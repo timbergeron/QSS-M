@@ -1,0 +1,16 @@
+{
+ "identical_map_uploads": true,
+ "maps": {
+  "start": {
+   "lines": 721,
+   "identical": true,
+   "sha256": "105286b55dede63cc7f50ceb3a65897f9f96feee7585ea07b6fee5bcc2c3e956"
+  },
+  "e1m1": {
+   "lines": 979,
+   "identical": true,
+   "sha256": "0db992260e352c650ccc1c6f6a8c94eae42abee90a6ec4b932e9dfcedfa7c10f"
+  }
+ },
+ "note": "tex_verify 1 texhash records (CPU upload data per mip) between BENCH_BEGIN markers; baseline = published QSS-M build, candidate = final build. Diagnostic sessions excluded from timing."
+}

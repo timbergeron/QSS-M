@@ -1,0 +1,261 @@
+
+LOG started on: 10/05/2026 21:07:24 
+
+Console initialized.
+Exe: 21:06:26 Oct  5 2026
+384.0 megabyte heap
+
+Sound Initialization
+Video mode 800x600x24 144Hz 2x scale (24-bit z-buffer, 0x FSAA) initialized
+GL_VENDOR: NVIDIA Corporation
+GL_RENDERER: NVIDIA GeForce RTX 4070/PCIe/SSE2
+GL_VERSION: 4.6.0 NVIDIA 591.86
+FOUND: ARB_vertex_buffer_object
+FOUND: GL_ARB_buffer_storage
+FOUND: ARB_multitexture
+GL_MAX_TEXTURE_UNITS: 4
+FOUND: ARB_texture_env_combine
+FOUND: ARB_texture_env_add
+FOUND: SDL_GL_SetSwapInterval
+FOUND: EXT_texture_filter_anisotropic
+FOUND: ARB_texture_non_power_of_two
+FOUND: GLSL
+GL_MAX_TEXTURE_IMAGE_UNITS: 32
+FOUND: brush model instancing
+FOUND: Framebuffer Objects
+Enabled: GLSL gamma
+FOUND: glBlendFuncSeparate
+Enabled: GLSL alias model rendering
+Enabled: EXT_packed_pixels
+FOUND: glGenerateMipmap
+SDL audio spec  : 44100 Hz, 1024 samples, 2 mix channels (callback: 2 ch, surround: on)
+SDL audio device: 44100 Hz, 2 ch, SDL_AUDIO_F32LE, 441 sample frames
+SDL audio driver: wasapi - Speakers (Realtek(R) Audio), 65536 bytes buffer
+Audio: 16 bit, stereo, 44100 Hz
+
+Language initialization
+Couldn't load 'localization/loc_english.txt'
+from 'C:\Users\Tim Bergeron\source\repos\QSS-M\.codex-build\engine-fps-optimization-20261005\timedemo-render\20261005-210724\800x600'
+
+========= Quake Initialized =========
+
+execing quake.rc
+execing default.cfg
+execing fpsbench.cfg
+PROFILE_TD_RENDER 
+TD_RENDER_PASS_aerowalk_0 
+Playing demo from fps_aerowalk.dem.
+Using protocol 15
+
+<-------------------------------------->
+
+#Aerowalk
+1445 frames   0.8 seconds 1763.2 fps
+BENCH_TD_RENDER frames=1446 world_us=43.497 hud_us=64.147 swap_us=328.753 other_us=155.619 gpu_us=12.049 samples=90
+TD_RENDER_PASS_aerowalk_1 
+Playing demo from fps_aerowalk.dem.
+Using protocol 15
+
+<-------------------------------------->
+
+#Aerowalk
+1445 frames   0.6 seconds 2624.1 fps
+BENCH_TD_RENDER frames=1446 world_us=29.941 hud_us=12.397 swap_us=253.846 other_us=84.767 gpu_us=38.343 samples=90
+TD_RENDER_PASS_aerowalk_2 
+Playing demo from fps_aerowalk.dem.
+Using protocol 15
+
+<-------------------------------------->
+
+#Aerowalk
+1445 frames   0.5 seconds 2777.2 fps
+BENCH_TD_RENDER frames=1446 world_us=27.773 hud_us=10.835 swap_us=237.791 other_us=83.556 gpu_us=68.767 samples=90
+TD_RENDER_PASS_aerowalk_3 
+Playing demo from fps_aerowalk.dem.
+Using protocol 15
+
+<-------------------------------------->
+
+#Aerowalk
+1445 frames   0.5 seconds 2662.4 fps
+BENCH_TD_RENDER frames=1446 world_us=26.873 hud_us=10.533 swap_us=250.847 other_us=87.227 gpu_us=73.705 samples=90
+TD_RENDER_PASS_aerowalk_4 
+Playing demo from fps_aerowalk.dem.
+Using protocol 15
+
+<-------------------------------------->
+
+#Aerowalk
+1445 frames   0.5 seconds 2747.8 fps
+BENCH_TD_RENDER frames=1446 world_us=28.391 hud_us=11.343 swap_us=237.534 other_us=86.544 gpu_us=44.396 samples=90
+TD_RENDER_PASS_aerowalk_5 
+Playing demo from fps_aerowalk.dem.
+Using protocol 15
+
+<-------------------------------------->
+
+#Aerowalk
+1445 frames   0.5 seconds 2699.6 fps
+BENCH_TD_RENDER frames=1446 world_us=26.895 hud_us=10.726 swap_us=245.842 other_us=87.010 gpu_us=74.786 samples=90
+TD_RENDER_PASS_aerowalk_6 
+Playing demo from fps_aerowalk.dem.
+Using protocol 15
+
+<-------------------------------------->
+
+#Aerowalk
+1445 frames   0.6 seconds 2598.9 fps
+BENCH_TD_RENDER frames=1446 world_us=27.746 hud_us=10.916 swap_us=251.754 other_us=94.242 gpu_us=73.865 samples=90
+TD_RENDER_PASS_aerowalk_7 
+Playing demo from fps_aerowalk.dem.
+Using protocol 15
+
+<-------------------------------------->
+
+#Aerowalk
+1445 frames   0.5 seconds 2832.5 fps
+BENCH_TD_RENDER frames=1446 world_us=27.853 hud_us=10.963 swap_us=232.618 other_us=81.521 gpu_us=46.990 samples=90
+TD_RENDER_PASS_dm3_0 
+Playing demo from fps_dm3.dem.
+Using protocol 15
+
+<-------------------------------------->
+
+#The Abandoned Base
+1442 frames   0.6 seconds 2591.6 fps
+BENCH_TD_RENDER frames=1443 world_us=22.804 hud_us=11.788 swap_us=219.123 other_us=132.031 gpu_us=70.861 samples=90
+TD_RENDER_PASS_dm3_1 
+Playing demo from fps_dm3.dem.
+Using protocol 15
+
+<-------------------------------------->
+
+#The Abandoned Base
+1442 frames   0.6 seconds 2570.6 fps
+BENCH_TD_RENDER frames=1443 world_us=23.443 hud_us=12.356 swap_us=228.151 other_us=124.943 gpu_us=44.305 samples=90
+TD_RENDER_PASS_dm3_2 
+Playing demo from fps_dm3.dem.
+Using protocol 15
+
+<-------------------------------------->
+
+#The Abandoned Base
+1442 frames   0.6 seconds 2451.1 fps
+BENCH_TD_RENDER frames=1443 world_us=22.833 hud_us=12.003 swap_us=241.015 other_us=132.003 gpu_us=66.947 samples=90
+TD_RENDER_PASS_dm3_3 
+Playing demo from fps_dm3.dem.
+Using protocol 15
+
+<-------------------------------------->
+
+#The Abandoned Base
+1442 frames   0.5 seconds 2650.1 fps
+BENCH_TD_RENDER frames=1443 world_us=23.300 hud_us=12.232 swap_us=223.962 other_us=117.727 gpu_us=45.056 samples=90
+TD_RENDER_PASS_dm3_4 
+Playing demo from fps_dm3.dem.
+Using protocol 15
+
+<-------------------------------------->
+
+#The Abandoned Base
+1442 frames   0.6 seconds 2551.9 fps
+BENCH_TD_RENDER frames=1443 world_us=23.763 hud_us=12.333 swap_us=223.850 other_us=131.789 gpu_us=53.862 samples=90
+TD_RENDER_PASS_dm3_5 
+Playing demo from fps_dm3.dem.
+Using protocol 15
+
+<-------------------------------------->
+
+#The Abandoned Base
+1442 frames   0.5 seconds 2685.1 fps
+BENCH_TD_RENDER frames=1443 world_us=22.609 hud_us=11.988 swap_us=222.427 other_us=115.298 gpu_us=45.682 samples=90
+TD_RENDER_PASS_dm3_6 
+Playing demo from fps_dm3.dem.
+Using protocol 15
+
+<-------------------------------------->
+
+#The Abandoned Base
+1442 frames   0.6 seconds 2579.9 fps
+BENCH_TD_RENDER frames=1443 world_us=23.706 hud_us=12.392 swap_us=223.326 other_us=128.069 gpu_us=56.786 samples=90
+TD_RENDER_PASS_dm3_7 
+Playing demo from fps_dm3.dem.
+Using protocol 15
+
+<-------------------------------------->
+
+#The Abandoned Base
+1442 frames   0.6 seconds 2567.4 fps
+BENCH_TD_RENDER frames=1443 world_us=23.220 hud_us=12.262 swap_us=231.430 other_us=122.506 gpu_us=43.600 samples=90
+TD_RENDER_PASS_ctf2m8_0 
+Playing demo from fps_ctf2m8.dem.
+Using protocol 15
+
+<-------------------------------------->
+
+#Capturephobopolis
+1442 frames   0.6 seconds 2406.6 fps
+BENCH_TD_RENDER frames=1443 world_us=25.808 hud_us=12.458 swap_us=260.479 other_us=116.667 gpu_us=95.528 samples=90
+TD_RENDER_PASS_ctf2m8_1 
+Playing demo from fps_ctf2m8.dem.
+Using protocol 15
+
+<-------------------------------------->
+
+#Capturephobopolis
+1442 frames   0.5 seconds 2664.2 fps
+BENCH_TD_RENDER frames=1443 world_us=24.646 hud_us=12.147 swap_us=237.253 other_us=101.181 gpu_us=81.294 samples=90
+TD_RENDER_PASS_ctf2m8_2 
+Playing demo from fps_ctf2m8.dem.
+Using protocol 15
+
+<-------------------------------------->
+
+#Capturephobopolis
+1442 frames   0.5 seconds 2732.1 fps
+BENCH_TD_RENDER frames=1443 world_us=25.059 hud_us=12.486 swap_us=228.193 other_us=100.169 gpu_us=52.520 samples=90
+TD_RENDER_PASS_ctf2m8_3 
+Playing demo from fps_ctf2m8.dem.
+Using protocol 15
+
+<-------------------------------------->
+
+#Capturephobopolis
+1442 frames   0.5 seconds 2771.7 fps
+BENCH_TD_RENDER frames=1443 world_us=24.006 hud_us=11.665 swap_us=225.882 other_us=99.135 gpu_us=87.029 samples=90
+TD_RENDER_PASS_ctf2m8_4 
+Playing demo from fps_ctf2m8.dem.
+Using protocol 15
+
+<-------------------------------------->
+
+#Capturephobopolis
+1442 frames   0.5 seconds 2736.6 fps
+BENCH_TD_RENDER frames=1443 world_us=24.572 hud_us=11.930 swap_us=229.844 other_us=98.963 gpu_us=53.089 samples=90
+TD_RENDER_PASS_ctf2m8_5 
+Playing demo from fps_ctf2m8.dem.
+Using protocol 15
+
+<-------------------------------------->
+
+#Capturephobopolis
+1442 frames   0.5 seconds 2816.1 fps
+BENCH_TD_RENDER frames=1443 world_us=22.860 hud_us=11.269 swap_us=223.116 other_us=97.765 gpu_us=96.757 samples=90
+TD_RENDER_PASS_ctf2m8_6 
+Playing demo from fps_ctf2m8.dem.
+Using protocol 15
+
+<-------------------------------------->
+
+#Capturephobopolis
+1442 frames   0.6 seconds 2616.0 fps
+BENCH_TD_RENDER frames=1443 world_us=24.034 hud_us=11.854 swap_us=239.200 other_us=107.062 gpu_us=79.531 samples=90
+TD_RENDER_PASS_ctf2m8_7 
+Playing demo from fps_ctf2m8.dem.
+Using protocol 15
+
+<-------------------------------------->
+
+#Capturephobopolis
+1442 frames   0.5 seconds 2728.5 fps
+BENCH_TD_RENDER frames=1443 world_us=24.104 hud_us=11.825 swap_us=230.271 other_us=100.213 gpu_us=52.827 samples=90

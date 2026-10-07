@@ -1,0 +1,76 @@
+LOG started on: 10/05/2026 15:33:55 
+
+Using add-on server "https://kexquake.s3.amazonaws.com"
+Playing registered version.
+Using renderer/network isolation.
+Console initialized.
+UDP Initialized
+WIPX_OpenSocket: Address family not supported by protocol family
+WIPX_Init: Unable to open control socket, IPX disabled
+Server using protocol 999 (RMQ)
+Exe: 10:28:01 Aug 11 2026 (Windows 64-bit)
+384.0 megabyte heap
+
+Video initialization
+Video mode: 800 x 600 24bit Z24 S8 144Hz
+GL_VENDOR:   NVIDIA Corporation
+GL_RENDERER: NVIDIA GeForce RTX 4070/PCIe/SSE2
+GL_VERSION:  4.3.0 NVIDIA 591.86
+FOUND: EXT_texture_filter_anisotropic
+FOUND: ARB_buffer_storage
+FOUND: ARB_multi_bind
+FOUND: ARB_bindless_texture
+FOUND: ARB_shader_draw_parameters
+FOUND: ARB_clip_control
+
+Sound Initialization
+SDL audio spec  : 44100 Hz, 1024 samples, 2 channels
+SDL audio driver: wasapi - Speakers (Logitech G432 Gaming Headset), 65536 bytes buffer
+Audio: 16 bit, stereo, 44100 Hz
+
+Language initialization
+Loaded 1 strings from 'localization/loc_english.txt'
+
+========= Quake Initialized =========
+
+
+Add-on server status:
+ 29 add-ons available for download
+  0 add-ons already installed
+
+execing quake.rc
+execing default.cfg
+execing benchmark.cfg
+BENCH_SESSION_1791239635675750600 
+BENCH_BEGIN_connect 
+Port set to 26001
+trying...
+Connection accepted
+CL_EstablishConnection: connected to 127.0.0.1:26001
+
+QSS-M 1.6.9-7da539b Server (24778 CRC)
+Serverinfo packet received.
+Clearing memory
+
+----------------------------------------
+
+the Slipgate Complex
+Using protocol 15
+maps/e1m1.bsp is not watervised
+--> client to server keepalive
+Lightmap size:   512 x 512 (3/4 blocks)
+Lightmap memory: 1.0 MB (66.5% efficiency)
+Server sent unknown command fullserverinfo
+FindFile: can't find music/track06.mp3
+Couldn't find a cdrip for track 6
+CL_SignonReply: 1
+FindFile: can't find csprogs.dat
+Programs occupy 403K.
+CL_SignonReply: 2
+CL_SignonReply: 3
+368.3 megabyte data cache
+CL_SignonReply: 4
+BENCH_QUIT 
+Sending clc_disconnect
+Wrote ironwail.cfg.
+Shutting down SDL sound

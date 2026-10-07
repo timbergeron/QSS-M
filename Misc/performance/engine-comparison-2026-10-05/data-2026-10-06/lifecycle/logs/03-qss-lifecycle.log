@@ -1,0 +1,120 @@
+LOG started on: 10/06/2026 12:59:18 
+Playing registered version.
+Console initialized.
+IPv4 UDP Initialized
+IPv6 UDP Initialized
+WIPX_OpenSocket: Address family not supported by protocol family
+WIPX_Init: Unable to open control socket, IPX disabled
+Exe: QSS 2024-03-01
+256.0 megabyte heap
+Video mode 800x600x24 144Hz (24-bit z-buffer, 0x FSAA) initialized
+GL_VENDOR: NVIDIA Corporation
+GL_RENDERER: NVIDIA GeForce RTX 4070/PCIe/SSE2
+GL_VERSION: 4.6.0 NVIDIA 610.88
+FOUND: ARB_vertex_buffer_object
+FOUND: GL_ARB_buffer_storage
+FOUND: ARB_multitexture
+GL_MAX_TEXTURE_UNITS: 4
+FOUND: ARB_texture_env_combine
+FOUND: ARB_texture_env_add
+FOUND: SDL_GL_SetSwapInterval
+FOUND: EXT_texture_filter_anisotropic
+FOUND: ARB_texture_non_power_of_two
+FOUND: GLSL
+FOUND: glGenerateMipmap
+
+Sound Initialization
+SDL audio spec  : 44100 Hz, 1024 samples, 2 channels
+SDL audio driver: wasapi - Speakers (Logitech G432 Gaming Headset), 65536 bytes buffer
+Audio: 16 bit, stereo, 44100 Hz
+CDAudio disabled at compile time
+
+Language initialization
+Couldn't load 'localization/loc_english.txt'
+from 'C:\Users\Tim Bergeron\source\repos\QSS-M\.codex-build\report-refresh-20261006\lifecycle\qss'
+
+========= Quake Initialized =========
+
+execing quake.rc
+execing default.cfg
+execing benchmark.cfg
+Using renderer/network isolation.
+BENCH_SESSION_1791316758672347700 
+BENCH_READY 
+BENCH_BEGIN_initial 
+SpawnServer: start
+Clearing memory
+FindFile: can't find csprogs.dat
+progs.dat occupies 403K.
+trying to open external vis file
+maps/start.vis not found, trying id1.vis
+external vis not found
+maps/start.bsp is not watervised
+40 entities inhibited
+Server spawned.
+CL_EstablishConnection: connected to local
+Client LOCAL connected
+
+QSS 2024-03-01 Server (24778 CRC)
+Serverinfo packet received.
+Using protocol 15(proquake)
+
+
+
+Introduction
+FindFile: can't find music/track04.ogg
+FindFile: can't find music/track04.opus
+FindFile: can't find music/track04.mp3
+FindFile: can't find music/track04.flac
+FindFile: can't find music/track04.wav
+Couldn't find a cdrip for track 4
+CL_SignonReply: 1
+FindFile: can't find particles/map_start.cfg
+FindFile: can't find map_start.cfg
+FindFile: can't find csprogs.dat
+progs.dat occupies 403K.
+CL_SignonReply: 2
+CL_SignonReply: 3
+238.4 megabyte data cache
+CL_SignonReply: 4
+BENCH_BEGIN_change 
+Sending clc_disconnect
+SpawnServer: e1m1
+Clearing memory
+FindFile: can't find csprogs.dat
+progs.dat occupies 403K.
+Loaded external entity file maps/e1m1@c49d.ent
+trying to open external vis file
+maps/e1m1.vis not found, trying id1.vis
+external vis not found
+maps/e1m1.bsp is not watervised
+33 entities inhibited
+Server spawned.
+CL_EstablishConnection: connected to local
+Client LOCAL connected
+
+QSS 2024-03-01 Server (24778 CRC)
+Serverinfo packet received.
+Using protocol 15(proquake)
+
+
+
+the Slipgate Complex
+FindFile: can't find music/track06.ogg
+FindFile: can't find music/track06.opus
+FindFile: can't find music/track06.mp3
+FindFile: can't find music/track06.flac
+FindFile: can't find music/track06.wav
+Couldn't find a cdrip for track 6
+CL_SignonReply: 1
+FindFile: can't find particles/map_e1m1.cfg
+FindFile: can't find map_e1m1.cfg
+FindFile: can't find csprogs.dat
+progs.dat occupies 403K.
+CL_SignonReply: 2
+CL_SignonReply: 3
+238.5 megabyte data cache
+CL_SignonReply: 4
+BENCH_BEGIN_quit 
+Sending clc_disconnect
+Shutting down SDL sound

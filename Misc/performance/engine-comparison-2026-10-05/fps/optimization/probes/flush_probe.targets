@@ -1,0 +1,1 @@
+<Project xmlns="http://schemas.microsoft.com/developer/msbuild/2003"><ItemGroup><ClCompile Remove="..\..\Quake\gl_vidsdl.c"/><ClCompile Remove="..\..\Quake\gl_draw.c"/><ClCompile Include="$(MSBuildThisFileDirectory)gl_vidsdl_flush.c"/><ClCompile Include="$(MSBuildThisFileDirectory)gl_draw_flush.c"/></ItemGroup></Project>

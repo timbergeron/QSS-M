@@ -1,0 +1,623 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Quake Engine Lab</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600;700&family=IBM+Plex+Sans:ital,wght@0,400;0,500;0,600;1,400&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+/* Layout: one 1180px reading column; summary matrix first, then one section per benchmark, each a toolbar + chart + collapsible detail. */
+:root {
+  color-scheme: light;
+  --ground: #f5f5f2;        /* page */
+  --plate: #ffffff;         /* panels */
+  --well: #ecedea;          /* tracks, insets */
+  --rule: #d9dcd8;
+  --ink: #1b2126;
+  --ink-2: #4c5862;
+  --ink-3: #6b7680;
+  --bronze: #a65d14;        /* QSS-M, the one highlighted series */
+  --bronze-ink: #8a4a0c;    /* accent text on ground */
+  --bronze-wash: #f4e7d8;
+  --field: #7b8794;         /* every other engine */
+  --field-soft: #c2c9cf;
+  --good: #2f7d4f;
+  --warn: #9a6a00;
+  --focus: #1f6fd1;
+  --font-display: "Barlow Condensed", "Arial Narrow", "Roboto Condensed", sans-serif;
+  --font-body: "IBM Plex Sans", "Segoe UI", system-ui, sans-serif;
+  --font-data: "IBM Plex Mono", ui-monospace, "Cascadia Mono", Consolas, monospace;
+  --r: 10px;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --ground: #15191d; --plate: #1c2126; --well: #262c32; --rule: #313942;
+    --ink: #e9edf0; --ink-2: #b3bdc6; --ink-3: #8b96a1;
+    --bronze: #c47b2c; --bronze-ink: #e0a35c; --bronze-wash: #33271b;
+    --field: #7d8a99; --field-soft: #46505a;
+    --good: #5fbf86; --warn: #d9a63a; --focus: #6aa8ff;
+  }
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --ground: #15191d; --plate: #1c2126; --well: #262c32; --rule: #313942;
+  --ink: #e9edf0; --ink-2: #b3bdc6; --ink-3: #8b96a1;
+  --bronze: #c47b2c; --bronze-ink: #e0a35c; --bronze-wash: #33271b;
+  --field: #7d8a99; --field-soft: #46505a;
+  --good: #5fbf86; --warn: #d9a63a; --focus: #6aa8ff;
+}
+*, *::before, *::after { box-sizing: border-box }
+html { scroll-behavior: smooth; scroll-padding-top: 76px }
+@media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto } *, *::before, *::after { transition: none !important; animation: none !important } }
+body { margin: 0; background: var(--ground); color: var(--ink); font: 400 15px/1.6 var(--font-body); -webkit-font-smoothing: antialiased }
+a { color: var(--bronze-ink); text-underline-offset: 3px }
+a:hover { text-decoration-thickness: 2px }
+:focus-visible { outline: 2px solid var(--focus); outline-offset: 3px; border-radius: 4px }
+code, .mono { font-family: var(--font-data); font-size: .86em }
+h1, h2, h3 { font-family: var(--font-display); font-weight: 600; letter-spacing: .01em; line-height: 1.05; text-wrap: balance; margin: 0 }
+.wrap { max-width: 1180px; margin: 0 auto; padding-inline: clamp(16px, 4vw, 40px) }
+.eyebrow { font: 600 12px/1.2 var(--font-body); letter-spacing: .14em; text-transform: uppercase; color: var(--bronze-ink) }
+.muted { color: var(--ink-2) }
+.small { font-size: 13px }
+.tab { font-variant-numeric: tabular-nums }
+
+/* Header */
+.top { position: sticky; top: env(safe-area-inset-top, 0px); z-index: 20; background: color-mix(in srgb, var(--ground) 88%, transparent); backdrop-filter: blur(14px); border-bottom: 1px solid var(--rule) }
+.top .wrap { display: flex; align-items: center; gap: 20px; min-height: 60px }
+.brand { display: flex; align-items: baseline; gap: 10px; font-family: var(--font-display); font-weight: 700; font-size: 22px; letter-spacing: .02em; color: var(--ink); text-decoration: none; white-space: nowrap }
+.brand small { font: 500 12px var(--font-data); color: var(--ink-3); letter-spacing: 0 }
+.nav { display: flex; gap: 4px; margin-left: auto; overflow-x: auto; scrollbar-width: none }
+.nav a { color: var(--ink-2); text-decoration: none; font-size: 13.5px; padding: 6px 10px; border-radius: 7px; white-space: nowrap }
+.nav a:hover, .nav a.on { color: var(--ink); background: var(--well) }
+.theme { flex: none; border: 1px solid var(--rule); background: var(--plate); color: var(--ink-2); border-radius: 8px; font: 500 12.5px var(--font-body); padding: 6px 10px; cursor: pointer }
+@media (max-width: 760px) { .nav { display: none } .theme { margin-left: auto } }
+
+/* Hero */
+.hero { padding-block: 56px 28px; display: grid; grid-template-columns: minmax(0, 1.35fr) minmax(0, 1fr); gap: 40px; align-items: end }
+.hero h1 { font-size: clamp(46px, 7vw, 86px); font-weight: 700; text-transform: uppercase; letter-spacing: -.005em; margin-top: 14px }
+.hero h1 span { color: var(--bronze) }
+.hero p { margin: 18px 0 0; max-width: 60ch; color: var(--ink-2); font-size: 17px }
+.rig { display: grid; gap: 0; border-top: 1px solid var(--rule) }
+.rig div { display: flex; justify-content: space-between; gap: 16px; padding: 9px 0; border-bottom: 1px solid var(--rule); font-size: 13.5px }
+.rig dt, .rig span:first-child { color: var(--ink-3) }
+.rig span:last-child { text-align: right; font-family: var(--font-data); font-size: 12.5px }
+@media (max-width: 860px) { .hero { grid-template-columns: 1fr; gap: 26px; padding-block: 36px 20px } }
+
+/* Headline numbers */
+.headline { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); border: 1px solid var(--rule); border-radius: var(--r); background: var(--plate); margin-block: 8px 44px }
+.headline > div { padding: 18px 20px; min-width: 0 }
+.headline > div + div { border-left: 1px solid var(--rule) }
+.headline .k { font-size: 12.5px; color: var(--ink-3) }
+.headline .v { font: 600 34px/1.1 var(--font-display); margin-top: 6px; color: var(--ink) }
+.headline .v em { font-style: normal; color: var(--bronze) }
+.headline .d { font-size: 12.5px; color: var(--ink-2); margin-top: 4px }
+@media (max-width: 860px) { .headline { grid-template-columns: repeat(2, minmax(0, 1fr)) } .headline > div:nth-child(3) { border-left: 0 } .headline > div:nth-child(n+3) { border-top: 1px solid var(--rule) } }
+@media (max-width: 460px) { .headline { grid-template-columns: 1fr } .headline > div + div { border-left: 0; border-top: 1px solid var(--rule) } }
+
+/* Sections */
+section.block { padding-block: 40px; border-top: 1px solid var(--rule) }
+.sec-head { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 12px 32px; align-items: end; margin-bottom: 22px }
+.sec-head h2 { font-size: clamp(32px, 4.4vw, 46px); margin-top: 8px }
+.sec-head p { grid-column: 1 / -1; margin: 4px 0 0; max-width: 72ch; color: var(--ink-2) }
+@media (max-width: 700px) { .sec-head { grid-template-columns: 1fr } }
+
+/* Standings matrix */
+.matrix-wrap { overflow-x: auto; border: 1px solid var(--rule); border-radius: var(--r); background: var(--plate) }
+table { border-collapse: collapse; width: 100%; font-variant-numeric: tabular-nums }
+.matrix { min-width: 760px; font-size: 13.5px }
+.matrix th, .matrix td { padding: 11px 12px; border-bottom: 1px solid var(--rule); text-align: right; white-space: nowrap }
+.matrix thead th { font: 600 12px var(--font-body); color: var(--ink-3); letter-spacing: .04em; text-transform: uppercase; vertical-align: bottom }
+.matrix th:first-child, .matrix td:first-child { text-align: left }
+.matrix tbody tr:last-child td, .matrix tbody tr:last-child th { border-bottom: 0 }
+.matrix tbody th { font-weight: 500 }
+.matrix tbody th button { all: unset; cursor: pointer; color: var(--ink); border-bottom: 1px dashed var(--field-soft) }
+.matrix tbody th button:hover { color: var(--bronze-ink); border-bottom-color: currentColor }
+.matrix tbody th small { display: block; color: var(--ink-3); font-size: 11.5px; font-weight: 400 }
+.matrix .q { background: color-mix(in srgb, var(--bronze-wash) 65%, transparent) }
+.matrix thead .q { color: var(--bronze-ink) }
+.cell { display: inline-flex; align-items: baseline; gap: 7px; justify-content: flex-end }
+.rank { display: inline-grid; place-items: center; min-width: 20px; height: 20px; padding: 0 5px; border-radius: 5px; font: 600 11px var(--font-data); color: var(--ink-3); background: var(--well) }
+.rank.r1 { color: #fff; background: var(--bronze) }
+.cell.na { color: var(--ink-3) }
+
+/* Controls */
+.bar-tools { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin-bottom: 14px }
+.seg { display: inline-flex; flex-wrap: wrap; gap: 3px; padding: 3px; background: var(--well); border-radius: 9px }
+.seg button { border: 0; background: transparent; color: var(--ink-2); font: 500 13px var(--font-body); padding: 6px 11px; border-radius: 7px; cursor: pointer }
+.seg button:hover { color: var(--ink) }
+.seg button[aria-pressed="true"] { background: var(--plate); color: var(--ink); box-shadow: 0 1px 2px rgb(0 0 0 / .08) }
+select.pick { font: 500 13px var(--font-body); color: var(--ink); background: var(--plate); border: 1px solid var(--rule); border-radius: 8px; padding: 7px 10px }
+
+/* Bar chart */
+.chart { background: var(--plate); border: 1px solid var(--rule); border-radius: var(--r); padding: 18px 20px 14px; min-width: 0 }
+.chart-title { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 6px 20px; align-items: baseline; margin-bottom: 6px }
+.chart-title h3 { font-size: 24px }
+.chart-title span { font-size: 12.5px; color: var(--ink-3) }
+.chart-def { margin: 0 0 12px; font-size: 13.5px; color: var(--ink-2); max-width: 82ch }
+.rows { display: grid }
+.row { display: grid; grid-template-columns: 150px minmax(0, 1fr) 132px; gap: 16px; align-items: center; padding: 9px 0; border-top: 1px solid var(--rule) }
+.row:first-child { border-top: 0 }
+.row .name { font-size: 14px; font-weight: 500; min-width: 0 }
+.row .name small { display: block; font: 400 11.5px var(--font-data); color: var(--ink-3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap }
+.row.qssm .name { color: var(--bronze-ink); font-weight: 600 }
+.track { position: relative; height: 22px }
+.track .base { position: absolute; inset: 9px 0 auto; height: 4px; background: var(--well); border-radius: 4px }
+.bar { position: absolute; left: 0; top: 4px; height: 14px; border-radius: 0 4px 4px 0; background: var(--field); transition: width .5s cubic-bezier(.2, .8, .2, 1) }
+.row.qssm .bar { background: var(--bronze) }
+.span { position: absolute; top: 2px; height: 18px; border-left: 1.5px solid var(--ink-3); border-right: 1.5px solid var(--ink-3); opacity: .55; transition: left .5s cubic-bezier(.2, .8, .2, 1), width .5s cubic-bezier(.2, .8, .2, 1); pointer-events: none }
+.dot { position: absolute; top: 50%; width: 9px; height: 9px; margin: -4.5px 0 0 -4.5px; border-radius: 50%; background: var(--plate); border: 2px solid var(--ink-2); transition: left .5s cubic-bezier(.2, .8, .2, 1); cursor: default }
+.dot:hover, .dot:focus-visible { border-color: var(--bronze); transform: scale(1.35) }
+.ghost { position: absolute; top: -1px; height: 24px; width: 0; border-left: 2px dashed var(--bronze); opacity: .8; transition: left .5s cubic-bezier(.2, .8, .2, 1) }
+.ghost::after { content: attr(data-label); position: absolute; top: -15px; left: 3px; font: 500 10.5px var(--font-data); color: var(--bronze-ink); white-space: nowrap }
+.row .val { text-align: right; font: 500 15px var(--font-data) }
+.row .val small { display: block; font-size: 11px; color: var(--ink-3); font-weight: 400 }
+.row .val .x { color: var(--ink-3); font-size: 11px }
+.row.na .val { color: var(--ink-3); font-family: var(--font-body); font-size: 12.5px }
+.axis { display: grid; grid-template-columns: 150px minmax(0, 1fr) 132px; gap: 16px; margin-top: 4px }
+.axis .ticks { position: relative; height: 16px; border-top: 1px solid var(--rule) }
+.axis .ticks span { position: absolute; top: 2px; transform: translateX(-50%); font: 400 10.5px var(--font-data); color: var(--ink-3) }
+.legend { display: flex; flex-wrap: wrap; gap: 6px 18px; margin-top: 12px; font-size: 12px; color: var(--ink-3) }
+.legend i { display: inline-block; vertical-align: -1px; margin-right: 6px }
+.legend .lb { width: 18px; height: 10px; border-radius: 0 3px 3px 0; background: var(--field) }
+.legend .lq { width: 18px; height: 10px; border-radius: 0 3px 3px 0; background: var(--bronze) }
+.legend .ld { width: 9px; height: 9px; border-radius: 50%; border: 2px solid var(--ink-2) }
+.legend .lg { width: 0; height: 12px; border-left: 2px dashed var(--bronze) }
+.legend .lr { width: 14px; height: 10px; border-left: 1.5px solid var(--ink-3); border-right: 1.5px solid var(--ink-3) }
+@media (max-width: 640px) {
+  .row, .axis { grid-template-columns: minmax(0, 1fr) 96px; gap: 4px 10px }
+  .row .track { grid-column: 1 / -1; grid-row: 2 }
+  .axis > :first-child, .axis > :last-child { display: none }
+  .axis .ticks { grid-column: 1 / -1 }
+  .row, .axis { grid-template-columns: minmax(0, 1fr) 118px }
+  .ghost::after { display: none }
+  .brand small { display: none }
+  .theme { padding: 5px 8px }
+}
+.tip { position: fixed; z-index: 50; pointer-events: none; background: var(--ink); color: var(--ground); font: 500 12px var(--font-data); padding: 5px 8px; border-radius: 6px; opacity: 0; transform: translateY(4px); transition: opacity .12s, transform .12s; white-space: nowrap }
+.tip.on { opacity: 1; transform: none }
+
+.note { margin: 12px 2px 0; font-size: 12.5px; color: var(--ink-3); max-width: 96ch }
+.note strong { color: var(--ink-2); font-weight: 600 }
+.flag { display: inline-block; font: 600 11px var(--font-body); letter-spacing: .04em; text-transform: uppercase; padding: 2px 7px; border-radius: 5px; background: var(--bronze-wash); color: var(--bronze-ink); vertical-align: 2px }
+.flag.old { background: var(--well); color: var(--ink-2) }
+
+/* Disclosure panels */
+details.more { margin-top: 14px; border: 1px solid var(--rule); border-radius: var(--r); background: var(--plate) }
+details.more > summary { list-style: none; cursor: pointer; padding: 14px 18px; font-weight: 600; font-size: 14px; display: flex; justify-content: space-between; gap: 12px; align-items: center }
+details.more > summary::-webkit-details-marker { display: none }
+details.more > summary::after { content: "+"; font: 500 18px var(--font-data); color: var(--ink-3); transition: transform .2s }
+details.more[open] > summary::after { transform: rotate(45deg) }
+details.more > summary small { font-weight: 400; color: var(--ink-3); font-size: 12.5px; margin-left: 8px }
+details.more .in { padding: 0 18px 18px; min-width: 0 }
+details.more .in > p { margin: 0 0 12px; max-width: 80ch; color: var(--ink-2); font-size: 14px }
+.tw { overflow-x: auto; margin-block: 6px 12px }
+.data { font-size: 13px }
+.data caption { text-align: left; font-size: 12px; color: var(--ink-3); padding: 0 0 8px }
+.data th, .data td { padding: 8px 10px; border-bottom: 1px solid var(--rule); text-align: right; white-space: nowrap }
+.data th:first-child, .data td:first-child { text-align: left }
+.data td.wrap-cell { white-space: normal; text-align: left; min-width: 260px }
+.data thead th { font-weight: 600; color: var(--ink-3); font-size: 12px }
+.data tr.qssm td:first-child, .data tr.qssm th:first-child { color: var(--bronze-ink); font-weight: 600 }
+.data td.best { font-weight: 600; color: var(--ink) }
+.data td.best::after { content: " ●"; color: var(--bronze); font-size: 9px; vertical-align: 2px }
+
+/* Loading story */
+.split { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; margin-bottom: 18px }
+.split > div { background: var(--plate); border: 1px solid var(--rule); border-radius: var(--r); padding: 16px 18px; min-width: 0 }
+.split .k { font-size: 12.5px; color: var(--ink-3) }
+.split .v { font: 600 30px/1.15 var(--font-display); margin-top: 4px }
+.split .v .from { color: var(--ink-3); font-weight: 500 }
+.split .v .to { color: var(--bronze) }
+.split p { margin: 6px 0 0; font-size: 12.5px; color: var(--ink-2) }
+@media (max-width: 860px) { .split { grid-template-columns: 1fr } }
+.steps { list-style: none; margin: 18px 0 0; padding: 0; display: grid; gap: 0; border: 1px solid var(--rule); border-radius: var(--r); background: var(--plate); counter-reset: s }
+.step { counter-increment: s; display: grid; grid-template-columns: 44px minmax(0, 1fr) 250px; gap: 16px; padding: 16px 18px; border-top: 1px solid var(--rule) }
+.step:first-child { border-top: 0 }
+.step::before { content: counter(s); font: 700 26px/1 var(--font-display); color: var(--bronze) }
+.step h4 { margin: 0 0 4px; font-size: 15px; font-weight: 600 }
+.step p { margin: 0; font-size: 13.5px; color: var(--ink-2); max-width: 70ch }
+.step .meta { margin-top: 6px; font-size: 12px; color: var(--ink-3) }
+.delta { display: grid; gap: 8px; align-content: start; font-size: 12px }
+.delta .dl { display: grid; grid-template-columns: 56px minmax(0, 1fr); gap: 4px 8px; align-items: center; color: var(--ink-3) }
+.delta .pair { position: relative; height: 10px; background: var(--well); border-radius: 3px }
+.delta .pair i { position: absolute; left: 0; top: 0; height: 100%; border-radius: 0 3px 3px 0 }
+.delta .pair .b { background: var(--field-soft) }
+.delta .pair .a { background: var(--bronze); height: 6px; top: 2px }
+.delta .num { grid-column: 2; font-family: var(--font-data); color: var(--ink-2) }
+@media (max-width: 760px) { .step { grid-template-columns: 30px minmax(0, 1fr) } .delta { grid-column: 2 } }
+
+/* FPS heat table */
+.heat { min-width: 720px; font-size: 13px }
+.heat th, .heat td { padding: 9px 10px; border-bottom: 1px solid var(--rule); text-align: right }
+.heat thead th { font-weight: 600; color: var(--ink-3); font-size: 12px; vertical-align: bottom }
+.heat th:first-child, .heat td:first-child { text-align: left }
+.heat td { position: relative }
+.heat td .hb { position: absolute; left: 6px; right: 6px; bottom: 4px; height: 3px; border-radius: 2px; background: var(--well); overflow: hidden }
+.heat td .hb i { display: block; height: 100%; background: var(--field) }
+.heat td.q .hb i { background: var(--bronze) }
+.heat td.top { font-weight: 600 }
+.heat thead th.q, .heat td.q { background: color-mix(in srgb, var(--bronze-wash) 55%, transparent) }
+.heat tbody th button { all: unset; cursor: pointer; border-bottom: 1px dashed var(--field-soft) }
+.heat tbody th button:hover { color: var(--bronze-ink) }
+.heat tfoot td, .heat tfoot th { font-weight: 600; border-bottom: 0 }
+
+/* Findings list */
+.findings { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; margin-bottom: 8px }
+.inv-sub { font-size: 24px; margin: 30px 0 12px; }
+.findings > div { border-top: 3px solid var(--bronze); background: var(--plate); border-radius: 0 0 var(--r) var(--r); padding: 14px 16px; border-inline: 1px solid var(--rule); border-bottom: 1px solid var(--rule); min-width: 0 }
+.findings h4 { margin: 0 0 6px; font-size: 14.5px; font-weight: 600 }
+.findings p { margin: 0; font-size: 13.5px; color: var(--ink-2) }
+@media (max-width: 860px) { .findings { grid-template-columns: 1fr } }
+
+.defs { display: grid; grid-template-columns: 210px minmax(0, 1fr); gap: 0 }
+.defs dt, .defs dd { padding: 10px 0; border-top: 1px solid var(--rule); margin: 0 }
+.defs dt { font-weight: 600; font-size: 13.5px; padding-right: 16px }
+.defs dd { font-size: 13.5px; color: var(--ink-2) }
+@media (max-width: 640px) { .defs { grid-template-columns: 1fr } .defs dd { border-top: 0; padding-top: 0 } }
+.prose p { max-width: 80ch; color: var(--ink-2); font-size: 14px; margin: 0 0 12px }
+.links { display: flex; flex-wrap: wrap; gap: 8px 18px; font-size: 13px; margin-top: 6px }
+.hash { font-family: var(--font-data); font-size: 11.5px; color: var(--ink-3); overflow-wrap: anywhere }
+footer { border-top: 1px solid var(--rule); padding-block: 26px 40px; font-size: 12.5px; color: var(--ink-3); display: flex; flex-wrap: wrap; gap: 8px 24px; justify-content: space-between }
+</style>
+</head>
+<body>
+<header class="top">
+  <div class="wrap">
+    <a class="brand" href="#top">Quake Engine Lab <small>/ benchmarks</small></a>
+    <nav class="nav" aria-label="Sections">
+      <a href="#standings">Standings</a>
+      <a href="#lifecycle">Lifecycle</a>
+      <a href="#loading">Map loading</a>
+      <a href="#fps">FPS</a>
+      <a href="#investigation">FPS investigation</a>
+      <a href="#method">Method &amp; data</a>
+    </nav>
+    <button class="theme" id="theme" type="button" aria-label="Color theme">Theme: system</button>
+  </div>
+</header>
+
+<main id="top">
+  <div class="wrap">
+    <section class="hero" aria-labelledby="h1">
+      <div>
+        <div class="eyebrow" id="hero-date"></div>
+        <h1 id="h1">Six Quake engines, <span>timed.</span></h1>
+        <p id="hero-lede"></p>
+      </div>
+      <div class="rig" id="rig" aria-label="Test machine"></div>
+    </section>
+
+    <div class="headline" id="headline" aria-label="Headline results"></div>
+
+    <section class="block" id="standings" aria-labelledby="standings-h">
+      <div class="sec-head">
+        <div><div class="eyebrow">Summary</div><h2 id="standings-h">Standings</h2></div>
+        <p>Median of five fresh runs per engine per test, all measured on <span id="std-date"></span>. Lifecycle tests are milliseconds, lower is faster; FPS is the geometric mean across nine maps, higher is faster. Badges show rank within each row. Select a test name to open its chart.</p>
+      </div>
+      <div class="matrix-wrap"><table class="matrix" id="matrix"></table></div>
+      <p class="note" id="matrix-note"></p>
+    </section>
+
+    <section class="block" id="lifecycle" aria-labelledby="life-h">
+      <div class="sec-head">
+        <div><div class="eyebrow">Lifecycle benchmark</div><h2 id="life-h">The time between actions</h2></div>
+        <p>Start the engine, load a map, change maps, join a server, quit. Each run is a fresh process; the bar is the median, the dots are the individual runs, and the bracket spans the fastest and slowest.</p>
+      </div>
+      <div class="bar-tools"><div class="seg" id="life-tests" role="group" aria-label="Choose a lifecycle test"></div></div>
+      <div class="chart" id="life-chart" aria-live="polite"></div>
+      <details class="more"><summary>Every lifecycle run <small>median [fastest–slowest] and all samples, ms</small></summary><div class="in"><div class="tw"><table class="data" id="life-table"></table></div></div></details>
+    </section>
+
+    <section class="block" id="loading" aria-labelledby="load-h">
+      <div class="sec-head">
+        <div><div class="eyebrow">QSS-M source changes · <span id="load-date"></span></div><h2 id="load-h">How QSS-M's map loading got faster</h2></div>
+        <p>A nine-round head-to-head against the two engines that led loading before this work, with the original QSS-M build as the baseline. Endpoint for every engine: completed client signon after the <code>map</code> command.</p>
+      </div>
+      <div class="split" id="load-split"></div>
+      <div class="bar-tools"><div class="seg" id="load-tests" role="group" aria-label="Choose a loading test"></div></div>
+      <div class="chart" id="load-chart" aria-live="polite"></div>
+      <h3 style="font-size:26px;margin-top:34px">Seven changes</h3>
+      <p class="muted small" style="max-width:76ch;margin:6px 0 0">Each change was kept only after its own back-to-back A/B. The figures are that A/B's medians, measured in different sessions, so they don't add up exactly to the totals above.</p>
+      <ol class="steps" id="load-steps"></ol>
+      <details class="more"><summary>Checks <small>FPS, quit time, texture output, regression tests</small></summary><div class="in" id="load-checks"></div></details>
+      <details class="more"><summary>Tried and rejected <small>measured, then dropped</small></summary><div class="in" id="load-rejected"></div></details>
+    </section>
+
+    <section class="block" id="fps" aria-labelledby="fps-h">
+      <div class="sec-head">
+        <div><div class="eyebrow">Rendering benchmark</div><h2 id="fps-h">Nine maps and two real games</h2></div>
+        <p>Native timedemos in a fresh process per pass: one discarded warm-up, then five measured passes per engine, 800 × 600, uncapped, VSync and MSAA off. The nine-map suite plays the same recorded 360° turn at each map's first deathmatch spawn. Two gameplay demos add real movement and combat: a 16-player CTF match and Sphere's 2:14 ad_tears speedrun.</p>
+      </div>
+      <div class="bar-tools">
+        <select class="pick" id="fps-map" aria-label="Choose a map"></select>
+        <div class="seg" id="fps-unit" role="group" aria-label="Choose a unit"><button type="button" data-u="fps" aria-pressed="true">FPS</button><button type="button" data-u="ms" aria-pressed="false">ms / frame</button></div>
+      </div>
+      <div class="chart" id="fps-chart" aria-live="polite"></div>
+      <details class="more" open><summary>All maps at a glance <small>median FPS; select a map to chart it</small></summary><div class="in"><div class="tw"><table class="heat" id="fps-heat"></table></div><p class="note" id="fps-heat-note"></p></div></details>
+      <details class="more" open><summary>Gameplay demos <small>median FPS; select a demo to chart it</small></summary><div class="in"><div class="tw"><table class="heat" id="fps-demo-heat"></table></div><p class="note" id="fps-demo-note"></p></div></details>
+    </section>
+
+    <section class="block" id="investigation" aria-labelledby="inv-h">
+      <div class="sec-head">
+        <div><div class="eyebrow">QSS-M FPS investigation · <span id="inv-date"></span></div><h2 id="inv-h">Why QSS-M's timedemo FPS was low</h2></div>
+        <p>Diagnostic runs that trace QSS-M's FPS gap. They use instrumented or private builds, so their numbers stay out of the rankings above. The October 5 work is kept below for reference.</p>
+      </div>
+      <div class="findings" id="inv-findings"></div>
+      <div id="inv-panels"></div>
+    </section>
+
+    <section class="block" id="method" aria-labelledby="method-h">
+      <div class="sec-head">
+        <div><div class="eyebrow">Method &amp; data</div><h2 id="method-h">How it was measured</h2></div>
+        <p>Everything needed to check or reproduce these numbers: what each timing covers, how sessions ran, which builds were used, and the raw files.</p>
+      </div>
+      <dl class="defs" id="defs"></dl>
+      <details class="more"><summary>Sessions, caches and settings</summary><div class="in prose" id="method-sessions"></div></details>
+      <details class="more"><summary>FPS method and limits</summary><div class="in prose" id="method-fps"></div></details>
+      <details class="more"><summary>Denver connection test</summary><div class="in prose" id="method-denver"></div></details>
+      <details class="more"><summary>Builds and hashes</summary><div class="in"><div class="tw"><table class="data" id="builds"></table></div></div></details>
+      <details class="more" open><summary>Raw data and scripts</summary><div class="in" id="raw-links"></div></details>
+    </section>
+  </div>
+</main>
+<div class="wrap"><footer id="foot"></footer></div>
+<div class="tip" id="tip" role="tooltip"></div>
+
+<script type="application/json" id="report-data">/*DATA*/</script>
+<script>
+(() => {
+  const D = JSON.parse(document.getElementById('report-data').textContent);
+  const $ = (s, r = document) => r.querySelector(s);
+  const el = (tag, cls, html) => { const e = document.createElement(tag); if (cls) e.className = cls; if (html != null) e.innerHTML = html; return e; };
+  const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+  const fmt = (v, d = 0) => v == null ? '–' : Number(v).toLocaleString('en-US', { minimumFractionDigits: d, maximumFractionDigits: d });
+  const ENG = D.engines;              // {key:{name,version,renderer,...}}
+  const ORDER = D.engine_order;
+  const name = k => ENG[k] ? ENG[k].name : k;
+
+  /* Theme toggle: system -> light -> dark */
+  const themes = ['system', 'light', 'dark'];
+  let theme = 'system';
+  try { theme = localStorage.getItem('qel-theme') || 'system'; } catch (e) {}
+  const applyTheme = () => {
+    if (theme === 'system') document.documentElement.removeAttribute('data-theme');
+    else document.documentElement.setAttribute('data-theme', theme);
+    $('#theme').textContent = 'Theme: ' + theme;
+  };
+  $('#theme').onclick = () => { theme = themes[(themes.indexOf(theme) + 1) % 3]; try { localStorage.setItem('qel-theme', theme); } catch (e) {} applyTheme(); };
+  applyTheme();
+
+  /* Tooltip */
+  const tip = $('#tip');
+  const showTip = (t, x, y) => { tip.textContent = t; tip.classList.add('on'); const w = tip.offsetWidth; tip.style.left = Math.max(8, Math.min(innerWidth - w - 8, x - w / 2)) + 'px'; tip.style.top = (y - 34) + 'px'; };
+  const hideTip = () => tip.classList.remove('on');
+  document.addEventListener('pointerover', e => { const t = e.target.closest('[data-tip]'); if (!t) return; const r = t.getBoundingClientRect(); showTip(t.dataset.tip, r.left + r.width / 2, r.top); });
+  document.addEventListener('pointerout', e => { if (e.target.closest('[data-tip]')) hideTip(); });
+  document.addEventListener('focusin', e => { const t = e.target.closest('[data-tip]'); if (!t) return; const r = t.getBoundingClientRect(); showTip(t.dataset.tip, r.left + r.width / 2, r.top); });
+  document.addEventListener('focusout', hideTip);
+  addEventListener('scroll', hideTip, { passive: true });
+
+  /* Shared horizontal bar chart: median bar, min-max bracket, run dots, optional QSS-M "before" marker */
+  function niceMax(v) { const p = Math.pow(10, Math.floor(Math.log10(v))); for (const m of [1, 1.2, 1.6, 2, 3, 4, 6, 8, 10]) if (m * p >= v) return m * p; return 10 * p; }
+  function barChart(host, cfg) {
+    // cfg: {title, sub, def, unit, digits, higher, rows:[{key,label,sub,s:{samples,median,min,max}|null,na}], ghost:{key,value,label}, note}
+    const rows = cfg.rows.slice().sort((a, b) => {
+      if (!a.s || a.s.median == null) return 1; if (!b.s || b.s.median == null) return -1;
+      return cfg.higher ? b.s.median - a.s.median : a.s.median - b.s.median;
+    });
+    const vals = rows.flatMap(r => r.s && r.s.median != null ? r.s.samples.filter(v => v != null) : []);
+    if (cfg.ghost) vals.push(cfg.ghost.value);
+    const max = niceMax(Math.max(...vals) * 1.04);
+    const pct = v => (v / max * 100).toFixed(3) + '%';
+    const best = rows[0] && rows[0].s ? rows[0].s.median : null;
+    let html = '<div class="chart-title"><h3>' + esc(cfg.title) + '</h3><span>' + esc(cfg.sub) + '</span></div>';
+    if (cfg.def) html += '<p class="chart-def">' + cfg.def + '</p>';
+    html += '<div class="rows">';
+    for (const r of rows) {
+      const q = r.key === 'qssm' || r.q;
+      if (!r.s || r.s.median == null) {
+        html += '<div class="row na' + (q ? ' qssm' : '') + '"><div class="name">' + esc(r.label) + (r.sub ? '<small>' + esc(r.sub) + '</small>' : '') + '</div><div class="track"><div class="base"></div></div><div class="val">' + esc(r.na || 'Not applicable') + '</div></div>';
+        continue;
+      }
+      const s = r.s, d = cfg.digits ?? 0;
+      let track = '<div class="base"></div><div class="bar" style="width:' + pct(s.median) + '"></div><div class="span" style="left:' + pct(s.min) + ';width:calc(' + pct(s.max) + ' - ' + pct(s.min) + ')"></div>';
+      s.samples.forEach((v, i) => { if (v != null) track += '<span class="dot" tabindex="0" style="left:' + pct(v) + '" data-tip="' + esc(r.label) + ' · run ' + (i + 1) + ': ' + fmt(v, d === 0 ? 1 : d) + ' ' + cfg.unit + '"></span>'; });
+      if (cfg.ghost && cfg.ghost.key === r.key) track += '<div class="ghost" style="left:' + pct(cfg.ghost.value) + '" data-label="' + esc(cfg.ghost.label) + '" data-tip="' + esc(cfg.ghost.tip) + '"></div>';
+      const rel = best && s.median !== best ? (cfg.higher ? (best / s.median) : (s.median / best)) : null;
+      html += '<div class="row' + (q ? ' qssm' : '') + '"><div class="name">' + esc(r.label) + (r.sub ? '<small>' + esc(r.sub) + '</small>' : '') + '</div><div class="track">' + track + '</div><div class="val">' + fmt(s.median, d) + ' <span class="x">' + cfg.unit + '</span><small>' + fmt(s.min, d) + '–' + fmt(s.max, d) + (rel ? ' · ' + rel.toFixed(2) + '×' : ' · best') + '</small></div></div>';
+    }
+    html += '</div><div class="axis"><div></div><div class="ticks">';
+    for (let i = 0; i <= 4; i++) html += '<span style="left:' + (i * 25) + '%">' + fmt(max * i / 4, max < 10 ? 1 : 0) + '</span>';
+    html += '</div><div></div></div>';
+    html += '<div class="legend"><span><i class="lq"></i>QSS-M median</span><span><i class="lb"></i>Other engines</span><span><i class="ld"></i>Each run</span><span><i class="lr"></i>Fastest–slowest</span><span>×: how far behind the best median</span>' + (cfg.ghost ? '<span><i class="lg"></i>' + esc(cfg.ghost.legend) + '</span>' : '') + '</div>';
+    if (cfg.note) html += '<p class="note">' + cfg.note + '</p>';
+    host.innerHTML = html;
+  }
+
+  function seg(host, items, current, onPick) {
+    host.innerHTML = '';
+    for (const it of items) {
+      const b = el('button', null, esc(it.label)); b.type = 'button'; b.dataset.k = it.key;
+      b.setAttribute('aria-pressed', String(it.key === current));
+      b.onclick = () => { for (const x of host.children) x.setAttribute('aria-pressed', String(x === b)); onPick(it.key); };
+      host.appendChild(b);
+    }
+  }
+
+  /* ---------- Hero ---------- */
+  $('#hero-date').textContent = D.meta.date_label;
+  $('#hero-lede').innerHTML = D.meta.lede;
+  $('#rig').innerHTML = D.meta.rig.map(([k, v]) => '<div><span>' + esc(k) + '</span><span>' + esc(v) + '</span></div>').join('');
+  $('#headline').innerHTML = D.headline.map(h => '<div><div class="k">' + esc(h.k) + '</div><div class="v">' + h.v + '</div><div class="d">' + esc(h.d) + '</div></div>').join('');
+  $('#std-date').textContent = D.meta.measured;
+
+  /* ---------- Standings matrix ---------- */
+  const M = D.lifecycle.metrics;
+  (() => {
+    let h = '<thead><tr><th scope="col">Test</th>' + ORDER.map(k => '<th scope="col" class="' + (k === 'qssm' ? 'q' : '') + '">' + esc(name(k)) + '</th>').join('') + '</tr></thead><tbody>';
+    const rowsDef = M.map(m => ({ key: m.key, label: m.title, sub: 'ms · lower is faster' + (m.dated ? ' · ' + m.dated : ''), higher: false, stat: k => m.stats[k] && m.stats[k].median, unranked: m.unranked || [], digits: 0 }));
+    rowsDef.push({ key: 'fps', label: 'FPS · nine-map mean', sub: 'geometric mean · higher is faster', higher: true, stat: k => D.fps.geomean[k], unranked: [], digits: 0 });
+    for (const m of D.fps.maps.filter(x => x.group === 'demo'))
+      rowsDef.push({ key: 'fps:' + m.key, label: 'FPS · ' + m.title, sub: 'median FPS · higher is faster', higher: true, stat: k => D.fps.stats[m.key][k] ? D.fps.stats[m.key][k].median : null, unranked: [], digits: 0 });
+    for (const r of rowsDef) {
+      const vals = ORDER.filter(k => !r.unranked.includes(k)).map(k => r.stat(k)).filter(v => v != null);
+      const sorted = vals.slice().sort((a, b) => r.higher ? b - a : a - b);
+      h += '<tr><th scope="row"><button type="button" data-go="' + r.key + '">' + esc(r.label) + '</button><small>' + esc(r.sub) + '</small></th>';
+      for (const k of ORDER) {
+        const v = r.stat(k);
+        if (v == null) { h += '<td class="' + (k === 'qssm' ? 'q' : '') + '"><span class="cell na">n/a</span></td>'; continue; }
+        if (r.unranked.includes(k)) { h += '<td class="' + (k === 'qssm' ? 'q' : '') + '"><span class="cell na" title="Different protocol; not ranked">' + fmt(v, r.digits) + ' <span class="rank">–</span></span></td>'; continue; }
+        const rank = sorted.indexOf(v) + 1;
+        h += '<td class="' + (k === 'qssm' ? 'q' : '') + '"><span class="cell"><span>' + fmt(v, r.digits) + '</span><span class="rank' + (rank === 1 ? ' r1' : '') + '" title="Rank ' + rank + ' of ' + sorted.length + '">' + rank + '</span></span></td>';
+      }
+      h += '</tr>';
+    }
+    $('#matrix').innerHTML = h + '</tbody>';
+    $('#matrix').addEventListener('click', e => {
+      const b = e.target.closest('[data-go]'); if (!b) return;
+      if (b.dataset.go === 'fps') { pickMap('all'); location.hash = 'fps'; return; }
+      if (b.dataset.go.startsWith('fps:')) { pickMap(b.dataset.go.slice(4)); $('#fps').scrollIntoView(); return; }
+      pickLife(b.dataset.go); const btn = $('#life-tests [data-k="' + b.dataset.go + '"]'); if (btn) for (const x of btn.parentNode.children) x.setAttribute('aria-pressed', String(x === btn));
+      $('#lifecycle').scrollIntoView();
+    });
+    $('#matrix-note').innerHTML = D.lifecycle.matrix_note;
+  })();
+
+  /* ---------- Lifecycle ---------- */
+  function pickLife(key) {
+    const m = M.find(x => x.key === key);
+    const ghost = m.before ? { key: 'qssm', value: m.before.median, label: 'before ' + fmt(m.before.median) + ' ms', legend: 'QSS-M before this work (' + m.before.label + ')', tip: 'QSS-M ' + m.before.label + ': median ' + fmt(m.before.median, 1) + ' ms' } : null;
+    barChart($('#life-chart'), {
+      title: m.title, sub: 'ms · lower is faster · ' + (m.dated || D.meta.measured), def: esc(m.definition), unit: 'ms', digits: 0, higher: false, ghost,
+      rows: ORDER.map(k => ({ key: k, label: name(k), sub: ENG[k].version, s: m.stats[k] && m.stats[k].median != null ? m.stats[k] : null, na: m.na && m.na[k] })),
+      note: m.note || ''
+    });
+  }
+  seg($('#life-tests'), M.map(m => ({ key: m.key, label: m.short })), 'initial', pickLife);
+  pickLife('initial');
+  (() => {
+    let h = '<caption>Median [fastest–slowest], then every run in order, ms. Blank: not applicable.</caption><thead><tr><th>Engine</th>' + M.map(m => '<th>' + esc(m.short) + '</th>').join('') + '</tr></thead><tbody>';
+    for (const k of ORDER) {
+      h += '<tr class="' + (k === 'qssm' ? 'qssm' : '') + '"><td>' + esc(name(k)) + '</td>' + M.map(m => { const s = m.stats[k]; if (!s || s.median == null) return '<td>–</td>'; return '<td title="' + s.samples.map(v => v == null ? '–' : v.toFixed(1)).join(', ') + '">' + fmt(s.median) + ' <span class="muted">[' + fmt(s.min) + '–' + fmt(s.max) + ']</span></td>'; }).join('') + '</tr>';
+    }
+    h += '</tbody>';
+    $('#life-table').innerHTML = h;
+  })();
+
+  /* ---------- Map loading story ---------- */
+  const L = D.loading;
+  $('#load-date').textContent = L.date;
+  const lm = (k, e) => L.summary[k][e].median;
+  $('#load-split').innerHTML = [
+    ['Initial map load · start', 'initial'], ['Map change · e1m1', 'change']
+  ].map(([t, k]) => { const others = ['ironwail', 'vkquake'].map(e => [e, lm(k, e)]).sort((a, b) => a[1] - b[1]); return '<div><div class="k">' + t + '</div><div class="v"><span class="from">' + fmt(lm(k, 'baseline')) + ' →</span> <span class="to">' + fmt(lm(k, 'candidate')) + ' ms</span></div><p>Fastest in this head-to-head. Next: ' + esc(name(others[0][0])) + ' at ' + fmt(others[0][1]) + ' ms. Median of nine runs.</p></div>'; }).join('')
+    + '<div><div class="k">Held steady</div><div class="v">FPS · quit · textures</div><p>' + esc(L.steady) + '</p></div>';
+  const LNAMES = { baseline: 'QSS-M · before', candidate: 'QSS-M · now', ironwail: name('ironwail'), vkquake: name('vkquake') };
+  function pickLoad(k) {
+    barChart($('#load-chart'), {
+      title: k === 'initial' ? 'Initial map load · start' : 'Map change · start → e1m1', sub: 'ms · lower is faster · nine runs · ' + L.date, unit: 'ms', digits: 0, higher: false,
+      rows: ['candidate', 'baseline', 'ironwail', 'vkquake'].map(e => ({ key: e === 'candidate' ? 'qssm' : e, q: e === 'baseline' ? false : undefined, label: LNAMES[e], sub: e === 'baseline' ? 'original build' : e === 'candidate' ? 'current source' : ENG[e].version, s: L.summary[k][e] })),
+      note: esc(L.note)
+    });
+  }
+  seg($('#load-tests'), [{ key: 'initial', label: 'Initial load' }, { key: 'change', label: 'Map change' }], 'initial', pickLoad);
+  pickLoad('initial');
+  (() => {
+    const all = L.steps.flatMap(s => [...s.initial, ...s.change]); const mx = Math.max(...all);
+    $('#load-steps').innerHTML = L.steps.map(s => {
+      const pair = (lab, v) => '<div class="dl"><span>' + lab + '</span><span class="pair" data-tip="' + lab + ': ' + v[0].toFixed(1) + ' → ' + v[1].toFixed(1) + ' ms"><i class="b" style="width:' + (v[0] / mx * 100) + '%"></i><i class="a" style="width:' + (v[1] / mx * 100) + '%"></i></span><span class="num">' + fmt(v[0]) + ' → ' + fmt(v[1]) + ' ms</span></div>';
+      let meta = '<code>' + esc(s.files) + '</code> · ' + s.samples + ' runs per side';
+      if (s.first_frame) meta += ' · first presented frame: ' + fmt(s.first_frame.initial[0]) + ' → ' + fmt(s.first_frame.initial[1]) + ' ms (initial), ' + fmt(s.first_frame.change[0]) + ' → ' + fmt(s.first_frame.change[1]) + ' ms (change)';
+      return '<li class="step"><div><h4>' + esc(s.title) + '</h4><p>' + esc(s.body) + '</p><div class="meta">' + meta + '</div></div><div class="delta">' + pair('Initial', s.initial) + pair('Change', s.change) + '</div></li>';
+    }).join('');
+  })();
+  $('#load-checks').innerHTML = L.checks_html;
+  $('#load-rejected').innerHTML = L.rejected_html;
+
+  /* ---------- FPS ---------- */
+  const F = D.fps;
+  let fpsMap = 'all', fpsUnit = 'fps';
+  const sel = $('#fps-map');
+  const SUITE = F.maps.filter(m => m.group !== 'demo'), DEMOS = F.maps.filter(m => m.group === 'demo');
+  sel.innerHTML = '<optgroup label="Nine-map suite"><option value="all">All nine maps · geometric mean</option>' + SUITE.map(m => '<option value="' + m.key + '">' + esc(m.title) + '</option>').join('') + '</optgroup>'
+    + '<optgroup label="Gameplay demos">' + DEMOS.map(m => '<option value="' + m.key + '">' + esc(m.title) + '</option>').join('') + '</optgroup>';
+  function toMs(s) { if (!s) return s; const inv = v => v == null ? null : 1000 / v; return { samples: s.samples.map(inv), median: inv(s.median), min: inv(s.max), max: inv(s.min) }; }
+  function renderFps() {
+    const ms = fpsUnit === 'ms';
+    let rows, title, ghost = null, sub;
+    if (fpsMap === 'all') {
+      title = 'All nine maps';
+      rows = ORDER.map(k => { const g = F.geomean_stats[k]; return { key: k, label: name(k), sub: ENG[k].version + ' · ' + ENG[k].renderer, s: ms ? toMs(g) : g }; });
+      if (F.before_geomean) ghost = { key: 'qssm', value: ms ? 1000 / F.before_geomean : F.before_geomean, label: 'before ' + (ms ? (1000 / F.before_geomean).toFixed(3) : fmt(F.before_geomean)), legend: 'QSS-M installed build (' + F.before_label + ')', tip: 'QSS-M ' + F.before_label + ': ' + fmt(F.before_geomean) + ' FPS geometric mean' };
+      sub = 'geometric mean of per-map medians · dots are per-pass geometric means';
+    } else {
+      const m = F.maps.find(x => x.key === fpsMap); title = m.title;
+      rows = ORDER.map(k => ({ key: k, label: name(k), sub: ENG[k].version + ' · ' + ENG[k].renderer, s: F.stats[fpsMap][k] ? (ms ? toMs(F.stats[fpsMap][k]) : F.stats[fpsMap][k]) : null, na: (m.na || {})[k] }));
+      const b = F.before && F.before[fpsMap];
+      if (b) ghost = { key: 'qssm', value: ms ? 1000 / b : b, label: 'before ' + (ms ? (1000 / b).toFixed(3) : fmt(b)), legend: 'QSS-M installed build (' + F.before_label + ')', tip: 'QSS-M ' + F.before_label + ': ' + fmt(b) + ' FPS median' };
+      sub = 'median of five passes · ' + m.note;
+    }
+    barChart($('#fps-chart'), { title, sub: (ms ? 'ms per frame · lower is faster · ' : 'FPS · higher is faster · ') + sub, unit: ms ? 'ms' : 'FPS', digits: ms ? 3 : 0, higher: !ms, rows, ghost, note: F.note });
+  }
+  function pickMap(k) { fpsMap = k; sel.value = k; renderFps(); }
+  sel.onchange = () => pickMap(sel.value);
+  for (const b of $('#fps-unit').children) b.onclick = () => { fpsUnit = b.dataset.u; for (const x of $('#fps-unit').children) x.setAttribute('aria-pressed', String(x === b)); renderFps(); };
+  renderFps();
+  (() => {
+    let h = '<thead><tr><th scope="col">Map</th>' + ORDER.map(k => '<th scope="col" class="' + (k === 'qssm' ? 'q' : '') + '">' + esc(name(k)) + '</th>').join('') + '</tr></thead><tbody>';
+    const rowFor = (label, key, get) => {
+      const vals = ORDER.map(get), top = Math.max(...vals.filter(v => v != null));
+      let r = '<tr><th scope="row">' + (key ? '<button type="button" data-map="' + key + '">' + esc(label) + '</button>' : esc(label)) + '</th>';
+      ORDER.forEach((k, i) => { const v = vals[i]; if (v == null) { r += '<td class="' + (k === 'qssm' ? 'q' : '') + '" title="Not applicable">–</td>'; return; } r += '<td class="' + (k === 'qssm' ? 'q ' : '') + (v === top ? 'top' : '') + '" data-tip="' + esc(name(k) + ' · ' + label + ': ' + fmt(v) + ' FPS') + '">' + fmt(v) + (v === top ? ' ●' : '') + '<span class="hb"><i style="width:' + (v / top * 100).toFixed(1) + '%"></i></span></td>'; });
+      return r + '</tr>';
+    };
+    for (const m of SUITE) h += rowFor(m.title, m.key, k => F.stats[m.key][k].median);
+    h += '</tbody><tfoot>' + rowFor('Geometric mean', null, k => F.geomean[k]) + '</tfoot>';
+    $('#fps-heat').innerHTML = h;
+    let d = '<thead><tr><th scope="col">Demo</th>' + ORDER.map(k => '<th scope="col" class="' + (k === 'qssm' ? 'q' : '') + '">' + esc(name(k)) + '</th>').join('') + '</tr></thead><tbody>';
+    for (const m of DEMOS) d += rowFor(m.title, m.key, k => F.stats[m.key][k] ? F.stats[m.key][k].median : null);
+    $('#fps-demo-heat').innerHTML = d + '</tbody>';
+    $('#fps-demo-note').innerHTML = DEMOS.map(m => '<strong>' + esc(m.title) + ':</strong> ' + esc(m.note)).join('. ') + '. Dashes mark engines that can\'t play the demo.';
+    for (const id of ['#fps-heat', '#fps-demo-heat']) $(id).addEventListener('click', e => { const b = e.target.closest('[data-map]'); if (!b) return; pickMap(b.dataset.map); $('#fps').scrollIntoView(); });
+    $('#fps-heat-note').innerHTML = '● marks the fastest engine on each map. The thin bar under each value is its share of that map\'s fastest median.';
+  })();
+
+  /* ---------- Investigation ---------- */
+  const I = D.investigation;
+  $('#inv-date').textContent = I.sections[0].date;
+  const cellHtml = c => typeof c === 'string' ? esc(c) : '<a href="' + esc(c.h[0]) + '">' + esc(c.t) + '</a>';
+  const panelHtml = p => {
+    let body = p.intro ? '<p>' + p.intro + '</p>' : '';
+    for (const t of p.tables) {
+      body += '<div class="tw"><table class="data">' + (t.caption ? '<caption>' + esc(t.caption) + '</caption>' : '') + '<thead><tr>' + t.rows[0].map(c => '<th>' + esc(typeof c === 'string' ? c : c.t) + '</th>').join('') + '</tr></thead><tbody>';
+      for (const r of t.rows.slice(1)) body += '<tr class="' + (/QSS-M/.test(typeof r[0] === 'string' ? r[0] : r[0].t) ? 'qssm' : '') + '">' + r.map((c, i) => '<td' + ((t.wrap || []).includes(i) ? ' class="wrap-cell"' : '') + '>' + cellHtml(c) + '</td>').join('') + '</tr>';
+      body += '</tbody></table></div>';
+    }
+    if (p.after) body += '<p>' + p.after + '</p>';
+    if (p.links) body += '<div class="links">' + p.links.map(([t, h]) => '<a href="' + esc(h) + '">' + esc(t) + '</a>').join('') + '</div>';
+    return '<details class="more"><summary>' + esc(p.title) + '<small>' + esc(p.sub || '') + '</small></summary><div class="in">' + body + '</div></details>';
+  };
+  $('#inv-findings').innerHTML = I.sections[0].findings.map(f => '<div><h4>' + esc(f.h) + '</h4><p>' + f.p + '</p></div>').join('');
+  $('#inv-panels').innerHTML = I.sections[0].panels.map(panelHtml).join('') + I.sections.slice(1).map(s =>
+    '<h3 class="inv-sub">' + esc(s.title) + ' <span class="flag old">' + esc(s.date) + '</span></h3><div class="findings">' + s.findings.map(f => '<div><h4>' + esc(f.h) + '</h4><p>' + f.p + '</p></div>').join('') + '</div>' + s.panels.map(panelHtml).join('')).join('');
+
+  /* ---------- Method ---------- */
+  $('#defs').innerHTML = M.map(m => '<dt>' + esc(m.title) + '</dt><dd>' + esc(m.definition) + '</dd>').join('') + '<dt>FPS</dt><dd>' + esc(F.definition) + '</dd>';
+  $('#method-sessions').innerHTML = D.method.sessions;
+  $('#method-fps').innerHTML = D.method.fps;
+  $('#method-denver').innerHTML = D.method.denver;
+  $('#builds').innerHTML = '<thead><tr><th>Engine</th><th>Version</th><th>Renderer</th><th>Executable SHA-256</th></tr></thead><tbody>' + D.builds.map(b => '<tr class="' + (b.qssm ? 'qssm' : '') + '"><td>' + esc(b.name) + '</td><td>' + esc(b.version) + '</td><td>' + esc(b.renderer) + '</td><td class="hash" style="text-align:left">' + esc(b.sha) + '</td></tr>').join('') + '</tbody>';
+  $('#raw-links').innerHTML = D.raw.map(g => '<p class="small" style="margin:10px 0 4px;font-weight:600">' + esc(g.group) + '</p><div class="links">' + g.items.map(([t, h]) => '<a href="' + esc(h) + '">' + esc(t) + '</a>').join('') + '</div>').join('');
+  $('#foot').innerHTML = D.meta.footer;
+
+  /* Active nav link */
+  const links = [...document.querySelectorAll('.nav a')];
+  const io = new IntersectionObserver(es => { for (const e of es) if (e.isIntersecting) for (const a of links) a.classList.toggle('on', a.getAttribute('href') === '#' + e.target.id); }, { rootMargin: '-40% 0px -55% 0px' });
+  for (const a of links) { const s = document.querySelector(a.getAttribute('href')); if (s) io.observe(s); }
+})();
+</script>
+</body>
+</html>

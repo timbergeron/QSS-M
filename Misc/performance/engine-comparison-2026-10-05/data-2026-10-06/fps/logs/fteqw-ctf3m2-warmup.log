@@ -1,0 +1,20 @@
+--- fte\qconsole.log ---
+FPS_BENCH_fteqw_ctf3m2_1791325057965749200
+2026-10-06 15:17:38 "vid_width" is "800"
+2026-10-06 15:17:38 Default: "0"
+2026-10-06 15:17:38 "vid_height" is "600"
+2026-10-06 15:17:38 Default: "0"
+2026-10-06 15:17:38 "vid_vsync" is "0" (default)
+2026-10-06 15:17:38 Playing demo from fps_ctf3m2.dem.
+2026-10-06 15:17:38 Setting windowed mode 800*600 OpenGL
+2026-10-06 15:17:38 GL_VENDOR: NVIDIA Corporation
+2026-10-06 15:17:38 GL_RENDERER: NVIDIA GeForce RTX 4070/PCIe/SSE2
+2026-10-06 15:17:38 GL_VERSION: 4.6.0 NVIDIA 610.88
+2026-10-06 15:17:38 OpenGL renderer initialized
+2026-10-06 15:17:38 ^Ue080^Ue081^Ue081^Ue081^Ue081^Ue081^Ue081 Quake Initialized ^Ue081^Ue081^Ue081^Ue081^Ue081^Ue081^Ue082
+2026-10-06 15:17:38 
+2026-10-06 15:17:38 
+2026-10-06 15:17:38 ^Ue01d^Ue01e^Ue01e^Ue01e^Ue01e^Ue01e^Ue01e^Ue01e^Ue01e^Ue01e^Ue01e^Ue01e^Ue01e^Ue01e^Ue01e^Ue01e^Ue01e^Ue01e^Ue01f
+2026-10-06 15:17:38 
+2026-10-06 15:17:38 Red Alert - By EG
+2026-10-06 15:17:39 1443 frames   0.5 seconds 2955.9 fps

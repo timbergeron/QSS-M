@@ -1,0 +1,305 @@
+{
+  "purpose": "Supplemental QSS-M diagnostics; excluded from the six-engine ranking. Same executable and Aerowalk demo as baseline. Eight timedemos per process; repeat median excludes first pass. One session per condition, sequential order; no statistical significance claimed.",
+  "exe_sha256": "5cacdcc77bef96b045fb6beca1ad80272f3cdef7315119774dd87a84f84a7ae4",
+  "baseline_cvars": {
+    "r_shadows": "0",
+    "r_outline": "0",
+    "r_scenecache": "auto (empty string)",
+    "r_bmodelcache": "1",
+    "r_aliaslightcache": "1",
+    "host_maxfps": "0",
+    "vid_vsync": "0",
+    "vid_fsaa": "0"
+  },
+  "main_settings_subset": {
+    "r_fastsky": "2",
+    "r_waterwarp": "0",
+    "r_drawflame": "0",
+    "r_shadows": ".125",
+    "r_outline": "5"
+  },
+  "samples": [
+    {
+      "variant": "baseline_repeat",
+      "geometry": {
+        "width": 800,
+        "height": 600
+      },
+      "fps": [
+        2102.3,
+        2859.9,
+        2852.3,
+        2665.9,
+        2839.6,
+        2773.0,
+        2485.0,
+        2871.0
+      ],
+      "frames": [
+        1445,
+        1445,
+        1445,
+        1445,
+        1445,
+        1445,
+        1445,
+        1445
+      ],
+      "extra": "",
+      "command": [
+        "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\engine-fps-20261005\\diagnostic\\qssm\\QSS-M-w64.exe",
+        "-basedir",
+        "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\engine-fps-20261005\\diagnostic\\qssm",
+        "-nohome",
+        "-condebug",
+        "-window",
+        "-width",
+        "800",
+        "-height",
+        "600",
+        "-nojoy",
+        "-noice",
+        "-listen",
+        "-noudp",
+        "-noquakeimport"
+      ],
+      "first_fps": 2102.3,
+      "repeat_median_fps": 2839.6
+    },
+    {
+      "variant": "fastsky_repeat",
+      "geometry": {
+        "width": 800,
+        "height": 600
+      },
+      "fps": [
+        2056.0,
+        2871.3,
+        2916.7,
+        2712.9,
+        2830.0,
+        2782.7,
+        2738.2,
+        2802.0
+      ],
+      "frames": [
+        1445,
+        1445,
+        1445,
+        1445,
+        1445,
+        1445,
+        1445,
+        1445
+      ],
+      "extra": "r_fastsky 2\nr_waterwarp 0\nr_drawflame 0\n",
+      "command": [
+        "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\engine-fps-20261005\\diagnostic\\qssm\\QSS-M-w64.exe",
+        "-basedir",
+        "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\engine-fps-20261005\\diagnostic\\qssm",
+        "-nohome",
+        "-condebug",
+        "-window",
+        "-width",
+        "800",
+        "-height",
+        "600",
+        "-nojoy",
+        "-noice",
+        "-listen",
+        "-noudp",
+        "-noquakeimport"
+      ],
+      "first_fps": 2056.0,
+      "repeat_median_fps": 2802.0
+    },
+    {
+      "variant": "scene_off_repeat",
+      "geometry": {
+        "width": 800,
+        "height": 600
+      },
+      "fps": [
+        2129.8,
+        2972.5,
+        2955.2,
+        2863.4,
+        2764.1,
+        2976.8,
+        2906.3,
+        2780.2
+      ],
+      "frames": [
+        1445,
+        1445,
+        1445,
+        1445,
+        1445,
+        1445,
+        1445,
+        1445
+      ],
+      "extra": "r_scenecache 0\n",
+      "command": [
+        "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\engine-fps-20261005\\diagnostic\\qssm\\QSS-M-w64.exe",
+        "-basedir",
+        "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\engine-fps-20261005\\diagnostic\\qssm",
+        "-nohome",
+        "-condebug",
+        "-window",
+        "-width",
+        "800",
+        "-height",
+        "600",
+        "-nojoy",
+        "-noice",
+        "-listen",
+        "-noudp",
+        "-noquakeimport"
+      ],
+      "first_fps": 2129.8,
+      "repeat_median_fps": 2906.3
+    },
+    {
+      "variant": "4k_repeat",
+      "geometry": {
+        "width": 3840,
+        "height": 2160
+      },
+      "fps": [
+        1921.7,
+        2080.3,
+        1978.5,
+        2125.1,
+        2179.5,
+        1920.1,
+        2008.1,
+        2208.1
+      ],
+      "frames": [
+        1445,
+        1445,
+        1445,
+        1445,
+        1445,
+        1445,
+        1445,
+        1445
+      ],
+      "extra": "",
+      "command": [
+        "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\engine-fps-20261005\\diagnostic\\qssm\\QSS-M-w64.exe",
+        "-basedir",
+        "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\engine-fps-20261005\\diagnostic\\qssm",
+        "-nohome",
+        "-condebug",
+        "-window",
+        "-width",
+        "3840",
+        "-height",
+        "2160",
+        "-nojoy",
+        "-noice",
+        "-listen",
+        "-noudp",
+        "-noquakeimport"
+      ],
+      "first_fps": 1921.7,
+      "repeat_median_fps": 2080.3
+    },
+    {
+      "variant": "4k_fastsky_repeat",
+      "geometry": {
+        "width": 3840,
+        "height": 2160
+      },
+      "fps": [
+        1935.5,
+        2065.5,
+        1915.5,
+        2002.5,
+        2193.1,
+        2151.9,
+        1986.8,
+        2099.5
+      ],
+      "frames": [
+        1445,
+        1445,
+        1445,
+        1445,
+        1445,
+        1445,
+        1445,
+        1445
+      ],
+      "extra": "r_fastsky 2\nr_waterwarp 0\nr_drawflame 0\n",
+      "command": [
+        "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\engine-fps-20261005\\diagnostic\\qssm\\QSS-M-w64.exe",
+        "-basedir",
+        "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\engine-fps-20261005\\diagnostic\\qssm",
+        "-nohome",
+        "-condebug",
+        "-window",
+        "-width",
+        "3840",
+        "-height",
+        "2160",
+        "-nojoy",
+        "-noice",
+        "-listen",
+        "-noudp",
+        "-noquakeimport"
+      ],
+      "first_fps": 1935.5,
+      "repeat_median_fps": 2065.5
+    },
+    {
+      "variant": "menu_settle_repeat",
+      "geometry": {
+        "width": 800,
+        "height": 600
+      },
+      "fps": [
+        2363.7,
+        2758.1,
+        2384.4,
+        2582.6,
+        2815.5,
+        2829.9,
+        2792.5,
+        2650.0
+      ],
+      "frames": [
+        1445,
+        1445,
+        1445,
+        1445,
+        1445,
+        1445,
+        1445,
+        1445
+      ],
+      "extra": "wait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\n",
+      "command": [
+        "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\engine-fps-20261005\\diagnostic\\qssm\\QSS-M-w64.exe",
+        "-basedir",
+        "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\engine-fps-20261005\\diagnostic\\qssm",
+        "-nohome",
+        "-condebug",
+        "-window",
+        "-width",
+        "800",
+        "-height",
+        "600",
+        "-nojoy",
+        "-noice",
+        "-listen",
+        "-noudp",
+        "-noquakeimport"
+      ],
+      "first_fps": 2363.7,
+      "repeat_median_fps": 2758.1
+    }
+  ]
+}

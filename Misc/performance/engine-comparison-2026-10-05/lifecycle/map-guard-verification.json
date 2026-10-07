@@ -1,0 +1,8 @@
+{
+  "result": "passed",
+  "checks": [
+    "Map command withheld when a second player joins during setup",
+    "Map command delivered only after signon and the sole setup-client status check"
+  ],
+  "network_or_engines_used": false
+}

@@ -1,0 +1,65 @@
+{
+  "aerowalk": {
+    "packets": 1451,
+    "seconds": 19.986111164093018,
+    "yaw_travel_degrees": 363.7353515625,
+    "complete": true,
+    "hash_verified": true
+  },
+  "ztndm3": {
+    "packets": 1448,
+    "seconds": 19.986111164093018,
+    "yaw_travel_degrees": 363.7353515625,
+    "complete": true,
+    "hash_verified": true
+  },
+  "dm3": {
+    "packets": 1448,
+    "seconds": 19.986111164093018,
+    "yaw_travel_degrees": 363.7353515625,
+    "complete": true,
+    "hash_verified": true
+  },
+  "bravado": {
+    "packets": 1448,
+    "seconds": 19.986111164093018,
+    "yaw_travel_degrees": 363.7298583984375,
+    "complete": true,
+    "hash_verified": true
+  },
+  "ctf3m2": {
+    "packets": 1448,
+    "seconds": 19.986111164093018,
+    "yaw_travel_degrees": 363.7353515625,
+    "complete": true,
+    "hash_verified": true
+  },
+  "schloss": {
+    "packets": 1448,
+    "seconds": 19.986111164093018,
+    "yaw_travel_degrees": 363.7353515625,
+    "complete": true,
+    "hash_verified": true
+  },
+  "e1m2": {
+    "packets": 1448,
+    "seconds": 19.986111164093018,
+    "yaw_travel_degrees": 363.7353515625,
+    "complete": true,
+    "hash_verified": true
+  },
+  "dm2": {
+    "packets": 1448,
+    "seconds": 19.986111164093018,
+    "yaw_travel_degrees": 363.7353515625,
+    "complete": true,
+    "hash_verified": true
+  },
+  "ctf2m8": {
+    "packets": 1448,
+    "seconds": 19.986111164093018,
+    "yaw_travel_degrees": 363.7298583984375,
+    "complete": true,
+    "hash_verified": true
+  }
+}

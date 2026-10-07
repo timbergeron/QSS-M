@@ -1,0 +1,357 @@
+diff --git a/Quake/cl_demo.c b/Quake/cl_demo.c
+index 4cea4c25..3bab50b6 100644
+--- a/Quake/cl_demo.c
++++ b/Quake/cl_demo.c
+@@ -4835,12 +4835,126 @@ CL_FinishTimeDemo
+ 
+ ====================
+ */
++/* PROBE: per-frame wall time during timedemo */
++unsigned int glprobe_c[GLPROBE_N];
++static struct { const char *file; int line; unsigned int n; } glprobe_sites[256];
++void glprobe_site (const char *file, int line)
++{
++	int i;
++	for (i = 0; i < 256 && glprobe_sites[i].file; i++)
++		if (glprobe_sites[i].line == line && glprobe_sites[i].file == file)
++		{
++			glprobe_sites[i].n++;
++			return;
++		}
++	if (i < 256)
++	{
++		glprobe_sites[i].file = file; glprobe_sites[i].line = line; glprobe_sites[i].n = 1;
++	}
++}
++const char *glprobe_names[GLPROBE_N] = {"glBegin","glEnd","glVertex2f","glVertex3f","glVertex3fv","glVertex2fv","glTexCoord2f","glTexCoord2fv","glColor4f","glColor4ub","glColor4ubv","glColor3f","glColor4fv","glColor3ub","glBindTexture","glEnable","glDisable","glBlendFunc","glDepthMask","glDepthFunc","glTexEnvf","glTexEnvi","glTexParameterf","glTexParameteri","glDrawArrays","glDrawElements","glMatrixMode","glLoadIdentity","glPushMatrix","glPopMatrix","glOrtho","glViewport","glScissor","glAlphaFunc","glShadeModel","glPolygonMode","glCullFace","glFrontFace","glDepthRange","glClear","glColorMask","glLoadMatrixf","glMultMatrixf","glTranslatef","glRotatef","glScalef","glEnableClientState","glDisableClientState","glVertexPointer","glTexCoordPointer","glColorPointer","glGetIntegerv","glGetFloatv","glGetError","glStencilFunc","glStencilOp","glPolygonOffset","glLineWidth","glPointSize","glHint","glFogf","glFogfv","glFogi","glTexImage2D","glTexSubImage2D","glCopyTexSubImage2D","glReadPixels","glFinish","glFlush","glGenTextures","glDeleteTextures","glPixelStorei","glClearColor"};
++double td_stage[8];
++static double td_probe_last;
++static int td_probe_n;
++static float td_probe_ms[400000];
++void TD_ProbeFrame (void)
++{
++	double now = Sys_DoubleTime ();
++	if (!cls.timedemo || host_framecount <= cls.td_startframe + 1)
++	{
++		memset (td_stage, 0, sizeof(td_stage));
++		memset (glprobe_c, 0, sizeof(glprobe_c));
++		memset (glprobe_sites, 0, sizeof(glprobe_sites));
++	}
++	if (cls.timedemo && host_framecount > cls.td_startframe + 1 && td_probe_n < (int)countof(td_probe_ms))
++	{
++		td_probe_ms[td_probe_n] = (float)((now - td_probe_last) * 1000.0);
++		if (td_probe_ms[td_probe_n] > 2.0f)
++			Con_Printf ("TDSPIKE %d %.1fms signon %d\n", td_probe_n, td_probe_ms[td_probe_n], cls.signon);
++		td_probe_n++;
++	}
++	td_probe_last = now;
++}
++static int TD_ProbeCmp (const void *a, const void *b)
++{
++	float x = *(const float *)a, y = *(const float *)b;
++	return x < y ? 1 : x > y ? -1 : 0;
++}
++static void TD_ProbeReport (void)
++{
++	static float sorted[400000];
++	double total = 0, over1 = 0, over2 = 0, med, excess = 0;
++	int i, n1 = 0, n2 = 0, n5 = 0;
++	char line[1024];
++	if (!td_probe_n) return;
++	Con_Printf ("TDPROBE stages us/frame read %.1f screen %.1f sound %.1f particles %.1f swap %.1f pscript %.1f\n",
++		td_stage[0] * 1e6 / td_probe_n, td_stage[1] * 1e6 / td_probe_n, td_stage[2] * 1e6 / td_probe_n,
++		td_stage[3] * 1e6 / td_probe_n, td_stage[4] * 1e6 / td_probe_n, td_stage[5] * 1e6 / td_probe_n);
++	memset (td_stage, 0, sizeof(td_stage));
++	{
++		unsigned int total = 0, k, j, best;
++		char glline[4000];
++		qboolean used[GLPROBE_N] = {0};
++		for (k = 0; k < GLPROBE_N; k++)
++			total += glprobe_c[k];
++		q_snprintf (glline, sizeof(glline), "TDPROBE glcalls/frame %.1f:", (double)total / td_probe_n);
++		for (j = 0; j < GLPROBE_N; j++)
++		{
++			best = GLPROBE_N;
++			for (k = 0; k < GLPROBE_N; k++)
++				if (!used[k] && glprobe_c[k] && (best == GLPROBE_N || glprobe_c[k] > glprobe_c[best]))
++					best = k;
++			if (best == GLPROBE_N)
++				break;
++			used[best] = true;
++			q_snprintf (glline + strlen (glline), sizeof(glline) - strlen (glline), " %s %.1f", glprobe_names[best], (double)glprobe_c[best] / td_probe_n);
++		}
++		Con_Printf ("%s\n", glline);
++		memset (glprobe_c, 0, sizeof(glprobe_c));
++		for (k = 0; k < 256 && glprobe_sites[k].file; k++)
++			if (glprobe_sites[k].n >= (unsigned)td_probe_n / 4)
++				Con_Printf ("TDPROBE glBegin %s:%d %.2f/frame\n", COM_SkipPath (glprobe_sites[k].file), glprobe_sites[k].line, (double)glprobe_sites[k].n / td_probe_n);
++		memset (glprobe_sites, 0, sizeof(glprobe_sites));
++	}
++	{ extern double snd_probe_filtered; Con_Printf ("TDPROBE soundfilter %.0f samples\n", snd_probe_filtered); snd_probe_filtered = 0; }
++	for (i = 0; i < td_probe_n; i++) { total += td_probe_ms[i]; sorted[i] = td_probe_ms[i]; }
++	qsort (sorted, td_probe_n, sizeof(float), TD_ProbeCmp);
++	med = sorted[td_probe_n / 2];
++	for (i = 0; i < td_probe_n; i++)
++	{
++		float v = td_probe_ms[i];
++		if (v > 1) { n1++; over1 += v; }
++		if (v > 2) { n2++; over2 += v; }
++		if (v > 5) n5++;
++		if (v > med * 3) excess += v - med;
++	}
++	Con_Printf ("TDPROBE frames %d total %.1fms median %.4fms p99 %.3fms p999 %.3fms max %.2fms >1ms %d (%.1fms) >2ms %d (%.1fms) >5ms %d excess>3xmed %.1fms\n",
++		td_probe_n, total, med, sorted[td_probe_n / 100], sorted[td_probe_n / 1000], sorted[0], n1, over1, n2, over2, n5, excess);
++	line[0] = 0;
++	for (i = 0; i < td_probe_n; i++)
++		if (td_probe_ms[i] > 1.0f && strlen (line) < 900)
++			q_snprintf (line + strlen (line), sizeof(line) - strlen (line), " %d:%.1f", i, td_probe_ms[i]);
++	Con_Printf ("TDPROBE spikes%s\n", line);
++	{
++		static int pass;
++		FILE *f = fopen (va ("%s/tdprobe_%d.txt", com_basedir, pass++), "w");
++		if (f)
++		{
++			for (i = 0; i < td_probe_n; i++)
++				fprintf (f, "%.4f\n", td_probe_ms[i]);
++			fclose (f);
++		}
++	}
++	td_probe_n = 0;
++}
++
+ static void CL_FinishTimeDemo (void)
+ {
+ 	int	frames;
+ 	float	time;
+ 
+ 	cls.timedemo = false;
++	TD_ProbeReport (); /* PROBE */
+ 
+ // the first frame didn't count
+ 	frames = (host_framecount - cls.td_startframe) - 1;
+diff --git a/Quake/gl_rmain.c b/Quake/gl_rmain.c
+index 076e0226..09522bab 100644
+--- a/Quake/gl_rmain.c
++++ b/Quake/gl_rmain.c
+@@ -3598,10 +3598,13 @@ void R_RenderScene (void)
+ 		// Render particles after alpha entities for correct depth sorting -- woods #alphasort
+ 		if (r_refdef.drawworld && !(r_teleport_view && r_telestyle_detail.value < 1))
+ 		{
++			{ extern double td_stage[8]; double _t = Sys_DoubleTime (); /* PROBE */
+ 			R_DrawParticles ();
++			td_stage[3] += Sys_DoubleTime () - _t; _t = Sys_DoubleTime ();
+ #ifdef PSET_SCRIPT
+ 			PScript_DrawParticles();
+ #endif
++			td_stage[5] += Sys_DoubleTime () - _t; }
+ 		}
+ 	}
+ 	else
+@@ -3613,10 +3616,13 @@ void R_RenderScene (void)
+ 
+ 		if (r_refdef.drawworld && !(r_teleport_view && r_telestyle_detail.value < 1))
+ 		{
++			{ extern double td_stage[8]; double _t = Sys_DoubleTime (); /* PROBE */
+ 			R_DrawParticles ();
++			td_stage[3] += Sys_DoubleTime () - _t; _t = Sys_DoubleTime ();
+ #ifdef PSET_SCRIPT
+ 			PScript_DrawParticles();
+ #endif
++			td_stage[5] += Sys_DoubleTime () - _t; }
+ 		}
+ 	}
+ 
+diff --git a/Quake/gl_screen.c b/Quake/gl_screen.c
+index 608dbeaa..e5475a64 100644
+--- a/Quake/gl_screen.c
++++ b/Quake/gl_screen.c
+@@ -8396,12 +8396,27 @@ WARNING: be very careful calling this from elsewhere, because the refresh
+ needs almost the entire 256k of stack space!
+ ==================
+ */
++static double	scr_signon_hold_start;
++
+ void SCR_UpdateScreen (void)
+ {
+ 	SCR_ScreenshotConsumeCompleted ();
+ 	Sbar_ScoreboardFrame ();
+ 	vid.numpages = (gl_triplebuffer.value) ? 3 : 2;
+ 
++	/* A local server's client signs on within a few frames, and drawing them
++	 * only waits on the GL driver; hold the last frame as the loading plaque
++	 * does, but never for long. */
++	if (Host_LocalSignon ())
++	{
++		if (!scr_signon_hold_start)
++			scr_signon_hold_start = realtime;
++		if (realtime - scr_signon_hold_start < 2.0)
++			return;
++	}
++	else
++		scr_signon_hold_start = 0;
++
+ 	if (scr_disabled_for_loading)
+ 	{
+ 		extern qboolean curl_download_active;	// cl_main.c #webdl
+@@ -8592,7 +8607,7 @@ void SCR_UpdateScreen (void)
+ 
+ 	GLSLGamma_GammaCorrect ();
+ 
+-	GL_EndRendering ();
++	{ extern double td_stage[8]; double _t = Sys_DoubleTime (); GL_EndRendering (); td_stage[4] += Sys_DoubleTime () - _t; } /* PROBE */
+ }
+ 
+ //============================================================================
+diff --git a/Quake/glquake.h b/Quake/glquake.h
+index 06a7f9bf..32c96238 100644
+--- a/Quake/glquake.h
++++ b/Quake/glquake.h
+@@ -721,6 +721,8 @@ extern byte *skipsubmodels;
+ 
+ void GL_BindBuffer (GLenum target, GLuint buffer);
+ void GL_ClearBufferBindings (void);
++GLuint GL_GenBufferName (void);
++void GL_ResetBufferNames (void);
+ 
+ void GLSLGamma_DeleteTexture (void);
+ void GLSLGamma_BeginFrame (void);
+@@ -736,4 +738,6 @@ void R_MotionBlur_DeleteTexture (void); // woods #motionblur
+ 
+ float GL_WaterAlphaForSurface (msurface_t *fa);
+ 
++#include "glprobe_count.h" /* PROBE */
++
+ #endif	/* GLQUAKE_H */
+diff --git a/Quake/host.c b/Quake/host.c
+index 3b093234..c8b74d45 100644
+--- a/Quake/host.c
++++ b/Quake/host.c
+@@ -675,6 +675,7 @@ void Host_EndGame (const char *message, ...)
+ 	else
+ 		CL_Disconnect ();
+ 
++	COM_AbortLoadCache ();
+ 	Host_Longjmp (host_abortserver, 1);
+ }
+ 
+@@ -727,6 +728,7 @@ void Host_Error (const char *error, ...)
+ 
+ 	inerror = false;
+ 
++	COM_AbortLoadCache ();
+ 	Host_Longjmp (host_abortserver, 1);
+ }
+ 
+@@ -1558,8 +1560,17 @@ Share the FPS cap between the frame filter and the client wait.
+ */
+ 
+ 
++/* A local client signing on only waits on its own server, and the screen is
++ * frozen for loading, so run those few frames without the FPS cap. */
++qboolean Host_LocalSignon (void)
++{
++	return sv.active && cls.state == ca_connected && cls.signon < SIGNONS && !cls.demoplayback;
++}
++
+ static double Host_FrameInterval (void)
+ {
++	if (Host_LocalSignon ())
++		return 0;
+ 	if ((host_maxfps.value>0 || cls.state == ca_disconnected) && !cls.timedemo)
+ 	{
+ 		float maxfps;
+@@ -1588,6 +1599,8 @@ void Host_Throttle (double elapsed)
+ 	double interval = Host_FrameInterval ();
+ 	double remaining;
+ 
++	if (Host_LocalSignon ())
++		return;
+ 	if (interval <= 0)
+ 	{
+ 		SDL_Delay (1); // retain the uncapped client's sys_throttle behavior
+@@ -2411,6 +2424,7 @@ void _Host_Frame (double time)
+ 	static double		time2 = 0;
+ 	static double		time3 = 0;
+ 	int			pass1, pass2, pass3;
++	qboolean	signon_steps;
+ 
+ 	if (Host_Setjmp (host_abortserver) )
+ 		return;			// something bad happened, or the server disconnected
+@@ -2431,6 +2445,7 @@ void _Host_Frame (double time)
+ 		return;			// don't run too fast, or packets will flood out
+ 	}
+ 	Host_NetfpsProbe_Frame ();
++	{ extern void TD_ProbeFrame (void); TD_ProbeFrame (); } /* PROBE */
+ 	if (!isDedicated) // woods  -- don't call the input functions in dedicated servers (vkquake)
+ 	{ 
+ 		// get new key events
+@@ -2481,13 +2496,18 @@ void _Host_Frame (double time)
+ 
+ 	CL_AccumulateCmd ();
+ 
++	/* A local client signing on would wait for the next tick at every round
++	 * trip, so step the server each frame (with real elapsed time) until the
++	 * client is in game. */
++	signon_steps = Host_LocalSignon () && accumtime > 0;
++
+ 	//Run the server+networking (client->server->client), at a different rate from everything else
+-	if (accumtime >= host_netinterval)
++	if (accumtime >= host_netinterval || signon_steps)
+ 	{
+ 		float realframetime = host_frametime;
+ 		if (host_netinterval)
+ 		{
+-			host_frametime = q_max(accumtime, host_netinterval);
++			host_frametime = signon_steps ? accumtime : q_max(accumtime, host_netinterval);
+ 			accumtime -= host_frametime;
+ 			if (host_timescale.value > 0)
+ 				host_frametime *= host_timescale.value;
+@@ -2529,7 +2549,7 @@ void _Host_Frame (double time)
+ 			// time, byte-offset); renders one progress frame after.
+ 		demo_seek_activity = CL_DemoSeekFastPump ();
+ 		if (cls.state == ca_connected)
+-			CL_ReadFromServer ();
++			{ extern double td_stage[8]; double _t = Sys_DoubleTime (); CL_ReadFromServer (); td_stage[0] += Sys_DoubleTime () - _t; } /* PROBE */
+ 		demo_seek_activity |= CL_DemoSeekConsumeFrameActivity();
+ 
+ 		// Seek work can advance cl.time by many seconds in a single host
+@@ -2555,7 +2575,7 @@ void _Host_Frame (double time)
+ 	// until the seek completes, then the next host frame draws the result.
+ 	if (!isDedicated && !CL_DemoSeekActive ())
+ 	{
+-		SCR_UpdateScreen ();
++		{ extern double td_stage[8]; double _t = Sys_DoubleTime (); SCR_UpdateScreen (); td_stage[1] += Sys_DoubleTime () - _t; } /* PROBE */
+ 		Image_PreloadRelease (); /* startup images no longer needed after the first draw */
+ 		CL_RunParticles (); //johnfitz -- seperated from rendering
+ 		Sbar_PreloadFrame (); // spread 24-bit HUD decoding across post-launch/menu/connection frames
+@@ -2567,6 +2587,7 @@ void _Host_Frame (double time)
+ // update audio
+ 	if (!isDedicated)
+ 	{
++		extern double td_stage[8]; double _t = Sys_DoubleTime (); /* PROBE */
+ 		BGM_Update();	// adds music raw samples and/or advances midi driver
+ 		if (cl.listener_defined)
+ 		{
+@@ -2577,6 +2598,7 @@ void _Host_Frame (double time)
+ 			S_Update (r_origin, vpn, vright, vup);
+ 		else
+ 			S_Update (vec3_origin, vec3_origin, vec3_origin, vec3_origin);
++		td_stage[2] += Sys_DoubleTime () - _t; /* PROBE */
+ 		CL_DecayLights ();
+ 
+ 		CDAudio_Update();
+diff --git a/Quake/snd_mix.c b/Quake/snd_mix.c
+index 00bc305f..b5d0dfaa 100644
+--- a/Quake/snd_mix.c
++++ b/Quake/snd_mix.c
+@@ -268,8 +268,10 @@ kernel is 4x faster, because we can skip 3/4 of the input samples that are
+ known to be 0 and skip 3/4 of the filter kernel.
+ ==============
+ */
++double snd_probe_filtered; /* PROBE */
+ static void S_ApplyFilter(filter_t *filter, int *data, int stride, int count)
+ {
++	snd_probe_filtered += count; /* PROBE */
+ 	int i, j;
+ 	size_t inputsize;
+ 	float *input;

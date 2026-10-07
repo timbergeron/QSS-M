@@ -1,0 +1,18 @@
+{
+  "result": "passed",
+  "checks": [
+    "7 lifecycle tests × 6 selectable engine rows",
+    "five native log links per applicable selection; ezQuake Denver explicitly unattempted",
+    "30 lifecycle sample rows",
+    "keyboard tab navigation and restored selection focus",
+    "millisecond/second toggle",
+    "exact lifecycle JSON export",
+    "exact combined lifecycle + FPS export",
+    "CSV export matches all 30 file rows",
+    "light/dark themes",
+    "390px mobile layout without page overflow",
+    "preserved FPS interaction",
+    "reduced motion",
+    "no JavaScript errors"
+  ]
+}

@@ -1,0 +1,261 @@
+
+LOG started on: 10/05/2026 20:44:14 
+
+Console initialized.
+Exe: 20:18:02 Oct  5 2026
+384.0 megabyte heap
+
+Sound Initialization
+Video mode 3840x2160x24 144Hz 2x scale (24-bit z-buffer, 0x FSAA) initialized
+GL_VENDOR: NVIDIA Corporation
+GL_RENDERER: NVIDIA GeForce RTX 4070/PCIe/SSE2
+GL_VERSION: 4.6.0 NVIDIA 591.86
+FOUND: ARB_vertex_buffer_object
+FOUND: GL_ARB_buffer_storage
+FOUND: ARB_multitexture
+GL_MAX_TEXTURE_UNITS: 4
+FOUND: ARB_texture_env_combine
+FOUND: ARB_texture_env_add
+FOUND: SDL_GL_SetSwapInterval
+FOUND: EXT_texture_filter_anisotropic
+FOUND: ARB_texture_non_power_of_two
+FOUND: GLSL
+GL_MAX_TEXTURE_IMAGE_UNITS: 32
+FOUND: brush model instancing
+FOUND: Framebuffer Objects
+Enabled: GLSL gamma
+FOUND: glBlendFuncSeparate
+Enabled: GLSL alias model rendering
+Enabled: EXT_packed_pixels
+FOUND: glGenerateMipmap
+SDL audio spec  : 44100 Hz, 1024 samples, 2 mix channels (callback: 2 ch, surround: on)
+SDL audio device: 44100 Hz, 2 ch, SDL_AUDIO_F32LE, 441 sample frames
+SDL audio driver: wasapi - Speakers (Realtek(R) Audio), 65536 bytes buffer
+Audio: 16 bit, stereo, 44100 Hz
+
+Language initialization
+Couldn't load 'localization/loc_english.txt'
+from 'C:\Users\Tim Bergeron\source\repos\QSS-M\.codex-build\engine-fps-optimization-20261005\finish-probe\20261005-204306\3840x2160'
+
+========= Quake Initialized =========
+
+execing quake.rc
+execing default.cfg
+execing fpsbench.cfg
+FINISH_PROBE 
+FINISH_PASS_0_0_0 
+"gl_finish" is "0" (default)
+Playing demo from fps_aerowalk.dem.
+Using protocol 15
+
+<-------------------------------------->
+
+#Aerowalk
+1445 frames   0.8 seconds 1747.7 fps
+FINISH_PASS_0_0_1 
+"gl_finish" is "0" (default)
+Playing demo from fps_aerowalk.dem.
+Using protocol 15
+
+<-------------------------------------->
+
+#Aerowalk
+1445 frames   0.7 seconds 1942.1 fps
+FINISH_PASS_0_0_2 
+"gl_finish" is "0" (default)
+Playing demo from fps_aerowalk.dem.
+Using protocol 15
+
+<-------------------------------------->
+
+#Aerowalk
+1445 frames   0.7 seconds 2106.6 fps
+FINISH_PASS_0_0_3 
+"gl_finish" is "0" (default)
+Playing demo from fps_aerowalk.dem.
+Using protocol 15
+
+<-------------------------------------->
+
+#Aerowalk
+1445 frames   0.7 seconds 2025.4 fps
+FINISH_PASS_0_0_4 
+"gl_finish" is "0" (default)
+Playing demo from fps_aerowalk.dem.
+Using protocol 15
+
+<-------------------------------------->
+
+#Aerowalk
+1445 frames   0.8 seconds 1882.5 fps
+FINISH_PASS_0_0_5 
+"gl_finish" is "0" (default)
+Playing demo from fps_aerowalk.dem.
+Using protocol 15
+
+<-------------------------------------->
+
+#Aerowalk
+1445 frames   0.7 seconds 1982.9 fps
+FINISH_PASS_1_1_0 
+"gl_finish" is "1" (default: "0")
+Playing demo from fps_aerowalk.dem.
+Using protocol 15
+
+<-------------------------------------->
+
+#Aerowalk
+1445 frames   1.0 seconds 1382.3 fps
+FINISH_PASS_1_1_1 
+"gl_finish" is "1" (default: "0")
+Playing demo from fps_aerowalk.dem.
+Using protocol 15
+
+<-------------------------------------->
+
+#Aerowalk
+1445 frames   1.0 seconds 1479.2 fps
+FINISH_PASS_1_1_2 
+"gl_finish" is "1" (default: "0")
+Playing demo from fps_aerowalk.dem.
+Using protocol 15
+
+<-------------------------------------->
+
+#Aerowalk
+1445 frames   1.0 seconds 1419.8 fps
+FINISH_PASS_1_1_3 
+"gl_finish" is "1" (default: "0")
+Playing demo from fps_aerowalk.dem.
+Using protocol 15
+
+<-------------------------------------->
+
+#Aerowalk
+1445 frames   1.1 seconds 1362.8 fps
+FINISH_PASS_1_1_4 
+"gl_finish" is "1" (default: "0")
+Playing demo from fps_aerowalk.dem.
+Using protocol 15
+
+<-------------------------------------->
+
+#Aerowalk
+1445 frames   1.0 seconds 1417.0 fps
+FINISH_PASS_1_1_5 
+"gl_finish" is "1" (default: "0")
+Playing demo from fps_aerowalk.dem.
+Using protocol 15
+
+<-------------------------------------->
+
+#Aerowalk
+1445 frames   1.0 seconds 1398.0 fps
+FINISH_PASS_2_1_0 
+"gl_finish" is "1" (default: "0")
+Playing demo from fps_aerowalk.dem.
+Using protocol 15
+
+<-------------------------------------->
+
+#Aerowalk
+1445 frames   1.0 seconds 1482.4 fps
+FINISH_PASS_2_1_1 
+"gl_finish" is "1" (default: "0")
+Playing demo from fps_aerowalk.dem.
+Using protocol 15
+
+<-------------------------------------->
+
+#Aerowalk
+1445 frames   1.0 seconds 1420.6 fps
+FINISH_PASS_2_1_2 
+"gl_finish" is "1" (default: "0")
+Playing demo from fps_aerowalk.dem.
+Using protocol 15
+
+<-------------------------------------->
+
+#Aerowalk
+1445 frames   1.1 seconds 1351.5 fps
+FINISH_PASS_2_1_3 
+"gl_finish" is "1" (default: "0")
+Playing demo from fps_aerowalk.dem.
+Using protocol 15
+
+<-------------------------------------->
+
+#Aerowalk
+1445 frames   1.0 seconds 1419.5 fps
+FINISH_PASS_2_1_4 
+"gl_finish" is "1" (default: "0")
+Playing demo from fps_aerowalk.dem.
+Using protocol 15
+
+<-------------------------------------->
+
+#Aerowalk
+1445 frames   1.0 seconds 1394.3 fps
+FINISH_PASS_2_1_5 
+"gl_finish" is "1" (default: "0")
+Playing demo from fps_aerowalk.dem.
+Using protocol 15
+
+<-------------------------------------->
+
+#Aerowalk
+1445 frames   1.0 seconds 1478.8 fps
+FINISH_PASS_3_0_0 
+"gl_finish" is "0" (default)
+Playing demo from fps_aerowalk.dem.
+Using protocol 15
+
+<-------------------------------------->
+
+#Aerowalk
+1445 frames   0.7 seconds 1995.7 fps
+FINISH_PASS_3_0_1 
+"gl_finish" is "0" (default)
+Playing demo from fps_aerowalk.dem.
+Using protocol 15
+
+<-------------------------------------->
+
+#Aerowalk
+1445 frames   0.7 seconds 2087.1 fps
+FINISH_PASS_3_0_2 
+"gl_finish" is "0" (default)
+Playing demo from fps_aerowalk.dem.
+Using protocol 15
+
+<-------------------------------------->
+
+#Aerowalk
+1445 frames   0.7 seconds 1979.3 fps
+FINISH_PASS_3_0_3 
+"gl_finish" is "0" (default)
+Playing demo from fps_aerowalk.dem.
+Using protocol 15
+
+<-------------------------------------->
+
+#Aerowalk
+1445 frames   0.7 seconds 2134.7 fps
+FINISH_PASS_3_0_4 
+"gl_finish" is "0" (default)
+Playing demo from fps_aerowalk.dem.
+Using protocol 15
+
+<-------------------------------------->
+
+#Aerowalk
+1445 frames   0.7 seconds 2198.2 fps
+FINISH_PASS_3_0_5 
+"gl_finish" is "0" (default)
+Playing demo from fps_aerowalk.dem.
+Using protocol 15
+
+<-------------------------------------->
+
+#Aerowalk
+1445 frames   0.7 seconds 1938.4 fps

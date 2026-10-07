@@ -1,0 +1,253 @@
+{
+  "bench": "adtears",
+  "title": "ad_tears \u00b7 Sphere easy run 2:14",
+  "game": "ad",
+  "demo": "adte_214",
+  "method": "One discarded warm-up then five fresh-process native timedemos per engine, rotating engine order; 800x600 window, VSync/MSAA off, uncapped, sound on; same settings as the nine-map FPS suite. QSS-M runs with scr_autoid 0.",
+  "files": {
+    "ad/adte_214.dem": "f325ca844ccdcbb9ef0abaed10b243d2f5704c94059d46ace6c7e2db991eb68c",
+    "ad/pak2.pak": "4c82e0347952b38b0265fd34e0c3c3a6b6b4bea17642d18bf4189a97d93dd0f1"
+  },
+  "engines": {
+    "qssm": {
+      "exe": "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\map-load-finish-20261006\\bin-fix1\\quakespasm.exe",
+      "sha256": "63c9f4f4c5c6d9693c2670591c8fa7d8e2e709a23cb7c9f184dba4820e3ee3bd"
+    }
+  },
+  "samples": [
+    {
+      "engine": "qssm",
+      "bench": "adtears",
+      "run": 0,
+      "warmup": true,
+      "result": {
+        "frames": 9989,
+        "seconds": 8.4,
+        "fps": 1189.4,
+        "line": "9989 frames   8.4 seconds 1189.4 fps"
+      },
+      "window_pixels": {
+        "width": 800,
+        "height": 600
+      },
+      "elapsed_wall_seconds": 9.98399999999674,
+      "foreground": true,
+      "command": [
+        "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\fps-expanded-20261006\\demoruns\\adtears\\qssm\\quakespasm.exe",
+        "-basedir",
+        "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\fps-expanded-20261006\\demoruns\\adtears\\qssm",
+        "-nohome",
+        "-condebug",
+        "-window",
+        "-width",
+        "800",
+        "-height",
+        "600",
+        "-nojoy",
+        "-noice",
+        "-game",
+        "ad",
+        "-listen",
+        "-noudp",
+        "-noquakeimport"
+      ],
+      "config": "vid_width 800\nvid_height 600\nvid_fullscreen 0\nvid_vsync 0\nfov 90\nviewsize 100\nhost_maxfps 0\nsys_throttle -1\ncl_demoreel 0\ncl_discord_presence 0\nr_scale 1\nvid_fsaa 0\nscr_autoid 0\necho FPS_BENCH_qssm_adtears_1791330535594555800\nvid_width\nvid_height\nvid_vsync\ntimedemo adte_214\n",
+      "log": "demoruns/logs/qssm-adtears-warmup.log"
+    },
+    {
+      "engine": "qssm",
+      "bench": "adtears",
+      "run": 1,
+      "warmup": false,
+      "result": {
+        "frames": 9989,
+        "seconds": 8.3,
+        "fps": 1196.9,
+        "line": "9989 frames   8.3 seconds 1196.9 fps"
+      },
+      "window_pixels": {
+        "width": 800,
+        "height": 600
+      },
+      "elapsed_wall_seconds": 9.781000000002678,
+      "foreground": true,
+      "command": [
+        "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\fps-expanded-20261006\\demoruns\\adtears\\qssm\\quakespasm.exe",
+        "-basedir",
+        "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\fps-expanded-20261006\\demoruns\\adtears\\qssm",
+        "-nohome",
+        "-condebug",
+        "-window",
+        "-width",
+        "800",
+        "-height",
+        "600",
+        "-nojoy",
+        "-noice",
+        "-game",
+        "ad",
+        "-listen",
+        "-noudp",
+        "-noquakeimport"
+      ],
+      "config": "vid_width 800\nvid_height 600\nvid_fullscreen 0\nvid_vsync 0\nfov 90\nviewsize 100\nhost_maxfps 0\nsys_throttle -1\ncl_demoreel 0\ncl_discord_presence 0\nr_scale 1\nvid_fsaa 0\nscr_autoid 0\necho FPS_BENCH_qssm_adtears_1791330545591920400\nvid_width\nvid_height\nvid_vsync\ntimedemo adte_214\n",
+      "log": "demoruns/logs/qssm-adtears-01.log"
+    },
+    {
+      "engine": "qssm",
+      "bench": "adtears",
+      "run": 2,
+      "warmup": false,
+      "result": {
+        "frames": 9989,
+        "seconds": 8.5,
+        "fps": 1179.8,
+        "line": "9989 frames   8.5 seconds 1179.8 fps"
+      },
+      "window_pixels": {
+        "width": 800,
+        "height": 600
+      },
+      "elapsed_wall_seconds": 9.875,
+      "foreground": true,
+      "command": [
+        "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\fps-expanded-20261006\\demoruns\\adtears\\qssm\\quakespasm.exe",
+        "-basedir",
+        "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\fps-expanded-20261006\\demoruns\\adtears\\qssm",
+        "-nohome",
+        "-condebug",
+        "-window",
+        "-width",
+        "800",
+        "-height",
+        "600",
+        "-nojoy",
+        "-noice",
+        "-game",
+        "ad",
+        "-listen",
+        "-noudp",
+        "-noquakeimport"
+      ],
+      "config": "vid_width 800\nvid_height 600\nvid_fullscreen 0\nvid_vsync 0\nfov 90\nviewsize 100\nhost_maxfps 0\nsys_throttle -1\ncl_demoreel 0\ncl_discord_presence 0\nr_scale 1\nvid_fsaa 0\nscr_autoid 0\necho FPS_BENCH_qssm_adtears_1791330555383957100\nvid_width\nvid_height\nvid_vsync\ntimedemo adte_214\n",
+      "log": "demoruns/logs/qssm-adtears-02.log"
+    },
+    {
+      "engine": "qssm",
+      "bench": "adtears",
+      "run": 3,
+      "warmup": false,
+      "result": {
+        "frames": 9989,
+        "seconds": 8.6,
+        "fps": 1164.1,
+        "line": "9989 frames   8.6 seconds 1164.1 fps"
+      },
+      "window_pixels": {
+        "width": 800,
+        "height": 600
+      },
+      "elapsed_wall_seconds": 9.969000000004598,
+      "foreground": true,
+      "command": [
+        "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\fps-expanded-20261006\\demoruns\\adtears\\qssm\\quakespasm.exe",
+        "-basedir",
+        "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\fps-expanded-20261006\\demoruns\\adtears\\qssm",
+        "-nohome",
+        "-condebug",
+        "-window",
+        "-width",
+        "800",
+        "-height",
+        "600",
+        "-nojoy",
+        "-noice",
+        "-game",
+        "ad",
+        "-listen",
+        "-noudp",
+        "-noquakeimport"
+      ],
+      "config": "vid_width 800\nvid_height 600\nvid_fullscreen 0\nvid_vsync 0\nfov 90\nviewsize 100\nhost_maxfps 0\nsys_throttle -1\ncl_demoreel 0\ncl_discord_presence 0\nr_scale 1\nvid_fsaa 0\nscr_autoid 0\necho FPS_BENCH_qssm_adtears_1791330565272567500\nvid_width\nvid_height\nvid_vsync\ntimedemo adte_214\n",
+      "log": "demoruns/logs/qssm-adtears-03.log"
+    },
+    {
+      "engine": "qssm",
+      "bench": "adtears",
+      "run": 4,
+      "warmup": false,
+      "result": {
+        "frames": 9989,
+        "seconds": 8.5,
+        "fps": 1181.1,
+        "line": "9989 frames   8.5 seconds 1181.1 fps"
+      },
+      "window_pixels": {
+        "width": 800,
+        "height": 600
+      },
+      "elapsed_wall_seconds": 9.860000000000582,
+      "foreground": true,
+      "command": [
+        "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\fps-expanded-20261006\\demoruns\\adtears\\qssm\\quakespasm.exe",
+        "-basedir",
+        "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\fps-expanded-20261006\\demoruns\\adtears\\qssm",
+        "-nohome",
+        "-condebug",
+        "-window",
+        "-width",
+        "800",
+        "-height",
+        "600",
+        "-nojoy",
+        "-noice",
+        "-game",
+        "ad",
+        "-listen",
+        "-noudp",
+        "-noquakeimport"
+      ],
+      "config": "vid_width 800\nvid_height 600\nvid_fullscreen 0\nvid_vsync 0\nfov 90\nviewsize 100\nhost_maxfps 0\nsys_throttle -1\ncl_demoreel 0\ncl_discord_presence 0\nr_scale 1\nvid_fsaa 0\nscr_autoid 0\necho FPS_BENCH_qssm_adtears_1791330575257660100\nvid_width\nvid_height\nvid_vsync\ntimedemo adte_214\n",
+      "log": "demoruns/logs/qssm-adtears-04.log"
+    },
+    {
+      "engine": "qssm",
+      "bench": "adtears",
+      "run": 5,
+      "warmup": false,
+      "result": {
+        "frames": 9989,
+        "seconds": 8.4,
+        "fps": 1196.1,
+        "line": "9989 frames   8.4 seconds 1196.1 fps"
+      },
+      "window_pixels": {
+        "width": 800,
+        "height": 600
+      },
+      "elapsed_wall_seconds": 9.765999999995984,
+      "foreground": true,
+      "command": [
+        "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\fps-expanded-20261006\\demoruns\\adtears\\qssm\\quakespasm.exe",
+        "-basedir",
+        "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\fps-expanded-20261006\\demoruns\\adtears\\qssm",
+        "-nohome",
+        "-condebug",
+        "-window",
+        "-width",
+        "800",
+        "-height",
+        "600",
+        "-nojoy",
+        "-noice",
+        "-game",
+        "ad",
+        "-listen",
+        "-noudp",
+        "-noquakeimport"
+      ],
+      "config": "vid_width 800\nvid_height 600\nvid_fullscreen 0\nvid_vsync 0\nfov 90\nviewsize 100\nhost_maxfps 0\nsys_throttle -1\ncl_demoreel 0\ncl_discord_presence 0\nr_scale 1\nvid_fsaa 0\nscr_autoid 0\necho FPS_BENCH_qssm_adtears_1791330585141553800\nvid_width\nvid_height\nvid_vsync\ntimedemo adte_214\n",
+      "log": "demoruns/logs/qssm-adtears-05.log"
+    }
+  ]
+}

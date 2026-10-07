@@ -1,0 +1,2058 @@
+
+LOG started on: 10/06/2026 12:45:47 
+
+Console initialized.
+IPv4 UDP Initialized
+Exe: 20:18:02 Oct  5 2026
+384.0 megabyte heap
+
+Sound Initialization
+Video mode 800x600x24 144Hz 2x scale (24-bit z-buffer, 0x FSAA) initialized
+GL_VENDOR: NVIDIA Corporation
+GL_RENDERER: NVIDIA GeForce RTX 4070/PCIe/SSE2
+GL_VERSION: 4.6.0 NVIDIA 610.88
+FOUND: ARB_vertex_buffer_object
+FOUND: GL_ARB_buffer_storage
+FOUND: ARB_multitexture
+GL_MAX_TEXTURE_UNITS: 4
+FOUND: ARB_texture_env_combine
+FOUND: ARB_texture_env_add
+FOUND: SDL_GL_SetSwapInterval
+FOUND: EXT_texture_filter_anisotropic
+FOUND: ARB_texture_non_power_of_two
+FOUND: GLSL
+GL_MAX_TEXTURE_IMAGE_UNITS: 32
+FOUND: brush model instancing
+FOUND: Framebuffer Objects
+Enabled: GLSL gamma
+FOUND: glBlendFuncSeparate
+Enabled: GLSL alias model rendering
+Enabled: EXT_packed_pixels
+FOUND: glGenerateMipmap
+SDL audio spec  : 44100 Hz, 1024 samples, 2 mix channels (callback: 2 ch, surround: on)
+SDL audio device: 44100 Hz, 2 ch, SDL_AUDIO_F32LE, 441 sample frames
+SDL audio driver: wasapi - Speakers (Realtek(R) Audio), 65536 bytes buffer
+Audio: 16 bit, stereo, 44100 Hz
+
+Language initialization
+Couldn't load 'localization/loc_english.txt'
+from 'C:\Users\Tim Bergeron\source\repos\QSS-M\.codex-build\map-load-20261005\texverify-final-20261006\baseline\qssm'
+
+========= Quake Initialized =========
+
+execing quake.rc
+execing default.cfg
+execing benchmark.cfg
+BENCH_SESSION_1791315947701868200 
+BENCH_READY 
+texhash gfx/conback.lmp 0 320 200 0000a091 f7604cc5
+texhash gfx/conback.lmp 1 160 100 0000a091 06afb391
+texhash gfx/conback.lmp 2 80 50 0000a091 8afe16de
+texhash gfx/conback.lmp 3 40 25 0000a091 9b1d9543
+texhash gfx/conback.lmp 4 20 12 0000a091 36408c7a
+texhash gfx/conback.lmp 5 10 6 0000a091 d3aa5fa0
+texhash gfx/conback.lmp 6 5 3 0000a091 1e581266
+texhash gfx/conback.lmp 7 2 1 0000a091 5245956e
+texhash gfx/conback.lmp 8 1 1 0000a091 3dfa6c35
+texhash scrap0 0 256 256 000000c8 b46f2938
+texhash scrap0 0 256 256 000000c8 acdde1a3
+texhash scrap0 0 256 256 000000c8 de49be10
+texhash scrap0 0 256 256 000000c8 89c23e3a
+texhash scrap0 0 256 256 000000c8 4a3f6d1c
+texhash scrap0 0 256 256 000000c8 227c80ac
+texhash scrap0 0 256 256 000000c8 ed103994
+texhash gfx.wad:inv_shotgun 0 24 16 00000004 aa8576c1
+texhash scrap0 0 256 256 000000c8 4fb16661
+texhash gfx.wad:inv_sshotgun 0 24 16 00000004 bc5e9861
+texhash gfx.wad:inv_nailgun 0 24 16 00000004 538a92d4
+texhash gfx.wad:inv_snailgun 0 24 16 00000004 c6b9637d
+texhash gfx.wad:inv_rlaunch 0 24 16 00000004 c8935555
+texhash gfx.wad:inv_srlaunch 0 24 16 00000004 49c56575
+texhash gfx.wad:inv_lightng 0 48 16 00000004 cb07d23a
+texhash gfx.wad:inv2_shotgun 0 24 16 00000004 d6c320d1
+texhash gfx.wad:inv2_sshotgun 0 24 16 00000004 2d115a8d
+texhash gfx.wad:inv2_nailgun 0 24 16 00000004 d14acb0c
+texhash gfx.wad:inv2_snailgun 0 24 16 00000004 054c266d
+texhash gfx.wad:inv2_rlaunch 0 24 16 00000004 e4c726a2
+texhash gfx.wad:inv2_srlaunch 0 24 16 00000004 60de469d
+texhash gfx.wad:inv2_lightng 0 48 16 00000004 cdbe0e01
+texhash scrap0 0 256 256 000000c8 78787cb7
+texhash scrap0 0 256 256 000000c8 45e4c35c
+texhash scrap0 0 256 256 000000c8 7f097e5b
+texhash scrap0 0 256 256 000000c8 926b5255
+texhash scrap0 0 256 256 000000c8 567281be
+texhash scrap0 0 256 256 000000c8 1019b97a
+texhash scrap0 0 256 256 000000c8 e0422dcb
+texhash scrap0 0 256 256 000000c8 aa32ac4a
+texhash scrap0 0 256 256 000000c8 f30f6e53
+texhash scrap0 0 256 256 000000c8 fe8d04e5
+texhash scrap0 0 256 256 000000c8 f7a8e1c0
+texhash scrap0 0 256 256 000000c8 9c9f387b
+texhash scrap0 0 256 256 000000c8 7a9678c1
+texhash scrap0 0 256 256 000000c8 8dc59894
+texhash scrap0 0 256 256 000000c8 7195250b
+texhash scrap0 0 256 256 000000c8 e2adafcf
+texhash gfx.wad:sbar 0 320 24 00000090 0edb704d
+texhash scrap0 0 256 256 000000c8 312d2bab
+texhash gfx.wad:ibar 0 320 24 00000090 06cf5bd7
+texhash gfx.wad:scorebar 0 320 24 00000090 82f4f209
+BENCH_BEGIN_initial 
+SpawnServer: start
+SV_SpawnServer pre-clear: 0.0ms
+Clearing memory
+SV_SpawnServer clear memory: 0.2ms
+SV_SpawnServer draw reload: 0.0ms
+FindFile: can't find csprogs.dat
+progs.dat occupies 403K.
+Patch for incorrect ogre smash state applied
+SV_SpawnServer load progs: 2.5ms
+texhash maps/start.bsp:+2light01 0 64 64 00000001 ea1fbd81
+texhash maps/start.bsp:+2light01 1 32 32 00000001 0b23da48
+texhash maps/start.bsp:+2light01 2 16 16 00000001 3121885e
+texhash maps/start.bsp:+2light01 3 8 8 00000001 791a58e0
+texhash maps/start.bsp:+2light01 4 4 4 00000001 06fc806b
+texhash maps/start.bsp:+2light01 5 2 2 00000001 5c006d15
+texhash maps/start.bsp:+2light01 6 1 1 00000001 574ff3b8
+texhash maps/start.bsp:+1light01 0 64 64 00000001 64c510e9
+texhash maps/start.bsp:+1light01 1 32 32 00000001 8f7deb20
+texhash maps/start.bsp:+1light01 2 16 16 00000001 06e5ecf2
+texhash maps/start.bsp:+1light01 3 8 8 00000001 8d08a097
+texhash maps/start.bsp:+1light01 4 4 4 00000001 707161a3
+texhash maps/start.bsp:+1light01 5 2 2 00000001 226c2114
+texhash maps/start.bsp:+1light01 6 1 1 00000001 e4261fc8
+texhash maps/start.bsp:+6slip 0 64 64 00000201 afb12606
+texhash maps/start.bsp:+6slip 1 32 32 00000201 cbd68712
+texhash maps/start.bsp:+6slip 2 16 16 00000201 e4d98a47
+texhash maps/start.bsp:+6slip 3 8 8 00000201 520673e0
+texhash maps/start.bsp:+6slip 4 4 4 00000201 d3dd0f4a
+texhash maps/start.bsp:+6slip 5 2 2 00000201 8c2732aa
+texhash maps/start.bsp:+6slip 6 1 1 00000201 17e03709
+texhash maps/start.bsp:+6slip_glow 0 64 64 00000101 2459669e
+texhash maps/start.bsp:+6slip_glow 1 32 32 00000101 66242992
+texhash maps/start.bsp:+6slip_glow 2 16 16 00000101 c9033133
+texhash maps/start.bsp:+6slip_glow 3 8 8 00000101 a82236cd
+texhash maps/start.bsp:+6slip_glow 4 4 4 00000101 401451fc
+texhash maps/start.bsp:+6slip_glow 5 2 2 00000101 1e5e1993
+texhash maps/start.bsp:+6slip_glow 6 1 1 00000101 adc5545a
+texhash maps/start.bsp:+5slip 0 64 64 00000201 5d257fee
+texhash maps/start.bsp:+5slip 1 32 32 00000201 b38d9195
+texhash maps/start.bsp:+5slip 2 16 16 00000201 5ed88177
+texhash maps/start.bsp:+5slip 3 8 8 00000201 7013cab3
+texhash maps/start.bsp:+5slip 4 4 4 00000201 6b31fe4a
+texhash maps/start.bsp:+5slip 5 2 2 00000201 48c3134a
+texhash maps/start.bsp:+5slip 6 1 1 00000201 fc4bcc93
+texhash maps/start.bsp:+5slip_glow 0 64 64 00000101 dcab0342
+texhash maps/start.bsp:+5slip_glow 1 32 32 00000101 cbfd5ee4
+texhash maps/start.bsp:+5slip_glow 2 16 16 00000101 a732ebee
+texhash maps/start.bsp:+5slip_glow 3 8 8 00000101 63e70978
+texhash maps/start.bsp:+5slip_glow 4 4 4 00000101 987e19d3
+texhash maps/start.bsp:+5slip_glow 5 2 2 00000101 9725bbd7
+texhash maps/start.bsp:+5slip_glow 6 1 1 00000101 67f0a749
+texhash maps/start.bsp:+4slip 0 64 64 00000201 2c47a37a
+texhash maps/start.bsp:+4slip 1 32 32 00000201 88ed5ad8
+texhash maps/start.bsp:+4slip 2 16 16 00000201 ae7e705c
+texhash maps/start.bsp:+4slip 3 8 8 00000201 65a3680f
+texhash maps/start.bsp:+4slip 4 4 4 00000201 a7dfbfe4
+texhash maps/start.bsp:+4slip 5 2 2 00000201 a7f755dd
+texhash maps/start.bsp:+4slip 6 1 1 00000201 5271dcd6
+texhash maps/start.bsp:+4slip_glow 0 64 64 00000101 40446b16
+texhash maps/start.bsp:+4slip_glow 1 32 32 00000101 91dfe522
+texhash maps/start.bsp:+4slip_glow 2 16 16 00000101 2054e37f
+texhash maps/start.bsp:+4slip_glow 3 8 8 00000101 75c2a35e
+texhash maps/start.bsp:+4slip_glow 4 4 4 00000101 0dd3d9b5
+texhash maps/start.bsp:+4slip_glow 5 2 2 00000101 1193c49d
+texhash maps/start.bsp:+4slip_glow 6 1 1 00000101 c514e29e
+texhash maps/start.bsp:+3slip 0 64 64 00000201 a2291431
+texhash maps/start.bsp:+3slip 1 32 32 00000201 ab1afaed
+texhash maps/start.bsp:+3slip 2 16 16 00000201 6e498136
+texhash maps/start.bsp:+3slip 3 8 8 00000201 e076244e
+texhash maps/start.bsp:+3slip 4 4 4 00000201 52bd4e94
+texhash maps/start.bsp:+3slip 5 2 2 00000201 8066cfcc
+texhash maps/start.bsp:+3slip 6 1 1 00000201 aba9bd58
+texhash maps/start.bsp:+3slip_glow 0 64 64 00000101 f1099b71
+texhash maps/start.bsp:+3slip_glow 1 32 32 00000101 c88349b0
+texhash maps/start.bsp:+3slip_glow 2 16 16 00000101 86ca517b
+texhash maps/start.bsp:+3slip_glow 3 8 8 00000101 8d4e756e
+texhash maps/start.bsp:+3slip_glow 4 4 4 00000101 e3c2661b
+texhash maps/start.bsp:+3slip_glow 5 2 2 00000101 f1bf4705
+texhash maps/start.bsp:+3slip_glow 6 1 1 00000101 dc7b489d
+texhash maps/start.bsp:+2slip 0 64 64 00000201 eaae8207
+texhash maps/start.bsp:+2slip 1 32 32 00000201 7c38647e
+texhash maps/start.bsp:+2slip 2 16 16 00000201 d6d8ec4d
+texhash maps/start.bsp:+2slip 3 8 8 00000201 79321905
+texhash maps/start.bsp:+2slip 4 4 4 00000201 40d4bebd
+texhash maps/start.bsp:+2slip 5 2 2 00000201 77ea9a6d
+texhash maps/start.bsp:+2slip 6 1 1 00000201 479d3d53
+texhash maps/start.bsp:+2slip_glow 0 64 64 00000101 2a192bf5
+texhash maps/start.bsp:+2slip_glow 1 32 32 00000101 59a8f7eb
+texhash maps/start.bsp:+2slip_glow 2 16 16 00000101 6f48b39b
+texhash maps/start.bsp:+2slip_glow 3 8 8 00000101 422914ba
+texhash maps/start.bsp:+2slip_glow 4 4 4 00000101 be10c878
+texhash maps/start.bsp:+2slip_glow 5 2 2 00000101 b69c2f35
+texhash maps/start.bsp:+2slip_glow 6 1 1 00000101 7f5a3348
+texhash maps/start.bsp:+1slip 0 64 64 00000201 1b6052d2
+texhash maps/start.bsp:+1slip 1 32 32 00000201 7d8cbcc2
+texhash maps/start.bsp:+1slip 2 16 16 00000201 9f72ff9a
+texhash maps/start.bsp:+1slip 3 8 8 00000201 a7d5d1f6
+texhash maps/start.bsp:+1slip 4 4 4 00000201 52312386
+texhash maps/start.bsp:+1slip 5 2 2 00000201 575911f3
+texhash maps/start.bsp:+1slip 6 1 1 00000201 585a417c
+texhash maps/start.bsp:+1slip_glow 0 64 64 00000101 f44ff65a
+texhash maps/start.bsp:+1slip_glow 1 32 32 00000101 d87ebdd5
+texhash maps/start.bsp:+1slip_glow 2 16 16 00000101 24eac8c9
+texhash maps/start.bsp:+1slip_glow 3 8 8 00000101 efbd04ba
+texhash maps/start.bsp:+1slip_glow 4 4 4 00000101 ff024e84
+texhash maps/start.bsp:+1slip_glow 5 2 2 00000101 0ca9e5e5
+texhash maps/start.bsp:+1slip_glow 6 1 1 00000101 c545b814
+texhash maps/start.bsp:z_exit 0 32 32 00000201 d17795fa
+texhash maps/start.bsp:z_exit 1 16 16 00000201 bac012ad
+texhash maps/start.bsp:z_exit 2 8 8 00000201 cd65721f
+texhash maps/start.bsp:z_exit 3 4 4 00000201 0aa34d49
+texhash maps/start.bsp:z_exit 4 2 2 00000201 7e17bb18
+texhash maps/start.bsp:z_exit 5 1 1 00000201 1e58c369
+texhash maps/start.bsp:z_exit_glow 0 32 32 00000101 2ce4aeae
+texhash maps/start.bsp:z_exit_glow 1 16 16 00000101 fa683605
+texhash maps/start.bsp:z_exit_glow 2 8 8 00000101 00794133
+texhash maps/start.bsp:z_exit_glow 3 4 4 00000101 8bc63fb9
+texhash maps/start.bsp:z_exit_glow 4 2 2 00000101 962f5d16
+texhash maps/start.bsp:z_exit_glow 5 1 1 00000101 7f743103
+texhash maps/start.bsp:door04_2 0 128 192 00000001 7868c9f1
+texhash maps/start.bsp:door04_2 1 64 96 00000001 5b52d3ce
+texhash maps/start.bsp:door04_2 2 32 48 00000001 e711dfa1
+texhash maps/start.bsp:door04_2 3 16 24 00000001 7e75a3e5
+texhash maps/start.bsp:door04_2 4 8 12 00000001 1353489a
+texhash maps/start.bsp:door04_2 5 4 6 00000001 0c318f81
+texhash maps/start.bsp:door04_2 6 2 3 00000001 3fe5a08a
+texhash maps/start.bsp:door04_2 7 1 1 00000001 4332cbd5
+texhash maps/start.bsp:trigger 0 64 64 00000001 40b9a7b1
+texhash maps/start.bsp:trigger 1 32 32 00000001 ba07f56c
+texhash maps/start.bsp:trigger 2 16 16 00000001 45017189
+texhash maps/start.bsp:trigger 3 8 8 00000001 bfcf39c9
+texhash maps/start.bsp:trigger 4 4 4 00000001 1db31b54
+texhash maps/start.bsp:trigger 5 2 2 00000001 dd31f2e7
+texhash maps/start.bsp:trigger 6 1 1 00000001 3ee7f677
+texhash maps/start.bsp:metal5_1 0 64 64 00000001 d97a6a86
+texhash maps/start.bsp:metal5_1 1 32 32 00000001 d4bad881
+texhash maps/start.bsp:metal5_1 2 16 16 00000001 51ece966
+texhash maps/start.bsp:metal5_1 3 8 8 00000001 f9fc1b1c
+texhash maps/start.bsp:metal5_1 4 4 4 00000001 ec07b798
+texhash maps/start.bsp:metal5_1 5 2 2 00000001 3af83378
+texhash maps/start.bsp:metal5_1 6 1 1 00000001 9b43f27e
+texhash maps/start.bsp:rock4_1 0 128 128 00000001 afa72aea
+texhash maps/start.bsp:rock4_1 1 64 64 00000001 f2100bff
+texhash maps/start.bsp:rock4_1 2 32 32 00000001 6a8145ac
+texhash maps/start.bsp:rock4_1 3 16 16 00000001 5db294fb
+texhash maps/start.bsp:rock4_1 4 8 8 00000001 113d37eb
+texhash maps/start.bsp:rock4_1 5 4 4 00000001 b593161a
+texhash maps/start.bsp:rock4_1 6 2 2 00000001 f4bef776
+texhash maps/start.bsp:rock4_1 7 1 1 00000001 dfcbf134
+texhash maps/start.bsp:wizwood1_8 0 64 64 00000001 bdbba24e
+texhash maps/start.bsp:wizwood1_8 1 32 32 00000001 f667f2b7
+texhash maps/start.bsp:wizwood1_8 2 16 16 00000001 1ba3422b
+texhash maps/start.bsp:wizwood1_8 3 8 8 00000001 71a59eba
+texhash maps/start.bsp:wizwood1_8 4 4 4 00000001 e54df0b1
+texhash maps/start.bsp:wizwood1_8 5 2 2 00000001 26a44e1b
+texhash maps/start.bsp:wizwood1_8 6 1 1 00000001 c63faa4e
+texhash maps/start.bsp:skill3 0 32 160 00000001 406bba56
+texhash maps/start.bsp:skill3 1 16 80 00000001 610fb039
+texhash maps/start.bsp:skill3 2 8 40 00000001 d20e3df1
+texhash maps/start.bsp:skill3 3 4 20 00000001 bcdf36d2
+texhash maps/start.bsp:skill3 4 2 10 00000001 de9efed1
+texhash maps/start.bsp:skill3 5 1 5 00000001 120b851a
+texhash maps/start.bsp:skill3 6 1 2 00000001 348a0fef
+texhash maps/start.bsp:skill3 7 1 1 00000001 3de988e9
+texhash maps/start.bsp:quake 0 288 64 00000001 f11629d8
+texhash maps/start.bsp:quake 1 144 32 00000001 367bfcb2
+texhash maps/start.bsp:quake 2 72 16 00000001 2324533b
+texhash maps/start.bsp:quake 3 36 8 00000001 31c4bb79
+texhash maps/start.bsp:quake 4 18 4 00000001 59506909
+texhash maps/start.bsp:quake 5 9 2 00000001 45617ff3
+texhash maps/start.bsp:quake 6 4 1 00000001 1467dbe1
+texhash maps/start.bsp:quake 7 2 1 00000001 6fafe758
+texhash maps/start.bsp:quake 8 1 1 00000001 cf8b714e
+texhash maps/start.bsp:cop1_1 0 64 64 00000001 d97a6a86
+texhash maps/start.bsp:cop1_1 1 32 32 00000001 d4bad881
+texhash maps/start.bsp:cop1_1 2 16 16 00000001 51ece966
+texhash maps/start.bsp:cop1_1 3 8 8 00000001 f9fc1b1c
+texhash maps/start.bsp:cop1_1 4 4 4 00000001 ec07b798
+texhash maps/start.bsp:cop1_1 5 2 2 00000001 3af83378
+texhash maps/start.bsp:cop1_1 6 1 1 00000001 9b43f27e
+texhash maps/start.bsp:ceiling1_3 0 64 64 00000001 a10c6695
+texhash maps/start.bsp:ceiling1_3 1 32 32 00000001 a82d4321
+texhash maps/start.bsp:ceiling1_3 2 16 16 00000001 705427ff
+texhash maps/start.bsp:ceiling1_3 3 8 8 00000001 48bb5af0
+texhash maps/start.bsp:ceiling1_3 4 4 4 00000001 7259604f
+texhash maps/start.bsp:ceiling1_3 5 2 2 00000001 83feb863
+texhash maps/start.bsp:ceiling1_3 6 1 1 00000001 3d789f1a
+texhash maps/start.bsp:bricka2_1 0 64 64 00000001 981b8e81
+texhash maps/start.bsp:bricka2_1 1 32 32 00000001 2b2e930c
+texhash maps/start.bsp:bricka2_1 2 16 16 00000001 9298045c
+texhash maps/start.bsp:bricka2_1 3 8 8 00000001 0fbc0309
+texhash maps/start.bsp:bricka2_1 4 4 4 00000001 d2244338
+texhash maps/start.bsp:bricka2_1 5 2 2 00000001 ee1aa93a
+texhash maps/start.bsp:bricka2_1 6 1 1 00000001 11d5ebb8
+texhash maps/start.bsp:city1_4 0 64 64 00000001 d59e8ca6
+texhash maps/start.bsp:city1_4 1 32 32 00000001 f9540cfb
+texhash maps/start.bsp:city1_4 2 16 16 00000001 bf843673
+texhash maps/start.bsp:city1_4 3 8 8 00000001 007700c7
+texhash maps/start.bsp:city1_4 4 4 4 00000001 0f837f00
+texhash maps/start.bsp:city1_4 5 2 2 00000001 703dc98a
+texhash maps/start.bsp:city1_4 6 1 1 00000001 860d792e
+texhash maps/start.bsp:+0light01 0 64 64 00000001 cc4913d5
+texhash maps/start.bsp:+0light01 1 32 32 00000001 6f16f219
+texhash maps/start.bsp:+0light01 2 16 16 00000001 d0d51de6
+texhash maps/start.bsp:+0light01 3 8 8 00000001 62ac4bd0
+texhash maps/start.bsp:+0light01 4 4 4 00000001 e43f50a4
+texhash maps/start.bsp:+0light01 5 2 2 00000001 68a63cdd
+texhash maps/start.bsp:+0light01 6 1 1 00000001 574ff3b8
+texhash maps/start.bsp:switch_1 0 32 32 00000201 f0578838
+texhash maps/start.bsp:switch_1 1 16 16 00000201 48bb8f5a
+texhash maps/start.bsp:switch_1 2 8 8 00000201 b80c9647
+texhash maps/start.bsp:switch_1 3 4 4 00000201 3b2f60f3
+texhash maps/start.bsp:switch_1 4 2 2 00000201 fa2aeea9
+texhash maps/start.bsp:switch_1 5 1 1 00000201 05b96843
+texhash maps/start.bsp:switch_1_glow 0 32 32 00000101 0ca3496e
+texhash maps/start.bsp:switch_1_glow 1 16 16 00000101 a9e37ea9
+texhash maps/start.bsp:switch_1_glow 2 8 8 00000101 7a97ec3d
+texhash maps/start.bsp:switch_1_glow 3 4 4 00000101 4a7c9e34
+texhash maps/start.bsp:switch_1_glow 4 2 2 00000101 5e94bb01
+texhash maps/start.bsp:switch_1_glow 5 1 1 00000101 0b1a6525
+texhash maps/start.bsp:tech10_1 0 64 64 00000001 f26408dd
+texhash maps/start.bsp:tech10_1 1 32 32 00000001 a1e46979
+texhash maps/start.bsp:tech10_1 2 16 16 00000001 f1459a57
+texhash maps/start.bsp:tech10_1 3 8 8 00000001 74ea023f
+texhash maps/start.bsp:tech10_1 4 4 4 00000001 938a4387
+texhash maps/start.bsp:tech10_1 5 2 2 00000001 878c4dfd
+texhash maps/start.bsp:tech10_1 6 1 1 00000001 73578240
+texhash maps/start.bsp:wood1_1 0 64 64 00000001 45766bb2
+texhash maps/start.bsp:wood1_1 1 32 32 00000001 bbcaadfc
+texhash maps/start.bsp:wood1_1 2 16 16 00000001 f3f77362
+texhash maps/start.bsp:wood1_1 3 8 8 00000001 58d515fb
+texhash maps/start.bsp:wood1_1 4 4 4 00000001 3e962a38
+texhash maps/start.bsp:wood1_1 5 2 2 00000001 baea7af0
+texhash maps/start.bsp:wood1_1 6 1 1 00000001 8bd08e4a
+texhash maps/start.bsp:wizmet1_3 0 64 64 00000001 006f4d15
+texhash maps/start.bsp:wizmet1_3 1 32 32 00000001 be765f19
+texhash maps/start.bsp:wizmet1_3 2 16 16 00000001 eef0f2f2
+texhash maps/start.bsp:wizmet1_3 3 8 8 00000001 bff636b6
+texhash maps/start.bsp:wizmet1_3 4 4 4 00000001 a08fc662
+texhash maps/start.bsp:wizmet1_3 5 2 2 00000001 389f61a1
+texhash maps/start.bsp:wizmet1_3 6 1 1 00000001 ec11369a
+texhash maps/start.bsp:wizwood1_3 0 64 64 00000001 5dbfc6d5
+texhash maps/start.bsp:wizwood1_3 1 32 32 00000001 0c9f9d3d
+texhash maps/start.bsp:wizwood1_3 2 16 16 00000001 6d8ef05c
+texhash maps/start.bsp:wizwood1_3 3 8 8 00000001 85c81ac3
+texhash maps/start.bsp:wizwood1_3 4 4 4 00000001 d8a163be
+texhash maps/start.bsp:wizwood1_3 5 2 2 00000001 99d1339b
+texhash maps/start.bsp:wizwood1_3 6 1 1 00000001 aa04f373
+texhash maps/start.bsp:m5_8 0 64 64 00000001 f1186451
+texhash maps/start.bsp:m5_8 1 32 32 00000001 91c35854
+texhash maps/start.bsp:m5_8 2 16 16 00000001 8bd8bc0b
+texhash maps/start.bsp:m5_8 3 8 8 00000001 1017e982
+texhash maps/start.bsp:m5_8 4 4 4 00000001 792a65d5
+texhash maps/start.bsp:m5_8 5 2 2 00000001 7978009f
+texhash maps/start.bsp:m5_8 6 1 1 00000001 58a357aa
+texhash maps/start.bsp:wmet3_1 0 64 64 00000001 711e5e72
+texhash maps/start.bsp:wmet3_1 1 32 32 00000001 a3a0a3e4
+texhash maps/start.bsp:wmet3_1 2 16 16 00000001 7e445d0d
+texhash maps/start.bsp:wmet3_1 3 8 8 00000001 92d58861
+texhash maps/start.bsp:wmet3_1 4 4 4 00000001 18f7bff7
+texhash maps/start.bsp:wmet3_1 5 2 2 00000001 b09ba5b1
+texhash maps/start.bsp:wmet3_1 6 1 1 00000001 6d6e21eb
+texhash maps/start.bsp:wall9_8 0 64 64 00000001 b7f3c70e
+texhash maps/start.bsp:wall9_8 1 32 32 00000001 e14ed4fc
+texhash maps/start.bsp:wall9_8 2 16 16 00000001 3196eb14
+texhash maps/start.bsp:wall9_8 3 8 8 00000001 30f12688
+texhash maps/start.bsp:wall9_8 4 4 4 00000001 023c0e5f
+texhash maps/start.bsp:wall9_8 5 2 2 00000001 c94620ae
+texhash maps/start.bsp:wall9_8 6 1 1 00000001 8d2c2967
+texhash maps/start.bsp:m5_3 0 64 64 00000001 b967bdad
+texhash maps/start.bsp:m5_3 1 32 32 00000001 3d79e4d0
+texhash maps/start.bsp:m5_3 2 16 16 00000001 1d1f3fe7
+texhash maps/start.bsp:m5_3 3 8 8 00000001 57d90239
+texhash maps/start.bsp:m5_3 4 4 4 00000001 cf4d7567
+texhash maps/start.bsp:m5_3 5 2 2 00000001 a7fc2eec
+texhash maps/start.bsp:m5_3 6 1 1 00000001 a67067c9
+texhash maps/start.bsp:church1_2 0 64 64 00000001 fb166441
+texhash maps/start.bsp:church1_2 1 32 32 00000001 72d77548
+texhash maps/start.bsp:church1_2 2 16 16 00000001 3262ed73
+texhash maps/start.bsp:church1_2 3 8 8 00000001 2c946bac
+texhash maps/start.bsp:church1_2 4 4 4 00000001 f5ae375b
+texhash maps/start.bsp:church1_2 5 2 2 00000001 9c0fe097
+texhash maps/start.bsp:church1_2 6 1 1 00000001 229fa9d9
+texhash maps/start.bsp:metal1_4 0 64 64 00000001 3384d441
+texhash maps/start.bsp:metal1_4 1 32 32 00000001 8a320d48
+texhash maps/start.bsp:metal1_4 2 16 16 00000001 eb8625a2
+texhash maps/start.bsp:metal1_4 3 8 8 00000001 a56f2d98
+texhash maps/start.bsp:metal1_4 4 4 4 00000001 a2ad763f
+texhash maps/start.bsp:metal1_4 5 2 2 00000001 12918da6
+texhash maps/start.bsp:metal1_4 6 1 1 00000001 733ca8e9
+texhash maps/start.bsp:rune2_3 0 32 32 00000201 52df19bd
+texhash maps/start.bsp:rune2_3 1 16 16 00000201 452115c6
+texhash maps/start.bsp:rune2_3 2 8 8 00000201 914001e2
+texhash maps/start.bsp:rune2_3 3 4 4 00000201 071cf344
+texhash maps/start.bsp:rune2_3 4 2 2 00000201 95748492
+texhash maps/start.bsp:rune2_3 5 1 1 00000201 5cb1d771
+texhash maps/start.bsp:rune2_3_glow 0 32 32 00000101 b082911e
+texhash maps/start.bsp:rune2_3_glow 1 16 16 00000101 d2c0b023
+texhash maps/start.bsp:rune2_3_glow 2 8 8 00000101 d8b89f72
+texhash maps/start.bsp:rune2_3_glow 3 4 4 00000101 9a6045fb
+texhash maps/start.bsp:rune2_3_glow 4 2 2 00000101 2ab59fda
+texhash maps/start.bsp:rune2_3_glow 5 1 1 00000101 0b00676a
+texhash maps/start.bsp:wizmet1_8 0 64 64 00000001 24e3b10d
+texhash maps/start.bsp:wizmet1_8 1 32 32 00000001 1ed8a86d
+texhash maps/start.bsp:wizmet1_8 2 16 16 00000001 7eebed05
+texhash maps/start.bsp:wizmet1_8 3 8 8 00000001 f56515b4
+texhash maps/start.bsp:wizmet1_8 4 4 4 00000001 b4146ba1
+texhash maps/start.bsp:wizmet1_8 5 2 2 00000001 06d69e7f
+texhash maps/start.bsp:wizmet1_8 6 1 1 00000001 685b8aae
+texhash maps/start.bsp:cop1_6 0 64 64 00000001 aef036a5
+texhash maps/start.bsp:cop1_6 1 32 32 00000001 8b8bffea
+texhash maps/start.bsp:cop1_6 2 16 16 00000001 941a3a5f
+texhash maps/start.bsp:cop1_6 3 8 8 00000001 cdee3d5b
+texhash maps/start.bsp:cop1_6 4 4 4 00000001 38d73ac2
+texhash maps/start.bsp:cop1_6 5 2 2 00000001 2f608f45
+texhash maps/start.bsp:cop1_6 6 1 1 00000001 6d3b0037
+texhash maps/start.bsp:m5_5 0 64 64 00000001 13ba436e
+texhash maps/start.bsp:m5_5 1 32 32 00000001 8db41907
+texhash maps/start.bsp:m5_5 2 16 16 00000001 f2748c77
+texhash maps/start.bsp:m5_5 3 8 8 00000001 99af16f4
+texhash maps/start.bsp:m5_5 4 4 4 00000001 98229deb
+texhash maps/start.bsp:m5_5 5 2 2 00000001 84d5ef32
+texhash maps/start.bsp:m5_5 6 1 1 00000001 d5bc2078
+texhash maps/start.bsp:metal6_4 0 32 32 00000001 33a17d99
+texhash maps/start.bsp:metal6_4 1 16 16 00000001 e9e1d82f
+texhash maps/start.bsp:metal6_4 2 8 8 00000001 7fd0c51b
+texhash maps/start.bsp:metal6_4 3 4 4 00000001 a9ec5ac7
+texhash maps/start.bsp:metal6_4 4 2 2 00000001 f51dd6e5
+texhash maps/start.bsp:metal6_4 5 1 1 00000001 9cb2ed59
+texhash maps/start.bsp:metal5_3 0 64 64 00000001 99804e16
+texhash maps/start.bsp:metal5_3 1 32 32 00000001 dce72589
+texhash maps/start.bsp:metal5_3 2 16 16 00000001 906a0a94
+texhash maps/start.bsp:metal5_3 3 8 8 00000001 1543d174
+texhash maps/start.bsp:metal5_3 4 4 4 00000001 2a9d54dc
+texhash maps/start.bsp:metal5_3 5 2 2 00000001 44418f4a
+texhash maps/start.bsp:metal5_3 6 1 1 00000001 af8a17e2
+texhash maps/start.bsp:wmet4_4 0 64 64 00000001 3d45317d
+texhash maps/start.bsp:wmet4_4 1 32 32 00000001 d92abc49
+texhash maps/start.bsp:wmet4_4 2 16 16 00000001 65eb19e5
+texhash maps/start.bsp:wmet4_4 3 8 8 00000001 4a3279b1
+texhash maps/start.bsp:wmet4_4 4 4 4 00000001 8f491294
+texhash maps/start.bsp:wmet4_4 5 2 2 00000001 466db89e
+texhash maps/start.bsp:wmet4_4 6 1 1 00000001 9570af2f
+texhash maps/start.bsp:metalt1_1 0 64 64 00000001 90bbc8ba
+texhash maps/start.bsp:metalt1_1 1 32 32 00000001 d92566fe
+texhash maps/start.bsp:metalt1_1 2 16 16 00000001 888b1286
+texhash maps/start.bsp:metalt1_1 3 8 8 00000001 3558a443
+texhash maps/start.bsp:metalt1_1 4 4 4 00000001 8a39562e
+texhash maps/start.bsp:metalt1_1 5 2 2 00000001 d52c60d1
+texhash maps/start.bsp:metalt1_1 6 1 1 00000001 9026aa1b
+texhash maps/start.bsp:metal5_4 0 64 64 00000001 993d980c
+texhash maps/start.bsp:metal5_4 1 32 32 00000001 c844d1ec
+texhash maps/start.bsp:metal5_4 2 16 16 00000001 9f7c170f
+texhash maps/start.bsp:metal5_4 3 8 8 00000001 25876dbd
+texhash maps/start.bsp:metal5_4 4 4 4 00000001 074d8347
+texhash maps/start.bsp:metal5_4 5 2 2 00000001 154c8a61
+texhash maps/start.bsp:metal5_4 6 1 1 00000001 3f97ba78
+texhash maps/start.bsp:met5_1 0 64 64 00000001 1fd0c562
+texhash maps/start.bsp:met5_1 1 32 32 00000001 241cfb1a
+texhash maps/start.bsp:met5_1 2 16 16 00000001 8d601e19
+texhash maps/start.bsp:met5_1 3 8 8 00000001 3cf28f0a
+texhash maps/start.bsp:met5_1 4 4 4 00000001 b406c57a
+texhash maps/start.bsp:met5_1 5 2 2 00000001 f649ed66
+texhash maps/start.bsp:met5_1 6 1 1 00000001 3c307fe8
+texhash maps/start.bsp:cop3_4 0 64 64 00000001 aa9852ef
+texhash maps/start.bsp:cop3_4 1 32 32 00000001 fd674011
+texhash maps/start.bsp:cop3_4 2 16 16 00000001 2a94234b
+texhash maps/start.bsp:cop3_4 3 8 8 00000001 1e6e57ab
+texhash maps/start.bsp:cop3_4 4 4 4 00000001 f392ef78
+texhash maps/start.bsp:cop3_4 5 2 2 00000001 275ddb61
+texhash maps/start.bsp:cop3_4 6 1 1 00000001 afab7f44
+texhash maps/start.bsp:clip 0 64 64 00000001 bc7e8203
+texhash maps/start.bsp:clip 1 32 32 00000001 276c670b
+texhash maps/start.bsp:clip 2 16 16 00000001 cddb42d8
+texhash maps/start.bsp:clip 3 8 8 00000001 1aa432df
+texhash maps/start.bsp:clip 4 4 4 00000001 2715bdce
+texhash maps/start.bsp:clip 5 2 2 00000001 518b688b
+texhash maps/start.bsp:clip 6 1 1 00000001 c6189904
+texhash maps/start.bsp:tech09_3 0 128 128 00000001 8ff008ac
+texhash maps/start.bsp:tech09_3 1 64 64 00000001 604b8e40
+texhash maps/start.bsp:tech09_3 2 32 32 00000001 e953b0aa
+texhash maps/start.bsp:tech09_3 3 16 16 00000001 ff89b236
+texhash maps/start.bsp:tech09_3 4 8 8 00000001 b4ec0b57
+texhash maps/start.bsp:tech09_3 5 4 4 00000001 ce79b62b
+texhash maps/start.bsp:tech09_3 6 2 2 00000001 97163ad4
+texhash maps/start.bsp:tech09_3 7 1 1 00000001 7cb49261
+texhash maps/start.bsp:tech11_2 0 128 128 00000001 f56a5604
+texhash maps/start.bsp:tech11_2 1 64 64 00000001 6a17077b
+texhash maps/start.bsp:tech11_2 2 32 32 00000001 190bb96d
+texhash maps/start.bsp:tech11_2 3 16 16 00000001 02a4f3b2
+texhash maps/start.bsp:tech11_2 4 8 8 00000001 1428c7f5
+texhash maps/start.bsp:tech11_2 5 4 4 00000001 1325fc14
+texhash maps/start.bsp:tech11_2 6 2 2 00000001 9770c1c1
+texhash maps/start.bsp:tech11_2 7 1 1 00000001 7cb49261
+texhash maps/start.bsp:tlight02 0 64 64 00000201 4cddf9b9
+texhash maps/start.bsp:tlight02 1 32 32 00000201 67fa94f6
+texhash maps/start.bsp:tlight02 2 16 16 00000201 8526eb2c
+texhash maps/start.bsp:tlight02 3 8 8 00000201 d83c72c0
+texhash maps/start.bsp:tlight02 4 4 4 00000201 05286f4b
+texhash maps/start.bsp:tlight02 5 2 2 00000201 ee5c98ce
+texhash maps/start.bsp:tlight02 6 1 1 00000201 3443043e
+texhash maps/start.bsp:tlight02_glow 0 64 64 00000101 621abe55
+texhash maps/start.bsp:tlight02_glow 1 32 32 00000101 905bb6bd
+texhash maps/start.bsp:tlight02_glow 2 16 16 00000101 454c1771
+texhash maps/start.bsp:tlight02_glow 3 8 8 00000101 553d5649
+texhash maps/start.bsp:tlight02_glow 4 4 4 00000101 11350e5c
+texhash maps/start.bsp:tlight02_glow 5 2 2 00000101 9ed70685
+texhash maps/start.bsp:tlight02_glow 6 1 1 00000101 cb410682
+texhash maps/start.bsp:tech01_6 0 64 64 00000001 1df09bda
+texhash maps/start.bsp:tech01_6 1 32 32 00000001 1a98c190
+texhash maps/start.bsp:tech01_6 2 16 16 00000001 c9e7bb5e
+texhash maps/start.bsp:tech01_6 3 8 8 00000001 d229e1a6
+texhash maps/start.bsp:tech01_6 4 4 4 00000001 d685b956
+texhash maps/start.bsp:tech01_6 5 2 2 00000001 1c64893c
+texhash maps/start.bsp:tech01_6 6 1 1 00000001 22975b14
+texhash maps/start.bsp:tech01_1 0 64 64 00000001 c7242ebe
+texhash maps/start.bsp:tech01_1 1 32 32 00000001 0cccc1eb
+texhash maps/start.bsp:tech01_1 2 16 16 00000001 f2e3aa3d
+texhash maps/start.bsp:tech01_1 3 8 8 00000001 18450f9c
+texhash maps/start.bsp:tech01_1 4 4 4 00000001 129da7a5
+texhash maps/start.bsp:tech01_1 5 2 2 00000001 abd485ed
+texhash maps/start.bsp:tech01_1 6 1 1 00000001 cf63ea0e
+texhash maps/start.bsp:tlight07 0 32 128 00000201 795ec3b8
+texhash maps/start.bsp:tlight07 1 16 64 00000201 19314c9f
+texhash maps/start.bsp:tlight07 2 8 32 00000201 591cc99b
+texhash maps/start.bsp:tlight07 3 4 16 00000201 008c20f9
+texhash maps/start.bsp:tlight07 4 2 8 00000201 2f2ea59b
+texhash maps/start.bsp:tlight07 5 1 4 00000201 c98b7232
+texhash maps/start.bsp:tlight07 6 1 2 00000201 d6196111
+texhash maps/start.bsp:tlight07 7 1 1 00000201 13b60dab
+texhash maps/start.bsp:tlight07_glow 0 32 128 00000101 4f5ff24e
+texhash maps/start.bsp:tlight07_glow 1 16 64 00000101 d4081e1f
+texhash maps/start.bsp:tlight07_glow 2 8 32 00000101 0eef0af9
+texhash maps/start.bsp:tlight07_glow 3 4 16 00000101 ebbe2925
+texhash maps/start.bsp:tlight07_glow 4 2 8 00000101 02be2c40
+texhash maps/start.bsp:tlight07_glow 5 1 4 00000101 edf9dde2
+texhash maps/start.bsp:tlight07_glow 6 1 2 00000101 017af8fa
+texhash maps/start.bsp:tlight07_glow 7 1 1 00000101 272aee09
+texhash maps/start.bsp:tlight08 0 32 128 00000001 2fd49e6d
+texhash maps/start.bsp:tlight08 1 16 64 00000001 34edfc01
+texhash maps/start.bsp:tlight08 2 8 32 00000001 8e903ffa
+texhash maps/start.bsp:tlight08 3 4 16 00000001 1b83edab
+texhash maps/start.bsp:tlight08 4 2 8 00000001 59c171db
+texhash maps/start.bsp:tlight08 5 1 4 00000001 da17698d
+texhash maps/start.bsp:tlight08 6 1 2 00000001 c6a6e9b8
+texhash maps/start.bsp:tlight08 7 1 1 00000001 f079f87a
+texhash maps/start.bsp:+0sliptop 0 64 64 00000001 cfcc337b
+texhash maps/start.bsp:+0sliptop 1 32 32 00000001 7a27d467
+texhash maps/start.bsp:+0sliptop 2 16 16 00000001 a8a8537a
+texhash maps/start.bsp:+0sliptop 3 8 8 00000001 870f827b
+texhash maps/start.bsp:+0sliptop 4 4 4 00000001 47966380
+texhash maps/start.bsp:+0sliptop 5 2 2 00000001 53608380
+texhash maps/start.bsp:+0sliptop 6 1 1 00000001 2b2f02d2
+texhash maps/start.bsp:sliptopsd 0 16 64 00000001 d1115959
+texhash maps/start.bsp:sliptopsd 1 8 32 00000001 b1429154
+texhash maps/start.bsp:sliptopsd 2 4 16 00000001 6966ea82
+texhash maps/start.bsp:sliptopsd 3 2 8 00000001 b4c3a5ec
+texhash maps/start.bsp:sliptopsd 4 1 4 00000001 b2695271
+texhash maps/start.bsp:sliptopsd 5 1 2 00000001 715670ec
+texhash maps/start.bsp:sliptopsd 6 1 1 00000001 c71d9fca
+texhash maps/start.bsp:sliplite 0 16 16 00000201 51660095
+texhash maps/start.bsp:sliplite 1 8 8 00000201 ea806b6d
+texhash maps/start.bsp:sliplite 2 4 4 00000201 619a4505
+texhash maps/start.bsp:sliplite 3 2 2 00000201 91d5f84d
+texhash maps/start.bsp:sliplite 4 1 1 00000201 a0dc8a5f
+texhash maps/start.bsp:sliplite_glow 0 16 16 00000101 f14f394d
+texhash maps/start.bsp:sliplite_glow 1 8 8 00000101 402f3cab
+texhash maps/start.bsp:sliplite_glow 2 4 4 00000101 a285c98b
+texhash maps/start.bsp:sliplite_glow 3 2 2 00000101 011a4165
+texhash maps/start.bsp:sliplite_glow 4 1 1 00000101 ae5e20bc
+texhash maps/start.bsp:slipside 0 16 16 00000201 9bd93855
+texhash maps/start.bsp:slipside 1 8 8 00000201 8f73336d
+texhash maps/start.bsp:slipside 2 4 4 00000201 043f8637
+texhash maps/start.bsp:slipside 3 2 2 00000201 99cad5c9
+texhash maps/start.bsp:slipside 4 1 1 00000201 2468fc8a
+texhash maps/start.bsp:slipside_glow 0 16 16 00000101 208b12cd
+texhash maps/start.bsp:slipside_glow 1 8 8 00000101 6e1d9ed9
+texhash maps/start.bsp:slipside_glow 2 4 4 00000101 e19a0261
+texhash maps/start.bsp:slipside_glow 3 2 2 00000101 b3338dad
+texhash maps/start.bsp:slipside_glow 4 1 1 00000101 67d9cf8e
+texhash maps/start.bsp:+0slipbot 0 64 64 00000001 bfb7401a
+texhash maps/start.bsp:+0slipbot 1 32 32 00000001 14f36b3d
+texhash maps/start.bsp:+0slipbot 2 16 16 00000001 7c0d334e
+texhash maps/start.bsp:+0slipbot 3 8 8 00000001 a7df8c3f
+texhash maps/start.bsp:+0slipbot 4 4 4 00000001 4b3873d5
+texhash maps/start.bsp:+0slipbot 5 2 2 00000001 1d9dee13
+texhash maps/start.bsp:+0slipbot 6 1 1 00000001 fa1c33be
+texhash maps/start.bsp:slipbotsd 0 16 64 00000001 70c244fb
+texhash maps/start.bsp:slipbotsd 1 8 32 00000001 bc51f10e
+texhash maps/start.bsp:slipbotsd 2 4 16 00000001 654581d7
+texhash maps/start.bsp:slipbotsd 3 2 8 00000001 a8bddf70
+texhash maps/start.bsp:slipbotsd 4 1 4 00000001 61d691db
+texhash maps/start.bsp:slipbotsd 5 1 2 00000001 6a9f7697
+texhash maps/start.bsp:slipbotsd 6 1 1 00000001 91b02e35
+texhash maps/start.bsp:slip1 0 128 192 00000201 ac83b03e
+texhash maps/start.bsp:slip1 1 64 96 00000201 4a0df50b
+texhash maps/start.bsp:slip1 2 32 48 00000201 be428bf5
+texhash maps/start.bsp:slip1 3 16 24 00000201 3b62b3f8
+texhash maps/start.bsp:slip1 4 8 12 00000201 0ff1ab23
+texhash maps/start.bsp:slip1 5 4 6 00000201 5cbb9c51
+texhash maps/start.bsp:slip1 6 2 3 00000201 b20c7650
+texhash maps/start.bsp:slip1 7 1 1 00000201 6c093d2e
+texhash maps/start.bsp:slip1_glow 0 128 192 00000101 a25081ce
+texhash maps/start.bsp:slip1_glow 1 64 96 00000101 5172fd92
+texhash maps/start.bsp:slip1_glow 2 32 48 00000101 28829861
+texhash maps/start.bsp:slip1_glow 3 16 24 00000101 10fb2d8a
+texhash maps/start.bsp:slip1_glow 4 8 12 00000101 68fa33df
+texhash maps/start.bsp:slip1_glow 5 4 6 00000101 300d2c94
+texhash maps/start.bsp:slip1_glow 6 2 3 00000101 88b3a335
+texhash maps/start.bsp:slip1_glow 7 1 1 00000101 dc954658
+texhash maps/start.bsp:+0slip 0 64 64 00000201 96e810c2
+texhash maps/start.bsp:+0slip 1 32 32 00000201 d8b85ccb
+texhash maps/start.bsp:+0slip 2 16 16 00000201 f2d30327
+texhash maps/start.bsp:+0slip 3 8 8 00000201 20e6da24
+texhash maps/start.bsp:+0slip 4 4 4 00000201 7980e046
+texhash maps/start.bsp:+0slip 5 2 2 00000201 b46f5a84
+texhash maps/start.bsp:+0slip 6 1 1 00000201 1c0379cb
+texhash maps/start.bsp:+0slip_glow 0 64 64 00000101 c8937b0a
+texhash maps/start.bsp:+0slip_glow 1 32 32 00000101 691ddf49
+texhash maps/start.bsp:+0slip_glow 2 16 16 00000101 2b232da0
+texhash maps/start.bsp:+0slip_glow 3 8 8 00000101 cbbb4a76
+texhash maps/start.bsp:+0slip_glow 4 4 4 00000101 cfdc91a3
+texhash maps/start.bsp:+0slip_glow 5 2 2 00000101 52949145
+texhash maps/start.bsp:+0slip_glow 6 1 1 00000101 adf94fd0
+texhash maps/start.bsp:sfloor4_2 0 64 64 00000001 fda4017d
+texhash maps/start.bsp:sfloor4_2 1 32 32 00000001 24aa2c6d
+texhash maps/start.bsp:sfloor4_2 2 16 16 00000001 aa812b97
+texhash maps/start.bsp:sfloor4_2 3 8 8 00000001 ecbb736c
+texhash maps/start.bsp:sfloor4_2 4 4 4 00000001 a5c20b4f
+texhash maps/start.bsp:sfloor4_2 5 2 2 00000001 4d4b00a8
+texhash maps/start.bsp:sfloor4_2 6 1 1 00000001 28d11695
+texhash maps/start.bsp:tech08_1 0 128 128 00000001 ba7e0769
+texhash maps/start.bsp:tech08_1 1 64 64 00000001 adb1d738
+texhash maps/start.bsp:tech08_1 2 32 32 00000001 57316aa1
+texhash maps/start.bsp:tech08_1 3 16 16 00000001 9bb15599
+texhash maps/start.bsp:tech08_1 4 8 8 00000001 a45ea1ec
+texhash maps/start.bsp:tech08_1 5 4 4 00000001 cec11f66
+texhash maps/start.bsp:tech08_1 6 2 2 00000001 e15ae86a
+texhash maps/start.bsp:tech08_1 7 1 1 00000001 214e8bb5
+texhash maps/start.bsp:tech04_3 0 16 128 00000001 a479c5cd
+texhash maps/start.bsp:tech04_3 1 8 64 00000001 89498713
+texhash maps/start.bsp:tech04_3 2 4 32 00000001 eec4bb42
+texhash maps/start.bsp:tech04_3 3 2 16 00000001 fa75f1c8
+texhash maps/start.bsp:tech04_3 4 1 8 00000001 45463d88
+texhash maps/start.bsp:tech04_3 5 1 4 00000001 ac040732
+texhash maps/start.bsp:tech04_3 6 1 2 00000001 1269403c
+texhash maps/start.bsp:tech04_3 7 1 1 00000001 7364f9ca
+texhash maps/start.bsp:sfloor4_5 0 64 64 00000001 cdcb1895
+texhash maps/start.bsp:sfloor4_5 1 32 32 00000001 635bd20b
+texhash maps/start.bsp:sfloor4_5 2 16 16 00000001 8debbf8d
+texhash maps/start.bsp:sfloor4_5 3 8 8 00000001 769b76be
+texhash maps/start.bsp:sfloor4_5 4 4 4 00000001 c58affed
+texhash maps/start.bsp:sfloor4_5 5 2 2 00000001 e2758dfe
+texhash maps/start.bsp:sfloor4_5 6 1 1 00000001 a883f5c8
+texhash maps/start.bsp:skill2 0 32 96 00000001 1ca3c630
+texhash maps/start.bsp:skill2 1 16 48 00000001 a7516635
+texhash maps/start.bsp:skill2 2 8 24 00000001 77dc1fc8
+texhash maps/start.bsp:skill2 3 4 12 00000001 52e9c926
+texhash maps/start.bsp:skill2 4 2 6 00000001 e5484248
+texhash maps/start.bsp:skill2 5 1 3 00000001 5ee9dd37
+texhash maps/start.bsp:skill2 6 1 1 00000001 3de988e9
+texhash maps/start.bsp:skill1 0 32 96 00000001 6eaa460b
+texhash maps/start.bsp:skill1 1 16 48 00000001 66a37020
+texhash maps/start.bsp:skill1 2 8 24 00000001 b0343188
+texhash maps/start.bsp:skill1 3 4 12 00000001 4ef46677
+texhash maps/start.bsp:skill1 4 2 6 00000001 2c2ccbd0
+texhash maps/start.bsp:skill1 5 1 3 00000001 cb0241d4
+texhash maps/start.bsp:skill1 6 1 1 00000001 3de988e9
+texhash start.bsp:#teleport_norm 0 64 64 00040082 1bdb48ea
+texhash maps/start.bsp:*teleport 0 64 64 00000001 e93bb850
+texhash maps/start.bsp:*teleport 1 32 32 00000001 b62647ad
+texhash maps/start.bsp:*teleport 2 16 16 00000001 981f9a66
+texhash maps/start.bsp:*teleport 3 8 8 00000001 f00c9e60
+texhash maps/start.bsp:*teleport 4 4 4 00000001 b2573c3d
+texhash maps/start.bsp:*teleport 5 2 2 00000001 6d762604
+texhash maps/start.bsp:*teleport 6 1 1 00000001 488e1ea0
+texhash maps/start.bsp:skill0 0 32 96 00000001 7c6cacc6
+texhash maps/start.bsp:skill0 1 16 48 00000001 98acf848
+texhash maps/start.bsp:skill0 2 8 24 00000001 ed905981
+texhash maps/start.bsp:skill0 3 4 12 00000001 3c14c941
+texhash maps/start.bsp:skill0 4 2 6 00000001 7b0ab82a
+texhash maps/start.bsp:skill0 5 1 3 00000001 b73b948d
+texhash maps/start.bsp:skill0 6 1 1 00000001 d95364d4
+texhash maps/start.bsp:window02_1 0 64 192 00000001 d154d1d8
+texhash maps/start.bsp:window02_1 1 32 96 00000001 96c0e5bb
+texhash maps/start.bsp:window02_1 2 16 48 00000001 6ac79379
+texhash maps/start.bsp:window02_1 3 8 24 00000001 7ed131fd
+texhash maps/start.bsp:window02_1 4 4 12 00000001 60337d95
+texhash maps/start.bsp:window02_1 5 2 6 00000001 0e6665ae
+texhash maps/start.bsp:window02_1 6 1 3 00000001 e4f49f90
+texhash maps/start.bsp:window02_1 7 1 1 00000001 22b64554
+texhash maps/start.bsp:*water2 0 64 64 00000001 9038a75d
+texhash maps/start.bsp:*water2 1 32 32 00000001 fa33428d
+texhash maps/start.bsp:*water2 2 16 16 00000001 de51f37d
+texhash maps/start.bsp:*water2 3 8 8 00000001 0176c9fa
+texhash maps/start.bsp:*water2 4 4 4 00000001 a2380984
+texhash maps/start.bsp:*water2 5 2 2 00000001 1442a64d
+texhash maps/start.bsp:*water2 6 1 1 00000001 e634a515
+texhash maps/start.bsp:*lava1 0 64 64 00000001 ef42d5cc
+texhash maps/start.bsp:*lava1 1 32 32 00000001 83e9b276
+texhash maps/start.bsp:*lava1 2 16 16 00000001 7ec92008
+texhash maps/start.bsp:*lava1 3 8 8 00000001 04bef714
+texhash maps/start.bsp:*lava1 4 4 4 00000001 7d14b79b
+texhash maps/start.bsp:*lava1 5 2 2 00000001 c2b89609
+texhash maps/start.bsp:*lava1 6 1 1 00000001 fda7f71a
+texhash maps/start.bsp:*water1 0 64 64 00000001 544b3609
+texhash maps/start.bsp:*water1 1 32 32 00000001 274b3118
+texhash maps/start.bsp:*water1 2 16 16 00000001 3be0db92
+texhash maps/start.bsp:*water1 3 8 8 00000001 442e9d27
+texhash maps/start.bsp:*water1 4 4 4 00000001 0993899e
+texhash maps/start.bsp:*water1 5 2 2 00000001 3ab99a9f
+texhash maps/start.bsp:*water1 6 1 1 00000001 cc200d6a
+texhash maps/start.bsp:dem4_1 0 64 128 00000001 9c7ee2ff
+texhash maps/start.bsp:dem4_1 1 32 64 00000001 189ae131
+texhash maps/start.bsp:dem4_1 2 16 32 00000001 550504d1
+texhash maps/start.bsp:dem4_1 3 8 16 00000001 fe60bf08
+texhash maps/start.bsp:dem4_1 4 4 8 00000001 77196e7f
+texhash maps/start.bsp:dem4_1 5 2 4 00000001 01b68fa8
+texhash maps/start.bsp:dem4_1 6 1 2 00000001 f0d1e18e
+texhash maps/start.bsp:dem4_1 7 1 1 00000001 9c09151f
+texhash maps/start.bsp:bricka2_2 0 64 64 00000001 c3ce546e
+texhash maps/start.bsp:bricka2_2 1 32 32 00000001 edc189fa
+texhash maps/start.bsp:bricka2_2 2 16 16 00000001 abf7a810
+texhash maps/start.bsp:bricka2_2 3 8 8 00000001 474f9048
+texhash maps/start.bsp:bricka2_2 4 4 4 00000001 458c45e8
+texhash maps/start.bsp:bricka2_2 5 2 2 00000001 81bd6ecf
+texhash maps/start.bsp:bricka2_2 6 1 1 00000001 632b2f7b
+texhash maps/start.bsp:sky1_back 0 128 128 00000000 5ad746b4
+texhash maps/start.bsp:sky1_front 0 128 128 00000008 08fac452
+texhash maps/start.bsp:wizmet1_1 0 64 64 00000001 2acd8a0a
+texhash maps/start.bsp:wizmet1_1 1 32 32 00000001 2fbc8eaa
+texhash maps/start.bsp:wizmet1_1 2 16 16 00000001 ef2dba49
+texhash maps/start.bsp:wizmet1_1 3 8 8 00000001 c058c136
+texhash maps/start.bsp:wizmet1_1 4 4 4 00000001 6134e00f
+texhash maps/start.bsp:wizmet1_1 5 2 2 00000001 752b3c5a
+texhash maps/start.bsp:wizmet1_1 6 1 1 00000001 15a8b544
+texhash maps/start.bsp:wizmet1_2 0 64 64 00000001 db4941c1
+texhash maps/start.bsp:wizmet1_2 1 32 32 00000001 164f2a5e
+texhash maps/start.bsp:wizmet1_2 2 16 16 00000001 25817e03
+texhash maps/start.bsp:wizmet1_2 3 8 8 00000001 e7e53326
+texhash maps/start.bsp:wizmet1_2 4 4 4 00000001 be59015d
+texhash maps/start.bsp:wizmet1_2 5 2 2 00000001 4f4dad59
+texhash maps/start.bsp:wizmet1_2 6 1 1 00000001 4d2066a2
+texhash maps/start.bsp:wizwood1_5 0 64 64 00000001 16c0c9ad
+texhash maps/start.bsp:wizwood1_5 1 32 32 00000001 dd6b60bf
+texhash maps/start.bsp:wizwood1_5 2 16 16 00000001 3f68b77c
+texhash maps/start.bsp:wizwood1_5 3 8 8 00000001 2eac754c
+texhash maps/start.bsp:wizwood1_5 4 4 4 00000001 a83f47fe
+texhash maps/start.bsp:wizwood1_5 5 2 2 00000001 fa391f43
+texhash maps/start.bsp:wizwood1_5 6 1 1 00000001 d5077b4e
+texhash maps/start.bsp:city4_7 0 64 64 00000001 32137b5d
+texhash maps/start.bsp:city4_7 1 32 32 00000001 c1cb216f
+texhash maps/start.bsp:city4_7 2 16 16 00000001 c9e2098e
+texhash maps/start.bsp:city4_7 3 8 8 00000001 d62a107f
+texhash maps/start.bsp:city4_7 4 4 4 00000001 23bd3a57
+texhash maps/start.bsp:city4_7 5 2 2 00000001 3ad8a0e5
+texhash maps/start.bsp:city4_7 6 1 1 00000001 2addb753
+texhash maps/start.bsp:wiz1_4 0 64 64 00000001 cdc4ebdd
+texhash maps/start.bsp:wiz1_4 1 32 32 00000001 845d37cf
+texhash maps/start.bsp:wiz1_4 2 16 16 00000001 e8c5e637
+texhash maps/start.bsp:wiz1_4 3 8 8 00000001 8268ae30
+texhash maps/start.bsp:wiz1_4 4 4 4 00000001 1ca63701
+texhash maps/start.bsp:wiz1_4 5 2 2 00000001 67410203
+texhash maps/start.bsp:wiz1_4 6 1 1 00000001 252c7ccb
+texhash maps/start.bsp:city4_6 0 64 64 00000001 28600c09
+texhash maps/start.bsp:city4_6 1 32 32 00000001 0efbf9e7
+texhash maps/start.bsp:city4_6 2 16 16 00000001 1a3f76f0
+texhash maps/start.bsp:city4_6 3 8 8 00000001 60ec445a
+texhash maps/start.bsp:city4_6 4 4 4 00000001 5d19004b
+texhash maps/start.bsp:city4_6 5 2 2 00000001 b03aaef0
+texhash maps/start.bsp:city4_6 6 1 1 00000001 a201c375
+texhash maps/start.bsp:wbrick1_5 0 64 64 00000001 eb3b20ae
+texhash maps/start.bsp:wbrick1_5 1 32 32 00000001 6a76a95b
+texhash maps/start.bsp:wbrick1_5 2 16 16 00000001 9c1339f1
+texhash maps/start.bsp:wbrick1_5 3 8 8 00000001 e68ea2d5
+texhash maps/start.bsp:wbrick1_5 4 4 4 00000001 e3977838
+texhash maps/start.bsp:wbrick1_5 5 2 2 00000001 00b607ba
+texhash maps/start.bsp:wbrick1_5 6 1 1 00000001 e2a75a86
+Mod_LoadTextures maps/start.bsp: findfile 91.6ms (3154 calls) texmgr 39.0ms (98 calls) imageload 92.7ms (166 calls)
+TexMgr prepare maps/start.bsp: wall 1.9ms cpu 4.9ms commit 35.1ms, 91 jobs/6 batches (2 parallel), 0.4/2.4 MiB source/prepared
+Mod_LoadBrushModel maps/start.bsp: geom 0.1ms tex 133.4ms light 0.3ms faces 1.9ms
+trying to open external vis file
+maps/start.vis not found, trying id1.vis
+external vis not found
+maps/start.bsp is not watervised
+Mod_LoadBrushModel maps/start.bsp: nodes 0.2ms watervis 0.0ms
+Mod_LoadModel maps/start.bsp: read 0.6ms parse 138.8ms (1433792 bytes)
+SV_SpawnServer world model: 139.4ms
+texhash progs/player.mdl:frame0 0 296 194 00010210 38412b0f
+texhash progs/player.mdl:frame0_glow 0 296 194 00010110 74e78a8e
+texhash progs/eyes.mdl:frame0 0 136 28 00010010 40d4d1e7
+texhash progs/h_player.mdl:frame0 0 136 100 00010010 e3c8f935
+texhash progs/gib1.mdl:frame0 0 72 68 00010010 9a63c500
+texhash progs/gib2.mdl:frame0 0 168 84 00010010 fc1d0262
+texhash progs/gib3.mdl:frame0 0 200 108 00010010 94cc2629
+texhash progs/s_bubble.spr:frame0 0 16 16 00000098 426d4dea
+texhash progs/s_bubble.spr:frame1 0 16 16 00000098 428328e4
+texhash progs/s_explod.spr:frame0 0 56 56 00000098 07248f15
+texhash progs/s_explod.spr:frame1 0 56 56 00000098 50e774f5
+texhash progs/s_explod.spr:frame2 0 56 56 00000098 2560070e
+texhash progs/s_explod.spr:frame3 0 56 56 00000098 2cddcf20
+texhash progs/s_explod.spr:frame4 0 56 56 00000098 0a54a180
+texhash progs/s_explod.spr:frame5 0 56 56 00000098 003c9472
+texhash progs/v_axe.mdl:frame0 0 312 160 00010010 91489dbf
+texhash progs/v_shot.mdl:frame0 0 200 194 00010210 bfc52bee
+texhash progs/v_shot.mdl:frame0_glow 0 200 194 00010110 17c731e1
+texhash progs/v_nail.mdl:frame0 0 308 149 00010210 f7616bd1
+texhash progs/v_nail.mdl:frame0_glow 0 308 149 00010110 1c83991b
+texhash progs/v_rock.mdl:frame0 0 288 195 00010210 28e54323
+texhash progs/v_rock.mdl:frame0_glow 0 288 195 00010110 529a7ff4
+texhash progs/v_shot2.mdl:frame0 0 308 145 00010210 992b787c
+texhash progs/v_shot2.mdl:frame0_glow 0 308 145 00010110 932d1e6d
+texhash progs/v_nail2.mdl:frame0 0 312 193 00010210 42e41cab
+texhash progs/v_nail2.mdl:frame0_glow 0 312 193 00010110 37ac3469
+texhash progs/v_rock2.mdl:frame0 0 272 195 00010210 942f0fb1
+texhash progs/v_rock2.mdl:frame0_glow 0 272 195 00010110 e21b127b
+texhash progs/bolt.mdl:frame0 0 216 92 00010210 d01366c5
+texhash progs/bolt.mdl:frame0_glow 0 216 92 00010110 4e7fcb11
+texhash progs/bolt2.mdl:frame0 0 308 36 00010210 6f6c402c
+texhash progs/bolt2.mdl:frame0_glow 0 308 36 00010110 91077058
+texhash progs/bolt3.mdl:frame0 0 308 36 00010210 6f6c402c
+texhash progs/bolt3.mdl:frame0_glow 0 308 36 00010110 91077058
+texhash progs/lavaball.mdl:frame0 0 120 68 00010210 d3c350c5
+texhash progs/lavaball.mdl:frame0_glow 0 120 68 00010110 4a24fd78
+texhash progs/missile.mdl:frame0 0 288 195 00010210 a0177c2c
+texhash progs/missile.mdl:frame0_glow 0 288 195 00010110 1df6cb8d
+texhash progs/grenade.mdl:frame0 0 40 44 00010210 37689c11
+texhash progs/grenade.mdl:frame0_glow 0 40 44 00010110 0a4d15f1
+texhash progs/spike.mdl:frame0 0 72 20 00010010 49495d61
+texhash progs/s_spike.mdl:frame0 0 72 20 00010010 20edb569
+texhash progs/backpack.mdl:frame0 0 152 108 00010010 6e38298e
+texhash progs/zom_gib.mdl:frame0 0 104 92 00010010 f40c4cd6
+texhash progs/v_light.mdl:frame0 0 308 162 00010210 cbfbb3c1
+texhash progs/v_light.mdl:frame0_glow 0 308 162 00010110 486bb7e5
+texhash progs/flame2.mdl:frame0 0 300 194 00010210 91713af5
+texhash progs/flame2.mdl:frame0_glow 0 300 194 00010110 b9cdbb9a
+texhash progs/flame.mdl:frame0 0 296 140 00010210 bace9f0e
+texhash progs/flame.mdl:frame0_glow 0 296 140 00010110 91f2b070
+texhash progs/zombie.mdl:frame0 0 168 194 00010010 834af7ac
+texhash progs/h_zombie.mdl:frame0 0 72 44 00010010 3fee6380
+40 entities inhibited
+ED_LoadFromFile: 44.1ms (models 41.0ms/30 read 2.0ms findfile 21.0ms/696 texmgr 15.9ms/52)
+SV_SpawnServer entities: 44.2ms
+SV_SpawnServer settle physics: 0.0ms
+SV_SpawnServer baselines: 0.0ms
+Server spawned.
+SV_SpawnServer total: 186.4ms
+connecting to ^mlocal -- 127.0.0.1:26002
+connect timing: handshake accepted       +    0.0ms  (total     0.0ms)
+CL_EstablishConnection: connected to local
+Client LOCAL connected
+#
+QSS-M 1.6.9 Server (24778 CRC)
+Serverinfo packet received.
+connect timing: serverinfo received      +    3.1ms  (total     3.1ms)
+Using protocol 15(proquake)
+FindFile: can't find progs/ctfmodel.mdl
+FindFile: can't find progs/flag2.mdl
+FindFile: can't find progs/flag3.mdl
+FindFile: can't find progs/flag.mdl
+FindFile: can't find progs/star.mdl
+FindFile: can't find progs/bit.mdl
+FindFile: can't find progs/v_star.mdl
+
+<-------------------------------------->
+
+#Introduction
+connect timing: serverinfo parsed        +    3.5ms  (total     6.6ms)
+FindFile: can't find music/track04.ogg
+FindFile: can't find music/track04.opus
+FindFile: can't find music/track04.mp3
+FindFile: can't find music/track04.flac
+FindFile: can't find music/track04.wav
+FindFile: can't find music/track04.it
+FindFile: can't find music/track04.s3m
+FindFile: can't find music/track04.xm
+FindFile: can't find music/track04.mod
+FindFile: can't find music/track04.umx
+Couldn't find a cdrip for track 4
+CL_SignonReply: 1
+connect timing: signon 1 received        +    0.9ms  (total     7.5ms)
+model precache: 0.0ms (findfile 0.0ms/0 texmgr 0.0ms/0)
+sound precache: 11.3ms (findfile 3.1ms/96)
+R_NewMap gameplay shaders: 4.6ms
+R_NewMap classic particles: 0.1ms
+FindFile: can't find particles/map_start.cfg
+FindFile: can't find map_start.cfg
+R_NewMap pscript clear: 1.5ms
+GL_BuildLightmaps: surfaces 2.3ms
+GL_BuildLightmaps: fill 2.0ms
+GL_BuildLightmaps: occupied 0.8/32.0 MiB, transferred 0.8 MiB (1/1 partial)
+GL_BuildLightmaps: build 4.3ms upload 0.0ms (1 lightmaps)
+R_NewMap lightmaps: 4.4ms
+GL_BuildBModelVertexBuffer: 20.8ms (26930 verts)
+R_NewMap vbo+decals: 20.9ms
+R_NewMap teleporter shader: 0.0ms
+R_NewMap sky: 0.0ms
+R_NewMap worldspawn: 0.0ms
+R_NewMap locs: 0.2ms
+R_NewMap total: 31.7ms
+R_NewMap: 31.7ms (findfile 0.3ms/3 texmgr 0.0ms/1)
+FindFile: can't find csprogs.dat
+progs.dat occupies 403K.
+Patch for incorrect ogre smash state applied
+connect timing: prespawn sent (precache done) +   53.1ms  (total    60.6ms)
+CL_SignonReply: 2
+connect timing: signon 2 (baselines)     +    0.1ms  (total    60.8ms)
+allowing *ver set from BenchClient (not yet spawned)
+CL_SignonReply: 3
+connect timing: signon 3 (spawninfo)     +    1.0ms  (total    61.8ms)
+6.5 MiB data cache used (6.5 MiB peak, 64.0 MiB budget, 0 evictions)
+CL_SignonReply: 4
+connect timing: in game                  +   13.4ms  (total    75.2ms)
+FindFile: can't find connect.cfg
+FindFile: can't find configs/connect.cfg
+BENCH_BEGIN_change 
+Sending clc_disconnect
+Host_ShutdownServer: disconnect message undelivered to 1 clients
+SpawnServer: e1m1
+SV_SpawnServer pre-clear: 0.0ms
+Clearing memory
+SV_SpawnServer clear memory: 1.0ms
+SV_SpawnServer draw reload: 0.0ms
+FindFile: can't find csprogs.dat
+progs.dat occupies 403K.
+Patch for incorrect ogre smash state applied
+SV_SpawnServer load progs: 2.3ms
+texhash maps/e1m1.bsp:+abasebtn 0 32 32 00000001 ad94a73d
+texhash maps/e1m1.bsp:+abasebtn 1 16 16 00000001 a6b33f0b
+texhash maps/e1m1.bsp:+abasebtn 2 8 8 00000001 c92e9507
+texhash maps/e1m1.bsp:+abasebtn 3 4 4 00000001 24c697c9
+texhash maps/e1m1.bsp:+abasebtn 4 2 2 00000001 afbc1e54
+texhash maps/e1m1.bsp:+abasebtn 5 1 1 00000001 ff26ac6a
+texhash maps/e1m1.bsp:+1basebtn 0 32 32 00000001 438ad0cb
+texhash maps/e1m1.bsp:+1basebtn 1 16 16 00000001 a7a98042
+texhash maps/e1m1.bsp:+1basebtn 2 8 8 00000001 7195b17b
+texhash maps/e1m1.bsp:+1basebtn 3 4 4 00000001 63c21c83
+texhash maps/e1m1.bsp:+1basebtn 4 2 2 00000001 fd4c088e
+texhash maps/e1m1.bsp:+1basebtn 5 1 1 00000001 a777fee4
+texhash maps/e1m1.bsp:+6slip 0 64 64 00000201 afb12606
+texhash maps/e1m1.bsp:+6slip 1 32 32 00000201 cbd68712
+texhash maps/e1m1.bsp:+6slip 2 16 16 00000201 e4d98a47
+texhash maps/e1m1.bsp:+6slip 3 8 8 00000201 520673e0
+texhash maps/e1m1.bsp:+6slip 4 4 4 00000201 d3dd0f4a
+texhash maps/e1m1.bsp:+6slip 5 2 2 00000201 8c2732aa
+texhash maps/e1m1.bsp:+6slip 6 1 1 00000201 17e03709
+texhash maps/e1m1.bsp:+6slip_glow 0 64 64 00000101 2459669e
+texhash maps/e1m1.bsp:+6slip_glow 1 32 32 00000101 66242992
+texhash maps/e1m1.bsp:+6slip_glow 2 16 16 00000101 c9033133
+texhash maps/e1m1.bsp:+6slip_glow 3 8 8 00000101 a82236cd
+texhash maps/e1m1.bsp:+6slip_glow 4 4 4 00000101 401451fc
+texhash maps/e1m1.bsp:+6slip_glow 5 2 2 00000101 1e5e1993
+texhash maps/e1m1.bsp:+6slip_glow 6 1 1 00000101 adc5545a
+texhash maps/e1m1.bsp:+5slip 0 64 64 00000201 5d257fee
+texhash maps/e1m1.bsp:+5slip 1 32 32 00000201 b38d9195
+texhash maps/e1m1.bsp:+5slip 2 16 16 00000201 5ed88177
+texhash maps/e1m1.bsp:+5slip 3 8 8 00000201 7013cab3
+texhash maps/e1m1.bsp:+5slip 4 4 4 00000201 6b31fe4a
+texhash maps/e1m1.bsp:+5slip 5 2 2 00000201 48c3134a
+texhash maps/e1m1.bsp:+5slip 6 1 1 00000201 fc4bcc93
+texhash maps/e1m1.bsp:+5slip_glow 0 64 64 00000101 dcab0342
+texhash maps/e1m1.bsp:+5slip_glow 1 32 32 00000101 cbfd5ee4
+texhash maps/e1m1.bsp:+5slip_glow 2 16 16 00000101 a732ebee
+texhash maps/e1m1.bsp:+5slip_glow 3 8 8 00000101 63e70978
+texhash maps/e1m1.bsp:+5slip_glow 4 4 4 00000101 987e19d3
+texhash maps/e1m1.bsp:+5slip_glow 5 2 2 00000101 9725bbd7
+texhash maps/e1m1.bsp:+5slip_glow 6 1 1 00000101 67f0a749
+texhash maps/e1m1.bsp:+4slip 0 64 64 00000201 2c47a37a
+texhash maps/e1m1.bsp:+4slip 1 32 32 00000201 88ed5ad8
+texhash maps/e1m1.bsp:+4slip 2 16 16 00000201 ae7e705c
+texhash maps/e1m1.bsp:+4slip 3 8 8 00000201 65a3680f
+texhash maps/e1m1.bsp:+4slip 4 4 4 00000201 a7dfbfe4
+texhash maps/e1m1.bsp:+4slip 5 2 2 00000201 a7f755dd
+texhash maps/e1m1.bsp:+4slip 6 1 1 00000201 5271dcd6
+texhash maps/e1m1.bsp:+4slip_glow 0 64 64 00000101 40446b16
+texhash maps/e1m1.bsp:+4slip_glow 1 32 32 00000101 91dfe522
+texhash maps/e1m1.bsp:+4slip_glow 2 16 16 00000101 2054e37f
+texhash maps/e1m1.bsp:+4slip_glow 3 8 8 00000101 75c2a35e
+texhash maps/e1m1.bsp:+4slip_glow 4 4 4 00000101 0dd3d9b5
+texhash maps/e1m1.bsp:+4slip_glow 5 2 2 00000101 1193c49d
+texhash maps/e1m1.bsp:+4slip_glow 6 1 1 00000101 c514e29e
+texhash maps/e1m1.bsp:+3slip 0 64 64 00000201 a2291431
+texhash maps/e1m1.bsp:+3slip 1 32 32 00000201 ab1afaed
+texhash maps/e1m1.bsp:+3slip 2 16 16 00000201 6e498136
+texhash maps/e1m1.bsp:+3slip 3 8 8 00000201 e076244e
+texhash maps/e1m1.bsp:+3slip 4 4 4 00000201 52bd4e94
+texhash maps/e1m1.bsp:+3slip 5 2 2 00000201 8066cfcc
+texhash maps/e1m1.bsp:+3slip 6 1 1 00000201 aba9bd58
+texhash maps/e1m1.bsp:+3slip_glow 0 64 64 00000101 f1099b71
+texhash maps/e1m1.bsp:+3slip_glow 1 32 32 00000101 c88349b0
+texhash maps/e1m1.bsp:+3slip_glow 2 16 16 00000101 86ca517b
+texhash maps/e1m1.bsp:+3slip_glow 3 8 8 00000101 8d4e756e
+texhash maps/e1m1.bsp:+3slip_glow 4 4 4 00000101 e3c2661b
+texhash maps/e1m1.bsp:+3slip_glow 5 2 2 00000101 f1bf4705
+texhash maps/e1m1.bsp:+3slip_glow 6 1 1 00000101 dc7b489d
+texhash maps/e1m1.bsp:+2slip 0 64 64 00000201 eaae8207
+texhash maps/e1m1.bsp:+2slip 1 32 32 00000201 7c38647e
+texhash maps/e1m1.bsp:+2slip 2 16 16 00000201 d6d8ec4d
+texhash maps/e1m1.bsp:+2slip 3 8 8 00000201 79321905
+texhash maps/e1m1.bsp:+2slip 4 4 4 00000201 40d4bebd
+texhash maps/e1m1.bsp:+2slip 5 2 2 00000201 77ea9a6d
+texhash maps/e1m1.bsp:+2slip 6 1 1 00000201 479d3d53
+texhash maps/e1m1.bsp:+2slip_glow 0 64 64 00000101 2a192bf5
+texhash maps/e1m1.bsp:+2slip_glow 1 32 32 00000101 59a8f7eb
+texhash maps/e1m1.bsp:+2slip_glow 2 16 16 00000101 6f48b39b
+texhash maps/e1m1.bsp:+2slip_glow 3 8 8 00000101 422914ba
+texhash maps/e1m1.bsp:+2slip_glow 4 4 4 00000101 be10c878
+texhash maps/e1m1.bsp:+2slip_glow 5 2 2 00000101 b69c2f35
+texhash maps/e1m1.bsp:+2slip_glow 6 1 1 00000101 7f5a3348
+texhash maps/e1m1.bsp:+1slip 0 64 64 00000201 1b6052d2
+texhash maps/e1m1.bsp:+1slip 1 32 32 00000201 7d8cbcc2
+texhash maps/e1m1.bsp:+1slip 2 16 16 00000201 9f72ff9a
+texhash maps/e1m1.bsp:+1slip 3 8 8 00000201 a7d5d1f6
+texhash maps/e1m1.bsp:+1slip 4 4 4 00000201 52312386
+texhash maps/e1m1.bsp:+1slip 5 2 2 00000201 575911f3
+texhash maps/e1m1.bsp:+1slip 6 1 1 00000201 585a417c
+texhash maps/e1m1.bsp:+1slip_glow 0 64 64 00000101 f44ff65a
+texhash maps/e1m1.bsp:+1slip_glow 1 32 32 00000101 d87ebdd5
+texhash maps/e1m1.bsp:+1slip_glow 2 16 16 00000101 24eac8c9
+texhash maps/e1m1.bsp:+1slip_glow 3 8 8 00000101 efbd04ba
+texhash maps/e1m1.bsp:+1slip_glow 4 4 4 00000101 ff024e84
+texhash maps/e1m1.bsp:+1slip_glow 5 2 2 00000101 0ca9e5e5
+texhash maps/e1m1.bsp:+1slip_glow 6 1 1 00000101 c545b814
+texhash maps/e1m1.bsp:+3planet 0 32 32 00000001 e0216e33
+texhash maps/e1m1.bsp:+3planet 1 16 16 00000001 22825a90
+texhash maps/e1m1.bsp:+3planet 2 8 8 00000001 9dfd68c0
+texhash maps/e1m1.bsp:+3planet 3 4 4 00000001 3fa1c4c8
+texhash maps/e1m1.bsp:+3planet 4 2 2 00000001 2a317ca6
+texhash maps/e1m1.bsp:+3planet 5 1 1 00000001 988bc705
+texhash maps/e1m1.bsp:+2planet 0 32 32 00000001 ad515202
+texhash maps/e1m1.bsp:+2planet 1 16 16 00000001 046210e6
+texhash maps/e1m1.bsp:+2planet 2 8 8 00000001 6721014f
+texhash maps/e1m1.bsp:+2planet 3 4 4 00000001 945684c3
+texhash maps/e1m1.bsp:+2planet 4 2 2 00000001 95ac965d
+texhash maps/e1m1.bsp:+2planet 5 1 1 00000001 988bc705
+texhash maps/e1m1.bsp:+1planet 0 32 32 00000001 a89d290a
+texhash maps/e1m1.bsp:+1planet 1 16 16 00000001 3bc37e9f
+texhash maps/e1m1.bsp:+1planet 2 8 8 00000001 5c721cc5
+texhash maps/e1m1.bsp:+1planet 3 4 4 00000001 990a0271
+texhash maps/e1m1.bsp:+1planet 4 2 2 00000001 c715f548
+texhash maps/e1m1.bsp:+1planet 5 1 1 00000001 9567b4d3
+texhash maps/e1m1.bsp:key01_3 0 64 64 00000001 7226beb5
+texhash maps/e1m1.bsp:key01_3 1 32 32 00000001 ee184ed8
+texhash maps/e1m1.bsp:key01_3 2 16 16 00000001 104ea146
+texhash maps/e1m1.bsp:key01_3 3 8 8 00000001 d07cd9da
+texhash maps/e1m1.bsp:key01_3 4 4 4 00000001 b512908e
+texhash maps/e1m1.bsp:key01_3 5 2 2 00000001 edc308dd
+texhash maps/e1m1.bsp:key01_3 6 1 1 00000001 a77f32bb
+texhash maps/e1m1.bsp:trigger 0 64 64 00000001 40b9a7b1
+texhash maps/e1m1.bsp:trigger 1 32 32 00000001 ba07f56c
+texhash maps/e1m1.bsp:trigger 2 16 16 00000001 45017189
+texhash maps/e1m1.bsp:trigger 3 8 8 00000001 bfcf39c9
+texhash maps/e1m1.bsp:trigger 4 4 4 00000001 1db31b54
+texhash maps/e1m1.bsp:trigger 5 2 2 00000001 dd31f2e7
+texhash maps/e1m1.bsp:trigger 6 1 1 00000001 3ee7f677
+texhash maps/e1m1.bsp:+0basebtn 0 32 32 00000201 12a6eef0
+texhash maps/e1m1.bsp:+0basebtn 1 16 16 00000201 62a58257
+texhash maps/e1m1.bsp:+0basebtn 2 8 8 00000201 fd6fcf08
+texhash maps/e1m1.bsp:+0basebtn 3 4 4 00000201 e0b1a176
+texhash maps/e1m1.bsp:+0basebtn 4 2 2 00000201 fe636667
+texhash maps/e1m1.bsp:+0basebtn 5 1 1 00000201 f8daec10
+texhash maps/e1m1.bsp:+0basebtn_glow 0 32 32 00000101 22426026
+texhash maps/e1m1.bsp:+0basebtn_glow 1 16 16 00000101 caade8d4
+texhash maps/e1m1.bsp:+0basebtn_glow 2 8 8 00000101 61382554
+texhash maps/e1m1.bsp:+0basebtn_glow 3 4 4 00000101 84a510c1
+texhash maps/e1m1.bsp:+0basebtn_glow 4 2 2 00000101 65b4769b
+texhash maps/e1m1.bsp:+0basebtn_glow 5 1 1 00000101 7f5a3348
+texhash maps/e1m1.bsp:plat_top1 0 64 64 00000001 7a5340ce
+texhash maps/e1m1.bsp:plat_top1 1 32 32 00000001 55bf65f9
+texhash maps/e1m1.bsp:plat_top1 2 16 16 00000001 9efc4836
+texhash maps/e1m1.bsp:plat_top1 3 8 8 00000001 8e8fd529
+texhash maps/e1m1.bsp:plat_top1 4 4 4 00000001 9fd293f8
+texhash maps/e1m1.bsp:plat_top1 5 2 2 00000001 5af33b78
+texhash maps/e1m1.bsp:plat_top1 6 1 1 00000001 7f2844ed
+texhash maps/e1m1.bsp:plat_side1 0 64 16 00000001 48ad9fce
+texhash maps/e1m1.bsp:plat_side1 1 32 8 00000001 2c0b3e0b
+texhash maps/e1m1.bsp:plat_side1 2 16 4 00000001 2be7dc4b
+texhash maps/e1m1.bsp:plat_side1 3 8 2 00000001 0b690295
+texhash maps/e1m1.bsp:plat_side1 4 4 1 00000001 ddadcfdd
+texhash maps/e1m1.bsp:plat_side1 5 2 1 00000001 cb6af652
+texhash maps/e1m1.bsp:plat_side1 6 1 1 00000001 04b868b5
+texhash maps/e1m1.bsp:plat_stem 0 16 64 00000001 70fab919
+texhash maps/e1m1.bsp:plat_stem 1 8 32 00000001 fa7a5688
+texhash maps/e1m1.bsp:plat_stem 2 4 16 00000001 d8b84ae9
+texhash maps/e1m1.bsp:plat_stem 3 2 8 00000001 9cc65440
+texhash maps/e1m1.bsp:plat_stem 4 1 4 00000001 eb1fce20
+texhash maps/e1m1.bsp:plat_stem 5 1 2 00000001 e0a4b145
+texhash maps/e1m1.bsp:plat_stem 6 1 1 00000001 208444e5
+texhash maps/e1m1.bsp:edoor01_1 0 128 128 00000001 3e079f81
+texhash maps/e1m1.bsp:edoor01_1 1 64 64 00000001 05df8262
+texhash maps/e1m1.bsp:edoor01_1 2 32 32 00000001 79d1c66b
+texhash maps/e1m1.bsp:edoor01_1 3 16 16 00000001 f9d672b0
+texhash maps/e1m1.bsp:edoor01_1 4 8 8 00000001 adf43ccb
+texhash maps/e1m1.bsp:edoor01_1 5 4 4 00000001 f95f92bb
+texhash maps/e1m1.bsp:edoor01_1 6 2 2 00000001 2cf57856
+texhash maps/e1m1.bsp:edoor01_1 7 1 1 00000001 2528ab34
+texhash maps/e1m1.bsp:door02_1 0 16 128 00000001 3941ea46
+texhash maps/e1m1.bsp:door02_1 1 8 64 00000001 75829ed5
+texhash maps/e1m1.bsp:door02_1 2 4 32 00000001 732b839a
+texhash maps/e1m1.bsp:door02_1 3 2 16 00000001 842006ca
+texhash maps/e1m1.bsp:door02_1 4 1 8 00000001 ef7e04b6
+texhash maps/e1m1.bsp:door02_1 5 1 4 00000001 f1b23fba
+texhash maps/e1m1.bsp:door02_1 6 1 2 00000001 040f5205
+texhash maps/e1m1.bsp:door02_1 7 1 1 00000001 5f42f37a
+texhash maps/e1m1.bsp:crate0_top 0 64 64 00000001 eb55e5b5
+texhash maps/e1m1.bsp:crate0_top 1 32 32 00000001 5d17e385
+texhash maps/e1m1.bsp:crate0_top 2 16 16 00000001 24443951
+texhash maps/e1m1.bsp:crate0_top 3 8 8 00000001 20b2ee66
+texhash maps/e1m1.bsp:crate0_top 4 4 4 00000001 2b239100
+texhash maps/e1m1.bsp:crate0_top 5 2 2 00000001 78cc9137
+texhash maps/e1m1.bsp:crate0_top 6 1 1 00000001 e1826370
+texhash maps/e1m1.bsp:crate0_side 0 64 64 00000001 c478f3c9
+texhash maps/e1m1.bsp:crate0_side 1 32 32 00000001 3b1d2518
+texhash maps/e1m1.bsp:crate0_side 2 16 16 00000001 43d462b3
+texhash maps/e1m1.bsp:crate0_side 3 8 8 00000001 ff7e952c
+texhash maps/e1m1.bsp:crate0_side 4 4 4 00000001 c071501f
+texhash maps/e1m1.bsp:crate0_side 5 2 2 00000001 78c5a30e
+texhash maps/e1m1.bsp:crate0_side 6 1 1 00000001 cf0b1b74
+texhash maps/e1m1.bsp:+0sliptop 0 64 64 00000001 cfcc337b
+texhash maps/e1m1.bsp:+0sliptop 1 32 32 00000001 7a27d467
+texhash maps/e1m1.bsp:+0sliptop 2 16 16 00000001 a8a8537a
+texhash maps/e1m1.bsp:+0sliptop 3 8 8 00000001 870f827b
+texhash maps/e1m1.bsp:+0sliptop 4 4 4 00000001 47966380
+texhash maps/e1m1.bsp:+0sliptop 5 2 2 00000001 53608380
+texhash maps/e1m1.bsp:+0sliptop 6 1 1 00000001 2b2f02d2
+texhash maps/e1m1.bsp:sliptopsd 0 16 64 00000001 d1115959
+texhash maps/e1m1.bsp:sliptopsd 1 8 32 00000001 b1429154
+texhash maps/e1m1.bsp:sliptopsd 2 4 16 00000001 6966ea82
+texhash maps/e1m1.bsp:sliptopsd 3 2 8 00000001 b4c3a5ec
+texhash maps/e1m1.bsp:sliptopsd 4 1 4 00000001 b2695271
+texhash maps/e1m1.bsp:sliptopsd 5 1 2 00000001 715670ec
+texhash maps/e1m1.bsp:sliptopsd 6 1 1 00000001 c71d9fca
+texhash maps/e1m1.bsp:slip1 0 128 192 00000201 ac83b03e
+texhash maps/e1m1.bsp:slip1 1 64 96 00000201 4a0df50b
+texhash maps/e1m1.bsp:slip1 2 32 48 00000201 be428bf5
+texhash maps/e1m1.bsp:slip1 3 16 24 00000201 3b62b3f8
+texhash maps/e1m1.bsp:slip1 4 8 12 00000201 0ff1ab23
+texhash maps/e1m1.bsp:slip1 5 4 6 00000201 5cbb9c51
+texhash maps/e1m1.bsp:slip1 6 2 3 00000201 b20c7650
+texhash maps/e1m1.bsp:slip1 7 1 1 00000201 6c093d2e
+texhash maps/e1m1.bsp:slip1_glow 0 128 192 00000101 a25081ce
+texhash maps/e1m1.bsp:slip1_glow 1 64 96 00000101 5172fd92
+texhash maps/e1m1.bsp:slip1_glow 2 32 48 00000101 28829861
+texhash maps/e1m1.bsp:slip1_glow 3 16 24 00000101 10fb2d8a
+texhash maps/e1m1.bsp:slip1_glow 4 8 12 00000101 68fa33df
+texhash maps/e1m1.bsp:slip1_glow 5 4 6 00000101 300d2c94
+texhash maps/e1m1.bsp:slip1_glow 6 2 3 00000101 88b3a335
+texhash maps/e1m1.bsp:slip1_glow 7 1 1 00000101 dc954658
+texhash maps/e1m1.bsp:+0slip 0 64 64 00000201 96e810c2
+texhash maps/e1m1.bsp:+0slip 1 32 32 00000201 d8b85ccb
+texhash maps/e1m1.bsp:+0slip 2 16 16 00000201 f2d30327
+texhash maps/e1m1.bsp:+0slip 3 8 8 00000201 20e6da24
+texhash maps/e1m1.bsp:+0slip 4 4 4 00000201 7980e046
+texhash maps/e1m1.bsp:+0slip 5 2 2 00000201 b46f5a84
+texhash maps/e1m1.bsp:+0slip 6 1 1 00000201 1c0379cb
+texhash maps/e1m1.bsp:+0slip_glow 0 64 64 00000101 c8937b0a
+texhash maps/e1m1.bsp:+0slip_glow 1 32 32 00000101 691ddf49
+texhash maps/e1m1.bsp:+0slip_glow 2 16 16 00000101 2b232da0
+texhash maps/e1m1.bsp:+0slip_glow 3 8 8 00000101 cbbb4a76
+texhash maps/e1m1.bsp:+0slip_glow 4 4 4 00000101 cfdc91a3
+texhash maps/e1m1.bsp:+0slip_glow 5 2 2 00000101 52949145
+texhash maps/e1m1.bsp:+0slip_glow 6 1 1 00000101 adf94fd0
+texhash maps/e1m1.bsp:+0planet 0 32 32 00000001 c8dc6a86
+texhash maps/e1m1.bsp:+0planet 1 16 16 00000001 9ddd17fd
+texhash maps/e1m1.bsp:+0planet 2 8 8 00000001 99ee6144
+texhash maps/e1m1.bsp:+0planet 3 4 4 00000001 a94b960d
+texhash maps/e1m1.bsp:+0planet 4 2 2 00000001 95bf182e
+texhash maps/e1m1.bsp:+0planet 5 1 1 00000001 905a3fbc
+texhash maps/e1m1.bsp:z_exit 0 32 32 00000201 d17795fa
+texhash maps/e1m1.bsp:z_exit 1 16 16 00000201 bac012ad
+texhash maps/e1m1.bsp:z_exit 2 8 8 00000201 cd65721f
+texhash maps/e1m1.bsp:z_exit 3 4 4 00000201 0aa34d49
+texhash maps/e1m1.bsp:z_exit 4 2 2 00000201 7e17bb18
+texhash maps/e1m1.bsp:z_exit 5 1 1 00000201 1e58c369
+texhash maps/e1m1.bsp:z_exit_glow 0 32 32 00000101 2ce4aeae
+texhash maps/e1m1.bsp:z_exit_glow 1 16 16 00000101 fa683605
+texhash maps/e1m1.bsp:z_exit_glow 2 8 8 00000101 00794133
+texhash maps/e1m1.bsp:z_exit_glow 3 4 4 00000101 8bc63fb9
+texhash maps/e1m1.bsp:z_exit_glow 4 2 2 00000101 962f5d16
+texhash maps/e1m1.bsp:z_exit_glow 5 1 1 00000101 7f743103
+texhash maps/e1m1.bsp:switch_1 0 32 32 00000201 f0578838
+texhash maps/e1m1.bsp:switch_1 1 16 16 00000201 48bb8f5a
+texhash maps/e1m1.bsp:switch_1 2 8 8 00000201 b80c9647
+texhash maps/e1m1.bsp:switch_1 3 4 4 00000201 3b2f60f3
+texhash maps/e1m1.bsp:switch_1 4 2 2 00000201 fa2aeea9
+texhash maps/e1m1.bsp:switch_1 5 1 1 00000201 05b96843
+texhash maps/e1m1.bsp:switch_1_glow 0 32 32 00000101 0ca3496e
+texhash maps/e1m1.bsp:switch_1_glow 1 16 16 00000101 a9e37ea9
+texhash maps/e1m1.bsp:switch_1_glow 2 8 8 00000101 7a97ec3d
+texhash maps/e1m1.bsp:switch_1_glow 3 4 4 00000101 4a7c9e34
+texhash maps/e1m1.bsp:switch_1_glow 4 2 2 00000101 5e94bb01
+texhash maps/e1m1.bsp:switch_1_glow 5 1 1 00000101 0b1a6525
+texhash maps/e1m1.bsp:basebutn3 0 32 32 00000201 491d287a
+texhash maps/e1m1.bsp:basebutn3 1 16 16 00000201 ac257698
+texhash maps/e1m1.bsp:basebutn3 2 8 8 00000201 6ef6f633
+texhash maps/e1m1.bsp:basebutn3 3 4 4 00000201 53aa93b3
+texhash maps/e1m1.bsp:basebutn3 4 2 2 00000201 3ea1718d
+texhash maps/e1m1.bsp:basebutn3 5 1 1 00000201 3f1de0cf
+texhash maps/e1m1.bsp:basebutn3_glow 0 32 32 00000101 2cb9d55a
+texhash maps/e1m1.bsp:basebutn3_glow 1 16 16 00000101 87ae8199
+texhash maps/e1m1.bsp:basebutn3_glow 2 8 8 00000101 68cb0a90
+texhash maps/e1m1.bsp:basebutn3_glow 3 4 4 00000101 0c67e0d1
+texhash maps/e1m1.bsp:basebutn3_glow 4 2 2 00000101 c8fc97cd
+texhash maps/e1m1.bsp:basebutn3_glow 5 1 1 00000101 224ff5ae
+texhash maps/e1m1.bsp:ecop1_1 0 64 64 00000001 d97a6a86
+texhash maps/e1m1.bsp:ecop1_1 1 32 32 00000001 d4bad881
+texhash maps/e1m1.bsp:ecop1_1 2 16 16 00000001 51ece966
+texhash maps/e1m1.bsp:ecop1_1 3 8 8 00000001 f9fc1b1c
+texhash maps/e1m1.bsp:ecop1_1 4 4 4 00000001 ec07b798
+texhash maps/e1m1.bsp:ecop1_1 5 2 2 00000001 3af83378
+texhash maps/e1m1.bsp:ecop1_1 6 1 1 00000001 9b43f27e
+texhash e1m1.bsp:#teleport_norm 0 64 64 00040082 1bdb48ea
+texhash maps/e1m1.bsp:*teleport 0 64 64 00000001 e93bb850
+texhash maps/e1m1.bsp:*teleport 1 32 32 00000001 b62647ad
+texhash maps/e1m1.bsp:*teleport 2 16 16 00000001 981f9a66
+texhash maps/e1m1.bsp:*teleport 3 8 8 00000001 f00c9e60
+texhash maps/e1m1.bsp:*teleport 4 4 4 00000001 b2573c3d
+texhash maps/e1m1.bsp:*teleport 5 2 2 00000001 6d762604
+texhash maps/e1m1.bsp:*teleport 6 1 1 00000001 488e1ea0
+texhash maps/e1m1.bsp:tlight01 0 32 32 00000201 4933ced8
+texhash maps/e1m1.bsp:tlight01 1 16 16 00000201 f9d5ee1e
+texhash maps/e1m1.bsp:tlight01 2 8 8 00000201 c1f9d2e1
+texhash maps/e1m1.bsp:tlight01 3 4 4 00000201 d8c0cd3e
+texhash maps/e1m1.bsp:tlight01 4 2 2 00000201 967f2b22
+texhash maps/e1m1.bsp:tlight01 5 1 1 00000201 3e76aab6
+texhash maps/e1m1.bsp:tlight01_glow 0 32 32 00000101 0d5eeae5
+texhash maps/e1m1.bsp:tlight01_glow 1 16 16 00000101 c813c61d
+texhash maps/e1m1.bsp:tlight01_glow 2 8 8 00000101 928121bd
+texhash maps/e1m1.bsp:tlight01_glow 3 4 4 00000101 ba5da525
+texhash maps/e1m1.bsp:tlight01_glow 4 2 2 00000101 e34a4b0d
+texhash maps/e1m1.bsp:tlight01_glow 5 1 1 00000101 5a31deda
+texhash maps/e1m1.bsp:ecop1_4 0 64 64 00000001 0c4a43a9
+texhash maps/e1m1.bsp:ecop1_4 1 32 32 00000001 8615ce30
+texhash maps/e1m1.bsp:ecop1_4 2 16 16 00000001 0308fdb6
+texhash maps/e1m1.bsp:ecop1_4 3 8 8 00000001 efca969c
+texhash maps/e1m1.bsp:ecop1_4 4 4 4 00000001 df39e8c4
+texhash maps/e1m1.bsp:ecop1_4 5 2 2 00000001 b9483027
+texhash maps/e1m1.bsp:ecop1_4 6 1 1 00000001 5f3f21e3
+texhash maps/e1m1.bsp:twall2_3 0 64 64 00000001 161702f6
+texhash maps/e1m1.bsp:twall2_3 1 32 32 00000001 2e760316
+texhash maps/e1m1.bsp:twall2_3 2 16 16 00000001 82ab54b8
+texhash maps/e1m1.bsp:twall2_3 3 8 8 00000001 a85efa08
+texhash maps/e1m1.bsp:twall2_3 4 4 4 00000001 f2a928c4
+texhash maps/e1m1.bsp:twall2_3 5 2 2 00000001 39fe3a3e
+texhash maps/e1m1.bsp:twall2_3 6 1 1 00000001 f5c550d9
+texhash maps/e1m1.bsp:clip 0 64 64 00000001 bc7e8203
+texhash maps/e1m1.bsp:clip 1 32 32 00000001 276c670b
+texhash maps/e1m1.bsp:clip 2 16 16 00000001 cddb42d8
+texhash maps/e1m1.bsp:clip 3 8 8 00000001 1aa432df
+texhash maps/e1m1.bsp:clip 4 4 4 00000001 2715bdce
+texhash maps/e1m1.bsp:clip 5 2 2 00000001 518b688b
+texhash maps/e1m1.bsp:clip 6 1 1 00000001 c6189904
+texhash maps/e1m1.bsp:*slime0 0 64 64 00000001 2385e7d1
+texhash maps/e1m1.bsp:*slime0 1 32 32 00000001 36d525a3
+texhash maps/e1m1.bsp:*slime0 2 16 16 00000001 422a13eb
+texhash maps/e1m1.bsp:*slime0 3 8 8 00000001 1dd82ba0
+texhash maps/e1m1.bsp:*slime0 4 4 4 00000001 da012854
+texhash maps/e1m1.bsp:*slime0 5 2 2 00000001 09dcaef6
+texhash maps/e1m1.bsp:*slime0 6 1 1 00000001 5b303c47
+texhash maps/e1m1.bsp:twall3_1 0 64 128 00000001 d1c17ddd
+texhash maps/e1m1.bsp:twall3_1 1 32 64 00000001 2194c735
+texhash maps/e1m1.bsp:twall3_1 2 16 32 00000001 8c510847
+texhash maps/e1m1.bsp:twall3_1 3 8 16 00000001 47bc736d
+texhash maps/e1m1.bsp:twall3_1 4 4 8 00000001 ace9e36c
+texhash maps/e1m1.bsp:twall3_1 5 2 4 00000001 a0a550ba
+texhash maps/e1m1.bsp:twall3_1 6 1 2 00000001 5aa887b1
+texhash maps/e1m1.bsp:twall3_1 7 1 1 00000001 4e661c66
+texhash maps/e1m1.bsp:tech10_1 0 64 64 00000001 f26408dd
+texhash maps/e1m1.bsp:tech10_1 1 32 32 00000001 a1e46979
+texhash maps/e1m1.bsp:tech10_1 2 16 16 00000001 f1459a57
+texhash maps/e1m1.bsp:tech10_1 3 8 8 00000001 74ea023f
+texhash maps/e1m1.bsp:tech10_1 4 4 4 00000001 938a4387
+texhash maps/e1m1.bsp:tech10_1 5 2 2 00000001 878c4dfd
+texhash maps/e1m1.bsp:tech10_1 6 1 1 00000001 73578240
+texhash maps/e1m1.bsp:tech01_9 0 16 64 00000001 86774dfe
+texhash maps/e1m1.bsp:tech01_9 1 8 32 00000001 cf78bca7
+texhash maps/e1m1.bsp:tech01_9 2 4 16 00000001 3c3baf57
+texhash maps/e1m1.bsp:tech01_9 3 2 8 00000001 dd9744fc
+texhash maps/e1m1.bsp:tech01_9 4 1 4 00000001 3bd77e9a
+texhash maps/e1m1.bsp:tech01_9 5 1 2 00000001 f7736253
+texhash maps/e1m1.bsp:tech01_9 6 1 1 00000001 36c1d03c
+texhash maps/e1m1.bsp:sfloor4_5 0 64 64 00000001 cdcb1895
+texhash maps/e1m1.bsp:sfloor4_5 1 32 32 00000001 635bd20b
+texhash maps/e1m1.bsp:sfloor4_5 2 16 16 00000001 8debbf8d
+texhash maps/e1m1.bsp:sfloor4_5 3 8 8 00000001 769b76be
+texhash maps/e1m1.bsp:sfloor4_5 4 4 4 00000001 c58affed
+texhash maps/e1m1.bsp:sfloor4_5 5 2 2 00000001 e2758dfe
+texhash maps/e1m1.bsp:sfloor4_5 6 1 1 00000001 a883f5c8
+texhash maps/e1m1.bsp:tech11_2 0 128 128 00000001 f56a5604
+texhash maps/e1m1.bsp:tech11_2 1 64 64 00000001 6a17077b
+texhash maps/e1m1.bsp:tech11_2 2 32 32 00000001 190bb96d
+texhash maps/e1m1.bsp:tech11_2 3 16 16 00000001 02a4f3b2
+texhash maps/e1m1.bsp:tech11_2 4 8 8 00000001 1428c7f5
+texhash maps/e1m1.bsp:tech11_2 5 4 4 00000001 1325fc14
+texhash maps/e1m1.bsp:tech11_2 6 2 2 00000001 9770c1c1
+texhash maps/e1m1.bsp:tech11_2 7 1 1 00000001 7cb49261
+texhash maps/e1m1.bsp:twall2_1 0 64 128 00000001 78217dbd
+texhash maps/e1m1.bsp:twall2_1 1 32 64 00000001 7785daaf
+texhash maps/e1m1.bsp:twall2_1 2 16 32 00000001 703e51bd
+texhash maps/e1m1.bsp:twall2_1 3 8 16 00000001 16bb0dce
+texhash maps/e1m1.bsp:twall2_1 4 4 8 00000001 802a1a5d
+texhash maps/e1m1.bsp:twall2_1 5 2 4 00000001 733eb15d
+texhash maps/e1m1.bsp:twall2_1 6 1 2 00000001 b61eaea8
+texhash maps/e1m1.bsp:twall2_1 7 1 1 00000001 5b1fb0b8
+texhash maps/e1m1.bsp:twall5_1 0 128 128 00000001 7f011c13
+texhash maps/e1m1.bsp:twall5_1 1 64 64 00000001 303cbb19
+texhash maps/e1m1.bsp:twall5_1 2 32 32 00000001 e3e6e8a3
+texhash maps/e1m1.bsp:twall5_1 3 16 16 00000001 2f1482cb
+texhash maps/e1m1.bsp:twall5_1 4 8 8 00000001 5f14ba94
+texhash maps/e1m1.bsp:twall5_1 5 4 4 00000001 81bd5e1c
+texhash maps/e1m1.bsp:twall5_1 6 2 2 00000001 5105e45a
+texhash maps/e1m1.bsp:twall5_1 7 1 1 00000001 098b9833
+texhash maps/e1m1.bsp:comp1_5 0 64 64 00000001 639ee9c6
+texhash maps/e1m1.bsp:comp1_5 1 32 32 00000001 01b2f70f
+texhash maps/e1m1.bsp:comp1_5 2 16 16 00000001 0e669365
+texhash maps/e1m1.bsp:comp1_5 3 8 8 00000001 542cb9f9
+texhash maps/e1m1.bsp:comp1_5 4 4 4 00000001 70eae5bc
+texhash maps/e1m1.bsp:comp1_5 5 2 2 00000001 3d77a9ce
+texhash maps/e1m1.bsp:comp1_5 6 1 1 00000001 f8524771
+texhash maps/e1m1.bsp:twall2_6 0 64 64 00000001 e9b67a9b
+texhash maps/e1m1.bsp:twall2_6 1 32 32 00000001 4d1cc544
+texhash maps/e1m1.bsp:twall2_6 2 16 16 00000001 9f868513
+texhash maps/e1m1.bsp:twall2_6 3 8 8 00000001 5aa1c041
+texhash maps/e1m1.bsp:twall2_6 4 4 4 00000001 bdd982a4
+texhash maps/e1m1.bsp:twall2_6 5 2 2 00000001 ad7e5f68
+texhash maps/e1m1.bsp:twall2_6 6 1 1 00000001 9ab0ee3d
+texhash maps/e1m1.bsp:twall1_2 0 64 128 00000001 bae9e5a2
+texhash maps/e1m1.bsp:twall1_2 1 32 64 00000001 157614b8
+texhash maps/e1m1.bsp:twall1_2 2 16 32 00000001 98853d4d
+texhash maps/e1m1.bsp:twall1_2 3 8 16 00000001 f9b96b7f
+texhash maps/e1m1.bsp:twall1_2 4 4 8 00000001 d9d4dc76
+texhash maps/e1m1.bsp:twall1_2 5 2 4 00000001 32f04301
+texhash maps/e1m1.bsp:twall1_2 6 1 2 00000001 3346a8dd
+texhash maps/e1m1.bsp:twall1_2 7 1 1 00000001 cc6a05d3
+texhash maps/e1m1.bsp:twall2_5 0 64 64 00000001 88feb422
+texhash maps/e1m1.bsp:twall2_5 1 32 32 00000001 5ef118a0
+texhash maps/e1m1.bsp:twall2_5 2 16 16 00000001 afefd5bd
+texhash maps/e1m1.bsp:twall2_5 3 8 8 00000001 07464193
+texhash maps/e1m1.bsp:twall2_5 4 4 4 00000001 c3ae78a8
+texhash maps/e1m1.bsp:twall2_5 5 2 2 00000001 a547315e
+texhash maps/e1m1.bsp:twall2_5 6 1 1 00000001 ec828435
+texhash maps/e1m1.bsp:twall2_2 0 64 128 00000001 ca5b4b75
+texhash maps/e1m1.bsp:twall2_2 1 32 64 00000001 d95e55f2
+texhash maps/e1m1.bsp:twall2_2 2 16 32 00000001 7e08d691
+texhash maps/e1m1.bsp:twall2_2 3 8 16 00000001 345c4649
+texhash maps/e1m1.bsp:twall2_2 4 4 8 00000001 ad7b1c40
+texhash maps/e1m1.bsp:twall2_2 5 2 4 00000001 675d3296
+texhash maps/e1m1.bsp:twall2_2 6 1 2 00000001 d8694038
+texhash maps/e1m1.bsp:twall2_2 7 1 1 00000001 0219e71d
+texhash maps/e1m1.bsp:twall1_1 0 64 128 00000001 21fd1b77
+texhash maps/e1m1.bsp:twall1_1 1 32 64 00000001 1269a9f1
+texhash maps/e1m1.bsp:twall1_1 2 16 32 00000001 d789945e
+texhash maps/e1m1.bsp:twall1_1 3 8 16 00000001 a4829b37
+texhash maps/e1m1.bsp:twall1_1 4 4 8 00000001 72ec692d
+texhash maps/e1m1.bsp:twall1_1 5 2 4 00000001 eeb15171
+texhash maps/e1m1.bsp:twall1_1 6 1 2 00000001 65765e2f
+texhash maps/e1m1.bsp:twall1_1 7 1 1 00000001 cfb14f3f
+texhash maps/e1m1.bsp:twall5_3 0 64 64 00000001 8aa950e8
+texhash maps/e1m1.bsp:twall5_3 1 32 32 00000001 87afdade
+texhash maps/e1m1.bsp:twall5_3 2 16 16 00000001 323f5e70
+texhash maps/e1m1.bsp:twall5_3 3 8 8 00000001 c9f01521
+texhash maps/e1m1.bsp:twall5_3 4 4 4 00000001 815c13c1
+texhash maps/e1m1.bsp:twall5_3 5 2 2 00000001 9398e88d
+texhash maps/e1m1.bsp:twall5_3 6 1 1 00000001 098b9833
+texhash maps/e1m1.bsp:ecop1_6 0 64 64 00000001 aef036a5
+texhash maps/e1m1.bsp:ecop1_6 1 32 32 00000001 8b8bffea
+texhash maps/e1m1.bsp:ecop1_6 2 16 16 00000001 941a3a5f
+texhash maps/e1m1.bsp:ecop1_6 3 8 8 00000001 cdee3d5b
+texhash maps/e1m1.bsp:ecop1_6 4 4 4 00000001 38d73ac2
+texhash maps/e1m1.bsp:ecop1_6 5 2 2 00000001 2f608f45
+texhash maps/e1m1.bsp:ecop1_6 6 1 1 00000001 6d3b0037
+texhash maps/e1m1.bsp:*water0 0 64 64 00000001 48070535
+texhash maps/e1m1.bsp:*water0 1 32 32 00000001 5445ce5f
+texhash maps/e1m1.bsp:*water0 2 16 16 00000001 c2c26a21
+texhash maps/e1m1.bsp:*water0 3 8 8 00000001 80ff12c4
+texhash maps/e1m1.bsp:*water0 4 4 4 00000001 7082e888
+texhash maps/e1m1.bsp:*water0 5 2 2 00000001 1d935d80
+texhash maps/e1m1.bsp:*water0 6 1 1 00000001 d3bb2c29
+texhash maps/e1m1.bsp:ground1_2 0 64 64 00000001 d7f79042
+texhash maps/e1m1.bsp:ground1_2 1 32 32 00000001 6af86334
+texhash maps/e1m1.bsp:ground1_2 2 16 16 00000001 37d62cd0
+texhash maps/e1m1.bsp:ground1_2 3 8 8 00000001 889aeefc
+texhash maps/e1m1.bsp:ground1_2 4 4 4 00000001 192fbc92
+texhash maps/e1m1.bsp:ground1_2 5 2 2 00000001 29bffb4a
+texhash maps/e1m1.bsp:ground1_2 6 1 1 00000001 7cbde097
+texhash maps/e1m1.bsp:tech04_2 0 128 16 00000001 ce56c895
+texhash maps/e1m1.bsp:tech04_2 1 64 8 00000001 cd3b88fb
+texhash maps/e1m1.bsp:tech04_2 2 32 4 00000001 84172d98
+texhash maps/e1m1.bsp:tech04_2 3 16 2 00000001 5d5402f1
+texhash maps/e1m1.bsp:tech04_2 4 8 1 00000001 dac3b1cc
+texhash maps/e1m1.bsp:tech04_2 5 4 1 00000001 8435edc9
+texhash maps/e1m1.bsp:tech04_2 6 2 1 00000001 6e2c0279
+texhash maps/e1m1.bsp:tech04_2 7 1 1 00000001 f079f87a
+texhash maps/e1m1.bsp:sky4_back 0 128 128 00000000 64381b11
+texhash maps/e1m1.bsp:sky4_front 0 128 128 00000008 83f27032
+texhash maps/e1m1.bsp:uwall1_2 0 64 64 00000001 f7691ff9
+texhash maps/e1m1.bsp:uwall1_2 1 32 32 00000001 497d3e2e
+texhash maps/e1m1.bsp:uwall1_2 2 16 16 00000001 dfaeb8f3
+texhash maps/e1m1.bsp:uwall1_2 3 8 8 00000001 4ddbac84
+texhash maps/e1m1.bsp:uwall1_2 4 4 4 00000001 be7f8bed
+texhash maps/e1m1.bsp:uwall1_2 5 2 2 00000001 70e72367
+texhash maps/e1m1.bsp:uwall1_2 6 1 1 00000001 8b7a7659
+texhash maps/e1m1.bsp:ground1_6 0 64 64 00000001 47241222
+texhash maps/e1m1.bsp:ground1_6 1 32 32 00000001 ca98ddeb
+texhash maps/e1m1.bsp:ground1_6 2 16 16 00000001 83a2269e
+texhash maps/e1m1.bsp:ground1_6 3 8 8 00000001 13c5077d
+texhash maps/e1m1.bsp:ground1_6 4 4 4 00000001 7e869fbc
+texhash maps/e1m1.bsp:ground1_6 5 2 2 00000001 0707699c
+texhash maps/e1m1.bsp:ground1_6 6 1 1 00000001 4cc1f773
+texhash maps/e1m1.bsp:tlight11 0 16 64 00000201 0be460e9
+texhash maps/e1m1.bsp:tlight11 1 8 32 00000201 2119e582
+texhash maps/e1m1.bsp:tlight11 2 4 16 00000201 3d9a9e6c
+texhash maps/e1m1.bsp:tlight11 3 2 8 00000201 0efe3e88
+texhash maps/e1m1.bsp:tlight11 4 1 4 00000201 a1370894
+texhash maps/e1m1.bsp:tlight11 5 1 2 00000201 f2d7830a
+texhash maps/e1m1.bsp:tlight11 6 1 1 00000201 ee655cd1
+texhash maps/e1m1.bsp:tlight11_glow 0 16 64 00000101 4962bb85
+texhash maps/e1m1.bsp:tlight11_glow 1 8 32 00000101 1098c3c5
+texhash maps/e1m1.bsp:tlight11_glow 2 4 16 00000101 e5a645c5
+texhash maps/e1m1.bsp:tlight11_glow 3 2 8 00000101 8a0b0e15
+texhash maps/e1m1.bsp:tlight11_glow 4 1 4 00000101 873d09c7
+texhash maps/e1m1.bsp:tlight11_glow 5 1 2 00000101 e1ee9372
+texhash maps/e1m1.bsp:tlight11_glow 6 1 1 00000101 3d1a99a3
+texhash maps/e1m1.bsp:tech07_2 0 128 128 00000001 5d03decd
+texhash maps/e1m1.bsp:tech07_2 1 64 64 00000001 941c120d
+texhash maps/e1m1.bsp:tech07_2 2 32 32 00000001 8a18671d
+texhash maps/e1m1.bsp:tech07_2 3 16 16 00000001 bf1d37c9
+texhash maps/e1m1.bsp:tech07_2 4 8 8 00000001 cda884a2
+texhash maps/e1m1.bsp:tech07_2 5 4 4 00000001 ca4b2bd3
+texhash maps/e1m1.bsp:tech07_2 6 2 2 00000001 0c08000a
+texhash maps/e1m1.bsp:tech07_2 7 1 1 00000001 01cf332b
+texhash maps/e1m1.bsp:tech01_6 0 64 64 00000001 1df09bda
+texhash maps/e1m1.bsp:tech01_6 1 32 32 00000001 1a98c190
+texhash maps/e1m1.bsp:tech01_6 2 16 16 00000001 c9e7bb5e
+texhash maps/e1m1.bsp:tech01_6 3 8 8 00000001 d229e1a6
+texhash maps/e1m1.bsp:tech01_6 4 4 4 00000001 d685b956
+texhash maps/e1m1.bsp:tech01_6 5 2 2 00000001 1c64893c
+texhash maps/e1m1.bsp:tech01_6 6 1 1 00000001 22975b14
+texhash maps/e1m1.bsp:tlight07 0 32 128 00000201 795ec3b8
+texhash maps/e1m1.bsp:tlight07 1 16 64 00000201 19314c9f
+texhash maps/e1m1.bsp:tlight07 2 8 32 00000201 591cc99b
+texhash maps/e1m1.bsp:tlight07 3 4 16 00000201 008c20f9
+texhash maps/e1m1.bsp:tlight07 4 2 8 00000201 2f2ea59b
+texhash maps/e1m1.bsp:tlight07 5 1 4 00000201 c98b7232
+texhash maps/e1m1.bsp:tlight07 6 1 2 00000201 d6196111
+texhash maps/e1m1.bsp:tlight07 7 1 1 00000201 13b60dab
+texhash maps/e1m1.bsp:tlight07_glow 0 32 128 00000101 4f5ff24e
+texhash maps/e1m1.bsp:tlight07_glow 1 16 64 00000101 d4081e1f
+texhash maps/e1m1.bsp:tlight07_glow 2 8 32 00000101 0eef0af9
+texhash maps/e1m1.bsp:tlight07_glow 3 4 16 00000101 ebbe2925
+texhash maps/e1m1.bsp:tlight07_glow 4 2 8 00000101 02be2c40
+texhash maps/e1m1.bsp:tlight07_glow 5 1 4 00000101 edf9dde2
+texhash maps/e1m1.bsp:tlight07_glow 6 1 2 00000101 017af8fa
+texhash maps/e1m1.bsp:tlight07_glow 7 1 1 00000101 272aee09
+texhash maps/e1m1.bsp:tlight08 0 32 128 00000001 2fd49e6d
+texhash maps/e1m1.bsp:tlight08 1 16 64 00000001 34edfc01
+texhash maps/e1m1.bsp:tlight08 2 8 32 00000001 8e903ffa
+texhash maps/e1m1.bsp:tlight08 3 4 16 00000001 1b83edab
+texhash maps/e1m1.bsp:tlight08 4 2 8 00000001 59c171db
+texhash maps/e1m1.bsp:tlight08 5 1 4 00000001 da17698d
+texhash maps/e1m1.bsp:tlight08 6 1 2 00000001 c6a6e9b8
+texhash maps/e1m1.bsp:tlight08 7 1 1 00000001 f079f87a
+texhash maps/e1m1.bsp:tech10_3 0 32 128 00000001 31e07225
+texhash maps/e1m1.bsp:tech10_3 1 16 64 00000001 c1973d13
+texhash maps/e1m1.bsp:tech10_3 2 8 32 00000001 5964e3f1
+texhash maps/e1m1.bsp:tech10_3 3 4 16 00000001 22f5c423
+texhash maps/e1m1.bsp:tech10_3 4 2 8 00000001 2520ac98
+texhash maps/e1m1.bsp:tech10_3 5 1 4 00000001 7e4ce4e0
+texhash maps/e1m1.bsp:tech10_3 6 1 2 00000001 487b4b4d
+texhash maps/e1m1.bsp:tech10_3 7 1 1 00000001 bda77915
+texhash maps/e1m1.bsp:tech01_1 0 64 64 00000001 c7242ebe
+texhash maps/e1m1.bsp:tech01_1 1 32 32 00000001 0cccc1eb
+texhash maps/e1m1.bsp:tech01_1 2 16 16 00000001 f2e3aa3d
+texhash maps/e1m1.bsp:tech01_1 3 8 8 00000001 18450f9c
+texhash maps/e1m1.bsp:tech01_1 4 4 4 00000001 129da7a5
+texhash maps/e1m1.bsp:tech01_1 5 2 2 00000001 abd485ed
+texhash maps/e1m1.bsp:tech01_1 6 1 1 00000001 cf63ea0e
+texhash maps/e1m1.bsp:tlight10 0 64 64 00000001 1e66e4d1
+texhash maps/e1m1.bsp:tlight10 1 32 32 00000001 a371ea8a
+texhash maps/e1m1.bsp:tlight10 2 16 16 00000001 9aa788b2
+texhash maps/e1m1.bsp:tlight10 3 8 8 00000001 edc0b86d
+texhash maps/e1m1.bsp:tlight10 4 4 4 00000001 12f8e7ec
+texhash maps/e1m1.bsp:tlight10 5 2 2 00000001 b1d9c45b
+texhash maps/e1m1.bsp:tlight10 6 1 1 00000001 d84807ad
+texhash maps/e1m1.bsp:comp1_6 0 64 64 00000201 febad7f0
+texhash maps/e1m1.bsp:comp1_6 1 32 32 00000201 18b45b18
+texhash maps/e1m1.bsp:comp1_6 2 16 16 00000201 e0a471e7
+texhash maps/e1m1.bsp:comp1_6 3 8 8 00000201 39164253
+texhash maps/e1m1.bsp:comp1_6 4 4 4 00000201 171f7143
+texhash maps/e1m1.bsp:comp1_6 5 2 2 00000201 8071ddc4
+texhash maps/e1m1.bsp:comp1_6 6 1 1 00000201 e2aea9da
+texhash maps/e1m1.bsp:comp1_6_glow 0 64 64 00000101 6d19182d
+texhash maps/e1m1.bsp:comp1_6_glow 1 32 32 00000101 f33cf64e
+texhash maps/e1m1.bsp:comp1_6_glow 2 16 16 00000101 8df1b35f
+texhash maps/e1m1.bsp:comp1_6_glow 3 8 8 00000101 44ae3556
+texhash maps/e1m1.bsp:comp1_6_glow 4 4 4 00000101 cd44b124
+texhash maps/e1m1.bsp:comp1_6_glow 5 2 2 00000101 ed7b95b9
+texhash maps/e1m1.bsp:comp1_6_glow 6 1 1 00000101 2269f369
+texhash maps/e1m1.bsp:comp1_2 0 64 64 00000001 6d9776a9
+texhash maps/e1m1.bsp:comp1_2 1 32 32 00000001 3a7e2ace
+texhash maps/e1m1.bsp:comp1_2 2 16 16 00000001 4a594715
+texhash maps/e1m1.bsp:comp1_2 3 8 8 00000001 00ca8d20
+texhash maps/e1m1.bsp:comp1_2 4 4 4 00000001 865b032f
+texhash maps/e1m1.bsp:comp1_2 5 2 2 00000001 5112bc32
+texhash maps/e1m1.bsp:comp1_2 6 1 1 00000001 856cad4b
+texhash maps/e1m1.bsp:comp1_4 0 64 64 00000001 565d42f8
+texhash maps/e1m1.bsp:comp1_4 1 32 32 00000001 9269c70f
+texhash maps/e1m1.bsp:comp1_4 2 16 16 00000001 94512d90
+texhash maps/e1m1.bsp:comp1_4 3 8 8 00000001 978ea468
+texhash maps/e1m1.bsp:comp1_4 4 4 4 00000001 3761898e
+texhash maps/e1m1.bsp:comp1_4 5 2 2 00000001 94b4d02f
+texhash maps/e1m1.bsp:comp1_4 6 1 1 00000001 a5e56235
+texhash maps/e1m1.bsp:comp1_1 0 64 64 00000001 6987b7af
+texhash maps/e1m1.bsp:comp1_1 1 32 32 00000001 387fd8de
+texhash maps/e1m1.bsp:comp1_1 2 16 16 00000001 120b2bc0
+texhash maps/e1m1.bsp:comp1_1 3 8 8 00000001 ddbc9288
+texhash maps/e1m1.bsp:comp1_1 4 4 4 00000001 69e25fff
+texhash maps/e1m1.bsp:comp1_1 5 2 2 00000001 1acffa03
+texhash maps/e1m1.bsp:comp1_1 6 1 1 00000001 88a5da35
+texhash maps/e1m1.bsp:comp1_3 0 64 64 00000001 7c752bad
+texhash maps/e1m1.bsp:comp1_3 1 32 32 00000001 cee50035
+texhash maps/e1m1.bsp:comp1_3 2 16 16 00000001 dae28186
+texhash maps/e1m1.bsp:comp1_3 3 8 8 00000001 f546c2b3
+texhash maps/e1m1.bsp:comp1_3 4 4 4 00000001 f154a4bb
+texhash maps/e1m1.bsp:comp1_3 5 2 2 00000001 f35f79e9
+texhash maps/e1m1.bsp:comp1_3 6 1 1 00000001 42d0e762
+texhash maps/e1m1.bsp:tech09_3 0 128 128 00000001 8ff008ac
+texhash maps/e1m1.bsp:tech09_3 1 64 64 00000001 604b8e40
+texhash maps/e1m1.bsp:tech09_3 2 32 32 00000001 e953b0aa
+texhash maps/e1m1.bsp:tech09_3 3 16 16 00000001 ff89b236
+texhash maps/e1m1.bsp:tech09_3 4 8 8 00000001 b4ec0b57
+texhash maps/e1m1.bsp:tech09_3 5 4 4 00000001 ce79b62b
+texhash maps/e1m1.bsp:tech09_3 6 2 2 00000001 97163ad4
+texhash maps/e1m1.bsp:tech09_3 7 1 1 00000001 7cb49261
+texhash maps/e1m1.bsp:tlight02 0 64 64 00000201 4cddf9b9
+texhash maps/e1m1.bsp:tlight02 1 32 32 00000201 67fa94f6
+texhash maps/e1m1.bsp:tlight02 2 16 16 00000201 8526eb2c
+texhash maps/e1m1.bsp:tlight02 3 8 8 00000201 d83c72c0
+texhash maps/e1m1.bsp:tlight02 4 4 4 00000201 05286f4b
+texhash maps/e1m1.bsp:tlight02 5 2 2 00000201 ee5c98ce
+texhash maps/e1m1.bsp:tlight02 6 1 1 00000201 3443043e
+texhash maps/e1m1.bsp:tlight02_glow 0 64 64 00000101 621abe55
+texhash maps/e1m1.bsp:tlight02_glow 1 32 32 00000101 905bb6bd
+texhash maps/e1m1.bsp:tlight02_glow 2 16 16 00000101 454c1771
+texhash maps/e1m1.bsp:tlight02_glow 3 8 8 00000101 553d5649
+texhash maps/e1m1.bsp:tlight02_glow 4 4 4 00000101 11350e5c
+texhash maps/e1m1.bsp:tlight02_glow 5 2 2 00000101 9ed70685
+texhash maps/e1m1.bsp:tlight02_glow 6 1 1 00000101 cb410682
+texhash maps/e1m1.bsp:tech01_7 0 64 64 00000001 4416a7c1
+texhash maps/e1m1.bsp:tech01_7 1 32 32 00000001 1559c158
+texhash maps/e1m1.bsp:tech01_7 2 16 16 00000001 b6c5f673
+texhash maps/e1m1.bsp:tech01_7 3 8 8 00000001 8a09ffde
+texhash maps/e1m1.bsp:tech01_7 4 4 4 00000001 4c3f8ea8
+texhash maps/e1m1.bsp:tech01_7 5 2 2 00000001 67163ed0
+texhash maps/e1m1.bsp:tech01_7 6 1 1 00000001 a0b755fc
+texhash maps/e1m1.bsp:tech04_1 0 128 16 00000001 f448e6e1
+texhash maps/e1m1.bsp:tech04_1 1 64 8 00000001 07f88e66
+texhash maps/e1m1.bsp:tech04_1 2 32 4 00000001 a5e54391
+texhash maps/e1m1.bsp:tech04_1 3 16 2 00000001 8d17e3f8
+texhash maps/e1m1.bsp:tech04_1 4 8 1 00000001 9ed3b7d6
+texhash maps/e1m1.bsp:tech04_1 5 4 1 00000001 a9b0c38f
+texhash maps/e1m1.bsp:tech04_1 6 2 1 00000001 2271850c
+texhash maps/e1m1.bsp:tech04_1 7 1 1 00000001 73644e33
+texhash maps/e1m1.bsp:tech04_3 0 16 128 00000001 a479c5cd
+texhash maps/e1m1.bsp:tech04_3 1 8 64 00000001 89498713
+texhash maps/e1m1.bsp:tech04_3 2 4 32 00000001 eec4bb42
+texhash maps/e1m1.bsp:tech04_3 3 2 16 00000001 fa75f1c8
+texhash maps/e1m1.bsp:tech04_3 4 1 8 00000001 45463d88
+texhash maps/e1m1.bsp:tech04_3 5 1 4 00000001 ac040732
+texhash maps/e1m1.bsp:tech04_3 6 1 2 00000001 1269403c
+texhash maps/e1m1.bsp:tech04_3 7 1 1 00000001 7364f9ca
+texhash maps/e1m1.bsp:tech08_1 0 128 128 00000001 ba7e0769
+texhash maps/e1m1.bsp:tech08_1 1 64 64 00000001 adb1d738
+texhash maps/e1m1.bsp:tech08_1 2 32 32 00000001 57316aa1
+texhash maps/e1m1.bsp:tech08_1 3 16 16 00000001 9bb15599
+texhash maps/e1m1.bsp:tech08_1 4 8 8 00000001 a45ea1ec
+texhash maps/e1m1.bsp:tech08_1 5 4 4 00000001 cec11f66
+texhash maps/e1m1.bsp:tech08_1 6 2 2 00000001 e15ae86a
+texhash maps/e1m1.bsp:tech08_1 7 1 1 00000001 214e8bb5
+texhash maps/e1m1.bsp:sfloor4_2 0 64 64 00000001 fda4017d
+texhash maps/e1m1.bsp:sfloor4_2 1 32 32 00000001 24aa2c6d
+texhash maps/e1m1.bsp:sfloor4_2 2 16 16 00000001 aa812b97
+texhash maps/e1m1.bsp:sfloor4_2 3 8 8 00000001 ecbb736c
+texhash maps/e1m1.bsp:sfloor4_2 4 4 4 00000001 a5c20b4f
+texhash maps/e1m1.bsp:sfloor4_2 5 2 2 00000001 4d4b00a8
+texhash maps/e1m1.bsp:sfloor4_2 6 1 1 00000001 28d11695
+texhash maps/e1m1.bsp:sliplite 0 16 16 00000201 51660095
+texhash maps/e1m1.bsp:sliplite 1 8 8 00000201 ea806b6d
+texhash maps/e1m1.bsp:sliplite 2 4 4 00000201 619a4505
+texhash maps/e1m1.bsp:sliplite 3 2 2 00000201 91d5f84d
+texhash maps/e1m1.bsp:sliplite 4 1 1 00000201 a0dc8a5f
+texhash maps/e1m1.bsp:sliplite_glow 0 16 16 00000101 f14f394d
+texhash maps/e1m1.bsp:sliplite_glow 1 8 8 00000101 402f3cab
+texhash maps/e1m1.bsp:sliplite_glow 2 4 4 00000101 a285c98b
+texhash maps/e1m1.bsp:sliplite_glow 3 2 2 00000101 011a4165
+texhash maps/e1m1.bsp:sliplite_glow 4 1 1 00000101 ae5e20bc
+texhash maps/e1m1.bsp:slipside 0 16 16 00000201 9bd93855
+texhash maps/e1m1.bsp:slipside 1 8 8 00000201 8f73336d
+texhash maps/e1m1.bsp:slipside 2 4 4 00000201 043f8637
+texhash maps/e1m1.bsp:slipside 3 2 2 00000201 99cad5c9
+texhash maps/e1m1.bsp:slipside 4 1 1 00000201 2468fc8a
+texhash maps/e1m1.bsp:slipside_glow 0 16 16 00000101 208b12cd
+texhash maps/e1m1.bsp:slipside_glow 1 8 8 00000101 6e1d9ed9
+texhash maps/e1m1.bsp:slipside_glow 2 4 4 00000101 e19a0261
+texhash maps/e1m1.bsp:slipside_glow 3 2 2 00000101 b3338dad
+texhash maps/e1m1.bsp:slipside_glow 4 1 1 00000101 67d9cf8e
+texhash maps/e1m1.bsp:+0slipbot 0 64 64 00000001 bfb7401a
+texhash maps/e1m1.bsp:+0slipbot 1 32 32 00000001 14f36b3d
+texhash maps/e1m1.bsp:+0slipbot 2 16 16 00000001 7c0d334e
+texhash maps/e1m1.bsp:+0slipbot 3 8 8 00000001 a7df8c3f
+texhash maps/e1m1.bsp:+0slipbot 4 4 4 00000001 4b3873d5
+texhash maps/e1m1.bsp:+0slipbot 5 2 2 00000001 1d9dee13
+texhash maps/e1m1.bsp:+0slipbot 6 1 1 00000001 fa1c33be
+texhash maps/e1m1.bsp:slipbotsd 0 16 64 00000001 70c244fb
+texhash maps/e1m1.bsp:slipbotsd 1 8 32 00000001 bc51f10e
+texhash maps/e1m1.bsp:slipbotsd 2 4 16 00000001 654581d7
+texhash maps/e1m1.bsp:slipbotsd 3 2 8 00000001 a8bddf70
+texhash maps/e1m1.bsp:slipbotsd 4 1 4 00000001 61d691db
+texhash maps/e1m1.bsp:slipbotsd 5 1 2 00000001 6a9f7697
+texhash maps/e1m1.bsp:slipbotsd 6 1 1 00000001 91b02e35
+Mod_LoadTextures maps/e1m1.bsp: findfile 81.9ms (3154 calls) texmgr 32.6ms (102 calls) imageload 82.9ms (166 calls)
+TexMgr prepare maps/e1m1.bsp: wall 1.2ms cpu 4.0ms commit 28.5ms, 96 jobs/6 batches (2 parallel), 0.4/2.2 MiB source/prepared
+Mod_LoadBrushModel maps/e1m1.bsp: geom 0.1ms tex 116.9ms light 0.3ms faces 1.8ms
+trying to open external vis file
+maps/e1m1.vis not found, trying id1.vis
+external vis not found
+maps/e1m1.bsp is not watervised
+Mod_LoadBrushModel maps/e1m1.bsp: nodes 0.1ms watervis 0.1ms
+Mod_LoadModel maps/e1m1.bsp: read 0.5ms parse 122.0ms (1365176 bytes)
+SV_SpawnServer world model: 122.6ms
+texhash progs/s_bubble.spr:frame0 0 16 16 00000098 426d4dea
+texhash progs/s_bubble.spr:frame1 0 16 16 00000098 428328e4
+texhash progs/s_explod.spr:frame0 0 56 56 00000098 07248f15
+texhash progs/s_explod.spr:frame1 0 56 56 00000098 50e774f5
+texhash progs/s_explod.spr:frame2 0 56 56 00000098 2560070e
+texhash progs/s_explod.spr:frame3 0 56 56 00000098 2cddcf20
+texhash progs/s_explod.spr:frame4 0 56 56 00000098 0a54a180
+texhash progs/s_explod.spr:frame5 0 56 56 00000098 003c9472
+texhash progs/armor.mdl:frame0 0 184 76 00010010 fee04365
+texhash progs/armor.mdl:frame1 0 184 76 00010010 bd1d58f9
+texhash progs/armor.mdl:frame2 0 184 76 00010010 ef683689
+texhash progs/g_nail.mdl:frame0 0 308 94 00010010 e13a345d
+texhash progs/soldier.mdl:frame0 0 300 194 00010210 2ca686bc
+texhash progs/soldier.mdl:frame0_glow 0 300 194 00010110 f3bece49
+texhash progs/h_guard.mdl:frame0 0 72 60 00010010 9640d456
+texhash maps/b_nail0.bsp:rockettop 0 16 16 00000001 fe27bdc1
+texhash maps/b_nail0.bsp:rockettop 1 8 8 00000001 5359b116
+texhash maps/b_nail0.bsp:rockettop 2 4 4 00000001 b4293059
+texhash maps/b_nail0.bsp:rockettop 3 2 2 00000001 613fdf44
+texhash maps/b_nail0.bsp:rockettop 4 1 1 00000001 221408cf
+texhash maps/b_nail0.bsp:nail0top 0 32 32 00000001 ebf0446d
+texhash maps/b_nail0.bsp:nail0top 1 16 16 00000001 4b8e5de5
+texhash maps/b_nail0.bsp:nail0top 2 8 8 00000001 2dbc4383
+texhash maps/b_nail0.bsp:nail0top 3 4 4 00000001 c3033435
+texhash maps/b_nail0.bsp:nail0top 4 2 2 00000001 187bff02
+texhash maps/b_nail0.bsp:nail0top 5 1 1 00000001 2d99a268
+texhash maps/b_nail0.bsp:nail0sid 0 32 32 00000001 bdc5a63d
+texhash maps/b_nail0.bsp:nail0sid 1 16 16 00000001 1252d5e1
+texhash maps/b_nail0.bsp:nail0sid 2 8 8 00000001 812695ee
+texhash maps/b_nail0.bsp:nail0sid 3 4 4 00000001 73242814
+texhash maps/b_nail0.bsp:nail0sid 4 2 2 00000001 af6de5cc
+texhash maps/b_nail0.bsp:nail0sid 5 1 1 00000001 3befd892
+Mod_LoadTextures maps/b_nail0.bsp: findfile 3.1ms (114 calls) texmgr 1.6ms (3 calls) imageload 3.1ms (6 calls)
+TexMgr prepare maps/b_nail0.bsp: wall 0.0ms cpu 0.0ms commit 1.6ms, 3 jobs/1 batches (0 parallel), 0.0/0.0 MiB source/prepared
+Mod_LoadBrushModel maps/b_nail0.bsp: geom 0.0ms tex 4.7ms light 0.1ms faces 0.1ms
+trying to open external vis file
+maps/b_nail0.vis not found, trying id1.vis
+external vis not found
+Mod_DecompressVis: leaf VIS offset out of range on model "maps/b_nail0.bsp"
+Mod_LoadBrushModel maps/b_nail0.bsp: nodes 0.0ms watervis 0.0ms
+Mod_LoadModel maps/b_nail0.bsp: read 0.1ms parse 5.0ms (5044 bytes)
+texhash progs/quaddama.mdl:frame0 0 308 121 00010010 07f6d69c
+texhash maps/b_bh100.bsp:+2_med100 0 32 32 00000201 c39f2bf8
+texhash maps/b_bh100.bsp:+2_med100 1 16 16 00000201 504791f2
+texhash maps/b_bh100.bsp:+2_med100 2 8 8 00000201 96778915
+texhash maps/b_bh100.bsp:+2_med100 3 4 4 00000201 1edec19b
+texhash maps/b_bh100.bsp:+2_med100 4 2 2 00000201 87a353e0
+texhash maps/b_bh100.bsp:+2_med100 5 1 1 00000201 38453dfa
+texhash maps/b_bh100.bsp:+2_med100_glow 0 32 32 00000101 fee2e7f2
+texhash maps/b_bh100.bsp:+2_med100_glow 1 16 16 00000101 5a26f146
+texhash maps/b_bh100.bsp:+2_med100_glow 2 8 8 00000101 637d7a6c
+texhash maps/b_bh100.bsp:+2_med100_glow 3 4 4 00000101 5c177cad
+texhash maps/b_bh100.bsp:+2_med100_glow 4 2 2 00000101 2681d1eb
+texhash maps/b_bh100.bsp:+2_med100_glow 5 1 1 00000101 f3e4d49c
+texhash maps/b_bh100.bsp:+1_med100 0 32 32 00000201 c39f2bf8
+texhash maps/b_bh100.bsp:+1_med100 1 16 16 00000201 504791f2
+texhash maps/b_bh100.bsp:+1_med100 2 8 8 00000201 96778915
+texhash maps/b_bh100.bsp:+1_med100 3 4 4 00000201 1edec19b
+texhash maps/b_bh100.bsp:+1_med100 4 2 2 00000201 87a353e0
+texhash maps/b_bh100.bsp:+1_med100 5 1 1 00000201 38453dfa
+texhash maps/b_bh100.bsp:+1_med100_glow 0 32 32 00000101 9017bb7a
+texhash maps/b_bh100.bsp:+1_med100_glow 1 16 16 00000101 de968554
+texhash maps/b_bh100.bsp:+1_med100_glow 2 8 8 00000101 3e7dd768
+texhash maps/b_bh100.bsp:+1_med100_glow 3 4 4 00000101 6eba398c
+texhash maps/b_bh100.bsp:+1_med100_glow 4 2 2 00000101 2681d1eb
+texhash maps/b_bh100.bsp:+1_med100_glow 5 1 1 00000101 f3e4d49c
+texhash maps/b_bh100.bsp:+0_med100 0 32 32 00000201 c39f2bf8
+texhash maps/b_bh100.bsp:+0_med100 1 16 16 00000201 504791f2
+texhash maps/b_bh100.bsp:+0_med100 2 8 8 00000201 96778915
+texhash maps/b_bh100.bsp:+0_med100 3 4 4 00000201 1edec19b
+texhash maps/b_bh100.bsp:+0_med100 4 2 2 00000201 87a353e0
+texhash maps/b_bh100.bsp:+0_med100 5 1 1 00000201 38453dfa
+texhash maps/b_bh100.bsp:+0_med100_glow 0 32 32 00000101 2aa66fc2
+texhash maps/b_bh100.bsp:+0_med100_glow 1 16 16 00000101 d82ddaba
+texhash maps/b_bh100.bsp:+0_med100_glow 2 8 8 00000101 07918881
+texhash maps/b_bh100.bsp:+0_med100_glow 3 4 4 00000101 a0c5ae9e
+texhash maps/b_bh100.bsp:+0_med100_glow 4 2 2 00000101 2681d1eb
+texhash maps/b_bh100.bsp:+0_med100_glow 5 1 1 00000101 f3e4d49c
+texhash maps/b_bh100.bsp:med100 0 32 32 00000001 d775d8cd
+texhash maps/b_bh100.bsp:med100 1 16 16 00000001 b7888467
+texhash maps/b_bh100.bsp:med100 2 8 8 00000001 ae79bc40
+texhash maps/b_bh100.bsp:med100 3 4 4 00000001 c02f8bd2
+texhash maps/b_bh100.bsp:med100 4 2 2 00000001 01ea3664
+texhash maps/b_bh100.bsp:med100 5 1 1 00000001 7f7206b2
+texhash maps/b_bh100.bsp:+3_med100 0 32 32 00000201 c39f2bf8
+texhash maps/b_bh100.bsp:+3_med100 1 16 16 00000201 504791f2
+texhash maps/b_bh100.bsp:+3_med100 2 8 8 00000201 96778915
+texhash maps/b_bh100.bsp:+3_med100 3 4 4 00000201 1edec19b
+texhash maps/b_bh100.bsp:+3_med100 4 2 2 00000201 87a353e0
+texhash maps/b_bh100.bsp:+3_med100 5 1 1 00000201 38453dfa
+texhash maps/b_bh100.bsp:+3_med100_glow 0 32 32 00000101 9017bb7a
+texhash maps/b_bh100.bsp:+3_med100_glow 1 16 16 00000101 de968554
+texhash maps/b_bh100.bsp:+3_med100_glow 2 8 8 00000101 3e7dd768
+texhash maps/b_bh100.bsp:+3_med100_glow 3 4 4 00000101 6eba398c
+texhash maps/b_bh100.bsp:+3_med100_glow 4 2 2 00000101 2681d1eb
+texhash maps/b_bh100.bsp:+3_med100_glow 5 1 1 00000101 f3e4d49c
+Mod_LoadTextures maps/b_bh100.bsp: findfile 5.1ms (190 calls) texmgr 2.4ms (9 calls) imageload 5.2ms (10 calls)
+TexMgr prepare maps/b_bh100.bsp: wall 0.0ms cpu 0.0ms commit 2.4ms, 9 jobs/1 batches (0 parallel), 0.0/0.0 MiB source/prepared
+Mod_LoadBrushModel maps/b_bh100.bsp: geom 0.0ms tex 7.7ms light 0.1ms faces 0.1ms
+trying to open external vis file
+maps/b_bh100.vis not found, trying id1.vis
+external vis not found
+Mod_DecompressVis: leaf VIS offset out of range on model "maps/b_bh100.bsp"
+Mod_LoadBrushModel maps/b_bh100.bsp: nodes 0.0ms watervis 0.0ms
+Mod_LoadModel maps/b_bh100.bsp: read 0.1ms parse 8.0ms (8820 bytes)
+texhash maps/b_shell0.bsp:rockettop 0 16 16 00000001 fe27bdc1
+texhash maps/b_shell0.bsp:rockettop 1 8 8 00000001 5359b116
+texhash maps/b_shell0.bsp:rockettop 2 4 4 00000001 b4293059
+texhash maps/b_shell0.bsp:rockettop 3 2 2 00000001 613fdf44
+texhash maps/b_shell0.bsp:rockettop 4 1 1 00000001 221408cf
+texhash maps/b_shell0.bsp:shot0top 0 32 32 00000001 082f3299
+texhash maps/b_shell0.bsp:shot0top 1 16 16 00000001 cccf55f0
+texhash maps/b_shell0.bsp:shot0top 2 8 8 00000001 6ec891e4
+texhash maps/b_shell0.bsp:shot0top 3 4 4 00000001 0b9ca83f
+texhash maps/b_shell0.bsp:shot0top 4 2 2 00000001 ec17993a
+texhash maps/b_shell0.bsp:shot0top 5 1 1 00000001 f9d03a99
+texhash maps/b_shell0.bsp:shot0sid 0 32 32 00000001 49876f32
+texhash maps/b_shell0.bsp:shot0sid 1 16 16 00000001 6febdd88
+texhash maps/b_shell0.bsp:shot0sid 2 8 8 00000001 bafcefea
+texhash maps/b_shell0.bsp:shot0sid 3 4 4 00000001 8df272ba
+texhash maps/b_shell0.bsp:shot0sid 4 2 2 00000001 4dc70006
+texhash maps/b_shell0.bsp:shot0sid 5 1 1 00000001 21b4f682
+Mod_LoadTextures maps/b_shell0.bsp: findfile 3.3ms (114 calls) texmgr 1.2ms (3 calls) imageload 3.4ms (6 calls)
+TexMgr prepare maps/b_shell0.bsp: wall 0.0ms cpu 0.0ms commit 1.2ms, 3 jobs/1 batches (0 parallel), 0.0/0.0 MiB source/prepared
+Mod_LoadBrushModel maps/b_shell0.bsp: geom 0.0ms tex 4.6ms light 0.1ms faces 0.1ms
+trying to open external vis file
+maps/b_shell0.vis not found, trying id1.vis
+external vis not found
+Mod_DecompressVis: leaf VIS offset out of range on model "maps/b_shell0.bsp"
+Mod_LoadBrushModel maps/b_shell0.bsp: nodes 0.0ms watervis 0.0ms
+texhash maps/b_bh10.bsp:med3_0 0 32 32 00000201 174dfccc
+texhash maps/b_bh10.bsp:med3_0 1 16 16 00000201 397987a6
+texhash maps/b_bh10.bsp:med3_0 2 8 8 00000201 2cc51d1b
+texhash maps/b_bh10.bsp:med3_0 3 4 4 00000201 06a2bb8c
+texhash maps/b_bh10.bsp:med3_0 4 2 2 00000201 791bbce3
+texhash maps/b_bh10.bsp:med3_0 5 1 1 00000201 9acbdd51
+texhash maps/b_bh10.bsp:med3_0_glow 0 32 32 00000101 3503cec5
+texhash maps/b_bh10.bsp:med3_0_glow 1 16 16 00000101 d4896e7c
+texhash maps/b_bh10.bsp:med3_0_glow 2 8 8 00000101 8eb3adc9
+texhash maps/b_bh10.bsp:med3_0_glow 3 4 4 00000101 e75c9ef0
+texhash maps/b_bh10.bsp:med3_0_glow 4 2 2 00000101 309728aa
+texhash maps/b_bh10.bsp:med3_0_glow 5 1 1 00000101 96c3bf47
+texhash maps/b_bh10.bsp:med3_1 0 32 16 00000201 15d5e01b
+texhash maps/b_bh10.bsp:med3_1 1 16 8 00000201 8ddd290a
+texhash maps/b_bh10.bsp:med3_1 2 8 4 00000201 786e388e
+texhash maps/b_bh10.bsp:med3_1 3 4 2 00000201 36470a21
+texhash maps/b_bh10.bsp:med3_1 4 2 1 00000201 22cd3c81
+texhash maps/b_bh10.bsp:med3_1 5 1 1 00000201 15b10409
+texhash maps/b_bh10.bsp:med3_1_glow 0 32 16 00000101 894cf60d
+texhash maps/b_bh10.bsp:med3_1_glow 1 16 8 00000101 133e518d
+texhash maps/b_bh10.bsp:med3_1_glow 2 8 4 00000101 c5f3f2a5
+texhash maps/b_bh10.bsp:med3_1_glow 3 4 2 00000101 fb036e05
+texhash maps/b_bh10.bsp:med3_1_glow 4 2 1 00000101 bef11a9d
+texhash maps/b_bh10.bsp:med3_1_glow 5 1 1 00000101 f3e4d49c
+Mod_LoadTextures maps/b_bh10.bsp: findfile 2.1ms (76 calls) texmgr 1.3ms (4 calls) imageload 2.1ms (4 calls)
+TexMgr prepare maps/b_bh10.bsp: wall 0.0ms cpu 0.0ms commit 1.2ms, 4 jobs/1 batches (0 parallel), 0.0/0.0 MiB source/prepared
+Mod_LoadBrushModel maps/b_bh10.bsp: geom 0.0ms tex 3.4ms light 0.1ms faces 0.1ms
+trying to open external vis file
+maps/b_bh10.vis not found, trying id1.vis
+external vis not found
+Mod_DecompressVis: leaf VIS offset out of range on model "maps/b_bh10.bsp"
+Mod_LoadBrushModel maps/b_bh10.bsp: nodes 0.0ms watervis 0.0ms
+texhash maps/b_bh25.bsp:+3_med25 0 32 32 00000201 7829a8dd
+texhash maps/b_bh25.bsp:+3_med25 1 16 16 00000201 cbc947c3
+texhash maps/b_bh25.bsp:+3_med25 2 8 8 00000201 2890e243
+texhash maps/b_bh25.bsp:+3_med25 3 4 4 00000201 6794d397
+texhash maps/b_bh25.bsp:+3_med25 4 2 2 00000201 704b531c
+texhash maps/b_bh25.bsp:+3_med25 5 1 1 00000201 6d07b7d1
+texhash maps/b_bh25.bsp:+3_med25_glow 0 32 32 00000101 1923261b
+texhash maps/b_bh25.bsp:+3_med25_glow 1 16 16 00000101 15788c63
+texhash maps/b_bh25.bsp:+3_med25_glow 2 8 8 00000101 324cc57d
+texhash maps/b_bh25.bsp:+3_med25_glow 3 4 4 00000101 b6962c49
+texhash maps/b_bh25.bsp:+3_med25_glow 4 2 2 00000101 f75d2fcb
+texhash maps/b_bh25.bsp:+3_med25_glow 5 1 1 00000101 60b36596
+texhash maps/b_bh25.bsp:+2_med25 0 32 32 00000201 674ab611
+texhash maps/b_bh25.bsp:+2_med25 1 16 16 00000201 863af2d8
+texhash maps/b_bh25.bsp:+2_med25 2 8 8 00000201 a857f3e0
+texhash maps/b_bh25.bsp:+2_med25 3 4 4 00000201 f3b05312
+texhash maps/b_bh25.bsp:+2_med25 4 2 2 00000201 97081fea
+texhash maps/b_bh25.bsp:+2_med25 5 1 1 00000201 6d100696
+texhash maps/b_bh25.bsp:+2_med25_glow 0 32 32 00000101 f7393bc3
+texhash maps/b_bh25.bsp:+2_med25_glow 1 16 16 00000101 18d0ff87
+texhash maps/b_bh25.bsp:+2_med25_glow 2 8 8 00000101 398e690e
+texhash maps/b_bh25.bsp:+2_med25_glow 3 4 4 00000101 140dd81b
+texhash maps/b_bh25.bsp:+2_med25_glow 4 2 2 00000101 24ca95f4
+texhash maps/b_bh25.bsp:+2_med25_glow 5 1 1 00000101 60af93ff
+texhash maps/b_bh25.bsp:+1_med25 0 32 32 00000201 62d69571
+texhash maps/b_bh25.bsp:+1_med25 1 16 16 00000201 ea17b054
+texhash maps/b_bh25.bsp:+1_med25 2 8 8 00000201 65b43503
+texhash maps/b_bh25.bsp:+1_med25 3 4 4 00000201 2becba82
+texhash maps/b_bh25.bsp:+1_med25 4 2 2 00000201 91ba6922
+texhash maps/b_bh25.bsp:+1_med25 5 1 1 00000201 6d100696
+texhash maps/b_bh25.bsp:+1_med25_glow 0 32 32 00000101 6e2ad7d7
+texhash maps/b_bh25.bsp:+1_med25_glow 1 16 16 00000101 077491dc
+texhash maps/b_bh25.bsp:+1_med25_glow 2 8 8 00000101 b8a26533
+texhash maps/b_bh25.bsp:+1_med25_glow 3 4 4 00000101 c5cef3af
+texhash maps/b_bh25.bsp:+1_med25_glow 4 2 2 00000101 f75d2fcb
+texhash maps/b_bh25.bsp:+1_med25_glow 5 1 1 00000101 60b36596
+texhash maps/b_bh25.bsp:+1_med25s 0 32 16 00000201 5139c608
+texhash maps/b_bh25.bsp:+1_med25s 1 16 8 00000201 907b44e2
+texhash maps/b_bh25.bsp:+1_med25s 2 8 4 00000201 9cb0cb15
+texhash maps/b_bh25.bsp:+1_med25s 3 4 2 00000201 a53e9ad1
+texhash maps/b_bh25.bsp:+1_med25s 4 2 1 00000201 70ad2af2
+texhash maps/b_bh25.bsp:+1_med25s 5 1 1 00000201 422087bc
+texhash maps/b_bh25.bsp:+1_med25s_glow 0 32 16 00000101 05a1cdc6
+texhash maps/b_bh25.bsp:+1_med25s_glow 1 16 8 00000101 78fda264
+texhash maps/b_bh25.bsp:+1_med25s_glow 2 8 4 00000101 2c43d743
+texhash maps/b_bh25.bsp:+1_med25s_glow 3 4 2 00000101 5b879a54
+texhash maps/b_bh25.bsp:+1_med25s_glow 4 2 1 00000101 7effbef8
+texhash maps/b_bh25.bsp:+1_med25s_glow 5 1 1 00000101 683ea07a
+texhash maps/b_bh25.bsp:+0_med25 0 32 32 00000201 953b1185
+texhash maps/b_bh25.bsp:+0_med25 1 16 16 00000201 7d3537ed
+texhash maps/b_bh25.bsp:+0_med25 2 8 8 00000201 8a536e90
+texhash maps/b_bh25.bsp:+0_med25 3 4 4 00000201 6794d397
+texhash maps/b_bh25.bsp:+0_med25 4 2 2 00000201 704b531c
+texhash maps/b_bh25.bsp:+0_med25 5 1 1 00000201 6d07b7d1
+texhash maps/b_bh25.bsp:+0_med25_glow 0 32 32 00000101 dd99e583
+texhash maps/b_bh25.bsp:+0_med25_glow 1 16 16 00000101 56a7b0e5
+texhash maps/b_bh25.bsp:+0_med25_glow 2 8 8 00000101 d79e6f43
+texhash maps/b_bh25.bsp:+0_med25_glow 3 4 4 00000101 bd879780
+texhash maps/b_bh25.bsp:+0_med25_glow 4 2 2 00000101 ef10d204
+texhash maps/b_bh25.bsp:+0_med25_glow 5 1 1 00000101 60b36596
+texhash maps/b_bh25.bsp:+0_med25s 0 32 16 00000201 562ce2e8
+texhash maps/b_bh25.bsp:+0_med25s 1 16 8 00000201 bab9ca8a
+texhash maps/b_bh25.bsp:+0_med25s 2 8 4 00000201 fd006f53
+texhash maps/b_bh25.bsp:+0_med25s 3 4 2 00000201 cb7d6f5a
+texhash maps/b_bh25.bsp:+0_med25s 4 2 1 00000201 70ad2af2
+texhash maps/b_bh25.bsp:+0_med25s 5 1 1 00000201 422087bc
+texhash maps/b_bh25.bsp:+0_med25s_glow 0 32 16 00000101 c9c79c12
+texhash maps/b_bh25.bsp:+0_med25s_glow 1 16 8 00000101 0de2df4d
+texhash maps/b_bh25.bsp:+0_med25s_glow 2 8 4 00000101 e4776be1
+texhash maps/b_bh25.bsp:+0_med25s_glow 3 4 2 00000101 8a2390dc
+texhash maps/b_bh25.bsp:+0_med25s_glow 4 2 1 00000101 f3598ad6
+texhash maps/b_bh25.bsp:+0_med25s_glow 5 1 1 00000101 ae10278b
+Mod_LoadTextures maps/b_bh25.bsp: findfile 6.3ms (228 calls) texmgr 2.5ms (12 calls) imageload 6.4ms (12 calls)
+TexMgr prepare maps/b_bh25.bsp: wall 0.1ms cpu 0.0ms commit 2.5ms, 12 jobs/1 batches (0 parallel), 0.0/0.1 MiB source/prepared
+Mod_LoadBrushModel maps/b_bh25.bsp: geom 0.0ms tex 8.9ms light 0.1ms faces 0.1ms
+trying to open external vis file
+maps/b_bh25.vis not found, trying id1.vis
+external vis not found
+Mod_DecompressVis: leaf VIS offset out of range on model "maps/b_bh25.bsp"
+Mod_LoadBrushModel maps/b_bh25.bsp: nodes 0.0ms watervis 0.0ms
+Mod_LoadModel maps/b_bh25.bsp: read 0.0ms parse 9.2ms (8872 bytes)
+texhash maps/b_nail1.bsp:rockettop 0 16 16 00000001 fe27bdc1
+texhash maps/b_nail1.bsp:rockettop 1 8 8 00000001 5359b116
+texhash maps/b_nail1.bsp:rockettop 2 4 4 00000001 b4293059
+texhash maps/b_nail1.bsp:rockettop 3 2 2 00000001 613fdf44
+texhash maps/b_nail1.bsp:rockettop 4 1 1 00000001 221408cf
+texhash maps/b_nail1.bsp:nail1top 0 32 32 00000201 dfeb3205
+texhash maps/b_nail1.bsp:nail1top 1 16 16 00000201 c6d9bd39
+texhash maps/b_nail1.bsp:nail1top 2 8 8 00000201 9472f52a
+texhash maps/b_nail1.bsp:nail1top 3 4 4 00000201 e70d4aba
+texhash maps/b_nail1.bsp:nail1top 4 2 2 00000201 46e5997f
+texhash maps/b_nail1.bsp:nail1top 5 1 1 00000201 4babf8aa
+texhash maps/b_nail1.bsp:nail1top_glow 0 32 32 00000101 60dddc39
+texhash maps/b_nail1.bsp:nail1top_glow 1 16 16 00000101 b90613d4
+texhash maps/b_nail1.bsp:nail1top_glow 2 8 8 00000101 4d716623
+texhash maps/b_nail1.bsp:nail1top_glow 3 4 4 00000101 685f10b8
+texhash maps/b_nail1.bsp:nail1top_glow 4 2 2 00000101 38b8d412
+texhash maps/b_nail1.bsp:nail1top_glow 5 1 1 00000101 2269f369
+texhash maps/b_nail1.bsp:nail1sid 0 32 32 00000201 c83bd123
+texhash maps/b_nail1.bsp:nail1sid 1 16 16 00000201 913a56d5
+texhash maps/b_nail1.bsp:nail1sid 2 8 8 00000201 8b2cbe69
+texhash maps/b_nail1.bsp:nail1sid 3 4 4 00000201 231e12c6
+texhash maps/b_nail1.bsp:nail1sid 4 2 2 00000201 4f790ead
+texhash maps/b_nail1.bsp:nail1sid 5 1 1 00000201 8b76a4c2
+texhash maps/b_nail1.bsp:nail1sid_glow 0 32 32 00000101 872e8d51
+texhash maps/b_nail1.bsp:nail1sid_glow 1 16 16 00000101 a50aabd4
+texhash maps/b_nail1.bsp:nail1sid_glow 2 8 8 00000101 54ecbab4
+texhash maps/b_nail1.bsp:nail1sid_glow 3 4 4 00000101 7984d076
+texhash maps/b_nail1.bsp:nail1sid_glow 4 2 2 00000101 e8d1ea54
+texhash maps/b_nail1.bsp:nail1sid_glow 5 1 1 00000101 dc954658
+Mod_LoadTextures maps/b_nail1.bsp: findfile 3.1ms (114 calls) texmgr 1.1ms (5 calls) imageload 3.1ms (6 calls)
+TexMgr prepare maps/b_nail1.bsp: wall 0.0ms cpu 0.0ms commit 1.1ms, 5 jobs/1 batches (0 parallel), 0.0/0.0 MiB source/prepared
+Mod_LoadBrushModel maps/b_nail1.bsp: geom 0.0ms tex 4.3ms light 0.1ms faces 0.1ms
+trying to open external vis file
+maps/b_nail1.vis not found, trying id1.vis
+external vis not found
+Mod_DecompressVis: leaf VIS offset out of range on model "maps/b_nail1.bsp"
+Mod_LoadBrushModel maps/b_nail1.bsp: nodes 0.0ms watervis 0.0ms
+texhash progs/h_dog.mdl:frame0 0 264 84 00010210 8703e2f5
+texhash progs/h_dog.mdl:frame0_glow 0 264 84 00010110 c406e4fa
+texhash progs/dog.mdl:frame0 0 312 169 00010010 8a97acdc
+texhash progs/suit.mdl:frame0 0 224 194 00010010 3c38759e
+texhash progs/g_shot.mdl:frame0 0 232 132 00010010 128eb0af
+texhash maps/b_explob.bsp:+1_box_top 0 32 32 00000201 8e510929
+texhash maps/b_explob.bsp:+1_box_top 1 16 16 00000201 c15bb37e
+texhash maps/b_explob.bsp:+1_box_top 2 8 8 00000201 77bad974
+texhash maps/b_explob.bsp:+1_box_top 3 4 4 00000201 b1ad3166
+texhash maps/b_explob.bsp:+1_box_top 4 2 2 00000201 cde720ea
+texhash maps/b_explob.bsp:+1_box_top 5 1 1 00000201 88b13586
+texhash maps/b_explob.bsp:+1_box_top_glow 0 32 32 00000101 fd7b804d
+texhash maps/b_explob.bsp:+1_box_top_glow 1 16 16 00000101 9e4317e9
+texhash maps/b_explob.bsp:+1_box_top_glow 2 8 8 00000101 cc8a19b1
+texhash maps/b_explob.bsp:+1_box_top_glow 3 4 4 00000101 2b77e6c5
+texhash maps/b_explob.bsp:+1_box_top_glow 4 2 2 00000101 c0ea96b1
+texhash maps/b_explob.bsp:+1_box_top_glow 5 1 1 00000101 39b981ad
+texhash maps/b_explob.bsp:+1_box_side 0 32 64 00000201 34b5f860
+texhash maps/b_explob.bsp:+1_box_side 1 16 32 00000201 ad020fce
+texhash maps/b_explob.bsp:+1_box_side 2 8 16 00000201 b5de9e02
+texhash maps/b_explob.bsp:+1_box_side 3 4 8 00000201 f3a34e6f
+texhash maps/b_explob.bsp:+1_box_side 4 2 4 00000201 feb563cd
+texhash maps/b_explob.bsp:+1_box_side 5 1 2 00000201 c8278dce
+texhash maps/b_explob.bsp:+1_box_side 6 1 1 00000201 6c0e65f3
+texhash maps/b_explob.bsp:+1_box_side_glow 0 32 64 00000101 c4aaf00d
+texhash maps/b_explob.bsp:+1_box_side_glow 1 16 32 00000101 a12174b1
+texhash maps/b_explob.bsp:+1_box_side_glow 2 8 16 00000101 c6a010dd
+texhash maps/b_explob.bsp:+1_box_side_glow 3 4 8 00000101 3fb1c5ad
+texhash maps/b_explob.bsp:+1_box_side_glow 4 2 4 00000101 fbf0e969
+texhash maps/b_explob.bsp:+1_box_side_glow 5 1 2 00000101 0b375a40
+texhash maps/b_explob.bsp:+1_box_side_glow 6 1 1 00000101 50ef1236
+texhash maps/b_explob.bsp:+0_box_top 0 32 32 00000201 b8819451
+texhash maps/b_explob.bsp:+0_box_top 1 16 16 00000201 f0534e7a
+texhash maps/b_explob.bsp:+0_box_top 2 8 8 00000201 52f192d6
+texhash maps/b_explob.bsp:+0_box_top 3 4 4 00000201 12fd77c1
+texhash maps/b_explob.bsp:+0_box_top 4 2 2 00000201 18b0d84f
+texhash maps/b_explob.bsp:+0_box_top 5 1 1 00000201 657a84aa
+texhash maps/b_explob.bsp:+0_box_top_glow 0 32 32 00000101 09dad27d
+texhash maps/b_explob.bsp:+0_box_top_glow 1 16 16 00000101 380ce847
+texhash maps/b_explob.bsp:+0_box_top_glow 2 8 8 00000101 5ac95533
+texhash maps/b_explob.bsp:+0_box_top_glow 3 4 4 00000101 846f0671
+texhash maps/b_explob.bsp:+0_box_top_glow 4 2 2 00000101 79e97595
+texhash maps/b_explob.bsp:+0_box_top_glow 5 1 1 00000101 683ea07a
+texhash maps/b_explob.bsp:+0_box_side 0 32 64 00000201 66b6b0b4
+texhash maps/b_explob.bsp:+0_box_side 1 16 32 00000201 68f1e14b
+texhash maps/b_explob.bsp:+0_box_side 2 8 16 00000201 1d67a6c3
+texhash maps/b_explob.bsp:+0_box_side 3 4 8 00000201 7378e2c1
+texhash maps/b_explob.bsp:+0_box_side 4 2 4 00000201 9a7d4244
+texhash maps/b_explob.bsp:+0_box_side 5 1 2 00000201 c8278dce
+texhash maps/b_explob.bsp:+0_box_side 6 1 1 00000201 6c0e65f3
+texhash maps/b_explob.bsp:+0_box_side_glow 0 32 64 00000101 c2aa740d
+texhash maps/b_explob.bsp:+0_box_side_glow 1 16 32 00000101 f068cee5
+texhash maps/b_explob.bsp:+0_box_side_glow 2 8 16 00000101 a8f5d636
+texhash maps/b_explob.bsp:+0_box_side_glow 3 4 8 00000101 3488a304
+texhash maps/b_explob.bsp:+0_box_side_glow 4 2 4 00000101 8cd6c0a1
+texhash maps/b_explob.bsp:+0_box_side_glow 5 1 2 00000101 7f8e001e
+texhash maps/b_explob.bsp:+0_box_side_glow 6 1 1 00000101 96c3bf47
+Mod_LoadTextures maps/b_explob.bsp: findfile 4.1ms (152 calls) texmgr 2.5ms (8 calls) imageload 4.2ms (8 calls)
+TexMgr prepare maps/b_explob.bsp: wall 0.0ms cpu 0.0ms commit 2.5ms, 8 jobs/1 batches (0 parallel), 0.0/0.1 MiB source/prepared
+Mod_LoadBrushModel maps/b_explob.bsp: geom 0.0ms tex 6.8ms light 0.1ms faces 0.1ms
+trying to open external vis file
+maps/b_explob.vis not found, trying id1.vis
+external vis not found
+Mod_DecompressVis: leaf VIS offset out of range on model "maps/b_explob.bsp"
+Mod_LoadBrushModel maps/b_explob.bsp: nodes 0.0ms watervis 0.0ms
+Mod_LoadModel maps/b_explob.bsp: read 0.1ms parse 7.1ms (10220 bytes)
+33 entities inhibited
+ED_LoadFromFile: 66.4ms (models 63.1ms/18 read 1.4ms findfile 40.2ms/1409 texmgr 19.2ms/65)
+SV_SpawnServer entities: 66.5ms
+SV_SpawnServer settle physics: 0.2ms
+SV_SpawnServer baselines: 0.0ms
+Server spawned.
+SV_SpawnServer total: 192.7ms
+connecting to ^mlocal -- 127.0.0.1:26002
+connect timing: handshake accepted       +    0.0ms  (total     0.0ms)
+CL_EstablishConnection: connected to local
+Client LOCAL connected
+#
+QSS-M 1.6.9 Server (24778 CRC)
+Serverinfo packet received.
+connect timing: serverinfo received      +    2.1ms  (total     2.1ms)
+Using protocol 15(proquake)
+FindFile: can't find progs/ctfmodel.mdl
+FindFile: can't find progs/flag2.mdl
+FindFile: can't find progs/flag3.mdl
+FindFile: can't find progs/flag.mdl
+FindFile: can't find progs/star.mdl
+FindFile: can't find progs/bit.mdl
+FindFile: can't find progs/v_star.mdl
+
+<-------------------------------------->
+
+#the Slipgate Complex
+connect timing: serverinfo parsed        +    2.8ms  (total     5.0ms)
+FindFile: can't find music/track06.ogg
+FindFile: can't find music/track06.opus
+FindFile: can't find music/track06.mp3
+FindFile: can't find music/track06.flac
+FindFile: can't find music/track06.wav
+FindFile: can't find music/track06.it
+FindFile: can't find music/track06.s3m
+FindFile: can't find music/track06.xm
+FindFile: can't find music/track06.mod
+FindFile: can't find music/track06.umx
+Couldn't find a cdrip for track 6
+CL_SignonReply: 1
+connect timing: signon 1 received        +    3.1ms  (total     8.1ms)
+model precache: 0.0ms (findfile 0.0ms/0 texmgr 0.0ms/0)
+sound precache: 12.2ms (findfile 3.5ms/109)
+R_NewMap gameplay shaders: 0.0ms
+R_NewMap classic particles: 0.1ms
+FindFile: can't find particles/map_e1m1.cfg
+FindFile: can't find map_e1m1.cfg
+R_NewMap pscript clear: 0.8ms
+GL_BuildLightmaps: surfaces 4.3ms
+GL_BuildLightmaps: fill 1.9ms
+GL_BuildLightmaps: occupied 0.8/32.0 MiB, transferred 0.8 MiB (1/1 partial)
+GL_BuildLightmaps: build 6.2ms upload 0.0ms (1 lightmaps)
+R_NewMap lightmaps: 6.3ms
+GL_BuildBModelVertexBuffer: 10.9ms (26870 verts)
+R_NewMap vbo+decals: 11.1ms
+R_NewMap teleporter shader: 0.0ms
+R_NewMap sky: 0.0ms
+R_NewMap worldspawn: 0.0ms
+R_NewMap locs: 0.1ms
+R_NewMap total: 18.4ms
+R_NewMap: 18.4ms (findfile 0.2ms/3 texmgr 0.0ms/1)
+FindFile: can't find csprogs.dat
+progs.dat occupies 403K.
+Patch for incorrect ogre smash state applied
+connect timing: prespawn sent (precache done) +   40.8ms  (total    48.9ms)
+CL_SignonReply: 2
+connect timing: signon 2 (baselines)     +    0.2ms  (total    49.1ms)
+allowing *ver set from BenchClient (not yet spawned)
+CL_SignonReply: 3
+connect timing: signon 3 (spawninfo)     +    1.1ms  (total    50.2ms)
+7.3 MiB data cache used (7.3 MiB peak, 64.0 MiB budget, 0 evictions)
+CL_SignonReply: 4
+connect timing: in game                  +   13.4ms  (total    63.5ms)
+FindFile: can't find connect.cfg
+FindFile: can't find configs/connect.cfg
+BENCH_BEGIN_quit 
+Sending clc_disconnect
+Host_ShutdownServer: disconnect message undelivered to 1 clients
+FindFile: can't find configs/config.cfg
+Wrote config.cfg.
+FindFile: can't find configs/config.cfg
+Shutting down SDL sound
+IN_Shutdown called

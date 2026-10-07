@@ -1,0 +1,118 @@
+LOG started on: 10/06/2026 13:40:33 
+
+Using add-on server "https://kexquake.s3.amazonaws.com"
+Playing registered version.
+Using renderer/network isolation.
+Console initialized.
+WIPX_OpenSocket: Address family not supported by protocol family
+WIPX_Init: Unable to open control socket, IPX disabled
+Server using protocol 999 (RMQ)
+Exe: 10:28:01 Aug 11 2026 (Windows 64-bit)
+384.0 megabyte heap
+
+Video initialization
+Video mode: 800 x 600 24bit Z24 S8 144Hz
+GL_VENDOR:   NVIDIA Corporation
+GL_RENDERER: NVIDIA GeForce RTX 4070/PCIe/SSE2
+GL_VERSION:  4.3.0 NVIDIA 610.88
+FOUND: EXT_texture_filter_anisotropic
+FOUND: ARB_buffer_storage
+FOUND: ARB_multi_bind
+FOUND: ARB_bindless_texture
+FOUND: ARB_shader_draw_parameters
+FOUND: ARB_clip_control
+
+Sound Initialization
+SDL audio spec  : 44100 Hz, 1024 samples, 2 channels
+SDL audio driver: wasapi - Speakers (Logitech G432 Gaming Headset), 65536 bytes buffer
+Audio: 16 bit, stereo, 44100 Hz
+
+Language initialization
+Loaded 1 strings from 'localization/loc_english.txt'
+
+========= Quake Initialized =========
+
+
+Add-on server status:
+ 29 add-ons available for download
+  0 add-ons already installed
+
+execing quake.rc
+execing default.cfg
+execing fpsbench.cfg
+REPEAT_BEGIN 
+PASS_0 
+Playing demo from fps_aerowalk.dem.
+
+----------------------------------------
+
+Aerowalk
+Using protocol 15
+Warning: unnamed texture in maps/aerowalk.bsp, renaming to unnamed10
+Warning: unnamed texture in maps/aerowalk.bsp, renaming to unnamed16
+Warning: unnamed texture in maps/aerowalk.bsp, renaming to unnamed17
+Client ping times:
+   0 player
+Client ping times:
+   0 player
+Client ping times:
+   0 player
+Client ping times:
+   0 player
+Client ping times:
+   0 player
+Client ping times:
+   0 player
+Client ping times:
+   0 player
+1445 frames   0.5 seconds 2866.8 fps
+PASS_1 
+Playing demo from fps_aerowalk.dem.
+
+----------------------------------------
+
+Aerowalk
+Using protocol 15
+Warning: unnamed texture in maps/aerowalk.bsp, renaming to unnamed10
+Warning: unnamed texture in maps/aerowalk.bsp, renaming to unnamed16
+Warning: unnamed texture in maps/aerowalk.bsp, renaming to unnamed17
+Client ping times:
+   0 player
+Client ping times:
+   0 player
+Client ping times:
+   0 player
+Client ping times:
+   0 player
+Client ping times:
+   0 player
+Client ping times:
+   0 player
+Client ping times:
+   0 player
+1445 frames   0.5 seconds 3167.1 fps
+PASS_2 
+Playing demo from fps_aerowalk.dem.
+
+----------------------------------------
+
+Aerowalk
+Using protocol 15
+Warning: unnamed texture in maps/aerowalk.bsp, renaming to unnamed10
+Warning: unnamed texture in maps/aerowalk.bsp, renaming to unnamed16
+Warning: unnamed texture in maps/aerowalk.bsp, renaming to unnamed17
+Client ping times:
+   0 player
+Client ping times:
+   0 player
+Client ping times:
+   0 player
+Client ping times:
+   0 player
+Client ping times:
+   0 player
+Client ping times:
+   0 player
+Client ping times:
+   0 player
+1445 frames   0.4 seconds 3314.5 fps

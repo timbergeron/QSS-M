@@ -1,0 +1,15 @@
+{
+  "checks": [
+    "9 map selections",
+    "6 correctly ranked engine bars on every map",
+    "270 measured samples and 54 warm-ups",
+    "FPS/frame-time toggle",
+    "matrix selection",
+    "exact FPS JSON export",
+    "325-row CSV",
+    "light/dark themes",
+    "390px mobile layout",
+    "reduced motion",
+    "no JavaScript errors"
+  ]
+}

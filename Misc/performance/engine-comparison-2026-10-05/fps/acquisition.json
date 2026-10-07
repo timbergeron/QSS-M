@@ -1,0 +1,92 @@
+{
+  "ezquake": {
+    "release": "3.6.9",
+    "published_at": "2026-03-01T19:45:47Z",
+    "release_url": "https://github.com/QW-Group/ezquake-source/releases/tag/3.6.9",
+    "download_url": "https://github.com/QW-Group/ezquake-source/releases/download/3.6.9/ezQuake-windows-x64.zip",
+    "archive_sha256": "1814d2c9df12a732a5b2efb8720e67bb94094b422794e5f2550821f17a377f4d",
+    "archive": "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\engine-fps-20261005\\downloads\\ezQuake-windows-x64.zip",
+    "executables": [
+      "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\engine-fps-20261005\\engines\\ezquake\\ezquake.exe"
+    ]
+  },
+  "ironwail": {
+    "release": "v0.8.2",
+    "published_at": "2026-08-11T17:20:22Z",
+    "release_url": "https://github.com/andrei-drexler/ironwail/releases/tag/v0.8.2",
+    "download_url": "https://github.com/andrei-drexler/ironwail/releases/download/v0.8.2/ironwail-0.8.2-win64.zip",
+    "archive_sha256": "0e54e9089ce72bad73c288148cfb5474a00b05d9e1da1c8feb0b76665faf7d01",
+    "archive": "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\engine-fps-20261005\\downloads\\ironwail-0.8.2-win64.zip",
+    "executables": [
+      "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\engine-fps-20261005\\engines\\ironwail\\ironwail-0.8.2-win64\\ironwail.exe"
+    ]
+  },
+  "vkquake": {
+    "release": "1.36.0",
+    "published_at": "2026-08-29T01:36:38Z",
+    "release_url": "https://github.com/Novum/vkQuake/releases/tag/1.36.0",
+    "download_url": "https://github.com/Novum/vkQuake/releases/download/1.36.0/vkQuake-1.36.0_windows_x64.zip",
+    "archive_sha256": "243d8c7cd5fb4c2e876bbe927d909dcc89e86d9737f2bf6cebc093f15f5012c3",
+    "archive": "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\engine-fps-20261005\\downloads\\vkQuake-1.36.0_windows_x64.zip",
+    "executables": [
+      "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\engine-fps-20261005\\engines\\vkquake\\vkQuake.exe"
+    ]
+  },
+  "qss": {
+    "release": "2024-March-01 (requested archive)",
+    "release_url": "https://triptohell.info/moodles/qss/",
+    "download_url": "https://triptohell.info/moodles/qss/quakespasm_spiked_win64_dev.zip",
+    "archive_sha256": "5caf313cfbf25cc6dfd36b4014dffd6f877dd942a5895f769bdcba0f22a34fb2",
+    "archive": "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\engine-fps-20261005\\downloads\\quakespasm_spiked_win64_dev.zip",
+    "executables": [
+      "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\engine-fps-20261005\\engines\\qss\\quakespasm-spiked-win64.exe"
+    ]
+  },
+  "maps": {
+    "aerowalk": {
+      "source": "C:\\Users\\Tim Bergeron\\Desktop\\qssm\\id1\\maps\\aerowalk.bsp",
+      "size": 632028,
+      "sha256": "d8996eecad07a2075007ec62c534a93d8820b5fea08f5d4fce7be5019beb2f22"
+    },
+    "ztndm3": {
+      "source": "C:\\Users\\Tim Bergeron\\Desktop\\qssm\\id1\\maps\\ztndm3.bsp",
+      "size": 394888,
+      "sha256": "4ae63e8d82f6439d79cbde4d1a7b46dbbc46a34eb30839ba2db24e1fd0778fbe"
+    },
+    "dm3": {
+      "source": "C:\\Users\\Tim Bergeron\\Desktop\\qssm\\id1\\pak1.pak:maps/dm3.bsp",
+      "size": 950200,
+      "sha256": "d3af9f9cfb14041d0733301c34a1ea182950873bae12c69fc82d31e83a67fb4a"
+    },
+    "bravado": {
+      "source": "C:\\Users\\Tim Bergeron\\Desktop\\qssm\\id1\\maps\\bravado.bsp",
+      "size": 839536,
+      "sha256": "5f382d591ef5080322c4f8a2da07b22795c66104a7b9a2baccd4e72789d0789d"
+    },
+    "ctf3m2": {
+      "source": "C:\\Users\\Tim Bergeron\\Desktop\\qssm\\id1\\paks\\ctflocmaps.pak:maps/ctf3m2.bsp",
+      "size": 1028460,
+      "sha256": "c564fc3c31638913fe9ce2b734cce0741ed58ff6e91c8908e40d05222c2ccce8"
+    },
+    "schloss": {
+      "source": "C:\\Users\\Tim Bergeron\\Desktop\\qssm\\id1\\maps\\schloss.bsp",
+      "size": 2197772,
+      "sha256": "947d6a01e293d27f387080011fea0bfecda55c574cb664494c7dd21af71eb2dd"
+    },
+    "e1m2": {
+      "source": "C:\\Users\\Tim Bergeron\\Desktop\\qssm\\id1\\pak0.pak:maps/e1m2.bsp",
+      "size": 1332228,
+      "sha256": "d0aff066a89cb75bcc4dc729d0130a2ac2ed93287d91e57a5b63ac26dce4fb27"
+    },
+    "dm2": {
+      "source": "C:\\Users\\Tim Bergeron\\Desktop\\qssm\\id1\\pak1.pak:maps/dm2.bsp",
+      "size": 907384,
+      "sha256": "3fea2146521fee3d8eba3d83e89731fbcfd0d517a08432bdfbc356347274411f"
+    },
+    "ctf2m8": {
+      "source": "C:\\Users\\Tim Bergeron\\Desktop\\qssm\\id1\\paks\\ctf4maps.pak:maps/ctf2m8.bsp",
+      "size": 1615388,
+      "sha256": "4fabdeb0db814a7764b8c078051b777bd32b9197a23b9250d332d27520ac4920"
+    }
+  }
+}

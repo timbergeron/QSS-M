@@ -1,0 +1,261 @@
+
+LOG started on: 10/05/2026 20:59:24 
+
+Console initialized.
+Exe: 20:18:02 Oct  5 2026
+384.0 megabyte heap
+
+Sound Initialization
+Video mode 3840x2160x24 144Hz 2x scale (24-bit z-buffer, 0x FSAA) initialized
+GL_VENDOR: NVIDIA Corporation
+GL_RENDERER: NVIDIA GeForce RTX 4070/PCIe/SSE2
+GL_VERSION: 4.6.0 NVIDIA 591.86
+FOUND: ARB_vertex_buffer_object
+FOUND: GL_ARB_buffer_storage
+FOUND: ARB_multitexture
+GL_MAX_TEXTURE_UNITS: 4
+FOUND: ARB_texture_env_combine
+FOUND: ARB_texture_env_add
+FOUND: SDL_GL_SetSwapInterval
+FOUND: EXT_texture_filter_anisotropic
+FOUND: ARB_texture_non_power_of_two
+FOUND: GLSL
+GL_MAX_TEXTURE_IMAGE_UNITS: 32
+FOUND: brush model instancing
+FOUND: Framebuffer Objects
+Enabled: GLSL gamma
+FOUND: glBlendFuncSeparate
+Enabled: GLSL alias model rendering
+Enabled: EXT_packed_pixels
+FOUND: glGenerateMipmap
+SDL audio spec  : 44100 Hz, 1024 samples, 2 mix channels (callback: 2 ch, surround: on)
+SDL audio device: 44100 Hz, 2 ch, SDL_AUDIO_F32LE, 441 sample frames
+SDL audio driver: wasapi - Speakers (Realtek(R) Audio), 65536 bytes buffer
+Audio: 16 bit, stereo, 44100 Hz
+
+Language initialization
+Couldn't load 'localization/loc_english.txt'
+from 'C:\Users\Tim Bergeron\source\repos\QSS-M\.codex-build\engine-fps-optimization-20261005\gamma-path-probe\20261005-205817\3840x2160'
+
+========= Quake Initialized =========
+
+execing quake.rc
+execing default.cfg
+execing fpsbench.cfg
+GAMMA_PATH_PROBE 
+GAMMA_PATH_PASS_0_1_0 
+"gamma" is "1" (default)
+Playing demo from fps_aerowalk.dem.
+Using protocol 15
+
+<-------------------------------------->
+
+#Aerowalk
+1445 frames   0.8 seconds 1776.7 fps
+GAMMA_PATH_PASS_0_1_1 
+"gamma" is "1" (default)
+Playing demo from fps_aerowalk.dem.
+Using protocol 15
+
+<-------------------------------------->
+
+#Aerowalk
+1445 frames   0.7 seconds 2144.2 fps
+GAMMA_PATH_PASS_0_1_2 
+"gamma" is "1" (default)
+Playing demo from fps_aerowalk.dem.
+Using protocol 15
+
+<-------------------------------------->
+
+#Aerowalk
+1445 frames   0.7 seconds 1941.3 fps
+GAMMA_PATH_PASS_0_1_3 
+"gamma" is "1" (default)
+Playing demo from fps_aerowalk.dem.
+Using protocol 15
+
+<-------------------------------------->
+
+#Aerowalk
+1445 frames   0.7 seconds 2017.4 fps
+GAMMA_PATH_PASS_0_1_4 
+"gamma" is "1" (default)
+Playing demo from fps_aerowalk.dem.
+Using protocol 15
+
+<-------------------------------------->
+
+#Aerowalk
+1445 frames   0.7 seconds 1935.8 fps
+GAMMA_PATH_PASS_0_1_5 
+"gamma" is "1" (default)
+Playing demo from fps_aerowalk.dem.
+Using protocol 15
+
+<-------------------------------------->
+
+#Aerowalk
+1445 frames   0.7 seconds 2126.5 fps
+GAMMA_PATH_PASS_1_1.0001_0 
+"gamma" is "1.0001" (default: "1")
+Playing demo from fps_aerowalk.dem.
+Using protocol 15
+
+<-------------------------------------->
+
+#Aerowalk
+1445 frames   0.8 seconds 1905.4 fps
+GAMMA_PATH_PASS_1_1.0001_1 
+"gamma" is "1.0001" (default: "1")
+Playing demo from fps_aerowalk.dem.
+Using protocol 15
+
+<-------------------------------------->
+
+#Aerowalk
+1445 frames   0.8 seconds 1827.4 fps
+GAMMA_PATH_PASS_1_1.0001_2 
+"gamma" is "1.0001" (default: "1")
+Playing demo from fps_aerowalk.dem.
+Using protocol 15
+
+<-------------------------------------->
+
+#Aerowalk
+1445 frames   0.8 seconds 1862.3 fps
+GAMMA_PATH_PASS_1_1.0001_3 
+"gamma" is "1.0001" (default: "1")
+Playing demo from fps_aerowalk.dem.
+Using protocol 15
+
+<-------------------------------------->
+
+#Aerowalk
+1445 frames   0.7 seconds 2031.8 fps
+GAMMA_PATH_PASS_1_1.0001_4 
+"gamma" is "1.0001" (default: "1")
+Playing demo from fps_aerowalk.dem.
+Using protocol 15
+
+<-------------------------------------->
+
+#Aerowalk
+1445 frames   0.7 seconds 2016.9 fps
+GAMMA_PATH_PASS_1_1.0001_5 
+"gamma" is "1.0001" (default: "1")
+Playing demo from fps_aerowalk.dem.
+Using protocol 15
+
+<-------------------------------------->
+
+#Aerowalk
+1445 frames   0.8 seconds 1893.7 fps
+GAMMA_PATH_PASS_2_1.0001_0 
+"gamma" is "1.0001" (default: "1")
+Playing demo from fps_aerowalk.dem.
+Using protocol 15
+
+<-------------------------------------->
+
+#Aerowalk
+1445 frames   0.7 seconds 1988.8 fps
+GAMMA_PATH_PASS_2_1.0001_1 
+"gamma" is "1.0001" (default: "1")
+Playing demo from fps_aerowalk.dem.
+Using protocol 15
+
+<-------------------------------------->
+
+#Aerowalk
+1445 frames   0.8 seconds 1882.6 fps
+GAMMA_PATH_PASS_2_1.0001_2 
+"gamma" is "1.0001" (default: "1")
+Playing demo from fps_aerowalk.dem.
+Using protocol 15
+
+<-------------------------------------->
+
+#Aerowalk
+1445 frames   0.7 seconds 1975.4 fps
+GAMMA_PATH_PASS_2_1.0001_3 
+"gamma" is "1.0001" (default: "1")
+Playing demo from fps_aerowalk.dem.
+Using protocol 15
+
+<-------------------------------------->
+
+#Aerowalk
+1445 frames   0.7 seconds 2066.3 fps
+GAMMA_PATH_PASS_2_1.0001_4 
+"gamma" is "1.0001" (default: "1")
+Playing demo from fps_aerowalk.dem.
+Using protocol 15
+
+<-------------------------------------->
+
+#Aerowalk
+1445 frames   0.8 seconds 1866.9 fps
+GAMMA_PATH_PASS_2_1.0001_5 
+"gamma" is "1.0001" (default: "1")
+Playing demo from fps_aerowalk.dem.
+Using protocol 15
+
+<-------------------------------------->
+
+#Aerowalk
+1445 frames   0.7 seconds 1938.4 fps
+GAMMA_PATH_PASS_3_1_0 
+"gamma" is "1" (default)
+Playing demo from fps_aerowalk.dem.
+Using protocol 15
+
+<-------------------------------------->
+
+#Aerowalk
+1445 frames   0.7 seconds 1964.2 fps
+GAMMA_PATH_PASS_3_1_1 
+"gamma" is "1" (default)
+Playing demo from fps_aerowalk.dem.
+Using protocol 15
+
+<-------------------------------------->
+
+#Aerowalk
+1445 frames   0.7 seconds 2113.6 fps
+GAMMA_PATH_PASS_3_1_2 
+"gamma" is "1" (default)
+Playing demo from fps_aerowalk.dem.
+Using protocol 15
+
+<-------------------------------------->
+
+#Aerowalk
+1445 frames   0.7 seconds 2037.8 fps
+GAMMA_PATH_PASS_3_1_3 
+"gamma" is "1" (default)
+Playing demo from fps_aerowalk.dem.
+Using protocol 15
+
+<-------------------------------------->
+
+#Aerowalk
+1445 frames   0.8 seconds 1901.1 fps
+GAMMA_PATH_PASS_3_1_4 
+"gamma" is "1" (default)
+Playing demo from fps_aerowalk.dem.
+Using protocol 15
+
+<-------------------------------------->
+
+#Aerowalk
+1445 frames   0.7 seconds 1996.7 fps
+GAMMA_PATH_PASS_3_1_5 
+"gamma" is "1" (default)
+Playing demo from fps_aerowalk.dem.
+Using protocol 15
+
+<-------------------------------------->
+
+#Aerowalk
+1445 frames   0.7 seconds 2173.1 fps

@@ -1,0 +1,8 @@
+QSS-M observer HUD cache candidate, MSVC Release x64, source HEAD 7da539b9 plus source.patch.
+Includes an isolated engine binary and its matching runtime DLLs; no Quake game data.
+Run QSS-M-hud-cache-w64.exe -basedir "C:\Users\Tim Bergeron\Desktop\qssm" -noquakeimport
+to use your existing game directory and settings. 
+The benchmark did not replace the installed Desktop/qssm executable or edit its settings.
+The change caches observer HUD icons (including missing icons) until SCR_LoadPics on HUD/game reload.
+Test with the HUD enabled, observe/demo playback, and switching HUDs/games. Features remain enabled.
+The included report compares identical MSVC builds; this is not a released engine or a new global engine ranking.

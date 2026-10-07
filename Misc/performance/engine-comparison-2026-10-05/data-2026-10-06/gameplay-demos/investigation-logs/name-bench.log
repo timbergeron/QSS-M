@@ -1,0 +1,95 @@
+
+LOG started on: 10/06/2026 13:47:30 
+
+Console initialized.
+Exe: 13:45:56 Oct  6 2026
+384.0 megabyte heap
+
+Sound Initialization
+Video mode 800x600x24 144Hz 2x scale (24-bit z-buffer, 0x FSAA) initialized
+GL_VENDOR: NVIDIA Corporation
+GL_RENDERER: NVIDIA GeForce RTX 4070/PCIe/SSE2
+GL_VERSION: 4.6.0 NVIDIA 610.88
+FOUND: ARB_vertex_buffer_object
+FOUND: GL_ARB_buffer_storage
+FOUND: ARB_multitexture
+GL_MAX_TEXTURE_UNITS: 4
+FOUND: ARB_texture_env_combine
+FOUND: ARB_texture_env_add
+FOUND: SDL_GL_SetSwapInterval
+FOUND: EXT_texture_filter_anisotropic
+FOUND: ARB_texture_non_power_of_two
+FOUND: GLSL
+GL_MAX_TEXTURE_IMAGE_UNITS: 32
+FOUND: brush model instancing
+FOUND: Framebuffer Objects
+Enabled: GLSL gamma
+FOUND: glBlendFuncSeparate
+Enabled: GLSL alias model rendering
+Enabled: EXT_packed_pixels
+FOUND: glGenerateMipmap
+SDL audio spec  : 44100 Hz, 1024 samples, 2 mix channels (callback: 2 ch, surround: on)
+SDL audio device: 44100 Hz, 2 ch, SDL_AUDIO_F32LE, 441 sample frames
+SDL audio driver: wasapi - Speakers (Realtek(R) Audio), 65536 bytes buffer
+Audio: 16 bit, stereo, 44100 Hz
+
+Language initialization
+Couldn't load 'localization/loc_english.txt'
+from 'C:\Users\Tim Bergeron\source\repos\QSS-M\.codex-build\fps-expanded-20261006\runs\name-bench'
+
+========= Quake Initialized =========
+
+execing quake.rc
+execing default.cfg
+execing fpsbench.cfg
+REPEAT_BEGIN 
+PASS_0 
+Playing demo from fps_aerowalk.dem.
+Using protocol 15
+
+<-------------------------------------->
+
+#Aerowalk
+TDSPIKE 0 7.0ms signon 4
+TDSPIKE 1 3.4ms signon 4
+TDSPIKE 2 5.4ms signon 4
+TDSPIKE 3 2.8ms signon 4
+TDSPIKE 4 2.9ms signon 4
+TDSPIKE 5 2.8ms signon 4
+TDSPIKE 6 3.0ms signon 4
+TDSPIKE 7 3.0ms signon 4
+TDSPIKE 8 2.9ms signon 4
+TDSPIKE 9 3.5ms signon 4
+TDSPIKE 11 5.7ms signon 4
+TDPROBE stages us/frame read 23.0 screen 366.6 sound 3.4 particles 0.1 swap 293.1 pscript 0.4
+TDPROBE soundfilter 63504 samples
+TDPROBE frames 1445 total 607.8ms median 0.3691ms p99 0.791ms p999 5.713ms max 7.04ms >1ms 14 (46.4ms) >2ms 11 (42.5ms) >5ms 3 excess>3xmed 40.5ms
+TDPROBE spikes 0:7.0 1:3.4 2:5.4 3:2.8 4:2.9 5:2.8 6:3.0 7:3.0 8:2.9 9:3.5 11:5.7 595:1.1 893:1.3 1339:1.5
+1445 frames   0.6 seconds 2377.5 fps
+PASS_1 
+Playing demo from fps_aerowalk.dem.
+Using protocol 15
+
+<-------------------------------------->
+
+#Aerowalk
+TDSPIKE 0 4.3ms signon 4
+TDSPIKE 1 73.8ms signon 4
+TDPROBE stages us/frame read 15.1 screen 340.1 sound 2.8 particles 0.1 swap 295.7 pscript 0.3
+TDPROBE soundfilter 143766 samples
+TDPROBE frames 1445 total 532.7ms median 0.3041ms p99 0.508ms p999 4.253ms max 73.82ms >1ms 2 (78.1ms) >2ms 2 (78.1ms) >5ms 1 excess>3xmed 77.5ms
+TDPROBE spikes 0:4.3 1:73.8
+1445 frames   0.5 seconds 2712.4 fps
+PASS_2 
+Playing demo from fps_aerowalk.dem.
+Using protocol 15
+
+<-------------------------------------->
+
+#Aerowalk
+TDSPIKE 0 4.0ms signon 4
+TDPROBE stages us/frame read 15.1 screen 292.2 sound 2.6 particles 0.1 swap 249.4 pscript 0.3
+TDPROBE soundfilter 149940 samples
+TDPROBE frames 1445 total 463.1ms median 0.3092ms p99 0.468ms p999 1.057ms max 4.01ms >1ms 2 (5.1ms) >2ms 1 (4.0ms) >5ms 0 excess>3xmed 4.5ms
+TDPROBE spikes 0:4.0 441:1.1
+1445 frames   0.5 seconds 3120.3 fps

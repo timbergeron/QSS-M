@@ -1,0 +1,2474 @@
+{
+  "method": "Shared protocol-15 NetQuake recordings, stationary 360-degree camera sweep at the first deathmatch spawn; one discarded warm-up then five native timedemo passes per engine/map. 800x600 window, FOV90, VSync/MSAA off, uncapped; renderer defaults otherwise. Fresh process each pass; warmed OS/driver caches.",
+  "engines": {
+    "qssm": {
+      "name": "QSS-M",
+      "version": "installed build",
+      "exe_sha256": "c8f2fbde0c9c2cba091ae58851c8e24e0174708b5bb9afb2f9220f94fc5a3175",
+      "source": "C:\\Users\\Tim Bergeron\\Desktop\\qssm\\QSS-M-w64.exe"
+    }
+  },
+  "acquisition": {
+    "ezquake": {
+      "release": "3.6.9",
+      "published_at": "2026-03-01T19:45:47Z",
+      "release_url": "https://github.com/QW-Group/ezquake-source/releases/tag/3.6.9",
+      "download_url": "https://github.com/QW-Group/ezquake-source/releases/download/3.6.9/ezQuake-windows-x64.zip",
+      "archive_sha256": "1814d2c9df12a732a5b2efb8720e67bb94094b422794e5f2550821f17a377f4d",
+      "archive": "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\engine-fps-20261005\\downloads\\ezQuake-windows-x64.zip",
+      "executables": [
+        "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\engine-fps-20261005\\engines\\ezquake\\ezquake.exe"
+      ]
+    },
+    "ironwail": {
+      "release": "v0.8.2",
+      "published_at": "2026-08-11T17:20:22Z",
+      "release_url": "https://github.com/andrei-drexler/ironwail/releases/tag/v0.8.2",
+      "download_url": "https://github.com/andrei-drexler/ironwail/releases/download/v0.8.2/ironwail-0.8.2-win64.zip",
+      "archive_sha256": "0e54e9089ce72bad73c288148cfb5474a00b05d9e1da1c8feb0b76665faf7d01",
+      "archive": "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\engine-fps-20261005\\downloads\\ironwail-0.8.2-win64.zip",
+      "executables": [
+        "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\engine-fps-20261005\\engines\\ironwail\\ironwail-0.8.2-win64\\ironwail.exe"
+      ]
+    },
+    "vkquake": {
+      "release": "1.36.0",
+      "published_at": "2026-08-29T01:36:38Z",
+      "release_url": "https://github.com/Novum/vkQuake/releases/tag/1.36.0",
+      "download_url": "https://github.com/Novum/vkQuake/releases/download/1.36.0/vkQuake-1.36.0_windows_x64.zip",
+      "archive_sha256": "243d8c7cd5fb4c2e876bbe927d909dcc89e86d9737f2bf6cebc093f15f5012c3",
+      "archive": "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\engine-fps-20261005\\downloads\\vkQuake-1.36.0_windows_x64.zip",
+      "executables": [
+        "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\engine-fps-20261005\\engines\\vkquake\\vkQuake.exe"
+      ]
+    },
+    "qss": {
+      "release": "2024-March-01 (requested archive)",
+      "release_url": "https://triptohell.info/moodles/qss/",
+      "download_url": "https://triptohell.info/moodles/qss/quakespasm_spiked_win64_dev.zip",
+      "archive_sha256": "5caf313cfbf25cc6dfd36b4014dffd6f877dd942a5895f769bdcba0f22a34fb2",
+      "archive": "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\engine-fps-20261005\\downloads\\quakespasm_spiked_win64_dev.zip",
+      "executables": [
+        "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\engine-fps-20261005\\engines\\qss\\quakespasm-spiked-win64.exe"
+      ]
+    },
+    "maps": {
+      "aerowalk": {
+        "source": "C:\\Users\\Tim Bergeron\\Desktop\\qssm\\id1\\maps\\aerowalk.bsp",
+        "size": 632028,
+        "sha256": "d8996eecad07a2075007ec62c534a93d8820b5fea08f5d4fce7be5019beb2f22"
+      },
+      "ztndm3": {
+        "source": "C:\\Users\\Tim Bergeron\\Desktop\\qssm\\id1\\maps\\ztndm3.bsp",
+        "size": 394888,
+        "sha256": "4ae63e8d82f6439d79cbde4d1a7b46dbbc46a34eb30839ba2db24e1fd0778fbe"
+      },
+      "dm3": {
+        "source": "C:\\Users\\Tim Bergeron\\Desktop\\qssm\\id1\\pak1.pak:maps/dm3.bsp",
+        "size": 950200,
+        "sha256": "d3af9f9cfb14041d0733301c34a1ea182950873bae12c69fc82d31e83a67fb4a"
+      },
+      "bravado": {
+        "source": "C:\\Users\\Tim Bergeron\\Desktop\\qssm\\id1\\maps\\bravado.bsp",
+        "size": 839536,
+        "sha256": "5f382d591ef5080322c4f8a2da07b22795c66104a7b9a2baccd4e72789d0789d"
+      },
+      "ctf3m2": {
+        "source": "C:\\Users\\Tim Bergeron\\Desktop\\qssm\\id1\\paks\\ctflocmaps.pak:maps/ctf3m2.bsp",
+        "size": 1028460,
+        "sha256": "c564fc3c31638913fe9ce2b734cce0741ed58ff6e91c8908e40d05222c2ccce8"
+      },
+      "schloss": {
+        "source": "C:\\Users\\Tim Bergeron\\Desktop\\qssm\\id1\\maps\\schloss.bsp",
+        "size": 2197772,
+        "sha256": "947d6a01e293d27f387080011fea0bfecda55c574cb664494c7dd21af71eb2dd"
+      },
+      "e1m2": {
+        "source": "C:\\Users\\Tim Bergeron\\Desktop\\qssm\\id1\\pak0.pak:maps/e1m2.bsp",
+        "size": 1332228,
+        "sha256": "d0aff066a89cb75bcc4dc729d0130a2ac2ed93287d91e57a5b63ac26dce4fb27"
+      },
+      "dm2": {
+        "source": "C:\\Users\\Tim Bergeron\\Desktop\\qssm\\id1\\pak1.pak:maps/dm2.bsp",
+        "size": 907384,
+        "sha256": "3fea2146521fee3d8eba3d83e89731fbcfd0d517a08432bdfbc356347274411f"
+      },
+      "ctf2m8": {
+        "source": "C:\\Users\\Tim Bergeron\\Desktop\\qssm\\id1\\paks\\ctf4maps.pak:maps/ctf2m8.bsp",
+        "size": 1615388,
+        "sha256": "4fabdeb0db814a7764b8c078051b777bd32b9197a23b9250d332d27520ac4920"
+      }
+    }
+  },
+  "demos": {
+    "aerowalk": {
+      "origin": [
+        -224.0,
+        -720.0,
+        257.0
+      ],
+      "yaw_rate": 18,
+      "duration_seconds": 20,
+      "bytes": 186349,
+      "sha256": "1bfd328b7f229515b9a50345cb5d26ef900d050c00f3d247f4a4af5b190acdb3"
+    },
+    "ztndm3": {
+      "origin": [
+        -432.0,
+        128.0,
+        33.0
+      ],
+      "yaw_rate": 18,
+      "duration_seconds": 20,
+      "bytes": 123605,
+      "sha256": "9f2f3c64e5c1a36ff063e5becaf4d0989f9533014dcbf966a5560c645dac2732"
+    },
+    "dm3": {
+      "origin": [
+        -880.0,
+        -232.0,
+        -15.0
+      ],
+      "yaw_rate": 18,
+      "duration_seconds": 20,
+      "bytes": 92521,
+      "sha256": "44215b556ac9fe0e05c98e4b04f184bc05e42645118fac38d7df39938ed6d7f1"
+    },
+    "bravado": {
+      "origin": [
+        -640.0,
+        480.0,
+        301.0
+      ],
+      "yaw_rate": 18,
+      "duration_seconds": 20,
+      "bytes": 238580,
+      "sha256": "9a06924db6a6061174444f0b6c7b70b148d38d8af08537e48df34f278d891c20"
+    },
+    "ctf3m2": {
+      "origin": [
+        1760.0,
+        -544.0,
+        -183.0
+      ],
+      "yaw_rate": 18,
+      "duration_seconds": 20,
+      "bytes": 205266,
+      "sha256": "fb6f954d2192464eadbdade6d66a25d2c62598a8fd9dcfad2ff41c25379f1404"
+    },
+    "schloss": {
+      "origin": [
+        424.0,
+        -3240.0,
+        617.0
+      ],
+      "yaw_rate": 18,
+      "duration_seconds": 20,
+      "bytes": 188408,
+      "sha256": "4534d85245242c032276107f268dcccb94cf401496acbabecd95dd417beb0645"
+    },
+    "e1m2": {
+      "origin": [
+        -416.0,
+        -144.0,
+        321.0
+      ],
+      "yaw_rate": 18,
+      "duration_seconds": 20,
+      "bytes": 145745,
+      "sha256": "973090b55a24a98124e1617a93b0592fb10a1d7568cc20863473e4ea49fa1662"
+    },
+    "dm2": {
+      "origin": [
+        2560.0,
+        -192.0,
+        33.0
+      ],
+      "yaw_rate": 18,
+      "duration_seconds": 20,
+      "bytes": 90036,
+      "sha256": "7bf80235302818f91719eee78757b8d7b6b881ae2ae9d1b21c94cf1ec12d296d"
+    },
+    "ctf2m8": {
+      "origin": [
+        -760.0,
+        560.0,
+        -935.0
+      ],
+      "yaw_rate": 18,
+      "duration_seconds": 20,
+      "bytes": 99752,
+      "sha256": "60b198f1e77ec7084b4c0c45878f2e546d4e48ed99e9cb39b14fce0edf83f38a"
+    }
+  },
+  "samples": [
+    {
+      "engine": "qssm",
+      "map": "aerowalk",
+      "run": 0,
+      "warmup": true,
+      "result": {
+        "frames": 1445,
+        "seconds": 0.9,
+        "fps": 1668.3,
+        "line": "1445 frames   0.9 seconds 1668.3 fps"
+      },
+      "elapsed_wall_seconds": 1.7030000000013388,
+      "command": [
+        "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\report-refresh-20261006\\fps-installed\\runs\\qssm\\QSS-M-w64.exe",
+        "-basedir",
+        "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\report-refresh-20261006\\fps-installed\\runs\\qssm",
+        "-nohome",
+        "-condebug",
+        "-window",
+        "-width",
+        "800",
+        "-height",
+        "600",
+        "-nojoy",
+        "-noice",
+        "-listen",
+        "-noudp",
+        "-noquakeimport"
+      ],
+      "config": "vid_width 800\nvid_height 600\nvid_fullscreen 0\nvid_vsync 0\nfov 90\nviewsize 100\nhost_maxfps 0\nsys_throttle -1\ncl_demoreel 0\ncl_discord_presence 0\nr_scale 1\nvid_fsaa 0\necho FPS_BENCH_qssm_aerowalk_1791317790129846200\nvid_width\nvid_height\nvid_vsync\ntimedemo fps_aerowalk\n",
+      "startup_evidence": [
+        "Video mode 800x600x24 144Hz 2x scale (24-bit z-buffer, 0x FSAA) initialized",
+        "GL_VENDOR: NVIDIA Corporation",
+        "GL_RENDERER: NVIDIA GeForce RTX 4070/PCIe/SSE2",
+        "GL_VERSION: 4.6.0 NVIDIA 610.88"
+      ],
+      "window_pixels": {
+        "width": 800,
+        "height": 600
+      },
+      "log": "logs/qssm-aerowalk-warmup.log"
+    },
+    {
+      "engine": "qssm",
+      "map": "aerowalk",
+      "run": 1,
+      "warmup": false,
+      "result": {
+        "frames": 1445,
+        "seconds": 0.8,
+        "fps": 1769.1,
+        "line": "1445 frames   0.8 seconds 1769.1 fps"
+      },
+      "elapsed_wall_seconds": 1.3130000000019209,
+      "command": [
+        "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\report-refresh-20261006\\fps-installed\\runs\\qssm\\QSS-M-w64.exe",
+        "-basedir",
+        "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\report-refresh-20261006\\fps-installed\\runs\\qssm",
+        "-nohome",
+        "-condebug",
+        "-window",
+        "-width",
+        "800",
+        "-height",
+        "600",
+        "-nojoy",
+        "-noice",
+        "-listen",
+        "-noudp",
+        "-noquakeimport"
+      ],
+      "config": "vid_width 800\nvid_height 600\nvid_fullscreen 0\nvid_vsync 0\nfov 90\nviewsize 100\nhost_maxfps 0\nsys_throttle -1\ncl_demoreel 0\ncl_discord_presence 0\nr_scale 1\nvid_fsaa 0\necho FPS_BENCH_qssm_aerowalk_1791317791838920400\nvid_width\nvid_height\nvid_vsync\ntimedemo fps_aerowalk\n",
+      "startup_evidence": [
+        "Video mode 800x600x24 144Hz 2x scale (24-bit z-buffer, 0x FSAA) initialized",
+        "GL_VENDOR: NVIDIA Corporation",
+        "GL_RENDERER: NVIDIA GeForce RTX 4070/PCIe/SSE2",
+        "GL_VERSION: 4.6.0 NVIDIA 610.88"
+      ],
+      "window_pixels": {
+        "width": 800,
+        "height": 600
+      },
+      "log": "logs/qssm-aerowalk-01.log"
+    },
+    {
+      "engine": "qssm",
+      "map": "aerowalk",
+      "run": 2,
+      "warmup": false,
+      "result": {
+        "frames": 1445,
+        "seconds": 0.8,
+        "fps": 1807.6,
+        "line": "1445 frames   0.8 seconds 1807.6 fps"
+      },
+      "elapsed_wall_seconds": 1.25,
+      "command": [
+        "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\report-refresh-20261006\\fps-installed\\runs\\qssm\\QSS-M-w64.exe",
+        "-basedir",
+        "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\report-refresh-20261006\\fps-installed\\runs\\qssm",
+        "-nohome",
+        "-condebug",
+        "-window",
+        "-width",
+        "800",
+        "-height",
+        "600",
+        "-nojoy",
+        "-noice",
+        "-listen",
+        "-noudp",
+        "-noquakeimport"
+      ],
+      "config": "vid_width 800\nvid_height 600\nvid_fullscreen 0\nvid_vsync 0\nfov 90\nviewsize 100\nhost_maxfps 0\nsys_throttle -1\ncl_demoreel 0\ncl_discord_presence 0\nr_scale 1\nvid_fsaa 0\necho FPS_BENCH_qssm_aerowalk_1791317793148466400\nvid_width\nvid_height\nvid_vsync\ntimedemo fps_aerowalk\n",
+      "startup_evidence": [
+        "Video mode 800x600x24 144Hz 2x scale (24-bit z-buffer, 0x FSAA) initialized",
+        "GL_VENDOR: NVIDIA Corporation",
+        "GL_RENDERER: NVIDIA GeForce RTX 4070/PCIe/SSE2",
+        "GL_VERSION: 4.6.0 NVIDIA 610.88"
+      ],
+      "window_pixels": {
+        "width": 800,
+        "height": 600
+      },
+      "log": "logs/qssm-aerowalk-02.log"
+    },
+    {
+      "engine": "qssm",
+      "map": "aerowalk",
+      "run": 3,
+      "warmup": false,
+      "result": {
+        "frames": 1445,
+        "seconds": 0.8,
+        "fps": 1748.1,
+        "line": "1445 frames   0.8 seconds 1748.1 fps"
+      },
+      "elapsed_wall_seconds": 1.360000000000582,
+      "command": [
+        "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\report-refresh-20261006\\fps-installed\\runs\\qssm\\QSS-M-w64.exe",
+        "-basedir",
+        "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\report-refresh-20261006\\fps-installed\\runs\\qssm",
+        "-nohome",
+        "-condebug",
+        "-window",
+        "-width",
+        "800",
+        "-height",
+        "600",
+        "-nojoy",
+        "-noice",
+        "-listen",
+        "-noudp",
+        "-noquakeimport"
+      ],
+      "config": "vid_width 800\nvid_height 600\nvid_fullscreen 0\nvid_vsync 0\nfov 90\nviewsize 100\nhost_maxfps 0\nsys_throttle -1\ncl_demoreel 0\ncl_discord_presence 0\nr_scale 1\nvid_fsaa 0\necho FPS_BENCH_qssm_aerowalk_1791317794406156500\nvid_width\nvid_height\nvid_vsync\ntimedemo fps_aerowalk\n",
+      "startup_evidence": [
+        "Video mode 800x600x24 144Hz 2x scale (24-bit z-buffer, 0x FSAA) initialized",
+        "GL_VENDOR: NVIDIA Corporation",
+        "GL_RENDERER: NVIDIA GeForce RTX 4070/PCIe/SSE2",
+        "GL_VERSION: 4.6.0 NVIDIA 610.88"
+      ],
+      "window_pixels": {
+        "width": 800,
+        "height": 600
+      },
+      "log": "logs/qssm-aerowalk-03.log"
+    },
+    {
+      "engine": "qssm",
+      "map": "aerowalk",
+      "run": 4,
+      "warmup": false,
+      "result": {
+        "frames": 1445,
+        "seconds": 0.8,
+        "fps": 1825.0,
+        "line": "1445 frames   0.8 seconds 1825.0 fps"
+      },
+      "elapsed_wall_seconds": 1.25,
+      "command": [
+        "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\report-refresh-20261006\\fps-installed\\runs\\qssm\\QSS-M-w64.exe",
+        "-basedir",
+        "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\report-refresh-20261006\\fps-installed\\runs\\qssm",
+        "-nohome",
+        "-condebug",
+        "-window",
+        "-width",
+        "800",
+        "-height",
+        "600",
+        "-nojoy",
+        "-noice",
+        "-listen",
+        "-noudp",
+        "-noquakeimport"
+      ],
+      "config": "vid_width 800\nvid_height 600\nvid_fullscreen 0\nvid_vsync 0\nfov 90\nviewsize 100\nhost_maxfps 0\nsys_throttle -1\ncl_demoreel 0\ncl_discord_presence 0\nr_scale 1\nvid_fsaa 0\necho FPS_BENCH_qssm_aerowalk_1791317795773972100\nvid_width\nvid_height\nvid_vsync\ntimedemo fps_aerowalk\n",
+      "startup_evidence": [
+        "Video mode 800x600x24 144Hz 2x scale (24-bit z-buffer, 0x FSAA) initialized",
+        "GL_VENDOR: NVIDIA Corporation",
+        "GL_RENDERER: NVIDIA GeForce RTX 4070/PCIe/SSE2",
+        "GL_VERSION: 4.6.0 NVIDIA 610.88"
+      ],
+      "window_pixels": {
+        "width": 800,
+        "height": 600
+      },
+      "log": "logs/qssm-aerowalk-04.log"
+    },
+    {
+      "engine": "qssm",
+      "map": "aerowalk",
+      "run": 5,
+      "warmup": false,
+      "result": {
+        "frames": 1445,
+        "seconds": 0.8,
+        "fps": 1806.8,
+        "line": "1445 frames   0.8 seconds 1806.8 fps"
+      },
+      "elapsed_wall_seconds": 1.2969999999986612,
+      "command": [
+        "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\report-refresh-20261006\\fps-installed\\runs\\qssm\\QSS-M-w64.exe",
+        "-basedir",
+        "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\report-refresh-20261006\\fps-installed\\runs\\qssm",
+        "-nohome",
+        "-condebug",
+        "-window",
+        "-width",
+        "800",
+        "-height",
+        "600",
+        "-nojoy",
+        "-noice",
+        "-listen",
+        "-noudp",
+        "-noquakeimport"
+      ],
+      "config": "vid_width 800\nvid_height 600\nvid_fullscreen 0\nvid_vsync 0\nfov 90\nviewsize 100\nhost_maxfps 0\nsys_throttle -1\ncl_demoreel 0\ncl_discord_presence 0\nr_scale 1\nvid_fsaa 0\necho FPS_BENCH_qssm_aerowalk_1791317797026770400\nvid_width\nvid_height\nvid_vsync\ntimedemo fps_aerowalk\n",
+      "startup_evidence": [
+        "Video mode 800x600x24 144Hz 2x scale (24-bit z-buffer, 0x FSAA) initialized",
+        "GL_VENDOR: NVIDIA Corporation",
+        "GL_RENDERER: NVIDIA GeForce RTX 4070/PCIe/SSE2",
+        "GL_VERSION: 4.6.0 NVIDIA 610.88"
+      ],
+      "window_pixels": {
+        "width": 800,
+        "height": 600
+      },
+      "log": "logs/qssm-aerowalk-05.log"
+    },
+    {
+      "engine": "qssm",
+      "map": "ztndm3",
+      "run": 0,
+      "warmup": true,
+      "result": {
+        "frames": 1442,
+        "seconds": 0.8,
+        "fps": 1820.4,
+        "line": "1442 frames   0.8 seconds 1820.4 fps"
+      },
+      "elapsed_wall_seconds": 1.25,
+      "command": [
+        "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\report-refresh-20261006\\fps-installed\\runs\\qssm\\QSS-M-w64.exe",
+        "-basedir",
+        "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\report-refresh-20261006\\fps-installed\\runs\\qssm",
+        "-nohome",
+        "-condebug",
+        "-window",
+        "-width",
+        "800",
+        "-height",
+        "600",
+        "-nojoy",
+        "-noice",
+        "-listen",
+        "-noudp",
+        "-noquakeimport"
+      ],
+      "config": "vid_width 800\nvid_height 600\nvid_fullscreen 0\nvid_vsync 0\nfov 90\nviewsize 100\nhost_maxfps 0\nsys_throttle -1\ncl_demoreel 0\ncl_discord_presence 0\nr_scale 1\nvid_fsaa 0\necho FPS_BENCH_qssm_ztndm3_1791317798334631200\nvid_width\nvid_height\nvid_vsync\ntimedemo fps_ztndm3\n",
+      "startup_evidence": [
+        "Video mode 800x600x24 144Hz 2x scale (24-bit z-buffer, 0x FSAA) initialized",
+        "GL_VENDOR: NVIDIA Corporation",
+        "GL_RENDERER: NVIDIA GeForce RTX 4070/PCIe/SSE2",
+        "GL_VERSION: 4.6.0 NVIDIA 610.88"
+      ],
+      "window_pixels": {
+        "width": 800,
+        "height": 600
+      },
+      "log": "logs/qssm-ztndm3-warmup.log"
+    },
+    {
+      "engine": "qssm",
+      "map": "ztndm3",
+      "run": 1,
+      "warmup": false,
+      "result": {
+        "frames": 1442,
+        "seconds": 0.8,
+        "fps": 1828.8,
+        "line": "1442 frames   0.8 seconds 1828.8 fps"
+      },
+      "elapsed_wall_seconds": 1.2339999999967404,
+      "command": [
+        "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\report-refresh-20261006\\fps-installed\\runs\\qssm\\QSS-M-w64.exe",
+        "-basedir",
+        "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\report-refresh-20261006\\fps-installed\\runs\\qssm",
+        "-nohome",
+        "-condebug",
+        "-window",
+        "-width",
+        "800",
+        "-height",
+        "600",
+        "-nojoy",
+        "-noice",
+        "-listen",
+        "-noudp",
+        "-noquakeimport"
+      ],
+      "config": "vid_width 800\nvid_height 600\nvid_fullscreen 0\nvid_vsync 0\nfov 90\nviewsize 100\nhost_maxfps 0\nsys_throttle -1\ncl_demoreel 0\ncl_discord_presence 0\nr_scale 1\nvid_fsaa 0\necho FPS_BENCH_qssm_ztndm3_1791317799592385400\nvid_width\nvid_height\nvid_vsync\ntimedemo fps_ztndm3\n",
+      "startup_evidence": [
+        "Video mode 800x600x24 144Hz 2x scale (24-bit z-buffer, 0x FSAA) initialized",
+        "GL_VENDOR: NVIDIA Corporation",
+        "GL_RENDERER: NVIDIA GeForce RTX 4070/PCIe/SSE2",
+        "GL_VERSION: 4.6.0 NVIDIA 610.88"
+      ],
+      "window_pixels": {
+        "width": 800,
+        "height": 600
+      },
+      "log": "logs/qssm-ztndm3-01.log"
+    },
+    {
+      "engine": "qssm",
+      "map": "ztndm3",
+      "run": 2,
+      "warmup": false,
+      "result": {
+        "frames": 1442,
+        "seconds": 0.8,
+        "fps": 1862.9,
+        "line": "1442 frames   0.8 seconds 1862.9 fps"
+      },
+      "elapsed_wall_seconds": 1.235000000000582,
+      "command": [
+        "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\report-refresh-20261006\\fps-installed\\runs\\qssm\\QSS-M-w64.exe",
+        "-basedir",
+        "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\report-refresh-20261006\\fps-installed\\runs\\qssm",
+        "-nohome",
+        "-condebug",
+        "-window",
+        "-width",
+        "800",
+        "-height",
+        "600",
+        "-nojoy",
+        "-noice",
+        "-listen",
+        "-noudp",
+        "-noquakeimport"
+      ],
+      "config": "vid_width 800\nvid_height 600\nvid_fullscreen 0\nvid_vsync 0\nfov 90\nviewsize 100\nhost_maxfps 0\nsys_throttle -1\ncl_demoreel 0\ncl_discord_presence 0\nr_scale 1\nvid_fsaa 0\necho FPS_BENCH_qssm_ztndm3_1791317800837219000\nvid_width\nvid_height\nvid_vsync\ntimedemo fps_ztndm3\n",
+      "startup_evidence": [
+        "Video mode 800x600x24 144Hz 2x scale (24-bit z-buffer, 0x FSAA) initialized",
+        "GL_VENDOR: NVIDIA Corporation",
+        "GL_RENDERER: NVIDIA GeForce RTX 4070/PCIe/SSE2",
+        "GL_VERSION: 4.6.0 NVIDIA 610.88"
+      ],
+      "window_pixels": {
+        "width": 800,
+        "height": 600
+      },
+      "log": "logs/qssm-ztndm3-02.log"
+    },
+    {
+      "engine": "qssm",
+      "map": "ztndm3",
+      "run": 3,
+      "warmup": false,
+      "result": {
+        "frames": 1442,
+        "seconds": 0.8,
+        "fps": 1828.8,
+        "line": "1442 frames   0.8 seconds 1828.8 fps"
+      },
+      "elapsed_wall_seconds": 1.25,
+      "command": [
+        "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\report-refresh-20261006\\fps-installed\\runs\\qssm\\QSS-M-w64.exe",
+        "-basedir",
+        "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\report-refresh-20261006\\fps-installed\\runs\\qssm",
+        "-nohome",
+        "-condebug",
+        "-window",
+        "-width",
+        "800",
+        "-height",
+        "600",
+        "-nojoy",
+        "-noice",
+        "-listen",
+        "-noudp",
+        "-noquakeimport"
+      ],
+      "config": "vid_width 800\nvid_height 600\nvid_fullscreen 0\nvid_vsync 0\nfov 90\nviewsize 100\nhost_maxfps 0\nsys_throttle -1\ncl_demoreel 0\ncl_discord_presence 0\nr_scale 1\nvid_fsaa 0\necho FPS_BENCH_qssm_ztndm3_1791317802083156600\nvid_width\nvid_height\nvid_vsync\ntimedemo fps_ztndm3\n",
+      "startup_evidence": [
+        "Video mode 800x600x24 144Hz 2x scale (24-bit z-buffer, 0x FSAA) initialized",
+        "GL_VENDOR: NVIDIA Corporation",
+        "GL_RENDERER: NVIDIA GeForce RTX 4070/PCIe/SSE2",
+        "GL_VERSION: 4.6.0 NVIDIA 610.88"
+      ],
+      "window_pixels": {
+        "width": 800,
+        "height": 600
+      },
+      "log": "logs/qssm-ztndm3-03.log"
+    },
+    {
+      "engine": "qssm",
+      "map": "ztndm3",
+      "run": 4,
+      "warmup": false,
+      "result": {
+        "frames": 1442,
+        "seconds": 0.8,
+        "fps": 1834.6,
+        "line": "1442 frames   0.8 seconds 1834.6 fps"
+      },
+      "elapsed_wall_seconds": 1.235000000000582,
+      "command": [
+        "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\report-refresh-20261006\\fps-installed\\runs\\qssm\\QSS-M-w64.exe",
+        "-basedir",
+        "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\report-refresh-20261006\\fps-installed\\runs\\qssm",
+        "-nohome",
+        "-condebug",
+        "-window",
+        "-width",
+        "800",
+        "-height",
+        "600",
+        "-nojoy",
+        "-noice",
+        "-listen",
+        "-noudp",
+        "-noquakeimport"
+      ],
+      "config": "vid_width 800\nvid_height 600\nvid_fullscreen 0\nvid_vsync 0\nfov 90\nviewsize 100\nhost_maxfps 0\nsys_throttle -1\ncl_demoreel 0\ncl_discord_presence 0\nr_scale 1\nvid_fsaa 0\necho FPS_BENCH_qssm_ztndm3_1791317803340794600\nvid_width\nvid_height\nvid_vsync\ntimedemo fps_ztndm3\n",
+      "startup_evidence": [
+        "Video mode 800x600x24 144Hz 2x scale (24-bit z-buffer, 0x FSAA) initialized",
+        "GL_VENDOR: NVIDIA Corporation",
+        "GL_RENDERER: NVIDIA GeForce RTX 4070/PCIe/SSE2",
+        "GL_VERSION: 4.6.0 NVIDIA 610.88"
+      ],
+      "window_pixels": {
+        "width": 800,
+        "height": 600
+      },
+      "log": "logs/qssm-ztndm3-04.log"
+    },
+    {
+      "engine": "qssm",
+      "map": "ztndm3",
+      "run": 5,
+      "warmup": false,
+      "result": {
+        "frames": 1442,
+        "seconds": 0.8,
+        "fps": 1831.7,
+        "line": "1442 frames   0.8 seconds 1831.7 fps"
+      },
+      "elapsed_wall_seconds": 1.25,
+      "command": [
+        "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\report-refresh-20261006\\fps-installed\\runs\\qssm\\QSS-M-w64.exe",
+        "-basedir",
+        "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\report-refresh-20261006\\fps-installed\\runs\\qssm",
+        "-nohome",
+        "-condebug",
+        "-window",
+        "-width",
+        "800",
+        "-height",
+        "600",
+        "-nojoy",
+        "-noice",
+        "-listen",
+        "-noudp",
+        "-noquakeimport"
+      ],
+      "config": "vid_width 800\nvid_height 600\nvid_fullscreen 0\nvid_vsync 0\nfov 90\nviewsize 100\nhost_maxfps 0\nsys_throttle -1\ncl_demoreel 0\ncl_discord_presence 0\nr_scale 1\nvid_fsaa 0\necho FPS_BENCH_qssm_ztndm3_1791317804584238800\nvid_width\nvid_height\nvid_vsync\ntimedemo fps_ztndm3\n",
+      "startup_evidence": [
+        "Video mode 800x600x24 144Hz 2x scale (24-bit z-buffer, 0x FSAA) initialized",
+        "GL_VENDOR: NVIDIA Corporation",
+        "GL_RENDERER: NVIDIA GeForce RTX 4070/PCIe/SSE2",
+        "GL_VERSION: 4.6.0 NVIDIA 610.88"
+      ],
+      "window_pixels": {
+        "width": 800,
+        "height": 600
+      },
+      "log": "logs/qssm-ztndm3-05.log"
+    },
+    {
+      "engine": "qssm",
+      "map": "dm3",
+      "run": 0,
+      "warmup": true,
+      "result": {
+        "frames": 1442,
+        "seconds": 0.8,
+        "fps": 1713.0,
+        "line": "1442 frames   0.8 seconds 1713.0 fps"
+      },
+      "elapsed_wall_seconds": 1.2969999999986612,
+      "command": [
+        "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\report-refresh-20261006\\fps-installed\\runs\\qssm\\QSS-M-w64.exe",
+        "-basedir",
+        "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\report-refresh-20261006\\fps-installed\\runs\\qssm",
+        "-nohome",
+        "-condebug",
+        "-window",
+        "-width",
+        "800",
+        "-height",
+        "600",
+        "-nojoy",
+        "-noice",
+        "-listen",
+        "-noudp",
+        "-noquakeimport"
+      ],
+      "config": "vid_width 800\nvid_height 600\nvid_fullscreen 0\nvid_vsync 0\nfov 90\nviewsize 100\nhost_maxfps 0\nsys_throttle -1\ncl_demoreel 0\ncl_discord_presence 0\nr_scale 1\nvid_fsaa 0\necho FPS_BENCH_qssm_dm3_1791317805838223300\nvid_width\nvid_height\nvid_vsync\ntimedemo fps_dm3\n",
+      "startup_evidence": [
+        "Video mode 800x600x24 144Hz 2x scale (24-bit z-buffer, 0x FSAA) initialized",
+        "GL_VENDOR: NVIDIA Corporation",
+        "GL_RENDERER: NVIDIA GeForce RTX 4070/PCIe/SSE2",
+        "GL_VERSION: 4.6.0 NVIDIA 610.88"
+      ],
+      "window_pixels": {
+        "width": 800,
+        "height": 600
+      },
+      "log": "logs/qssm-dm3-warmup.log"
+    },
+    {
+      "engine": "qssm",
+      "map": "dm3",
+      "run": 1,
+      "warmup": false,
+      "result": {
+        "frames": 1442,
+        "seconds": 0.8,
+        "fps": 1714.1,
+        "line": "1442 frames   0.8 seconds 1714.1 fps"
+      },
+      "elapsed_wall_seconds": 1.2809999999954016,
+      "command": [
+        "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\report-refresh-20261006\\fps-installed\\runs\\qssm\\QSS-M-w64.exe",
+        "-basedir",
+        "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\report-refresh-20261006\\fps-installed\\runs\\qssm",
+        "-nohome",
+        "-condebug",
+        "-window",
+        "-width",
+        "800",
+        "-height",
+        "600",
+        "-nojoy",
+        "-noice",
+        "-listen",
+        "-noudp",
+        "-noquakeimport"
+      ],
+      "config": "vid_width 800\nvid_height 600\nvid_fullscreen 0\nvid_vsync 0\nfov 90\nviewsize 100\nhost_maxfps 0\nsys_throttle -1\ncl_demoreel 0\ncl_discord_presence 0\nr_scale 1\nvid_fsaa 0\necho FPS_BENCH_qssm_dm3_1791317807139990500\nvid_width\nvid_height\nvid_vsync\ntimedemo fps_dm3\n",
+      "startup_evidence": [
+        "Video mode 800x600x24 144Hz 2x scale (24-bit z-buffer, 0x FSAA) initialized",
+        "GL_VENDOR: NVIDIA Corporation",
+        "GL_RENDERER: NVIDIA GeForce RTX 4070/PCIe/SSE2",
+        "GL_VERSION: 4.6.0 NVIDIA 610.88"
+      ],
+      "window_pixels": {
+        "width": 800,
+        "height": 600
+      },
+      "log": "logs/qssm-dm3-01.log"
+    },
+    {
+      "engine": "qssm",
+      "map": "dm3",
+      "run": 2,
+      "warmup": false,
+      "result": {
+        "frames": 1442,
+        "seconds": 0.8,
+        "fps": 1729.4,
+        "line": "1442 frames   0.8 seconds 1729.4 fps"
+      },
+      "elapsed_wall_seconds": 1.2960000000020955,
+      "command": [
+        "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\report-refresh-20261006\\fps-installed\\runs\\qssm\\QSS-M-w64.exe",
+        "-basedir",
+        "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\report-refresh-20261006\\fps-installed\\runs\\qssm",
+        "-nohome",
+        "-condebug",
+        "-window",
+        "-width",
+        "800",
+        "-height",
+        "600",
+        "-nojoy",
+        "-noice",
+        "-listen",
+        "-noudp",
+        "-noquakeimport"
+      ],
+      "config": "vid_width 800\nvid_height 600\nvid_fullscreen 0\nvid_vsync 0\nfov 90\nviewsize 100\nhost_maxfps 0\nsys_throttle -1\ncl_demoreel 0\ncl_discord_presence 0\nr_scale 1\nvid_fsaa 0\necho FPS_BENCH_qssm_dm3_1791317808442940500\nvid_width\nvid_height\nvid_vsync\ntimedemo fps_dm3\n",
+      "startup_evidence": [
+        "Video mode 800x600x24 144Hz 2x scale (24-bit z-buffer, 0x FSAA) initialized",
+        "GL_VENDOR: NVIDIA Corporation",
+        "GL_RENDERER: NVIDIA GeForce RTX 4070/PCIe/SSE2",
+        "GL_VERSION: 4.6.0 NVIDIA 610.88"
+      ],
+      "window_pixels": {
+        "width": 800,
+        "height": 600
+      },
+      "log": "logs/qssm-dm3-02.log"
+    },
+    {
+      "engine": "qssm",
+      "map": "dm3",
+      "run": 3,
+      "warmup": false,
+      "result": {
+        "frames": 1442,
+        "seconds": 0.8,
+        "fps": 1700.6,
+        "line": "1442 frames   0.8 seconds 1700.6 fps"
+      },
+      "elapsed_wall_seconds": 1.2969999999986612,
+      "command": [
+        "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\report-refresh-20261006\\fps-installed\\runs\\qssm\\QSS-M-w64.exe",
+        "-basedir",
+        "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\report-refresh-20261006\\fps-installed\\runs\\qssm",
+        "-nohome",
+        "-condebug",
+        "-window",
+        "-width",
+        "800",
+        "-height",
+        "600",
+        "-nojoy",
+        "-noice",
+        "-listen",
+        "-noudp",
+        "-noquakeimport"
+      ],
+      "config": "vid_width 800\nvid_height 600\nvid_fullscreen 0\nvid_vsync 0\nfov 90\nviewsize 100\nhost_maxfps 0\nsys_throttle -1\ncl_demoreel 0\ncl_discord_presence 0\nr_scale 1\nvid_fsaa 0\necho FPS_BENCH_qssm_dm3_1791317809746105100\nvid_width\nvid_height\nvid_vsync\ntimedemo fps_dm3\n",
+      "startup_evidence": [
+        "Video mode 800x600x24 144Hz 2x scale (24-bit z-buffer, 0x FSAA) initialized",
+        "GL_VENDOR: NVIDIA Corporation",
+        "GL_RENDERER: NVIDIA GeForce RTX 4070/PCIe/SSE2",
+        "GL_VERSION: 4.6.0 NVIDIA 610.88"
+      ],
+      "window_pixels": {
+        "width": 800,
+        "height": 600
+      },
+      "log": "logs/qssm-dm3-03.log"
+    },
+    {
+      "engine": "qssm",
+      "map": "dm3",
+      "run": 4,
+      "warmup": false,
+      "result": {
+        "frames": 1442,
+        "seconds": 0.8,
+        "fps": 1720.9,
+        "line": "1442 frames   0.8 seconds 1720.9 fps"
+      },
+      "elapsed_wall_seconds": 1.2969999999986612,
+      "command": [
+        "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\report-refresh-20261006\\fps-installed\\runs\\qssm\\QSS-M-w64.exe",
+        "-basedir",
+        "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\report-refresh-20261006\\fps-installed\\runs\\qssm",
+        "-nohome",
+        "-condebug",
+        "-window",
+        "-width",
+        "800",
+        "-height",
+        "600",
+        "-nojoy",
+        "-noice",
+        "-listen",
+        "-noudp",
+        "-noquakeimport"
+      ],
+      "config": "vid_width 800\nvid_height 600\nvid_fullscreen 0\nvid_vsync 0\nfov 90\nviewsize 100\nhost_maxfps 0\nsys_throttle -1\ncl_demoreel 0\ncl_discord_presence 0\nr_scale 1\nvid_fsaa 0\necho FPS_BENCH_qssm_dm3_1791317811041613000\nvid_width\nvid_height\nvid_vsync\ntimedemo fps_dm3\n",
+      "startup_evidence": [
+        "Video mode 800x600x24 144Hz 2x scale (24-bit z-buffer, 0x FSAA) initialized",
+        "GL_VENDOR: NVIDIA Corporation",
+        "GL_RENDERER: NVIDIA GeForce RTX 4070/PCIe/SSE2",
+        "GL_VERSION: 4.6.0 NVIDIA 610.88"
+      ],
+      "window_pixels": {
+        "width": 800,
+        "height": 600
+      },
+      "log": "logs/qssm-dm3-04.log"
+    },
+    {
+      "engine": "qssm",
+      "map": "dm3",
+      "run": 5,
+      "warmup": false,
+      "result": {
+        "frames": 1442,
+        "seconds": 0.8,
+        "fps": 1714.5,
+        "line": "1442 frames   0.8 seconds 1714.5 fps"
+      },
+      "elapsed_wall_seconds": 1.2969999999986612,
+      "command": [
+        "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\report-refresh-20261006\\fps-installed\\runs\\qssm\\QSS-M-w64.exe",
+        "-basedir",
+        "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\report-refresh-20261006\\fps-installed\\runs\\qssm",
+        "-nohome",
+        "-condebug",
+        "-window",
+        "-width",
+        "800",
+        "-height",
+        "600",
+        "-nojoy",
+        "-noice",
+        "-listen",
+        "-noudp",
+        "-noquakeimport"
+      ],
+      "config": "vid_width 800\nvid_height 600\nvid_fullscreen 0\nvid_vsync 0\nfov 90\nviewsize 100\nhost_maxfps 0\nsys_throttle -1\ncl_demoreel 0\ncl_discord_presence 0\nr_scale 1\nvid_fsaa 0\necho FPS_BENCH_qssm_dm3_1791317812349922500\nvid_width\nvid_height\nvid_vsync\ntimedemo fps_dm3\n",
+      "startup_evidence": [
+        "Video mode 800x600x24 144Hz 2x scale (24-bit z-buffer, 0x FSAA) initialized",
+        "GL_VENDOR: NVIDIA Corporation",
+        "GL_RENDERER: NVIDIA GeForce RTX 4070/PCIe/SSE2",
+        "GL_VERSION: 4.6.0 NVIDIA 610.88"
+      ],
+      "window_pixels": {
+        "width": 800,
+        "height": 600
+      },
+      "log": "logs/qssm-dm3-05.log"
+    },
+    {
+      "engine": "qssm",
+      "map": "bravado",
+      "run": 0,
+      "warmup": true,
+      "result": {
+        "frames": 1442,
+        "seconds": 0.8,
+        "fps": 1710.7,
+        "line": "1442 frames   0.8 seconds 1710.7 fps"
+      },
+      "elapsed_wall_seconds": 1.2969999999986612,
+      "command": [
+        "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\report-refresh-20261006\\fps-installed\\runs\\qssm\\QSS-M-w64.exe",
+        "-basedir",
+        "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\report-refresh-20261006\\fps-installed\\runs\\qssm",
+        "-nohome",
+        "-condebug",
+        "-window",
+        "-width",
+        "800",
+        "-height",
+        "600",
+        "-nojoy",
+        "-noice",
+        "-listen",
+        "-noudp",
+        "-noquakeimport"
+      ],
+      "config": "vid_width 800\nvid_height 600\nvid_fullscreen 0\nvid_vsync 0\nfov 90\nviewsize 100\nhost_maxfps 0\nsys_throttle -1\ncl_demoreel 0\ncl_discord_presence 0\nr_scale 1\nvid_fsaa 0\necho FPS_BENCH_qssm_bravado_1791317813652768800\nvid_width\nvid_height\nvid_vsync\ntimedemo fps_bravado\n",
+      "startup_evidence": [
+        "Video mode 800x600x24 144Hz 2x scale (24-bit z-buffer, 0x FSAA) initialized",
+        "GL_VENDOR: NVIDIA Corporation",
+        "GL_RENDERER: NVIDIA GeForce RTX 4070/PCIe/SSE2",
+        "GL_VERSION: 4.6.0 NVIDIA 610.88"
+      ],
+      "window_pixels": {
+        "width": 800,
+        "height": 600
+      },
+      "log": "logs/qssm-bravado-warmup.log"
+    },
+    {
+      "engine": "qssm",
+      "map": "bravado",
+      "run": 1,
+      "warmup": false,
+      "result": {
+        "frames": 1442,
+        "seconds": 0.8,
+        "fps": 1713.0,
+        "line": "1442 frames   0.8 seconds 1713.0 fps"
+      },
+      "elapsed_wall_seconds": 1.2969999999986612,
+      "command": [
+        "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\report-refresh-20261006\\fps-installed\\runs\\qssm\\QSS-M-w64.exe",
+        "-basedir",
+        "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\report-refresh-20261006\\fps-installed\\runs\\qssm",
+        "-nohome",
+        "-condebug",
+        "-window",
+        "-width",
+        "800",
+        "-height",
+        "600",
+        "-nojoy",
+        "-noice",
+        "-listen",
+        "-noudp",
+        "-noquakeimport"
+      ],
+      "config": "vid_width 800\nvid_height 600\nvid_fullscreen 0\nvid_vsync 0\nfov 90\nviewsize 100\nhost_maxfps 0\nsys_throttle -1\ncl_demoreel 0\ncl_discord_presence 0\nr_scale 1\nvid_fsaa 0\necho FPS_BENCH_qssm_bravado_1791317814955897900\nvid_width\nvid_height\nvid_vsync\ntimedemo fps_bravado\n",
+      "startup_evidence": [
+        "Video mode 800x600x24 144Hz 2x scale (24-bit z-buffer, 0x FSAA) initialized",
+        "GL_VENDOR: NVIDIA Corporation",
+        "GL_RENDERER: NVIDIA GeForce RTX 4070/PCIe/SSE2",
+        "GL_VERSION: 4.6.0 NVIDIA 610.88"
+      ],
+      "window_pixels": {
+        "width": 800,
+        "height": 600
+      },
+      "log": "logs/qssm-bravado-01.log"
+    },
+    {
+      "engine": "qssm",
+      "map": "bravado",
+      "run": 2,
+      "warmup": false,
+      "result": {
+        "frames": 1442,
+        "seconds": 0.9,
+        "fps": 1655.1,
+        "line": "1442 frames   0.9 seconds 1655.1 fps"
+      },
+      "elapsed_wall_seconds": 1.3430000000007567,
+      "command": [
+        "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\report-refresh-20261006\\fps-installed\\runs\\qssm\\QSS-M-w64.exe",
+        "-basedir",
+        "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\report-refresh-20261006\\fps-installed\\runs\\qssm",
+        "-nohome",
+        "-condebug",
+        "-window",
+        "-width",
+        "800",
+        "-height",
+        "600",
+        "-nojoy",
+        "-noice",
+        "-listen",
+        "-noudp",
+        "-noquakeimport"
+      ],
+      "config": "vid_width 800\nvid_height 600\nvid_fullscreen 0\nvid_vsync 0\nfov 90\nviewsize 100\nhost_maxfps 0\nsys_throttle -1\ncl_demoreel 0\ncl_discord_presence 0\nr_scale 1\nvid_fsaa 0\necho FPS_BENCH_qssm_bravado_1791317816265698500\nvid_width\nvid_height\nvid_vsync\ntimedemo fps_bravado\n",
+      "startup_evidence": [
+        "Video mode 800x600x24 144Hz 2x scale (24-bit z-buffer, 0x FSAA) initialized",
+        "GL_VENDOR: NVIDIA Corporation",
+        "GL_RENDERER: NVIDIA GeForce RTX 4070/PCIe/SSE2",
+        "GL_VERSION: 4.6.0 NVIDIA 610.88"
+      ],
+      "window_pixels": {
+        "width": 800,
+        "height": 600
+      },
+      "log": "logs/qssm-bravado-02.log"
+    },
+    {
+      "engine": "qssm",
+      "map": "bravado",
+      "run": 3,
+      "warmup": false,
+      "result": {
+        "frames": 1442,
+        "seconds": 0.8,
+        "fps": 1725.3,
+        "line": "1442 frames   0.8 seconds 1725.3 fps"
+      },
+      "elapsed_wall_seconds": 1.312999999994645,
+      "command": [
+        "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\report-refresh-20261006\\fps-installed\\runs\\qssm\\QSS-M-w64.exe",
+        "-basedir",
+        "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\report-refresh-20261006\\fps-installed\\runs\\qssm",
+        "-nohome",
+        "-condebug",
+        "-window",
+        "-width",
+        "800",
+        "-height",
+        "600",
+        "-nojoy",
+        "-noice",
+        "-listen",
+        "-noudp",
+        "-noquakeimport"
+      ],
+      "config": "vid_width 800\nvid_height 600\nvid_fullscreen 0\nvid_vsync 0\nfov 90\nviewsize 100\nhost_maxfps 0\nsys_throttle -1\ncl_demoreel 0\ncl_discord_presence 0\nr_scale 1\nvid_fsaa 0\necho FPS_BENCH_qssm_bravado_1791317817619422700\nvid_width\nvid_height\nvid_vsync\ntimedemo fps_bravado\n",
+      "startup_evidence": [
+        "Video mode 800x600x24 144Hz 2x scale (24-bit z-buffer, 0x FSAA) initialized",
+        "GL_VENDOR: NVIDIA Corporation",
+        "GL_RENDERER: NVIDIA GeForce RTX 4070/PCIe/SSE2",
+        "GL_VERSION: 4.6.0 NVIDIA 610.88"
+      ],
+      "window_pixels": {
+        "width": 800,
+        "height": 600
+      },
+      "log": "logs/qssm-bravado-03.log"
+    },
+    {
+      "engine": "qssm",
+      "map": "bravado",
+      "run": 4,
+      "warmup": false,
+      "result": {
+        "frames": 1442,
+        "seconds": 0.8,
+        "fps": 1704.1,
+        "line": "1442 frames   0.8 seconds 1704.1 fps"
+      },
+      "elapsed_wall_seconds": 1.2960000000020955,
+      "command": [
+        "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\report-refresh-20261006\\fps-installed\\runs\\qssm\\QSS-M-w64.exe",
+        "-basedir",
+        "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\report-refresh-20261006\\fps-installed\\runs\\qssm",
+        "-nohome",
+        "-condebug",
+        "-window",
+        "-width",
+        "800",
+        "-height",
+        "600",
+        "-nojoy",
+        "-noice",
+        "-listen",
+        "-noudp",
+        "-noquakeimport"
+      ],
+      "config": "vid_width 800\nvid_height 600\nvid_fullscreen 0\nvid_vsync 0\nfov 90\nviewsize 100\nhost_maxfps 0\nsys_throttle -1\ncl_demoreel 0\ncl_discord_presence 0\nr_scale 1\nvid_fsaa 0\necho FPS_BENCH_qssm_bravado_1791317818938221200\nvid_width\nvid_height\nvid_vsync\ntimedemo fps_bravado\n",
+      "startup_evidence": [
+        "Video mode 800x600x24 144Hz 2x scale (24-bit z-buffer, 0x FSAA) initialized",
+        "GL_VENDOR: NVIDIA Corporation",
+        "GL_RENDERER: NVIDIA GeForce RTX 4070/PCIe/SSE2",
+        "GL_VERSION: 4.6.0 NVIDIA 610.88"
+      ],
+      "window_pixels": {
+        "width": 800,
+        "height": 600
+      },
+      "log": "logs/qssm-bravado-04.log"
+    },
+    {
+      "engine": "qssm",
+      "map": "bravado",
+      "run": 5,
+      "warmup": false,
+      "result": {
+        "frames": 1442,
+        "seconds": 0.8,
+        "fps": 1739.3,
+        "line": "1442 frames   0.8 seconds 1739.3 fps"
+      },
+      "elapsed_wall_seconds": 1.2969999999986612,
+      "command": [
+        "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\report-refresh-20261006\\fps-installed\\runs\\qssm\\QSS-M-w64.exe",
+        "-basedir",
+        "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\report-refresh-20261006\\fps-installed\\runs\\qssm",
+        "-nohome",
+        "-condebug",
+        "-window",
+        "-width",
+        "800",
+        "-height",
+        "600",
+        "-nojoy",
+        "-noice",
+        "-listen",
+        "-noudp",
+        "-noquakeimport"
+      ],
+      "config": "vid_width 800\nvid_height 600\nvid_fullscreen 0\nvid_vsync 0\nfov 90\nviewsize 100\nhost_maxfps 0\nsys_throttle -1\ncl_demoreel 0\ncl_discord_presence 0\nr_scale 1\nvid_fsaa 0\necho FPS_BENCH_qssm_bravado_1791317820241563900\nvid_width\nvid_height\nvid_vsync\ntimedemo fps_bravado\n",
+      "startup_evidence": [
+        "Video mode 800x600x24 144Hz 2x scale (24-bit z-buffer, 0x FSAA) initialized",
+        "GL_VENDOR: NVIDIA Corporation",
+        "GL_RENDERER: NVIDIA GeForce RTX 4070/PCIe/SSE2",
+        "GL_VERSION: 4.6.0 NVIDIA 610.88"
+      ],
+      "window_pixels": {
+        "width": 800,
+        "height": 600
+      },
+      "log": "logs/qssm-bravado-05.log"
+    },
+    {
+      "engine": "qssm",
+      "map": "ctf3m2",
+      "run": 0,
+      "warmup": true,
+      "result": {
+        "frames": 1442,
+        "seconds": 0.9,
+        "fps": 1657.2,
+        "line": "1442 frames   0.9 seconds 1657.2 fps"
+      },
+      "elapsed_wall_seconds": 1.360000000000582,
+      "command": [
+        "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\report-refresh-20261006\\fps-installed\\runs\\qssm\\QSS-M-w64.exe",
+        "-basedir",
+        "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\report-refresh-20261006\\fps-installed\\runs\\qssm",
+        "-nohome",
+        "-condebug",
+        "-window",
+        "-width",
+        "800",
+        "-height",
+        "600",
+        "-nojoy",
+        "-noice",
+        "-listen",
+        "-noudp",
+        "-noquakeimport"
+      ],
+      "config": "vid_width 800\nvid_height 600\nvid_fullscreen 0\nvid_vsync 0\nfov 90\nviewsize 100\nhost_maxfps 0\nsys_throttle -1\ncl_demoreel 0\ncl_discord_presence 0\nr_scale 1\nvid_fsaa 0\necho FPS_BENCH_qssm_ctf3m2_1791317821539895400\nvid_width\nvid_height\nvid_vsync\ntimedemo fps_ctf3m2\n",
+      "startup_evidence": [
+        "Video mode 800x600x24 144Hz 2x scale (24-bit z-buffer, 0x FSAA) initialized",
+        "GL_VENDOR: NVIDIA Corporation",
+        "GL_RENDERER: NVIDIA GeForce RTX 4070/PCIe/SSE2",
+        "GL_VERSION: 4.6.0 NVIDIA 610.88"
+      ],
+      "window_pixels": {
+        "width": 800,
+        "height": 600
+      },
+      "log": "logs/qssm-ctf3m2-warmup.log"
+    },
+    {
+      "engine": "qssm",
+      "map": "ctf3m2",
+      "run": 1,
+      "warmup": false,
+      "result": {
+        "frames": 1442,
+        "seconds": 0.9,
+        "fps": 1695.4,
+        "line": "1442 frames   0.9 seconds 1695.4 fps"
+      },
+      "elapsed_wall_seconds": 1.2969999999986612,
+      "command": [
+        "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\report-refresh-20261006\\fps-installed\\runs\\qssm\\QSS-M-w64.exe",
+        "-basedir",
+        "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\report-refresh-20261006\\fps-installed\\runs\\qssm",
+        "-nohome",
+        "-condebug",
+        "-window",
+        "-width",
+        "800",
+        "-height",
+        "600",
+        "-nojoy",
+        "-noice",
+        "-listen",
+        "-noudp",
+        "-noquakeimport"
+      ],
+      "config": "vid_width 800\nvid_height 600\nvid_fullscreen 0\nvid_vsync 0\nfov 90\nviewsize 100\nhost_maxfps 0\nsys_throttle -1\ncl_demoreel 0\ncl_discord_presence 0\nr_scale 1\nvid_fsaa 0\necho FPS_BENCH_qssm_ctf3m2_1791317822900942700\nvid_width\nvid_height\nvid_vsync\ntimedemo fps_ctf3m2\n",
+      "startup_evidence": [
+        "Video mode 800x600x24 144Hz 2x scale (24-bit z-buffer, 0x FSAA) initialized",
+        "GL_VENDOR: NVIDIA Corporation",
+        "GL_RENDERER: NVIDIA GeForce RTX 4070/PCIe/SSE2",
+        "GL_VERSION: 4.6.0 NVIDIA 610.88"
+      ],
+      "window_pixels": {
+        "width": 800,
+        "height": 600
+      },
+      "log": "logs/qssm-ctf3m2-01.log"
+    },
+    {
+      "engine": "qssm",
+      "map": "ctf3m2",
+      "run": 2,
+      "warmup": false,
+      "result": {
+        "frames": 1442,
+        "seconds": 0.9,
+        "fps": 1671.7,
+        "line": "1442 frames   0.9 seconds 1671.7 fps"
+      },
+      "elapsed_wall_seconds": 1.2810000000026776,
+      "command": [
+        "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\report-refresh-20261006\\fps-installed\\runs\\qssm\\QSS-M-w64.exe",
+        "-basedir",
+        "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\report-refresh-20261006\\fps-installed\\runs\\qssm",
+        "-nohome",
+        "-condebug",
+        "-window",
+        "-width",
+        "800",
+        "-height",
+        "600",
+        "-nojoy",
+        "-noice",
+        "-listen",
+        "-noudp",
+        "-noquakeimport"
+      ],
+      "config": "vid_width 800\nvid_height 600\nvid_fullscreen 0\nvid_vsync 0\nfov 90\nviewsize 100\nhost_maxfps 0\nsys_throttle -1\ncl_demoreel 0\ncl_discord_presence 0\nr_scale 1\nvid_fsaa 0\necho FPS_BENCH_qssm_ctf3m2_1791317824203186500\nvid_width\nvid_height\nvid_vsync\ntimedemo fps_ctf3m2\n",
+      "startup_evidence": [
+        "Video mode 800x600x24 144Hz 2x scale (24-bit z-buffer, 0x FSAA) initialized",
+        "GL_VENDOR: NVIDIA Corporation",
+        "GL_RENDERER: NVIDIA GeForce RTX 4070/PCIe/SSE2",
+        "GL_VERSION: 4.6.0 NVIDIA 610.88"
+      ],
+      "window_pixels": {
+        "width": 800,
+        "height": 600
+      },
+      "log": "logs/qssm-ctf3m2-02.log"
+    },
+    {
+      "engine": "qssm",
+      "map": "ctf3m2",
+      "run": 3,
+      "warmup": false,
+      "result": {
+        "frames": 1442,
+        "seconds": 0.9,
+        "fps": 1690.9,
+        "line": "1442 frames   0.9 seconds 1690.9 fps"
+      },
+      "elapsed_wall_seconds": 1.3440000000045984,
+      "command": [
+        "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\report-refresh-20261006\\fps-installed\\runs\\qssm\\QSS-M-w64.exe",
+        "-basedir",
+        "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\report-refresh-20261006\\fps-installed\\runs\\qssm",
+        "-nohome",
+        "-condebug",
+        "-window",
+        "-width",
+        "800",
+        "-height",
+        "600",
+        "-nojoy",
+        "-noice",
+        "-listen",
+        "-noudp",
+        "-noquakeimport"
+      ],
+      "config": "vid_width 800\nvid_height 600\nvid_fullscreen 0\nvid_vsync 0\nfov 90\nviewsize 100\nhost_maxfps 0\nsys_throttle -1\ncl_demoreel 0\ncl_discord_presence 0\nr_scale 1\nvid_fsaa 0\necho FPS_BENCH_qssm_ctf3m2_1791317825505075600\nvid_width\nvid_height\nvid_vsync\ntimedemo fps_ctf3m2\n",
+      "startup_evidence": [
+        "Video mode 800x600x24 144Hz 2x scale (24-bit z-buffer, 0x FSAA) initialized",
+        "GL_VENDOR: NVIDIA Corporation",
+        "GL_RENDERER: NVIDIA GeForce RTX 4070/PCIe/SSE2",
+        "GL_VERSION: 4.6.0 NVIDIA 610.88"
+      ],
+      "window_pixels": {
+        "width": 800,
+        "height": 600
+      },
+      "log": "logs/qssm-ctf3m2-03.log"
+    },
+    {
+      "engine": "qssm",
+      "map": "ctf3m2",
+      "run": 4,
+      "warmup": false,
+      "result": {
+        "frames": 1442,
+        "seconds": 0.9,
+        "fps": 1666.0,
+        "line": "1442 frames   0.9 seconds 1666.0 fps"
+      },
+      "elapsed_wall_seconds": 1.3439999999973224,
+      "command": [
+        "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\report-refresh-20261006\\fps-installed\\runs\\qssm\\QSS-M-w64.exe",
+        "-basedir",
+        "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\report-refresh-20261006\\fps-installed\\runs\\qssm",
+        "-nohome",
+        "-condebug",
+        "-window",
+        "-width",
+        "800",
+        "-height",
+        "600",
+        "-nojoy",
+        "-noice",
+        "-listen",
+        "-noudp",
+        "-noquakeimport"
+      ],
+      "config": "vid_width 800\nvid_height 600\nvid_fullscreen 0\nvid_vsync 0\nfov 90\nviewsize 100\nhost_maxfps 0\nsys_throttle -1\ncl_demoreel 0\ncl_discord_presence 0\nr_scale 1\nvid_fsaa 0\necho FPS_BENCH_qssm_ctf3m2_1791317826859839300\nvid_width\nvid_height\nvid_vsync\ntimedemo fps_ctf3m2\n",
+      "startup_evidence": [
+        "Video mode 800x600x24 144Hz 2x scale (24-bit z-buffer, 0x FSAA) initialized",
+        "GL_VENDOR: NVIDIA Corporation",
+        "GL_RENDERER: NVIDIA GeForce RTX 4070/PCIe/SSE2",
+        "GL_VERSION: 4.6.0 NVIDIA 610.88"
+      ],
+      "window_pixels": {
+        "width": 800,
+        "height": 600
+      },
+      "log": "logs/qssm-ctf3m2-04.log"
+    },
+    {
+      "engine": "qssm",
+      "map": "ctf3m2",
+      "run": 5,
+      "warmup": false,
+      "result": {
+        "frames": 1442,
+        "seconds": 0.9,
+        "fps": 1691.4,
+        "line": "1442 frames   0.9 seconds 1691.4 fps"
+      },
+      "elapsed_wall_seconds": 1.3130000000019209,
+      "command": [
+        "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\report-refresh-20261006\\fps-installed\\runs\\qssm\\QSS-M-w64.exe",
+        "-basedir",
+        "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\report-refresh-20261006\\fps-installed\\runs\\qssm",
+        "-nohome",
+        "-condebug",
+        "-window",
+        "-width",
+        "800",
+        "-height",
+        "600",
+        "-nojoy",
+        "-noice",
+        "-listen",
+        "-noudp",
+        "-noquakeimport"
+      ],
+      "config": "vid_width 800\nvid_height 600\nvid_fullscreen 0\nvid_vsync 0\nfov 90\nviewsize 100\nhost_maxfps 0\nsys_throttle -1\ncl_demoreel 0\ncl_discord_presence 0\nr_scale 1\nvid_fsaa 0\necho FPS_BENCH_qssm_ctf3m2_1791317828212199900\nvid_width\nvid_height\nvid_vsync\ntimedemo fps_ctf3m2\n",
+      "startup_evidence": [
+        "Video mode 800x600x24 144Hz 2x scale (24-bit z-buffer, 0x FSAA) initialized",
+        "GL_VENDOR: NVIDIA Corporation",
+        "GL_RENDERER: NVIDIA GeForce RTX 4070/PCIe/SSE2",
+        "GL_VERSION: 4.6.0 NVIDIA 610.88"
+      ],
+      "window_pixels": {
+        "width": 800,
+        "height": 600
+      },
+      "log": "logs/qssm-ctf3m2-05.log"
+    },
+    {
+      "engine": "qssm",
+      "map": "schloss",
+      "run": 0,
+      "warmup": true,
+      "result": {
+        "frames": 1442,
+        "seconds": 1.0,
+        "fps": 1503.8,
+        "line": "1442 frames   1.0 seconds 1503.8 fps"
+      },
+      "elapsed_wall_seconds": 1.4530000000013388,
+      "command": [
+        "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\report-refresh-20261006\\fps-installed\\runs\\qssm\\QSS-M-w64.exe",
+        "-basedir",
+        "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\report-refresh-20261006\\fps-installed\\runs\\qssm",
+        "-nohome",
+        "-condebug",
+        "-window",
+        "-width",
+        "800",
+        "-height",
+        "600",
+        "-nojoy",
+        "-noice",
+        "-listen",
+        "-noudp",
+        "-noquakeimport"
+      ],
+      "config": "vid_width 800\nvid_height 600\nvid_fullscreen 0\nvid_vsync 0\nfov 90\nviewsize 100\nhost_maxfps 0\nsys_throttle -1\ncl_demoreel 0\ncl_discord_presence 0\nr_scale 1\nvid_fsaa 0\necho FPS_BENCH_qssm_schloss_1791317829522944800\nvid_width\nvid_height\nvid_vsync\ntimedemo fps_schloss\n",
+      "startup_evidence": [
+        "Video mode 800x600x24 144Hz 2x scale (24-bit z-buffer, 0x FSAA) initialized",
+        "GL_VENDOR: NVIDIA Corporation",
+        "GL_RENDERER: NVIDIA GeForce RTX 4070/PCIe/SSE2",
+        "GL_VERSION: 4.6.0 NVIDIA 610.88"
+      ],
+      "window_pixels": {
+        "width": 800,
+        "height": 600
+      },
+      "log": "logs/qssm-schloss-warmup.log"
+    },
+    {
+      "engine": "qssm",
+      "map": "schloss",
+      "run": 1,
+      "warmup": false,
+      "result": {
+        "frames": 1442,
+        "seconds": 0.9,
+        "fps": 1534.5,
+        "line": "1442 frames   0.9 seconds 1534.5 fps"
+      },
+      "elapsed_wall_seconds": 1.3909999999959837,
+      "command": [
+        "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\report-refresh-20261006\\fps-installed\\runs\\qssm\\QSS-M-w64.exe",
+        "-basedir",
+        "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\report-refresh-20261006\\fps-installed\\runs\\qssm",
+        "-nohome",
+        "-condebug",
+        "-window",
+        "-width",
+        "800",
+        "-height",
+        "600",
+        "-nojoy",
+        "-noice",
+        "-listen",
+        "-noudp",
+        "-noquakeimport"
+      ],
+      "config": "vid_width 800\nvid_height 600\nvid_fullscreen 0\nvid_vsync 0\nfov 90\nviewsize 100\nhost_maxfps 0\nsys_throttle -1\ncl_demoreel 0\ncl_discord_presence 0\nr_scale 1\nvid_fsaa 0\necho FPS_BENCH_qssm_schloss_1791317830987878700\nvid_width\nvid_height\nvid_vsync\ntimedemo fps_schloss\n",
+      "startup_evidence": [
+        "Video mode 800x600x24 144Hz 2x scale (24-bit z-buffer, 0x FSAA) initialized",
+        "GL_VENDOR: NVIDIA Corporation",
+        "GL_RENDERER: NVIDIA GeForce RTX 4070/PCIe/SSE2",
+        "GL_VERSION: 4.6.0 NVIDIA 610.88"
+      ],
+      "window_pixels": {
+        "width": 800,
+        "height": 600
+      },
+      "log": "logs/qssm-schloss-01.log"
+    },
+    {
+      "engine": "qssm",
+      "map": "schloss",
+      "run": 2,
+      "warmup": false,
+      "result": {
+        "frames": 1442,
+        "seconds": 0.9,
+        "fps": 1570.2,
+        "line": "1442 frames   0.9 seconds 1570.2 fps"
+      },
+      "elapsed_wall_seconds": 1.4059999999954016,
+      "command": [
+        "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\report-refresh-20261006\\fps-installed\\runs\\qssm\\QSS-M-w64.exe",
+        "-basedir",
+        "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\report-refresh-20261006\\fps-installed\\runs\\qssm",
+        "-nohome",
+        "-condebug",
+        "-window",
+        "-width",
+        "800",
+        "-height",
+        "600",
+        "-nojoy",
+        "-noice",
+        "-listen",
+        "-noudp",
+        "-noquakeimport"
+      ],
+      "config": "vid_width 800\nvid_height 600\nvid_fullscreen 0\nvid_vsync 0\nfov 90\nviewsize 100\nhost_maxfps 0\nsys_throttle -1\ncl_demoreel 0\ncl_discord_presence 0\nr_scale 1\nvid_fsaa 0\necho FPS_BENCH_qssm_schloss_1791317832396905500\nvid_width\nvid_height\nvid_vsync\ntimedemo fps_schloss\n",
+      "startup_evidence": [
+        "Video mode 800x600x24 144Hz 2x scale (24-bit z-buffer, 0x FSAA) initialized",
+        "GL_VENDOR: NVIDIA Corporation",
+        "GL_RENDERER: NVIDIA GeForce RTX 4070/PCIe/SSE2",
+        "GL_VERSION: 4.6.0 NVIDIA 610.88"
+      ],
+      "window_pixels": {
+        "width": 800,
+        "height": 600
+      },
+      "log": "logs/qssm-schloss-02.log"
+    },
+    {
+      "engine": "qssm",
+      "map": "schloss",
+      "run": 3,
+      "warmup": false,
+      "result": {
+        "frames": 1442,
+        "seconds": 0.9,
+        "fps": 1543.1,
+        "line": "1442 frames   0.9 seconds 1543.1 fps"
+      },
+      "elapsed_wall_seconds": 1.4060000000026776,
+      "command": [
+        "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\report-refresh-20261006\\fps-installed\\runs\\qssm\\QSS-M-w64.exe",
+        "-basedir",
+        "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\report-refresh-20261006\\fps-installed\\runs\\qssm",
+        "-nohome",
+        "-condebug",
+        "-window",
+        "-width",
+        "800",
+        "-height",
+        "600",
+        "-nojoy",
+        "-noice",
+        "-listen",
+        "-noudp",
+        "-noquakeimport"
+      ],
+      "config": "vid_width 800\nvid_height 600\nvid_fullscreen 0\nvid_vsync 0\nfov 90\nviewsize 100\nhost_maxfps 0\nsys_throttle -1\ncl_demoreel 0\ncl_discord_presence 0\nr_scale 1\nvid_fsaa 0\necho FPS_BENCH_qssm_schloss_1791317833810961900\nvid_width\nvid_height\nvid_vsync\ntimedemo fps_schloss\n",
+      "startup_evidence": [
+        "Video mode 800x600x24 144Hz 2x scale (24-bit z-buffer, 0x FSAA) initialized",
+        "GL_VENDOR: NVIDIA Corporation",
+        "GL_RENDERER: NVIDIA GeForce RTX 4070/PCIe/SSE2",
+        "GL_VERSION: 4.6.0 NVIDIA 610.88"
+      ],
+      "window_pixels": {
+        "width": 800,
+        "height": 600
+      },
+      "log": "logs/qssm-schloss-03.log"
+    },
+    {
+      "engine": "qssm",
+      "map": "schloss",
+      "run": 4,
+      "warmup": false,
+      "result": {
+        "frames": 1442,
+        "seconds": 0.9,
+        "fps": 1519.0,
+        "line": "1442 frames   0.9 seconds 1519.0 fps"
+      },
+      "elapsed_wall_seconds": 1.389999999999418,
+      "command": [
+        "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\report-refresh-20261006\\fps-installed\\runs\\qssm\\QSS-M-w64.exe",
+        "-basedir",
+        "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\report-refresh-20261006\\fps-installed\\runs\\qssm",
+        "-nohome",
+        "-condebug",
+        "-window",
+        "-width",
+        "800",
+        "-height",
+        "600",
+        "-nojoy",
+        "-noice",
+        "-listen",
+        "-noudp",
+        "-noquakeimport"
+      ],
+      "config": "vid_width 800\nvid_height 600\nvid_fullscreen 0\nvid_vsync 0\nfov 90\nviewsize 100\nhost_maxfps 0\nsys_throttle -1\ncl_demoreel 0\ncl_discord_presence 0\nr_scale 1\nvid_fsaa 0\necho FPS_BENCH_qssm_schloss_1791317835228450000\nvid_width\nvid_height\nvid_vsync\ntimedemo fps_schloss\n",
+      "startup_evidence": [
+        "Video mode 800x600x24 144Hz 2x scale (24-bit z-buffer, 0x FSAA) initialized",
+        "GL_VENDOR: NVIDIA Corporation",
+        "GL_RENDERER: NVIDIA GeForce RTX 4070/PCIe/SSE2",
+        "GL_VERSION: 4.6.0 NVIDIA 610.88"
+      ],
+      "window_pixels": {
+        "width": 800,
+        "height": 600
+      },
+      "log": "logs/qssm-schloss-04.log"
+    },
+    {
+      "engine": "qssm",
+      "map": "schloss",
+      "run": 5,
+      "warmup": false,
+      "result": {
+        "frames": 1442,
+        "seconds": 0.9,
+        "fps": 1570.7,
+        "line": "1442 frames   0.9 seconds 1570.7 fps"
+      },
+      "elapsed_wall_seconds": 1.4060000000026776,
+      "command": [
+        "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\report-refresh-20261006\\fps-installed\\runs\\qssm\\QSS-M-w64.exe",
+        "-basedir",
+        "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\report-refresh-20261006\\fps-installed\\runs\\qssm",
+        "-nohome",
+        "-condebug",
+        "-window",
+        "-width",
+        "800",
+        "-height",
+        "600",
+        "-nojoy",
+        "-noice",
+        "-listen",
+        "-noudp",
+        "-noquakeimport"
+      ],
+      "config": "vid_width 800\nvid_height 600\nvid_fullscreen 0\nvid_vsync 0\nfov 90\nviewsize 100\nhost_maxfps 0\nsys_throttle -1\ncl_demoreel 0\ncl_discord_presence 0\nr_scale 1\nvid_fsaa 0\necho FPS_BENCH_qssm_schloss_1791317836631449200\nvid_width\nvid_height\nvid_vsync\ntimedemo fps_schloss\n",
+      "startup_evidence": [
+        "Video mode 800x600x24 144Hz 2x scale (24-bit z-buffer, 0x FSAA) initialized",
+        "GL_VENDOR: NVIDIA Corporation",
+        "GL_RENDERER: NVIDIA GeForce RTX 4070/PCIe/SSE2",
+        "GL_VERSION: 4.6.0 NVIDIA 610.88"
+      ],
+      "window_pixels": {
+        "width": 800,
+        "height": 600
+      },
+      "log": "logs/qssm-schloss-05.log"
+    },
+    {
+      "engine": "qssm",
+      "map": "e1m2",
+      "run": 0,
+      "warmup": true,
+      "result": {
+        "frames": 1442,
+        "seconds": 0.9,
+        "fps": 1672.7,
+        "line": "1442 frames   0.9 seconds 1672.7 fps"
+      },
+      "elapsed_wall_seconds": 1.3130000000019209,
+      "command": [
+        "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\report-refresh-20261006\\fps-installed\\runs\\qssm\\QSS-M-w64.exe",
+        "-basedir",
+        "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\report-refresh-20261006\\fps-installed\\runs\\qssm",
+        "-nohome",
+        "-condebug",
+        "-window",
+        "-width",
+        "800",
+        "-height",
+        "600",
+        "-nojoy",
+        "-noice",
+        "-listen",
+        "-noudp",
+        "-noquakeimport"
+      ],
+      "config": "vid_width 800\nvid_height 600\nvid_fullscreen 0\nvid_vsync 0\nfov 90\nviewsize 100\nhost_maxfps 0\nsys_throttle -1\ncl_demoreel 0\ncl_discord_presence 0\nr_scale 1\nvid_fsaa 0\necho FPS_BENCH_qssm_e1m2_1791317838042773200\nvid_width\nvid_height\nvid_vsync\ntimedemo fps_e1m2\n",
+      "startup_evidence": [
+        "Video mode 800x600x24 144Hz 2x scale (24-bit z-buffer, 0x FSAA) initialized",
+        "GL_VENDOR: NVIDIA Corporation",
+        "GL_RENDERER: NVIDIA GeForce RTX 4070/PCIe/SSE2",
+        "GL_VERSION: 4.6.0 NVIDIA 610.88"
+      ],
+      "window_pixels": {
+        "width": 800,
+        "height": 600
+      },
+      "log": "logs/qssm-e1m2-warmup.log"
+    },
+    {
+      "engine": "qssm",
+      "map": "e1m2",
+      "run": 1,
+      "warmup": false,
+      "result": {
+        "frames": 1442,
+        "seconds": 0.9,
+        "fps": 1695.2,
+        "line": "1442 frames   0.9 seconds 1695.2 fps"
+      },
+      "elapsed_wall_seconds": 1.2969999999986612,
+      "command": [
+        "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\report-refresh-20261006\\fps-installed\\runs\\qssm\\QSS-M-w64.exe",
+        "-basedir",
+        "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\report-refresh-20261006\\fps-installed\\runs\\qssm",
+        "-nohome",
+        "-condebug",
+        "-window",
+        "-width",
+        "800",
+        "-height",
+        "600",
+        "-nojoy",
+        "-noice",
+        "-listen",
+        "-noudp",
+        "-noquakeimport"
+      ],
+      "config": "vid_width 800\nvid_height 600\nvid_fullscreen 0\nvid_vsync 0\nfov 90\nviewsize 100\nhost_maxfps 0\nsys_throttle -1\ncl_demoreel 0\ncl_discord_presence 0\nr_scale 1\nvid_fsaa 0\necho FPS_BENCH_qssm_e1m2_1791317839358424400\nvid_width\nvid_height\nvid_vsync\ntimedemo fps_e1m2\n",
+      "startup_evidence": [
+        "Video mode 800x600x24 144Hz 2x scale (24-bit z-buffer, 0x FSAA) initialized",
+        "GL_VENDOR: NVIDIA Corporation",
+        "GL_RENDERER: NVIDIA GeForce RTX 4070/PCIe/SSE2",
+        "GL_VERSION: 4.6.0 NVIDIA 610.88"
+      ],
+      "window_pixels": {
+        "width": 800,
+        "height": 600
+      },
+      "log": "logs/qssm-e1m2-01.log"
+    },
+    {
+      "engine": "qssm",
+      "map": "e1m2",
+      "run": 2,
+      "warmup": false,
+      "result": {
+        "frames": 1442,
+        "seconds": 0.9,
+        "fps": 1688.3,
+        "line": "1442 frames   0.9 seconds 1688.3 fps"
+      },
+      "elapsed_wall_seconds": 1.2970000000059372,
+      "command": [
+        "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\report-refresh-20261006\\fps-installed\\runs\\qssm\\QSS-M-w64.exe",
+        "-basedir",
+        "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\report-refresh-20261006\\fps-installed\\runs\\qssm",
+        "-nohome",
+        "-condebug",
+        "-window",
+        "-width",
+        "800",
+        "-height",
+        "600",
+        "-nojoy",
+        "-noice",
+        "-listen",
+        "-noudp",
+        "-noquakeimport"
+      ],
+      "config": "vid_width 800\nvid_height 600\nvid_fullscreen 0\nvid_vsync 0\nfov 90\nviewsize 100\nhost_maxfps 0\nsys_throttle -1\ncl_demoreel 0\ncl_discord_presence 0\nr_scale 1\nvid_fsaa 0\necho FPS_BENCH_qssm_e1m2_1791317840677950800\nvid_width\nvid_height\nvid_vsync\ntimedemo fps_e1m2\n",
+      "startup_evidence": [
+        "Video mode 800x600x24 144Hz 2x scale (24-bit z-buffer, 0x FSAA) initialized",
+        "GL_VENDOR: NVIDIA Corporation",
+        "GL_RENDERER: NVIDIA GeForce RTX 4070/PCIe/SSE2",
+        "GL_VERSION: 4.6.0 NVIDIA 610.88"
+      ],
+      "window_pixels": {
+        "width": 800,
+        "height": 600
+      },
+      "log": "logs/qssm-e1m2-02.log"
+    },
+    {
+      "engine": "qssm",
+      "map": "e1m2",
+      "run": 3,
+      "warmup": false,
+      "result": {
+        "frames": 1442,
+        "seconds": 0.8,
+        "fps": 1704.5,
+        "line": "1442 frames   0.8 seconds 1704.5 fps"
+      },
+      "elapsed_wall_seconds": 1.312999999994645,
+      "command": [
+        "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\report-refresh-20261006\\fps-installed\\runs\\qssm\\QSS-M-w64.exe",
+        "-basedir",
+        "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\report-refresh-20261006\\fps-installed\\runs\\qssm",
+        "-nohome",
+        "-condebug",
+        "-window",
+        "-width",
+        "800",
+        "-height",
+        "600",
+        "-nojoy",
+        "-noice",
+        "-listen",
+        "-noudp",
+        "-noquakeimport"
+      ],
+      "config": "vid_width 800\nvid_height 600\nvid_fullscreen 0\nvid_vsync 0\nfov 90\nviewsize 100\nhost_maxfps 0\nsys_throttle -1\ncl_demoreel 0\ncl_discord_presence 0\nr_scale 1\nvid_fsaa 0\necho FPS_BENCH_qssm_e1m2_1791317841985681200\nvid_width\nvid_height\nvid_vsync\ntimedemo fps_e1m2\n",
+      "startup_evidence": [
+        "Video mode 800x600x24 144Hz 2x scale (24-bit z-buffer, 0x FSAA) initialized",
+        "GL_VENDOR: NVIDIA Corporation",
+        "GL_RENDERER: NVIDIA GeForce RTX 4070/PCIe/SSE2",
+        "GL_VERSION: 4.6.0 NVIDIA 610.88"
+      ],
+      "window_pixels": {
+        "width": 800,
+        "height": 600
+      },
+      "log": "logs/qssm-e1m2-03.log"
+    },
+    {
+      "engine": "qssm",
+      "map": "e1m2",
+      "run": 4,
+      "warmup": false,
+      "result": {
+        "frames": 1442,
+        "seconds": 0.9,
+        "fps": 1675.2,
+        "line": "1442 frames   0.9 seconds 1675.2 fps"
+      },
+      "elapsed_wall_seconds": 1.3590000000040163,
+      "command": [
+        "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\report-refresh-20261006\\fps-installed\\runs\\qssm\\QSS-M-w64.exe",
+        "-basedir",
+        "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\report-refresh-20261006\\fps-installed\\runs\\qssm",
+        "-nohome",
+        "-condebug",
+        "-window",
+        "-width",
+        "800",
+        "-height",
+        "600",
+        "-nojoy",
+        "-noice",
+        "-listen",
+        "-noudp",
+        "-noquakeimport"
+      ],
+      "config": "vid_width 800\nvid_height 600\nvid_fullscreen 0\nvid_vsync 0\nfov 90\nviewsize 100\nhost_maxfps 0\nsys_throttle -1\ncl_demoreel 0\ncl_discord_presence 0\nr_scale 1\nvid_fsaa 0\necho FPS_BENCH_qssm_e1m2_1791317843309732900\nvid_width\nvid_height\nvid_vsync\ntimedemo fps_e1m2\n",
+      "startup_evidence": [
+        "Video mode 800x600x24 144Hz 2x scale (24-bit z-buffer, 0x FSAA) initialized",
+        "GL_VENDOR: NVIDIA Corporation",
+        "GL_RENDERER: NVIDIA GeForce RTX 4070/PCIe/SSE2",
+        "GL_VERSION: 4.6.0 NVIDIA 610.88"
+      ],
+      "window_pixels": {
+        "width": 800,
+        "height": 600
+      },
+      "log": "logs/qssm-e1m2-04.log"
+    },
+    {
+      "engine": "qssm",
+      "map": "e1m2",
+      "run": 5,
+      "warmup": false,
+      "result": {
+        "frames": 1442,
+        "seconds": 0.9,
+        "fps": 1591.5,
+        "line": "1442 frames   0.9 seconds 1591.5 fps"
+      },
+      "elapsed_wall_seconds": 1.4060000000026776,
+      "command": [
+        "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\report-refresh-20261006\\fps-installed\\runs\\qssm\\QSS-M-w64.exe",
+        "-basedir",
+        "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\report-refresh-20261006\\fps-installed\\runs\\qssm",
+        "-nohome",
+        "-condebug",
+        "-window",
+        "-width",
+        "800",
+        "-height",
+        "600",
+        "-nojoy",
+        "-noice",
+        "-listen",
+        "-noudp",
+        "-noquakeimport"
+      ],
+      "config": "vid_width 800\nvid_height 600\nvid_fullscreen 0\nvid_vsync 0\nfov 90\nviewsize 100\nhost_maxfps 0\nsys_throttle -1\ncl_demoreel 0\ncl_discord_presence 0\nr_scale 1\nvid_fsaa 0\necho FPS_BENCH_qssm_e1m2_1791317844673145500\nvid_width\nvid_height\nvid_vsync\ntimedemo fps_e1m2\n",
+      "startup_evidence": [
+        "Video mode 800x600x24 144Hz 2x scale (24-bit z-buffer, 0x FSAA) initialized",
+        "GL_VENDOR: NVIDIA Corporation",
+        "GL_RENDERER: NVIDIA GeForce RTX 4070/PCIe/SSE2",
+        "GL_VERSION: 4.6.0 NVIDIA 610.88"
+      ],
+      "window_pixels": {
+        "width": 800,
+        "height": 600
+      },
+      "log": "logs/qssm-e1m2-05.log"
+    },
+    {
+      "engine": "qssm",
+      "map": "dm2",
+      "run": 0,
+      "warmup": true,
+      "result": {
+        "frames": 1442,
+        "seconds": 0.8,
+        "fps": 1857.6,
+        "line": "1442 frames   0.8 seconds 1857.6 fps"
+      },
+      "elapsed_wall_seconds": 1.25,
+      "command": [
+        "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\report-refresh-20261006\\fps-installed\\runs\\qssm\\QSS-M-w64.exe",
+        "-basedir",
+        "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\report-refresh-20261006\\fps-installed\\runs\\qssm",
+        "-nohome",
+        "-condebug",
+        "-window",
+        "-width",
+        "800",
+        "-height",
+        "600",
+        "-nojoy",
+        "-noice",
+        "-listen",
+        "-noudp",
+        "-noquakeimport"
+      ],
+      "config": "vid_width 800\nvid_height 600\nvid_fullscreen 0\nvid_vsync 0\nfov 90\nviewsize 100\nhost_maxfps 0\nsys_throttle -1\ncl_demoreel 0\ncl_discord_presence 0\nr_scale 1\nvid_fsaa 0\necho FPS_BENCH_qssm_dm2_1791317846097803900\nvid_width\nvid_height\nvid_vsync\ntimedemo fps_dm2\n",
+      "startup_evidence": [
+        "Video mode 800x600x24 144Hz 2x scale (24-bit z-buffer, 0x FSAA) initialized",
+        "GL_VENDOR: NVIDIA Corporation",
+        "GL_RENDERER: NVIDIA GeForce RTX 4070/PCIe/SSE2",
+        "GL_VERSION: 4.6.0 NVIDIA 610.88"
+      ],
+      "window_pixels": {
+        "width": 800,
+        "height": 600
+      },
+      "log": "logs/qssm-dm2-warmup.log"
+    },
+    {
+      "engine": "qssm",
+      "map": "dm2",
+      "run": 1,
+      "warmup": false,
+      "result": {
+        "frames": 1442,
+        "seconds": 0.8,
+        "fps": 1865.7,
+        "line": "1442 frames   0.8 seconds 1865.7 fps"
+      },
+      "elapsed_wall_seconds": 1.25,
+      "command": [
+        "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\report-refresh-20261006\\fps-installed\\runs\\qssm\\QSS-M-w64.exe",
+        "-basedir",
+        "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\report-refresh-20261006\\fps-installed\\runs\\qssm",
+        "-nohome",
+        "-condebug",
+        "-window",
+        "-width",
+        "800",
+        "-height",
+        "600",
+        "-nojoy",
+        "-noice",
+        "-listen",
+        "-noudp",
+        "-noquakeimport"
+      ],
+      "config": "vid_width 800\nvid_height 600\nvid_fullscreen 0\nvid_vsync 0\nfov 90\nviewsize 100\nhost_maxfps 0\nsys_throttle -1\ncl_demoreel 0\ncl_discord_presence 0\nr_scale 1\nvid_fsaa 0\necho FPS_BENCH_qssm_dm2_1791317847352783800\nvid_width\nvid_height\nvid_vsync\ntimedemo fps_dm2\n",
+      "startup_evidence": [
+        "Video mode 800x600x24 144Hz 2x scale (24-bit z-buffer, 0x FSAA) initialized",
+        "GL_VENDOR: NVIDIA Corporation",
+        "GL_RENDERER: NVIDIA GeForce RTX 4070/PCIe/SSE2",
+        "GL_VERSION: 4.6.0 NVIDIA 610.88"
+      ],
+      "window_pixels": {
+        "width": 800,
+        "height": 600
+      },
+      "log": "logs/qssm-dm2-01.log"
+    },
+    {
+      "engine": "qssm",
+      "map": "dm2",
+      "run": 2,
+      "warmup": false,
+      "result": {
+        "frames": 1442,
+        "seconds": 0.8,
+        "fps": 1808.4,
+        "line": "1442 frames   0.8 seconds 1808.4 fps"
+      },
+      "elapsed_wall_seconds": 1.2969999999986612,
+      "command": [
+        "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\report-refresh-20261006\\fps-installed\\runs\\qssm\\QSS-M-w64.exe",
+        "-basedir",
+        "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\report-refresh-20261006\\fps-installed\\runs\\qssm",
+        "-nohome",
+        "-condebug",
+        "-window",
+        "-width",
+        "800",
+        "-height",
+        "600",
+        "-nojoy",
+        "-noice",
+        "-listen",
+        "-noudp",
+        "-noquakeimport"
+      ],
+      "config": "vid_width 800\nvid_height 600\nvid_fullscreen 0\nvid_vsync 0\nfov 90\nviewsize 100\nhost_maxfps 0\nsys_throttle -1\ncl_demoreel 0\ncl_discord_presence 0\nr_scale 1\nvid_fsaa 0\necho FPS_BENCH_qssm_dm2_1791317848602884000\nvid_width\nvid_height\nvid_vsync\ntimedemo fps_dm2\n",
+      "startup_evidence": [
+        "Video mode 800x600x24 144Hz 2x scale (24-bit z-buffer, 0x FSAA) initialized",
+        "GL_VENDOR: NVIDIA Corporation",
+        "GL_RENDERER: NVIDIA GeForce RTX 4070/PCIe/SSE2",
+        "GL_VERSION: 4.6.0 NVIDIA 610.88"
+      ],
+      "window_pixels": {
+        "width": 800,
+        "height": 600
+      },
+      "log": "logs/qssm-dm2-02.log"
+    },
+    {
+      "engine": "qssm",
+      "map": "dm2",
+      "run": 3,
+      "warmup": false,
+      "result": {
+        "frames": 1442,
+        "seconds": 0.8,
+        "fps": 1849.6,
+        "line": "1442 frames   0.8 seconds 1849.6 fps"
+      },
+      "elapsed_wall_seconds": 1.235000000000582,
+      "command": [
+        "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\report-refresh-20261006\\fps-installed\\runs\\qssm\\QSS-M-w64.exe",
+        "-basedir",
+        "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\report-refresh-20261006\\fps-installed\\runs\\qssm",
+        "-nohome",
+        "-condebug",
+        "-window",
+        "-width",
+        "800",
+        "-height",
+        "600",
+        "-nojoy",
+        "-noice",
+        "-listen",
+        "-noudp",
+        "-noquakeimport"
+      ],
+      "config": "vid_width 800\nvid_height 600\nvid_fullscreen 0\nvid_vsync 0\nfov 90\nviewsize 100\nhost_maxfps 0\nsys_throttle -1\ncl_demoreel 0\ncl_discord_presence 0\nr_scale 1\nvid_fsaa 0\necho FPS_BENCH_qssm_dm2_1791317849912202700\nvid_width\nvid_height\nvid_vsync\ntimedemo fps_dm2\n",
+      "startup_evidence": [
+        "Video mode 800x600x24 144Hz 2x scale (24-bit z-buffer, 0x FSAA) initialized",
+        "GL_VENDOR: NVIDIA Corporation",
+        "GL_RENDERER: NVIDIA GeForce RTX 4070/PCIe/SSE2",
+        "GL_VERSION: 4.6.0 NVIDIA 610.88"
+      ],
+      "window_pixels": {
+        "width": 800,
+        "height": 600
+      },
+      "log": "logs/qssm-dm2-03.log"
+    },
+    {
+      "engine": "qssm",
+      "map": "dm2",
+      "run": 4,
+      "warmup": false,
+      "result": {
+        "frames": 1442,
+        "seconds": 0.8,
+        "fps": 1891.6,
+        "line": "1442 frames   0.8 seconds 1891.6 fps"
+      },
+      "elapsed_wall_seconds": 1.235000000000582,
+      "command": [
+        "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\report-refresh-20261006\\fps-installed\\runs\\qssm\\QSS-M-w64.exe",
+        "-basedir",
+        "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\report-refresh-20261006\\fps-installed\\runs\\qssm",
+        "-nohome",
+        "-condebug",
+        "-window",
+        "-width",
+        "800",
+        "-height",
+        "600",
+        "-nojoy",
+        "-noice",
+        "-listen",
+        "-noudp",
+        "-noquakeimport"
+      ],
+      "config": "vid_width 800\nvid_height 600\nvid_fullscreen 0\nvid_vsync 0\nfov 90\nviewsize 100\nhost_maxfps 0\nsys_throttle -1\ncl_demoreel 0\ncl_discord_presence 0\nr_scale 1\nvid_fsaa 0\necho FPS_BENCH_qssm_dm2_1791317851161977600\nvid_width\nvid_height\nvid_vsync\ntimedemo fps_dm2\n",
+      "startup_evidence": [
+        "Video mode 800x600x24 144Hz 2x scale (24-bit z-buffer, 0x FSAA) initialized",
+        "GL_VENDOR: NVIDIA Corporation",
+        "GL_RENDERER: NVIDIA GeForce RTX 4070/PCIe/SSE2",
+        "GL_VERSION: 4.6.0 NVIDIA 610.88"
+      ],
+      "window_pixels": {
+        "width": 800,
+        "height": 600
+      },
+      "log": "logs/qssm-dm2-04.log"
+    },
+    {
+      "engine": "qssm",
+      "map": "dm2",
+      "run": 5,
+      "warmup": false,
+      "result": {
+        "frames": 1442,
+        "seconds": 0.8,
+        "fps": 1842.8,
+        "line": "1442 frames   0.8 seconds 1842.8 fps"
+      },
+      "elapsed_wall_seconds": 1.235000000000582,
+      "command": [
+        "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\report-refresh-20261006\\fps-installed\\runs\\qssm\\QSS-M-w64.exe",
+        "-basedir",
+        "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\report-refresh-20261006\\fps-installed\\runs\\qssm",
+        "-nohome",
+        "-condebug",
+        "-window",
+        "-width",
+        "800",
+        "-height",
+        "600",
+        "-nojoy",
+        "-noice",
+        "-listen",
+        "-noudp",
+        "-noquakeimport"
+      ],
+      "config": "vid_width 800\nvid_height 600\nvid_fullscreen 0\nvid_vsync 0\nfov 90\nviewsize 100\nhost_maxfps 0\nsys_throttle -1\ncl_demoreel 0\ncl_discord_presence 0\nr_scale 1\nvid_fsaa 0\necho FPS_BENCH_qssm_dm2_1791317852412609300\nvid_width\nvid_height\nvid_vsync\ntimedemo fps_dm2\n",
+      "startup_evidence": [
+        "Video mode 800x600x24 144Hz 2x scale (24-bit z-buffer, 0x FSAA) initialized",
+        "GL_VENDOR: NVIDIA Corporation",
+        "GL_RENDERER: NVIDIA GeForce RTX 4070/PCIe/SSE2",
+        "GL_VERSION: 4.6.0 NVIDIA 610.88"
+      ],
+      "window_pixels": {
+        "width": 800,
+        "height": 600
+      },
+      "log": "logs/qssm-dm2-05.log"
+    },
+    {
+      "engine": "qssm",
+      "map": "ctf2m8",
+      "run": 0,
+      "warmup": true,
+      "result": {
+        "frames": 1442,
+        "seconds": 0.8,
+        "fps": 1796.8,
+        "line": "1442 frames   0.8 seconds 1796.8 fps"
+      },
+      "elapsed_wall_seconds": 1.235000000000582,
+      "command": [
+        "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\report-refresh-20261006\\fps-installed\\runs\\qssm\\QSS-M-w64.exe",
+        "-basedir",
+        "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\report-refresh-20261006\\fps-installed\\runs\\qssm",
+        "-nohome",
+        "-condebug",
+        "-window",
+        "-width",
+        "800",
+        "-height",
+        "600",
+        "-nojoy",
+        "-noice",
+        "-listen",
+        "-noudp",
+        "-noquakeimport"
+      ],
+      "config": "vid_width 800\nvid_height 600\nvid_fullscreen 0\nvid_vsync 0\nfov 90\nviewsize 100\nhost_maxfps 0\nsys_throttle -1\ncl_demoreel 0\ncl_discord_presence 0\nr_scale 1\nvid_fsaa 0\necho FPS_BENCH_qssm_ctf2m8_1791317853655832200\nvid_width\nvid_height\nvid_vsync\ntimedemo fps_ctf2m8\n",
+      "startup_evidence": [
+        "Video mode 800x600x24 144Hz 2x scale (24-bit z-buffer, 0x FSAA) initialized",
+        "GL_VENDOR: NVIDIA Corporation",
+        "GL_RENDERER: NVIDIA GeForce RTX 4070/PCIe/SSE2",
+        "GL_VERSION: 4.6.0 NVIDIA 610.88"
+      ],
+      "window_pixels": {
+        "width": 800,
+        "height": 600
+      },
+      "log": "logs/qssm-ctf2m8-warmup.log"
+    },
+    {
+      "engine": "qssm",
+      "map": "ctf2m8",
+      "run": 1,
+      "warmup": false,
+      "result": {
+        "frames": 1442,
+        "seconds": 0.8,
+        "fps": 1772.8,
+        "line": "1442 frames   0.8 seconds 1772.8 fps"
+      },
+      "elapsed_wall_seconds": 1.2819999999992433,
+      "command": [
+        "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\report-refresh-20261006\\fps-installed\\runs\\qssm\\QSS-M-w64.exe",
+        "-basedir",
+        "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\report-refresh-20261006\\fps-installed\\runs\\qssm",
+        "-nohome",
+        "-condebug",
+        "-window",
+        "-width",
+        "800",
+        "-height",
+        "600",
+        "-nojoy",
+        "-noice",
+        "-listen",
+        "-noudp",
+        "-noquakeimport"
+      ],
+      "config": "vid_width 800\nvid_height 600\nvid_fullscreen 0\nvid_vsync 0\nfov 90\nviewsize 100\nhost_maxfps 0\nsys_throttle -1\ncl_demoreel 0\ncl_discord_presence 0\nr_scale 1\nvid_fsaa 0\necho FPS_BENCH_qssm_ctf2m8_1791317854908925200\nvid_width\nvid_height\nvid_vsync\ntimedemo fps_ctf2m8\n",
+      "startup_evidence": [
+        "Video mode 800x600x24 144Hz 2x scale (24-bit z-buffer, 0x FSAA) initialized",
+        "GL_VENDOR: NVIDIA Corporation",
+        "GL_RENDERER: NVIDIA GeForce RTX 4070/PCIe/SSE2",
+        "GL_VERSION: 4.6.0 NVIDIA 610.88"
+      ],
+      "window_pixels": {
+        "width": 800,
+        "height": 600
+      },
+      "log": "logs/qssm-ctf2m8-01.log"
+    },
+    {
+      "engine": "qssm",
+      "map": "ctf2m8",
+      "run": 2,
+      "warmup": false,
+      "result": {
+        "frames": 1442,
+        "seconds": 0.8,
+        "fps": 1759.1,
+        "line": "1442 frames   0.8 seconds 1759.1 fps"
+      },
+      "elapsed_wall_seconds": 1.2810000000026776,
+      "command": [
+        "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\report-refresh-20261006\\fps-installed\\runs\\qssm\\QSS-M-w64.exe",
+        "-basedir",
+        "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\report-refresh-20261006\\fps-installed\\runs\\qssm",
+        "-nohome",
+        "-condebug",
+        "-window",
+        "-width",
+        "800",
+        "-height",
+        "600",
+        "-nojoy",
+        "-noice",
+        "-listen",
+        "-noudp",
+        "-noquakeimport"
+      ],
+      "config": "vid_width 800\nvid_height 600\nvid_fullscreen 0\nvid_vsync 0\nfov 90\nviewsize 100\nhost_maxfps 0\nsys_throttle -1\ncl_demoreel 0\ncl_discord_presence 0\nr_scale 1\nvid_fsaa 0\necho FPS_BENCH_qssm_ctf2m8_1791317856207299400\nvid_width\nvid_height\nvid_vsync\ntimedemo fps_ctf2m8\n",
+      "startup_evidence": [
+        "Video mode 800x600x24 144Hz 2x scale (24-bit z-buffer, 0x FSAA) initialized",
+        "GL_VENDOR: NVIDIA Corporation",
+        "GL_RENDERER: NVIDIA GeForce RTX 4070/PCIe/SSE2",
+        "GL_VERSION: 4.6.0 NVIDIA 610.88"
+      ],
+      "window_pixels": {
+        "width": 800,
+        "height": 600
+      },
+      "log": "logs/qssm-ctf2m8-02.log"
+    },
+    {
+      "engine": "qssm",
+      "map": "ctf2m8",
+      "run": 3,
+      "warmup": false,
+      "result": {
+        "frames": 1442,
+        "seconds": 0.8,
+        "fps": 1784.4,
+        "line": "1442 frames   0.8 seconds 1784.4 fps"
+      },
+      "elapsed_wall_seconds": 1.2810000000026776,
+      "command": [
+        "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\report-refresh-20261006\\fps-installed\\runs\\qssm\\QSS-M-w64.exe",
+        "-basedir",
+        "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\report-refresh-20261006\\fps-installed\\runs\\qssm",
+        "-nohome",
+        "-condebug",
+        "-window",
+        "-width",
+        "800",
+        "-height",
+        "600",
+        "-nojoy",
+        "-noice",
+        "-listen",
+        "-noudp",
+        "-noquakeimport"
+      ],
+      "config": "vid_width 800\nvid_height 600\nvid_fullscreen 0\nvid_vsync 0\nfov 90\nviewsize 100\nhost_maxfps 0\nsys_throttle -1\ncl_demoreel 0\ncl_discord_presence 0\nr_scale 1\nvid_fsaa 0\necho FPS_BENCH_qssm_ctf2m8_1791317857506497500\nvid_width\nvid_height\nvid_vsync\ntimedemo fps_ctf2m8\n",
+      "startup_evidence": [
+        "Video mode 800x600x24 144Hz 2x scale (24-bit z-buffer, 0x FSAA) initialized",
+        "GL_VENDOR: NVIDIA Corporation",
+        "GL_RENDERER: NVIDIA GeForce RTX 4070/PCIe/SSE2",
+        "GL_VERSION: 4.6.0 NVIDIA 610.88"
+      ],
+      "window_pixels": {
+        "width": 800,
+        "height": 600
+      },
+      "log": "logs/qssm-ctf2m8-03.log"
+    },
+    {
+      "engine": "qssm",
+      "map": "ctf2m8",
+      "run": 4,
+      "warmup": false,
+      "result": {
+        "frames": 1442,
+        "seconds": 0.8,
+        "fps": 1824.2,
+        "line": "1442 frames   0.8 seconds 1824.2 fps"
+      },
+      "elapsed_wall_seconds": 1.25,
+      "command": [
+        "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\report-refresh-20261006\\fps-installed\\runs\\qssm\\QSS-M-w64.exe",
+        "-basedir",
+        "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\report-refresh-20261006\\fps-installed\\runs\\qssm",
+        "-nohome",
+        "-condebug",
+        "-window",
+        "-width",
+        "800",
+        "-height",
+        "600",
+        "-nojoy",
+        "-noice",
+        "-listen",
+        "-noudp",
+        "-noquakeimport"
+      ],
+      "config": "vid_width 800\nvid_height 600\nvid_fullscreen 0\nvid_vsync 0\nfov 90\nviewsize 100\nhost_maxfps 0\nsys_throttle -1\ncl_demoreel 0\ncl_discord_presence 0\nr_scale 1\nvid_fsaa 0\necho FPS_BENCH_qssm_ctf2m8_1791317858808077900\nvid_width\nvid_height\nvid_vsync\ntimedemo fps_ctf2m8\n",
+      "startup_evidence": [
+        "Video mode 800x600x24 144Hz 2x scale (24-bit z-buffer, 0x FSAA) initialized",
+        "GL_VENDOR: NVIDIA Corporation",
+        "GL_RENDERER: NVIDIA GeForce RTX 4070/PCIe/SSE2",
+        "GL_VERSION: 4.6.0 NVIDIA 610.88"
+      ],
+      "window_pixels": {
+        "width": 800,
+        "height": 600
+      },
+      "log": "logs/qssm-ctf2m8-04.log"
+    },
+    {
+      "engine": "qssm",
+      "map": "ctf2m8",
+      "run": 5,
+      "warmup": false,
+      "result": {
+        "frames": 1442,
+        "seconds": 0.8,
+        "fps": 1776.7,
+        "line": "1442 frames   0.8 seconds 1776.7 fps"
+      },
+      "elapsed_wall_seconds": 1.2810000000026776,
+      "command": [
+        "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\report-refresh-20261006\\fps-installed\\runs\\qssm\\QSS-M-w64.exe",
+        "-basedir",
+        "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\report-refresh-20261006\\fps-installed\\runs\\qssm",
+        "-nohome",
+        "-condebug",
+        "-window",
+        "-width",
+        "800",
+        "-height",
+        "600",
+        "-nojoy",
+        "-noice",
+        "-listen",
+        "-noudp",
+        "-noquakeimport"
+      ],
+      "config": "vid_width 800\nvid_height 600\nvid_fullscreen 0\nvid_vsync 0\nfov 90\nviewsize 100\nhost_maxfps 0\nsys_throttle -1\ncl_demoreel 0\ncl_discord_presence 0\nr_scale 1\nvid_fsaa 0\necho FPS_BENCH_qssm_ctf2m8_1791317860062449600\nvid_width\nvid_height\nvid_vsync\ntimedemo fps_ctf2m8\n",
+      "startup_evidence": [
+        "Video mode 800x600x24 144Hz 2x scale (24-bit z-buffer, 0x FSAA) initialized",
+        "GL_VENDOR: NVIDIA Corporation",
+        "GL_RENDERER: NVIDIA GeForce RTX 4070/PCIe/SSE2",
+        "GL_VERSION: 4.6.0 NVIDIA 610.88"
+      ],
+      "window_pixels": {
+        "width": 800,
+        "height": 600
+      },
+      "log": "logs/qssm-ctf2m8-05.log"
+    }
+  ]
+}

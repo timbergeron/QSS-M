@@ -1,0 +1,344 @@
+LOG started on: 10/06/2026 13:43:37 
+
+Using add-on server "https://kexquake.s3.amazonaws.com"
+Playing registered version.
+Using renderer/network isolation.
+Console initialized.
+WIPX_OpenSocket: Address family not supported by protocol family
+WIPX_Init: Unable to open control socket, IPX disabled
+Server using protocol 999 (RMQ)
+Exe: 10:28:01 Aug 11 2026 (Windows 64-bit)
+384.0 megabyte heap
+
+Video initialization
+Video mode: 800 x 600 24bit Z24 S8 144Hz
+GL_VENDOR:   NVIDIA Corporation
+GL_RENDERER: NVIDIA GeForce RTX 4070/PCIe/SSE2
+GL_VERSION:  4.3.0 NVIDIA 610.88
+FOUND: EXT_texture_filter_anisotropic
+FOUND: ARB_buffer_storage
+FOUND: ARB_multi_bind
+FOUND: ARB_bindless_texture
+FOUND: ARB_shader_draw_parameters
+FOUND: ARB_clip_control
+
+Sound Initialization
+SDL audio spec  : 44100 Hz, 1024 samples, 2 channels
+SDL audio driver: wasapi - Speakers (Logitech G432 Gaming Headset), 65536 bytes buffer
+Audio: 16 bit, stereo, 44100 Hz
+
+Language initialization
+Loaded 1 strings from 'localization/loc_english.txt'
+
+========= Quake Initialized =========
+
+
+Add-on server status:
+ 29 add-ons available for download
+  0 add-ons already installed
+
+execing quake.rc
+execing default.cfg
+execing fpsbench.cfg
+Unknown command "scr_autoid"
+REPEAT_BEGIN 
+PASS_0 
+Playing demo from ctfmatch.dem.
+
+----------------------------------------
+
+Red Alert - By EG
+Using protocol 15
+"timelimit" changed to "20"
+host:    Denver CTF - Omi's love shack
+version: ManQuake 1.00 
+tcp/ip:  0.0.0.0
+map:     ctf3m2
+players: 7 active (16 max)
+
+#1  deepfriednewbie   -99   1:04:59
+   136.37.112.xxx
+#2  infin               0   0:33:16
+   135.23.248.xxx
+#3  wolff               0   0:40:33
+   174.58.50.xxx
+#4  player              0   0:30:51
+   76.176.6.xxx
+#5  woods            〚  0〛  0:00:39
+   98.145.119.xxx
+#6  moof                0   0:32:58
+   75.172.4.xxx
+#7  freekill            0   0:30:05
+   173.91.56.xxx
+Client ping times:
+  15 deepfriednewbie
+  59 infin
+  62 wolff
+  43 player
+  51 woods
+  35 moof
+  79 freekill
+(woods): our quad
+(woods): our quad
+(woods): our quad
+(woods): our quad
+(woods): our quad
+Client ping times:
+  12 deepfriednewbie
+  67 infin
+  64 wolff
+  46 player
+  57 woods
+  39 moof
+  79 freekill
+woods got the BLUE FLAG!
+moof got the RED FLAG!
+Client ping times:
+  12 deepfriednewbie
+  54 infin
+  62 wolff
+  45 player
+  54 woods
+  39 moof
+  82 freekill
+Client ping times:
+  12 deepfriednewbie
+  59 infin
+  62 wolff
+  43 player
+  60 woods
+  39 moof
+  82 freekill
+infin gets lead poisoned by woods's shotgun
+You get the Double-barrelled Shotgun, 52 shells
+Client ping times:
+  14 deepfriednewbie
+  51 infin
+  62 wolff
+  45 player
+  53 woods
+  39 moof
+  79 freekill
+wolff got his head blown off by woods's buckshot
+You get the Rocket Launcher, 25 shells, 30 nails, 21 rockets
+Client ping times:
+  14 deepfriednewbie
+  65 infin
+  64 wolff
+  46 player
+  56 woods
+  39 moof
+  78 freekill
+   0 unconnected
+uns has connected with proquake version 3.50
+You receive 15 health
+You receive 25 health
+Quad Damage is wearing off
+(woods): next quad at: 54
+(woods): next quad at: 54
+(woods): next quad at: 54
+Client ping times:
+  14 deepfriednewbie
+  60 infin
+  64 wolff
+  46 player
+  54 woods
+  37 moof
+  79 freekill
+  37 uns
+Client ping times:
+  17 deepfriednewbie
+  51 infin
+  65 wolff
+  48 player
+  56 woods
+  39 moof
+  82 freekill
+  54 uns
+Client ping times:
+  15 deepfriednewbie
+  51 infin
+  62 wolff
+  43 player
+  56 woods
+  37 moof
+  82 freekill
+  49 uns
+You receive 25 health
+moof was shocked by player's thunderbolt
+moof lost the RED flag!
+player returned the RED FLAG!
+(woods): yes / base good / now
+(woods): yes / base good / now
+(woods): yes / base good / now
+player was shocked by infin's thunderbolt
+woods captured the BLUE FLAG!
+capture time 〚00:38.17〛
+player gets an assist for returning the FLAG!
+player gets an assist for fragging the FLAG carrier!
+Client ping times:
+  14 deepfriednewbie
+  49 infin
+  60 wolff
+  43 player
+  53 woods
+  39 moof
+  79 freekill
+  45 uns
+wolff got the RED FLAG!
+You receive 25 health
+wolff rides woods's rocket
+wolff lost the RED flag!
+wolff got the RED FLAG!
+Client ping times:
+  14 deepfriednewbie
+  59 infin
+  60 wolff
+  42 player
+  56 woods
+  39 moof
+  76 freekill
+  49 uns
+You receive 25 health
+freekill was shocked by infin's thunderbolt
+(woods): quad soon
+(woods): quad soon
+(woods): quad soon
+Client ping times:
+  14 deepfriednewbie
+  78 infin
+  62 wolff
+  42 player
+  57 woods
+  37 moof
+  74 freekill
+  46 uns
+Match ends in 19 minutes
+"timelimit" changed to "19"
+(player): @ -red elevator- 〚48/97•no weapons〛
+(player): @ -red elevator- 〚48/97•no weapons〛
+woods got the BLUE FLAG!
+You receive 15 health
+You receive 25 health
+Client ping times:
+  14 deepfriednewbie
+  57 infin
+  62 wolff
+  42 player
+  54 woods
+  39 moof
+  84 freekill
+  29 uns
+(player): @ -quad- 〚14/19•no weapons〛
+(player): @ -quad- 〚14/19•no weapons〛
+(player): @ -quad- 〚14/19•no weapons〛
+player got his head blown off by moof's buckshot
+(player): Need help @ -quad-
+(player): Need help @ -quad-
+(player): Need help @ -quad-
+(player): Need help @ -quad-
+(player): ENEMY QUAD 18:52
+(player): ENEMY QUAD 18:52
+moof rides woods's rocket
+Client ping times:
+  15 deepfriednewbie
+  57 infin
+  65 wolff
+  42 player
+  54 woods
+  39 moof
+  82 freekill
+  31 uns
+You receive 25 health
+Client ping times:
+  14 deepfriednewbie
+  53 infin
+  90 wolff
+  45 player
+  53 woods
+  39 moof
+  81 freekill
+  29 uns
+You receive 25 health
+You receive 25 health
+Client ping times:
+  14 deepfriednewbie
+  64 infin
+  62 wolff
+  43 player
+  60 woods
+  39 moof
+  76 freekill
+  49 uns
+You receive 25 health
+You receive 25 health
+Client ping times:
+  12 deepfriednewbie
+  54 infin
+  70 wolff
+  45 player
+  54 woods
+  39 moof
+  79 freekill
+  49 uns
+infin rides player's rocket
+Client ping times:
+  12 deepfriednewbie
+  51 infin
+  62 wolff
+  46 player
+  57 woods
+  39 moof
+  81 freekill
+  42 uns
+wolff was gibbed by freekill's rocket
+wolff lost the RED flag!
+You receive 15 health
+infin was gibbed by player's rocket
+moof got the RED FLAG!
+Client ping times:
+  14 deepfriednewbie
+  45 infin
+  65 wolff
+  42 player
+  53 woods
+  39 moof
+  82 freekill
+  50 uns
+freekill was hooked by wolff
+wolff was pierced by freekill
+You receive 15 health
+You receive 25 health
+You receive 25 health
+Client ping times:
+  15 deepfriednewbie
+  57 infin
+  62 wolff
+  42 player
+  54 woods
+  37 moof
+  89 freekill
+  50 uns
+Client ping times:
+  14 deepfriednewbie
+  49 infin
+  64 wolff
+  48 player
+  57 woods
+  37 moof
+  78 freekill
+  50 uns
+wolff was shocked by woods's thunderbolt
+You get 64 shells, 5 rockets
+infin rides player's rocket
+You receive 25 health
+REPEAT_DONE 
+Client ping times:
+  12 deepfriednewbie
+  54 infin
+  57 wolff
+  42 player
+  54 woods
+  37 moof
+  78 freekill
+  46 uns

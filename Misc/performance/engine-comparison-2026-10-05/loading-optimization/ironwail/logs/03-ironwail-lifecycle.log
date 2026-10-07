@@ -1,0 +1,150 @@
+LOG started on: 10/06/2026 09:47:54 
+
+Using add-on server "https://kexquake.s3.amazonaws.com"
+Playing registered version.
+Using renderer/network isolation.
+Console initialized.
+UDP Initialized
+WIPX_OpenSocket: Address family not supported by protocol family
+WIPX_Init: Unable to open control socket, IPX disabled
+Server using protocol 999 (RMQ)
+Exe: 10:28:01 Aug 11 2026 (Windows 64-bit)
+384.0 megabyte heap
+
+Video initialization
+Video mode: 800 x 600 24bit Z24 S8 144Hz
+GL_VENDOR:   NVIDIA Corporation
+GL_RENDERER: NVIDIA GeForce RTX 4070/PCIe/SSE2
+GL_VERSION:  4.3.0 NVIDIA 610.88
+FOUND: EXT_texture_filter_anisotropic
+FOUND: ARB_buffer_storage
+FOUND: ARB_multi_bind
+FOUND: ARB_bindless_texture
+FOUND: ARB_shader_draw_parameters
+FOUND: ARB_clip_control
+
+Sound Initialization
+SDL audio spec  : 44100 Hz, 1024 samples, 2 channels
+SDL audio driver: wasapi - Speakers (Logitech G432 Gaming Headset), 65536 bytes buffer
+Audio: 16 bit, stereo, 44100 Hz
+
+Language initialization
+Loaded 1 strings from 'localization/loc_english.txt'
+
+========= Quake Initialized =========
+
+
+Add-on server status:
+ 29 add-ons available for download
+  0 add-ons already installed
+
+execing quake.rc
+execing default.cfg
+execing benchmark.cfg
+BENCH_SESSION_1791305274525354500 
+BENCH_READY 
+BENCH_BEGIN_initial 
+SpawnServer: start
+Clearing memory
+Programs occupy 403K.
+trying to open external vis file
+maps/start.vis not found, trying id1.vis
+external vis not found
+maps/start.bsp is not watervised
+40 entities inhibited
+Server spawned.
+
+=====================================
+
+Map checklist (start.bsp):
+
+[x] lightmap data
+[x] vis data
+[x] trigger_changelevel (5)
+[x] info_intermission (4)
+[x] skill spawnflags/triggers
+[x] info_player_coop (4/3+)
+[x] info_player_deathmatch (6/5+)
+[x] music track (4)
+[x] map title (Introduction)
+
+=====================================
+
+CL_EstablishConnection: connected to local
+Client LOCAL connected
+
+FITZQUAKE 0.85 SERVER (24778 CRC)
+Serverinfo packet received.
+
+----------------------------------------
+
+Introduction
+Using protocol 15
+Lightmap size:   512 x 512 (4/4 blocks)
+Lightmap memory: 1.0 MB (73.7% efficiency)
+FindFile: can't find music/track04.mp3
+Couldn't find a cdrip for track 4
+CL_SignonReply: 1
+FindFile: can't find csprogs.dat
+Programs occupy 403K.
+CL_SignonReply: 2
+BenchClient entered the game
+CL_SignonReply: 3
+367.6 megabyte data cache
+CL_SignonReply: 4
+BENCH_BEGIN_change 
+Sending clc_disconnect
+Client BenchClient removed
+SpawnServer: e1m1
+Clearing memory
+Programs occupy 403K.
+trying to open external vis file
+maps/e1m1.vis not found, trying id1.vis
+external vis not found
+maps/e1m1.bsp is not watervised
+33 entities inhibited
+Server spawned.
+
+=====================================
+
+Map checklist (e1m1.bsp):
+
+[x] lightmap data
+[x] vis data
+[x] trigger_changelevel (e1m2)
+[x] info_intermission (4)
+[x] skill spawnflags/triggers
+[x] info_player_coop (3/3+)
+[x] info_player_deathmatch (5/5+)
+[x] music track (6)
+[x] map title (the Slipgate Complex)
+
+=====================================
+
+CL_EstablishConnection: connected to local
+Client LOCAL connected
+
+FITZQUAKE 0.85 SERVER (24778 CRC)
+Serverinfo packet received.
+
+----------------------------------------
+
+the Slipgate Complex
+Using protocol 15
+Lightmap size:   512 x 512 (3/4 blocks)
+Lightmap memory: 1.0 MB (66.4% efficiency)
+FindFile: can't find music/track06.mp3
+Couldn't find a cdrip for track 6
+CL_SignonReply: 1
+FindFile: can't find csprogs.dat
+Programs occupy 403K.
+CL_SignonReply: 2
+BenchClient entered the game
+CL_SignonReply: 3
+367.6 megabyte data cache
+CL_SignonReply: 4
+BENCH_BEGIN_quit 
+Sending clc_disconnect
+Client BenchClient removed
+Wrote ironwail.cfg.
+Shutting down SDL sound

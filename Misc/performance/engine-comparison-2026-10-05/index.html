@@ -1,0 +1,623 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Quake Engine Lab</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600;700&family=IBM+Plex+Sans:ital,wght@0,400;0,500;0,600;1,400&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+/* Layout: one 1180px reading column; summary matrix first, then one section per benchmark, each a toolbar + chart + collapsible detail. */
+:root {
+  color-scheme: light;
+  --ground: #f5f5f2;        /* page */
+  --plate: #ffffff;         /* panels */
+  --well: #ecedea;          /* tracks, insets */
+  --rule: #d9dcd8;
+  --ink: #1b2126;
+  --ink-2: #4c5862;
+  --ink-3: #6b7680;
+  --bronze: #a65d14;        /* QSS-M, the one highlighted series */
+  --bronze-ink: #8a4a0c;    /* accent text on ground */
+  --bronze-wash: #f4e7d8;
+  --field: #7b8794;         /* every other engine */
+  --field-soft: #c2c9cf;
+  --good: #2f7d4f;
+  --warn: #9a6a00;
+  --focus: #1f6fd1;
+  --font-display: "Barlow Condensed", "Arial Narrow", "Roboto Condensed", sans-serif;
+  --font-body: "IBM Plex Sans", "Segoe UI", system-ui, sans-serif;
+  --font-data: "IBM Plex Mono", ui-monospace, "Cascadia Mono", Consolas, monospace;
+  --r: 10px;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --ground: #15191d; --plate: #1c2126; --well: #262c32; --rule: #313942;
+    --ink: #e9edf0; --ink-2: #b3bdc6; --ink-3: #8b96a1;
+    --bronze: #c47b2c; --bronze-ink: #e0a35c; --bronze-wash: #33271b;
+    --field: #7d8a99; --field-soft: #46505a;
+    --good: #5fbf86; --warn: #d9a63a; --focus: #6aa8ff;
+  }
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --ground: #15191d; --plate: #1c2126; --well: #262c32; --rule: #313942;
+  --ink: #e9edf0; --ink-2: #b3bdc6; --ink-3: #8b96a1;
+  --bronze: #c47b2c; --bronze-ink: #e0a35c; --bronze-wash: #33271b;
+  --field: #7d8a99; --field-soft: #46505a;
+  --good: #5fbf86; --warn: #d9a63a; --focus: #6aa8ff;
+}
+*, *::before, *::after { box-sizing: border-box }
+html { scroll-behavior: smooth; scroll-padding-top: 76px }
+@media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto } *, *::before, *::after { transition: none !important; animation: none !important } }
+body { margin: 0; background: var(--ground); color: var(--ink); font: 400 15px/1.6 var(--font-body); -webkit-font-smoothing: antialiased }
+a { color: var(--bronze-ink); text-underline-offset: 3px }
+a:hover { text-decoration-thickness: 2px }
+:focus-visible { outline: 2px solid var(--focus); outline-offset: 3px; border-radius: 4px }
+code, .mono { font-family: var(--font-data); font-size: .86em }
+h1, h2, h3 { font-family: var(--font-display); font-weight: 600; letter-spacing: .01em; line-height: 1.05; text-wrap: balance; margin: 0 }
+.wrap { max-width: 1180px; margin: 0 auto; padding-inline: clamp(16px, 4vw, 40px) }
+.eyebrow { font: 600 12px/1.2 var(--font-body); letter-spacing: .14em; text-transform: uppercase; color: var(--bronze-ink) }
+.muted { color: var(--ink-2) }
+.small { font-size: 13px }
+.tab { font-variant-numeric: tabular-nums }
+
+/* Header */
+.top { position: sticky; top: env(safe-area-inset-top, 0px); z-index: 20; background: color-mix(in srgb, var(--ground) 88%, transparent); backdrop-filter: blur(14px); border-bottom: 1px solid var(--rule) }
+.top .wrap { display: flex; align-items: center; gap: 20px; min-height: 60px }
+.brand { display: flex; align-items: baseline; gap: 10px; font-family: var(--font-display); font-weight: 700; font-size: 22px; letter-spacing: .02em; color: var(--ink); text-decoration: none; white-space: nowrap }
+.brand small { font: 500 12px var(--font-data); color: var(--ink-3); letter-spacing: 0 }
+.nav { display: flex; gap: 4px; margin-left: auto; overflow-x: auto; scrollbar-width: none }
+.nav a { color: var(--ink-2); text-decoration: none; font-size: 13.5px; padding: 6px 10px; border-radius: 7px; white-space: nowrap }
+.nav a:hover, .nav a.on { color: var(--ink); background: var(--well) }
+.theme { flex: none; border: 1px solid var(--rule); background: var(--plate); color: var(--ink-2); border-radius: 8px; font: 500 12.5px var(--font-body); padding: 6px 10px; cursor: pointer }
+@media (max-width: 760px) { .nav { display: none } .theme { margin-left: auto } }
+
+/* Hero */
+.hero { padding-block: 56px 28px; display: grid; grid-template-columns: minmax(0, 1.35fr) minmax(0, 1fr); gap: 40px; align-items: end }
+.hero h1 { font-size: clamp(46px, 7vw, 86px); font-weight: 700; text-transform: uppercase; letter-spacing: -.005em; margin-top: 14px }
+.hero h1 span { color: var(--bronze) }
+.hero p { margin: 18px 0 0; max-width: 60ch; color: var(--ink-2); font-size: 17px }
+.rig { display: grid; gap: 0; border-top: 1px solid var(--rule) }
+.rig div { display: flex; justify-content: space-between; gap: 16px; padding: 9px 0; border-bottom: 1px solid var(--rule); font-size: 13.5px }
+.rig dt, .rig span:first-child { color: var(--ink-3) }
+.rig span:last-child { text-align: right; font-family: var(--font-data); font-size: 12.5px }
+@media (max-width: 860px) { .hero { grid-template-columns: 1fr; gap: 26px; padding-block: 36px 20px } }
+
+/* Headline numbers */
+.headline { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); border: 1px solid var(--rule); border-radius: var(--r); background: var(--plate); margin-block: 8px 44px }
+.headline > div { padding: 18px 20px; min-width: 0 }
+.headline > div + div { border-left: 1px solid var(--rule) }
+.headline .k { font-size: 12.5px; color: var(--ink-3) }
+.headline .v { font: 600 34px/1.1 var(--font-display); margin-top: 6px; color: var(--ink) }
+.headline .v em { font-style: normal; color: var(--bronze) }
+.headline .d { font-size: 12.5px; color: var(--ink-2); margin-top: 4px }
+@media (max-width: 860px) { .headline { grid-template-columns: repeat(2, minmax(0, 1fr)) } .headline > div:nth-child(3) { border-left: 0 } .headline > div:nth-child(n+3) { border-top: 1px solid var(--rule) } }
+@media (max-width: 460px) { .headline { grid-template-columns: 1fr } .headline > div + div { border-left: 0; border-top: 1px solid var(--rule) } }
+
+/* Sections */
+section.block { padding-block: 40px; border-top: 1px solid var(--rule) }
+.sec-head { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 12px 32px; align-items: end; margin-bottom: 22px }
+.sec-head h2 { font-size: clamp(32px, 4.4vw, 46px); margin-top: 8px }
+.sec-head p { grid-column: 1 / -1; margin: 4px 0 0; max-width: 72ch; color: var(--ink-2) }
+@media (max-width: 700px) { .sec-head { grid-template-columns: 1fr } }
+
+/* Standings matrix */
+.matrix-wrap { overflow-x: auto; border: 1px solid var(--rule); border-radius: var(--r); background: var(--plate) }
+table { border-collapse: collapse; width: 100%; font-variant-numeric: tabular-nums }
+.matrix { min-width: 760px; font-size: 13.5px }
+.matrix th, .matrix td { padding: 11px 12px; border-bottom: 1px solid var(--rule); text-align: right; white-space: nowrap }
+.matrix thead th { font: 600 12px var(--font-body); color: var(--ink-3); letter-spacing: .04em; text-transform: uppercase; vertical-align: bottom }
+.matrix th:first-child, .matrix td:first-child { text-align: left }
+.matrix tbody tr:last-child td, .matrix tbody tr:last-child th { border-bottom: 0 }
+.matrix tbody th { font-weight: 500 }
+.matrix tbody th button { all: unset; cursor: pointer; color: var(--ink); border-bottom: 1px dashed var(--field-soft) }
+.matrix tbody th button:hover { color: var(--bronze-ink); border-bottom-color: currentColor }
+.matrix tbody th small { display: block; color: var(--ink-3); font-size: 11.5px; font-weight: 400 }
+.matrix .q { background: color-mix(in srgb, var(--bronze-wash) 65%, transparent) }
+.matrix thead .q { color: var(--bronze-ink) }
+.cell { display: inline-flex; align-items: baseline; gap: 7px; justify-content: flex-end }
+.rank { display: inline-grid; place-items: center; min-width: 20px; height: 20px; padding: 0 5px; border-radius: 5px; font: 600 11px var(--font-data); color: var(--ink-3); background: var(--well) }
+.rank.r1 { color: #fff; background: var(--bronze) }
+.cell.na { color: var(--ink-3) }
+
+/* Controls */
+.bar-tools { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin-bottom: 14px }
+.seg { display: inline-flex; flex-wrap: wrap; gap: 3px; padding: 3px; background: var(--well); border-radius: 9px }
+.seg button { border: 0; background: transparent; color: var(--ink-2); font: 500 13px var(--font-body); padding: 6px 11px; border-radius: 7px; cursor: pointer }
+.seg button:hover { color: var(--ink) }
+.seg button[aria-pressed="true"] { background: var(--plate); color: var(--ink); box-shadow: 0 1px 2px rgb(0 0 0 / .08) }
+select.pick { font: 500 13px var(--font-body); color: var(--ink); background: var(--plate); border: 1px solid var(--rule); border-radius: 8px; padding: 7px 10px }
+
+/* Bar chart */
+.chart { background: var(--plate); border: 1px solid var(--rule); border-radius: var(--r); padding: 18px 20px 14px; min-width: 0 }
+.chart-title { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 6px 20px; align-items: baseline; margin-bottom: 6px }
+.chart-title h3 { font-size: 24px }
+.chart-title span { font-size: 12.5px; color: var(--ink-3) }
+.chart-def { margin: 0 0 12px; font-size: 13.5px; color: var(--ink-2); max-width: 82ch }
+.rows { display: grid }
+.row { display: grid; grid-template-columns: 150px minmax(0, 1fr) 132px; gap: 16px; align-items: center; padding: 9px 0; border-top: 1px solid var(--rule) }
+.row:first-child { border-top: 0 }
+.row .name { font-size: 14px; font-weight: 500; min-width: 0 }
+.row .name small { display: block; font: 400 11.5px var(--font-data); color: var(--ink-3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap }
+.row.qssm .name { color: var(--bronze-ink); font-weight: 600 }
+.track { position: relative; height: 22px }
+.track .base { position: absolute; inset: 9px 0 auto; height: 4px; background: var(--well); border-radius: 4px }
+.bar { position: absolute; left: 0; top: 4px; height: 14px; border-radius: 0 4px 4px 0; background: var(--field); transition: width .5s cubic-bezier(.2, .8, .2, 1) }
+.row.qssm .bar { background: var(--bronze) }
+.span { position: absolute; top: 2px; height: 18px; border-left: 1.5px solid var(--ink-3); border-right: 1.5px solid var(--ink-3); opacity: .55; transition: left .5s cubic-bezier(.2, .8, .2, 1), width .5s cubic-bezier(.2, .8, .2, 1); pointer-events: none }
+.dot { position: absolute; top: 50%; width: 9px; height: 9px; margin: -4.5px 0 0 -4.5px; border-radius: 50%; background: var(--plate); border: 2px solid var(--ink-2); transition: left .5s cubic-bezier(.2, .8, .2, 1); cursor: default }
+.dot:hover, .dot:focus-visible { border-color: var(--bronze); transform: scale(1.35) }
+.ghost { position: absolute; top: -1px; height: 24px; width: 0; border-left: 2px dashed var(--bronze); opacity: .8; transition: left .5s cubic-bezier(.2, .8, .2, 1) }
+.ghost::after { content: attr(data-label); position: absolute; top: -15px; left: 3px; font: 500 10.5px var(--font-data); color: var(--bronze-ink); white-space: nowrap }
+.row .val { text-align: right; font: 500 15px var(--font-data) }
+.row .val small { display: block; font-size: 11px; color: var(--ink-3); font-weight: 400 }
+.row .val .x { color: var(--ink-3); font-size: 11px }
+.row.na .val { color: var(--ink-3); font-family: var(--font-body); font-size: 12.5px }
+.axis { display: grid; grid-template-columns: 150px minmax(0, 1fr) 132px; gap: 16px; margin-top: 4px }
+.axis .ticks { position: relative; height: 16px; border-top: 1px solid var(--rule) }
+.axis .ticks span { position: absolute; top: 2px; transform: translateX(-50%); font: 400 10.5px var(--font-data); color: var(--ink-3) }
+.legend { display: flex; flex-wrap: wrap; gap: 6px 18px; margin-top: 12px; font-size: 12px; color: var(--ink-3) }
+.legend i { display: inline-block; vertical-align: -1px; margin-right: 6px }
+.legend .lb { width: 18px; height: 10px; border-radius: 0 3px 3px 0; background: var(--field) }
+.legend .lq { width: 18px; height: 10px; border-radius: 0 3px 3px 0; background: var(--bronze) }
+.legend .ld { width: 9px; height: 9px; border-radius: 50%; border: 2px solid var(--ink-2) }
+.legend .lg { width: 0; height: 12px; border-left: 2px dashed var(--bronze) }
+.legend .lr { width: 14px; height: 10px; border-left: 1.5px solid var(--ink-3); border-right: 1.5px solid var(--ink-3) }
+@media (max-width: 640px) {
+  .row, .axis { grid-template-columns: minmax(0, 1fr) 96px; gap: 4px 10px }
+  .row .track { grid-column: 1 / -1; grid-row: 2 }
+  .axis > :first-child, .axis > :last-child { display: none }
+  .axis .ticks { grid-column: 1 / -1 }
+  .row, .axis { grid-template-columns: minmax(0, 1fr) 118px }
+  .ghost::after { display: none }
+  .brand small { display: none }
+  .theme { padding: 5px 8px }
+}
+.tip { position: fixed; z-index: 50; pointer-events: none; background: var(--ink); color: var(--ground); font: 500 12px var(--font-data); padding: 5px 8px; border-radius: 6px; opacity: 0; transform: translateY(4px); transition: opacity .12s, transform .12s; white-space: nowrap }
+.tip.on { opacity: 1; transform: none }
+
+.note { margin: 12px 2px 0; font-size: 12.5px; color: var(--ink-3); max-width: 96ch }
+.note strong { color: var(--ink-2); font-weight: 600 }
+.flag { display: inline-block; font: 600 11px var(--font-body); letter-spacing: .04em; text-transform: uppercase; padding: 2px 7px; border-radius: 5px; background: var(--bronze-wash); color: var(--bronze-ink); vertical-align: 2px }
+.flag.old { background: var(--well); color: var(--ink-2) }
+
+/* Disclosure panels */
+details.more { margin-top: 14px; border: 1px solid var(--rule); border-radius: var(--r); background: var(--plate) }
+details.more > summary { list-style: none; cursor: pointer; padding: 14px 18px; font-weight: 600; font-size: 14px; display: flex; justify-content: space-between; gap: 12px; align-items: center }
+details.more > summary::-webkit-details-marker { display: none }
+details.more > summary::after { content: "+"; font: 500 18px var(--font-data); color: var(--ink-3); transition: transform .2s }
+details.more[open] > summary::after { transform: rotate(45deg) }
+details.more > summary small { font-weight: 400; color: var(--ink-3); font-size: 12.5px; margin-left: 8px }
+details.more .in { padding: 0 18px 18px; min-width: 0 }
+details.more .in > p { margin: 0 0 12px; max-width: 80ch; color: var(--ink-2); font-size: 14px }
+.tw { overflow-x: auto; margin-block: 6px 12px }
+.data { font-size: 13px }
+.data caption { text-align: left; font-size: 12px; color: var(--ink-3); padding: 0 0 8px }
+.data th, .data td { padding: 8px 10px; border-bottom: 1px solid var(--rule); text-align: right; white-space: nowrap }
+.data th:first-child, .data td:first-child { text-align: left }
+.data td.wrap-cell { white-space: normal; text-align: left; min-width: 260px }
+.data thead th { font-weight: 600; color: var(--ink-3); font-size: 12px }
+.data tr.qssm td:first-child, .data tr.qssm th:first-child { color: var(--bronze-ink); font-weight: 600 }
+.data td.best { font-weight: 600; color: var(--ink) }
+.data td.best::after { content: " ●"; color: var(--bronze); font-size: 9px; vertical-align: 2px }
+
+/* Loading story */
+.split { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; margin-bottom: 18px }
+.split > div { background: var(--plate); border: 1px solid var(--rule); border-radius: var(--r); padding: 16px 18px; min-width: 0 }
+.split .k { font-size: 12.5px; color: var(--ink-3) }
+.split .v { font: 600 30px/1.15 var(--font-display); margin-top: 4px }
+.split .v .from { color: var(--ink-3); font-weight: 500 }
+.split .v .to { color: var(--bronze) }
+.split p { margin: 6px 0 0; font-size: 12.5px; color: var(--ink-2) }
+@media (max-width: 860px) { .split { grid-template-columns: 1fr } }
+.steps { list-style: none; margin: 18px 0 0; padding: 0; display: grid; gap: 0; border: 1px solid var(--rule); border-radius: var(--r); background: var(--plate); counter-reset: s }
+.step { counter-increment: s; display: grid; grid-template-columns: 44px minmax(0, 1fr) 250px; gap: 16px; padding: 16px 18px; border-top: 1px solid var(--rule) }
+.step:first-child { border-top: 0 }
+.step::before { content: counter(s); font: 700 26px/1 var(--font-display); color: var(--bronze) }
+.step h4 { margin: 0 0 4px; font-size: 15px; font-weight: 600 }
+.step p { margin: 0; font-size: 13.5px; color: var(--ink-2); max-width: 70ch }
+.step .meta { margin-top: 6px; font-size: 12px; color: var(--ink-3) }
+.delta { display: grid; gap: 8px; align-content: start; font-size: 12px }
+.delta .dl { display: grid; grid-template-columns: 56px minmax(0, 1fr); gap: 4px 8px; align-items: center; color: var(--ink-3) }
+.delta .pair { position: relative; height: 10px; background: var(--well); border-radius: 3px }
+.delta .pair i { position: absolute; left: 0; top: 0; height: 100%; border-radius: 0 3px 3px 0 }
+.delta .pair .b { background: var(--field-soft) }
+.delta .pair .a { background: var(--bronze); height: 6px; top: 2px }
+.delta .num { grid-column: 2; font-family: var(--font-data); color: var(--ink-2) }
+@media (max-width: 760px) { .step { grid-template-columns: 30px minmax(0, 1fr) } .delta { grid-column: 2 } }
+
+/* FPS heat table */
+.heat { min-width: 720px; font-size: 13px }
+.heat th, .heat td { padding: 9px 10px; border-bottom: 1px solid var(--rule); text-align: right }
+.heat thead th { font-weight: 600; color: var(--ink-3); font-size: 12px; vertical-align: bottom }
+.heat th:first-child, .heat td:first-child { text-align: left }
+.heat td { position: relative }
+.heat td .hb { position: absolute; left: 6px; right: 6px; bottom: 4px; height: 3px; border-radius: 2px; background: var(--well); overflow: hidden }
+.heat td .hb i { display: block; height: 100%; background: var(--field) }
+.heat td.q .hb i { background: var(--bronze) }
+.heat td.top { font-weight: 600 }
+.heat thead th.q, .heat td.q { background: color-mix(in srgb, var(--bronze-wash) 55%, transparent) }
+.heat tbody th button { all: unset; cursor: pointer; border-bottom: 1px dashed var(--field-soft) }
+.heat tbody th button:hover { color: var(--bronze-ink) }
+.heat tfoot td, .heat tfoot th { font-weight: 600; border-bottom: 0 }
+
+/* Findings list */
+.findings { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; margin-bottom: 8px }
+.inv-sub { font-size: 24px; margin: 30px 0 12px; }
+.findings > div { border-top: 3px solid var(--bronze); background: var(--plate); border-radius: 0 0 var(--r) var(--r); padding: 14px 16px; border-inline: 1px solid var(--rule); border-bottom: 1px solid var(--rule); min-width: 0 }
+.findings h4 { margin: 0 0 6px; font-size: 14.5px; font-weight: 600 }
+.findings p { margin: 0; font-size: 13.5px; color: var(--ink-2) }
+@media (max-width: 860px) { .findings { grid-template-columns: 1fr } }
+
+.defs { display: grid; grid-template-columns: 210px minmax(0, 1fr); gap: 0 }
+.defs dt, .defs dd { padding: 10px 0; border-top: 1px solid var(--rule); margin: 0 }
+.defs dt { font-weight: 600; font-size: 13.5px; padding-right: 16px }
+.defs dd { font-size: 13.5px; color: var(--ink-2) }
+@media (max-width: 640px) { .defs { grid-template-columns: 1fr } .defs dd { border-top: 0; padding-top: 0 } }
+.prose p { max-width: 80ch; color: var(--ink-2); font-size: 14px; margin: 0 0 12px }
+.links { display: flex; flex-wrap: wrap; gap: 8px 18px; font-size: 13px; margin-top: 6px }
+.hash { font-family: var(--font-data); font-size: 11.5px; color: var(--ink-3); overflow-wrap: anywhere }
+footer { border-top: 1px solid var(--rule); padding-block: 26px 40px; font-size: 12.5px; color: var(--ink-3); display: flex; flex-wrap: wrap; gap: 8px 24px; justify-content: space-between }
+</style>
+</head>
+<body>
+<header class="top">
+  <div class="wrap">
+    <a class="brand" href="#top">Quake Engine Lab <small>/ benchmarks</small></a>
+    <nav class="nav" aria-label="Sections">
+      <a href="#standings">Standings</a>
+      <a href="#lifecycle">Lifecycle</a>
+      <a href="#loading">Map loading</a>
+      <a href="#fps">FPS</a>
+      <a href="#investigation">FPS investigation</a>
+      <a href="#method">Method &amp; data</a>
+    </nav>
+    <button class="theme" id="theme" type="button" aria-label="Color theme">Theme: system</button>
+  </div>
+</header>
+
+<main id="top">
+  <div class="wrap">
+    <section class="hero" aria-labelledby="h1">
+      <div>
+        <div class="eyebrow" id="hero-date"></div>
+        <h1 id="h1">Six Quake engines, <span>timed.</span></h1>
+        <p id="hero-lede"></p>
+      </div>
+      <div class="rig" id="rig" aria-label="Test machine"></div>
+    </section>
+
+    <div class="headline" id="headline" aria-label="Headline results"></div>
+
+    <section class="block" id="standings" aria-labelledby="standings-h">
+      <div class="sec-head">
+        <div><div class="eyebrow">Summary</div><h2 id="standings-h">Standings</h2></div>
+        <p>Median of five fresh runs per engine per test, all measured on <span id="std-date"></span>. Lifecycle tests are milliseconds, lower is faster; FPS is the geometric mean across nine maps, higher is faster. Badges show rank within each row. Select a test name to open its chart.</p>
+      </div>
+      <div class="matrix-wrap"><table class="matrix" id="matrix"></table></div>
+      <p class="note" id="matrix-note"></p>
+    </section>
+
+    <section class="block" id="lifecycle" aria-labelledby="life-h">
+      <div class="sec-head">
+        <div><div class="eyebrow">Lifecycle benchmark</div><h2 id="life-h">The time between actions</h2></div>
+        <p>Start the engine, load a map, change maps, join a server, quit. Each run is a fresh process; the bar is the median, the dots are the individual runs, and the bracket spans the fastest and slowest.</p>
+      </div>
+      <div class="bar-tools"><div class="seg" id="life-tests" role="group" aria-label="Choose a lifecycle test"></div></div>
+      <div class="chart" id="life-chart" aria-live="polite"></div>
+      <details class="more"><summary>Every lifecycle run <small>median [fastest–slowest] and all samples, ms</small></summary><div class="in"><div class="tw"><table class="data" id="life-table"></table></div></div></details>
+    </section>
+
+    <section class="block" id="loading" aria-labelledby="load-h">
+      <div class="sec-head">
+        <div><div class="eyebrow">QSS-M source changes · <span id="load-date"></span></div><h2 id="load-h">How QSS-M's map loading got faster</h2></div>
+        <p>A nine-round head-to-head against the two engines that led loading before this work, with the original QSS-M build as the baseline. Endpoint for every engine: completed client signon after the <code>map</code> command.</p>
+      </div>
+      <div class="split" id="load-split"></div>
+      <div class="bar-tools"><div class="seg" id="load-tests" role="group" aria-label="Choose a loading test"></div></div>
+      <div class="chart" id="load-chart" aria-live="polite"></div>
+      <h3 style="font-size:26px;margin-top:34px">Seven changes</h3>
+      <p class="muted small" style="max-width:76ch;margin:6px 0 0">Each change was kept only after its own back-to-back A/B. The figures are that A/B's medians, measured in different sessions, so they don't add up exactly to the totals above.</p>
+      <ol class="steps" id="load-steps"></ol>
+      <details class="more"><summary>Checks <small>FPS, quit time, texture output, regression tests</small></summary><div class="in" id="load-checks"></div></details>
+      <details class="more"><summary>Tried and rejected <small>measured, then dropped</small></summary><div class="in" id="load-rejected"></div></details>
+    </section>
+
+    <section class="block" id="fps" aria-labelledby="fps-h">
+      <div class="sec-head">
+        <div><div class="eyebrow">Rendering benchmark</div><h2 id="fps-h">Nine maps and two real games</h2></div>
+        <p>Native timedemos in a fresh process per pass: one discarded warm-up, then five measured passes per engine, 800 × 600, uncapped, VSync and MSAA off. The nine-map suite plays the same recorded 360° turn at each map's first deathmatch spawn. Two gameplay demos add real movement and combat: a 16-player CTF match and Sphere's 2:14 ad_tears speedrun.</p>
+      </div>
+      <div class="bar-tools">
+        <select class="pick" id="fps-map" aria-label="Choose a map"></select>
+        <div class="seg" id="fps-unit" role="group" aria-label="Choose a unit"><button type="button" data-u="fps" aria-pressed="true">FPS</button><button type="button" data-u="ms" aria-pressed="false">ms / frame</button></div>
+      </div>
+      <div class="chart" id="fps-chart" aria-live="polite"></div>
+      <details class="more" open><summary>All maps at a glance <small>median FPS; select a map to chart it</small></summary><div class="in"><div class="tw"><table class="heat" id="fps-heat"></table></div><p class="note" id="fps-heat-note"></p></div></details>
+      <details class="more" open><summary>Gameplay demos <small>median FPS; select a demo to chart it</small></summary><div class="in"><div class="tw"><table class="heat" id="fps-demo-heat"></table></div><p class="note" id="fps-demo-note"></p></div></details>
+    </section>
+
+    <section class="block" id="investigation" aria-labelledby="inv-h">
+      <div class="sec-head">
+        <div><div class="eyebrow">QSS-M FPS investigation · <span id="inv-date"></span></div><h2 id="inv-h">Why QSS-M's timedemo FPS was low</h2></div>
+        <p>Diagnostic runs that trace QSS-M's FPS gap. They use instrumented or private builds, so their numbers stay out of the rankings above. The October 5 work is kept below for reference.</p>
+      </div>
+      <div class="findings" id="inv-findings"></div>
+      <div id="inv-panels"></div>
+    </section>
+
+    <section class="block" id="method" aria-labelledby="method-h">
+      <div class="sec-head">
+        <div><div class="eyebrow">Method &amp; data</div><h2 id="method-h">How it was measured</h2></div>
+        <p>Everything needed to check or reproduce these numbers: what each timing covers, how sessions ran, which builds were used, and the raw files.</p>
+      </div>
+      <dl class="defs" id="defs"></dl>
+      <details class="more"><summary>Sessions, caches and settings</summary><div class="in prose" id="method-sessions"></div></details>
+      <details class="more"><summary>FPS method and limits</summary><div class="in prose" id="method-fps"></div></details>
+      <details class="more"><summary>Denver connection test</summary><div class="in prose" id="method-denver"></div></details>
+      <details class="more"><summary>Builds and hashes</summary><div class="in"><div class="tw"><table class="data" id="builds"></table></div></div></details>
+      <details class="more" open><summary>Raw data and scripts</summary><div class="in" id="raw-links"></div></details>
+    </section>
+  </div>
+</main>
+<div class="wrap"><footer id="foot"></footer></div>
+<div class="tip" id="tip" role="tooltip"></div>
+
+<script type="application/json" id="report-data">{"meta":{"date_label":"Measured October 6, 2026 · Windows 11","measured":"October 6, 2026","lede":"Startup, map loading, joining a server, quitting, and rendering speed for QSS-M, Ironwail, vkQuake, QSS, FTEQW and ezQuake, all re-measured on October 6 with the current QSS-M source. QSS-M is now fastest to start, to reach a first map from launch, to change maps and to join a local server. Timedemo FPS rose 52% after a demo-loading fix, but rendering is where QSS-M still trails.","rig":[["CPU","AMD Ryzen 5 3600X · 12 threads"],["GPU","NVIDIA GeForce RTX 4070"],["Driver","610.88 (Oct 6 runs)"],["OS","Windows 11 · build 26100"],["Window","800 × 600 · VSync off · sound on"],["Runs","5 per engine per test, fresh process each"]],"footer":"<span>Quake Engine Lab · AMD Ryzen 5 3600X · RTX 4070<\/span><span>Every chart value comes from the raw files linked under Method &amp; data.<\/span>"},"engines":{"qssm":{"name":"QSS-M","renderer":"OpenGL","version":"current source"},"ironwail":{"name":"Ironwail","renderer":"OpenGL","version":"v0.8.2"},"vkquake":{"name":"vkQuake","renderer":"Vulkan","version":"1.36.0"},"qss":{"name":"QSS","renderer":"OpenGL","version":"2024-March-01 (requested archive)"},"fteqw":{"name":"FTEQW","renderer":"OpenGL","version":"git-30-f2576ed"},"ezquake":{"name":"ezQuake","renderer":"OpenGL","version":"3.6.9"}},"engine_order":["qssm","ironwail","vkquake","qss","fteqw","ezquake"],"headline":[{"k":"Lifecycle tests QSS-M wins","v":"<em>5<\/em> of 6","d":"Local tests measured today; engine start, launch → map, initial load, map change, connect · local."},{"k":"Launch → first map","v":"<em>476<\/em> ms","d":"Was 706 ms. Next: Ironwail at 670 ms."},{"k":"Map change","v":"<em>48<\/em> ms","d":"Was 279 ms. Next: vkQuake at 129 ms."},{"k":"Nine-map FPS","v":"2,631","d":"Was 1,733 with the installed build (+52%). Rank 4 of 6; ezQuake leads at 3,382."}],"lifecycle":{"metrics":[{"key":"startup","title":"Engine start","short":"Engine start","definition":"Process creation to the native BENCH_READY command-readiness marker, with no map loaded.","stats":{"qssm":{"samples":[398.4273000023677,362.1906000043964,379.8476000010851,354.0368000030867,381.01040000037756],"n":5,"median":379.8476000010851,"min":354.0368000030867,"max":398.4273000023677},"ironwail":{"samples":[690.6964999943739,573.719699998037,554.8469999994268,562.9227999961586,557.8765999962343],"n":5,"median":562.9227999961586,"min":554.8469999994268,"max":690.6964999943739},"vkquake":{"samples":[1074.8048000023118,977.7293000006466,968.8017000007676,954.5091999971191,933.2877000051667],"n":5,"median":968.8017000007676,"min":933.2877000051667,"max":1074.8048000023118},"qss":{"samples":[926.5548999974271,574.1137000004528,586.3191999960691,577.2142999994685,577.3970000009285],"n":5,"median":577.3970000009285,"min":574.1137000004528,"max":926.5548999974271},"fteqw":{"samples":[2285.740799998166,1196.1472000039066,1185.073900000134,1199.676600001112,1174.637399999483],"n":5,"median":1196.1472000039066,"min":1174.637399999483,"max":2285.740799998166},"ezquake":{"samples":[1663.9113999990514,1181.677900000068,1191.9775999995181,1206.9535000046017,1195.5230999956257],"n":5,"median":1195.5230999956257,"min":1181.677900000068,"max":1663.9113999990514}},"before":{"median":328.85410000017146,"label":"installed 1.6.9 build, same day","stats":{"samples":[632.0246999966912,320.13200000073994,319.3963000012445,328.85410000017146,349.89140000107],"n":5,"median":328.85410000017146,"min":319.3963000012445,"max":632.0246999966912}},"unranked":[]},{"key":"launch_map","title":"Launch → first map","short":"Launch → map","definition":"A separate fresh process loading start immediately; process creation to completed client signon. This measures the combined path directly.","stats":{"qssm":{"samples":[458.7950999994064,458.3950000014738,477.15570000582375,484.19420000573155,475.54459999810206],"n":5,"median":475.54459999810206,"min":458.3950000014738,"max":484.19420000573155},"ironwail":{"samples":[669.9556999956258,686.7533999975421,680.2827999999863,668.5852000009618,659.9872000006144],"n":5,"median":669.9556999956258,"min":659.9872000006144,"max":686.7533999975421},"vkquake":{"samples":[1067.0484000002034,1092.933499996434,1078.1847000034759,1086.3640000025043,1082.5541999947745],"n":5,"median":1082.5541999947745,"min":1067.0484000002034,"max":1092.933499996434},"qss":{"samples":[769.6935999993002,777.3859000008088,805.9630999996443,759.0999000021839,767.1801000033156],"n":5,"median":769.6935999993002,"min":759.0999000021839,"max":805.9630999996443},"fteqw":{"samples":[2356.3854999956675,2312.5943999984884,2361.1900999967474,2302.145300003758,2268.132899996999],"n":5,"median":2312.5943999984884,"min":2268.132899996999,"max":2361.1900999967474},"ezquake":{"samples":[1936.4774999994552,1920.2995000014198,1902.6544000007561,1899.9057000037283,1933.9613999982248],"n":5,"median":1920.2995000014198,"min":1899.9057000037283,"max":1936.4774999994552}},"before":{"median":706.2392000007094,"label":"installed 1.6.9 build, same day","stats":{"samples":[681.6200999965076,660.0689999977476,747.1942999982275,710.656299997936,706.2392000007094],"n":5,"median":706.2392000007094,"min":660.0689999977476,"max":747.1942999982275}},"unranked":[]},{"key":"initial","title":"Initial map load","short":"Initial load","definition":"The first map start command in an already-started fresh process, immediately before the command to completed client signon. Startup and menu settling are excluded.","stats":{"qssm":{"samples":[124.61710000206949,102.48249999858672,98.72189999441616,98.72140000516083,103.87269999773707],"n":5,"median":102.48249999858672,"min":98.72140000516083,"max":124.61710000206949},"ironwail":{"samples":[112.14060000202153,108.93709999800194,109.59119999461109,112.40410000027623,111.76309999427758],"n":5,"median":111.76309999427758,"min":108.93709999800194,"max":112.40410000027623},"vkquake":{"samples":[146.530600002734,148.96299999963958,146.11289999447763,148.83000000554603,141.52289999765344],"n":5,"median":146.530600002734,"min":141.52289999765344,"max":148.96299999963958},"qss":{"samples":[187.90509999962524,191.921600002388,190.4175000017858,192.23020000208635,192.9935999942245],"n":5,"median":191.921600002388,"min":187.90509999962524,"max":192.9935999942245},"fteqw":{"samples":[1203.9522000050056,1124.2004000014276,1133.910199998354,1121.832099997846,1130.508899994311],"n":5,"median":1130.508899994311,"min":1121.832099997846,"max":1203.9522000050056},"ezquake":{"samples":[843.9312999980757,712.8293999994639,742.8460000010091,724.887199998193,721.1330999998609],"n":5,"median":724.887199998193,"min":712.8293999994639,"max":843.9312999980757}},"before":{"median":294.54259999329224,"label":"installed 1.6.9 build, same day","stats":{"samples":[595.2510999995866,294.54259999329224,323.8878999982262,241.328700001759,275.31559999624733],"n":5,"median":294.54259999329224,"min":241.328700001759,"max":595.2510999995866}},"unranked":[]},{"key":"change","title":"Subsequent map load","short":"Map change","definition":"map e1m1 after start has completed signon in the same process; immediate command marker to completed client signon. Common assets are already cached.","stats":{"qssm":{"samples":[47.635800001444295,45.60510000010254,48.4063000039896,47.430400001758244,48.69630000030156],"n":5,"median":47.635800001444295,"min":45.60510000010254,"max":48.69630000030156},"ironwail":{"samples":[110.74199999711709,140.9745000055409,112.22140000609215,137.916600004246,134.73469999735244],"n":5,"median":134.73469999735244,"min":110.74199999711709,"max":140.9745000055409},"vkquake":{"samples":[129.36149999586632,130.53639999998268,127.91360000119312,124.29310000152327,130.78970000060508],"n":5,"median":129.36149999586632,"min":124.29310000152327,"max":130.78970000060508},"qss":{"samples":[272.00250000169035,205.95270000194432,259.20079999923473,208.32209999935003,217.05639999709092],"n":5,"median":217.05639999709092,"min":205.95270000194432,"max":272.00250000169035},"fteqw":{"samples":[1040.5852000039886,1054.7077999945031,1047.8435999975773,1044.431899994379,1039.410700002918],"n":5,"median":1044.431899994379,"min":1039.410700002918,"max":1054.7077999945031},"ezquake":{"samples":[474.31170000345446,458.92680000542896,472.07109999726526,460.6045000036829,471.88330000062706],"n":5,"median":471.88330000062706,"min":458.92680000542896,"max":474.31170000345446}},"before":{"median":279.0653000047314,"label":"installed 1.6.9 build, same day","stats":{"samples":[282.72149999975227,269.48369999445276,290.64849999849685,279.0653000047314,265.77450000331737],"n":5,"median":279.0653000047314,"min":265.77450000331737,"max":290.64849999849685}},"unranked":[]},{"key":"connect","title":"Connect · local server","short":"Connect · local","definition":"A fresh client settles at the menu, then joins e1m1 on loopback. Immediate connect-command marker to completed client signon. Five NetQuake clients use one QSS-M server; ezQuake uses an FTE QuakeWorld server.","stats":{"qssm":{"samples":[506.0804999957327,495.00760000228183,541.3055000026361,461.31379999860656,477.4011999979848],"n":5,"median":495.00760000228183,"min":461.31379999860656,"max":541.3055000026361},"ironwail":{"samples":[1979.4098999991547,1981.7395999998553,2008.4553999986383,2003.1080000044312,1974.897799998871],"n":5,"median":1981.7395999998553,"min":1974.897799998871,"max":2008.4553999986383},"vkquake":{"samples":[1971.0371000037412,2010.5943999951705,1970.768200000748,1991.7602999994415,1986.8163999999524],"n":5,"median":1986.8163999999524,"min":1970.768200000748,"max":2010.5943999951705},"qss":{"samples":[2150.1483999963966,2116.378700004134,2105.9594999969704,2128.382299997611,2143.1855999981053],"n":5,"median":2128.382299997611,"min":2105.9594999969704,"max":2150.1483999963966},"fteqw":{"samples":[706.725700001698,757.2858999992604,834.3124999955762,756.8916999953217,745.3758999981801],"n":5,"median":756.8916999953217,"min":706.725700001698,"max":834.3124999955762},"ezquake":{"samples":[1608.3796999955666,1606.4684000011766,1551.623200000904,1576.9983999998658,1545.897399999376],"n":5,"median":1576.9983999998658,"min":1545.897399999376,"max":1608.3796999955666}},"before":{"median":638.5816999973031,"label":"installed 1.6.9 build, same day","stats":{"samples":[645.6510999996681,629.4318000000203,638.3114000054775,638.5816999973031,660.4695999994874],"n":5,"median":638.5816999973031,"min":629.4318000000203,"max":660.4695999994874}},"note":"Same QSS-M NetQuake server for QSS-M, FTE, Ironwail, vkQuake, and QSS. ezQuake joins an FTE QuakeWorld server; its protocol and server workload differ, so no cross-protocol winner is claimed. ezQuake is shown for reference and left out of the ranking.","unranked":["ezquake"]},{"key":"connect_remote","title":"Connect · Denver","short":"Connect · Denver","definition":"Fresh client joining denver.quakeone.com:26000 on aerowalk. Immediate hostname connect-command marker to native signon stage 4. Same preinstalled map and custom sounds; server empty before each attempt. ezQuake cannot join this NetQuake server.","stats":{"qssm":{"samples":[793.3918000198901,822.9409999912605,795.9813000052236,872.6760999998078,820.2684999560006],"n":5,"median":820.2684999560006,"min":793.3918000198901,"max":872.6760999998078},"fteqw":{"samples":[1112.3329999973066,1141.5518000139855,1187.547400011681,1096.1526000173762,1042.0805999892764],"n":5,"median":1112.3329999973066,"min":1042.0805999892764,"max":1187.547400011681},"ezquake":{"samples":[null,null,null,null,null],"n":0,"median":null,"min":null,"max":null},"ironwail":{"samples":[6933.351199957542,6744.965700025205,6926.393700006884,6817.032799997833,6749.181299994234],"n":5,"median":6817.032799997833,"min":6744.965700025205,"max":6933.351199957542},"vkquake":{"samples":[11496.783799957484,11257.595999981277,11465.306200028863,11281.394099991303,11401.334599999245],"n":5,"median":11401.334599999245,"min":11257.595999981277,"max":11496.783799957484},"qss":{"samples":[11550.031599996146,11488.068599952385,11293.860299978405,11406.602999952156,11368.794100009836],"n":5,"median":11406.602999952156,"min":11293.860299978405,"max":11550.031599996146}},"dated":"Oct 5 · QSS-M installed build","na":{"ezquake":"Needs a QuakeWorld server"},"note":"<span class=\"flag old\">Oct 5 data<\/span> This public-server test was not repeated: it depends on denver.quakeone.com being empty and on aerowalk. The QSS-M row is the installed 1.6.9 build, not the current source. Denver · aerowalk · denver.quakeone.com:26000. Five compatible NetQuake clients, same cached map/sounds, no players before each attempt, base protocol with extensions disabled where supported. Real network/server scheduling included. ezQuake requires QuakeWorld, so this test is not applicable.","unranked":["ezquake"]},{"key":"quit","title":"Engine quit","short":"Quit","definition":"The marker immediately before native quit to observed process exit, after e1m1 is loaded locally. Connection-session quit is excluded. Native console quit bypasses confirmation menus.","stats":{"qssm":{"samples":[130.0937999985763,168.20110000116983,144.18809999915538,142.0291000031284,142.41509999556],"n":5,"median":142.41509999556,"min":130.0937999985763,"max":168.20110000116983},"ironwail":{"samples":[159.45279999868944,132.57279999379534,158.66600000299513,132.93840000551427,149.13789999991423],"n":5,"median":149.13789999991423,"min":132.57279999379534,"max":159.45279999868944},"vkquake":{"samples":[189.71079999755602,177.8139999951236,177.26450000191107,177.16269999800716,180.01509999885457],"n":5,"median":177.8139999951236,"min":177.16269999800716,"max":189.71079999755602},"qss":{"samples":[142.24649999960093,134.95729999704054,144.00469999964116,146.46479999646544,139.71620000666007],"n":5,"median":142.24649999960093,"min":134.95729999704054,"max":146.46479999646544},"fteqw":{"samples":[815.9148999984609,829.3867999964277,810.7000000018161,814.1868000020622,807.6536000007764],"n":5,"median":814.1868000020622,"min":807.6536000007764,"max":829.3867999964277},"ezquake":{"samples":[229.43859999941196,202.56930000323337,197.50619999831542,199.2121999937808,192.2158999950625],"n":5,"median":199.2121999937808,"min":192.2158999950625,"max":229.43859999941196}},"before":{"median":140.61100000253646,"label":"installed 1.6.9 build, same day","stats":{"samples":[145.6869000030565,126.78359999699751,138.43869999982417,151.31309999560472,140.61100000253646],"n":5,"median":140.61100000253646,"min":126.78359999699751,"max":151.31309999560472}},"unranked":[]}],"matrix_note":"Connect · local ranks the five NetQuake clients only; ezQuake joins a QuakeWorld server and is shown unranked. Connect · Denver is October 5 data with the installed QSS-M 1.6.9 build and was not repeated. The original October 5 page, measured on driver 591.86, is kept as <a href=\"index-2026-10-05.html\">index-2026-10-05.html<\/a>."},"loading":{"date":"October 6, 2026","summary":{"startup":{"baseline":{"median":336.03759999823524,"min":328.7930999940727,"max":350.95020000153454,"samples":[336.13850000256207,350.95020000153454,336.03759999823524,338.68470000015805,337.0386000024155,334.61309999984223,328.7930999940727,330.5112000016379,335.5867000063881]},"candidate":{"median":326.9416999974055,"min":309.7189999971306,"max":365.54400000022724,"samples":[326.9416999974055,330.45440000569215,311.6982999999891,331.79320000635926,365.54400000022724,325.5411999998614,309.7189999971306,332.03340000181925,322.8077000021585]},"ironwail":{"median":539.4892999975127,"min":523.9397000041208,"max":547.0669999995152,"samples":[533.1238999933703,523.9397000041208,547.0669999995152,536.5087000027415,539.4892999975127,539.7448000003351,540.7988000006299,542.7457999976468,535.0019999968936]},"vkquake":{"median":922.6024999952642,"min":918.8014000028488,"max":953.9720999964629,"samples":[921.983200001705,935.8801999987918,953.9720999964629,929.1799999991781,935.6604999993579,918.8014000028488,919.5372999965912,922.6024999952642,922.14559999411]}},"initial":{"baseline":{"median":226.5211999983876,"min":219.0963000030024,"max":235.62349999701837,"samples":[226.90229999716394,219.0963000030024,230.27030000230297,231.3157999960822,235.62349999701837,223.99700000096345,225.88530000211904,226.5211999983876,223.1194999985746]},"candidate":{"median":96.57419999712147,"min":92.54669999791076,"max":116.96529999608174,"samples":[99.4630999994115,116.96529999608174,96.65790000144625,115.34009999741102,93.87689999857685,96.57419999712147,92.54669999791076,95.66929999709828,95.21830000448972]},"ironwail":{"median":107.47999999875901,"min":100.32439999486087,"max":131.32100000075297,"samples":[106.87670000334037,107.47999999875901,106.78760000155307,105.82830000203103,109.77400000410853,109.63519999495475,131.32100000075297,100.32439999486087,108.17740000493359]},"vkquake":{"median":146.9721000030404,"min":145.1900000029127,"max":160.39920000184793,"samples":[146.25539999542525,145.1900000029127,147.26689999952214,146.0162999937893,145.44710000336636,147.04849999543512,160.39920000184793,146.9721000030404,147.10800000466406]}},"change":{"baseline":{"median":238.54649999702815,"min":219.75109999766573,"max":254.27179999678629,"samples":[219.75109999766573,238.02150000119582,254.27179999678629,254.0281999972649,238.54649999702815,231.5251999971224,251.5302999963751,231.45719999592984,246.28590000065742]},"candidate":{"median":42.33640000165906,"min":34.51160000258824,"max":45.28540000319481,"samples":[43.79540000081761,42.097899997315835,42.03110000526067,35.45109999686247,42.33640000165906,45.28540000319481,34.51160000258824,44.61369999626186,44.7652000002563]},"ironwail":{"median":126.24549999600276,"min":106.1145999992732,"max":136.96649999474175,"samples":[122.30289999570232,112.48740000155522,136.96649999474175,126.24549999600276,106.1145999992732,111.57559999992372,129.59150000096997,130.1030999966315,135.94300000113435]},"vkquake":{"median":127.04019999364391,"min":124.05910000234144,"max":136.44799999747192,"samples":[127.1710000000894,125.294199999189,126.50489999941783,124.05910000234144,136.44799999747192,127.04019999364391,131.52339999942342,126.97169999592006,128.35199999972247]}},"quit":{"baseline":{"median":146.34169999771984,"min":142.21079999697395,"max":151.979800000845,"samples":[146.15100000082748,151.979800000845,143.83630000520498,146.34169999771984,148.2484000007389,142.21079999697395,143.42309999483405,149.5513000045321,150.6087000016123]},"candidate":{"median":155.16619999834802,"min":139.07930000277702,"max":162.5595000004978,"samples":[149.94310000474798,157.449500002258,155.16619999834802,143.44239999627462,153.58659999765223,157.62379999796394,155.64569999696687,162.5595000004978,139.07930000277702]},"ironwail":{"median":146.499299997231,"min":135.54769999609562,"max":156.22489999805111,"samples":[136.79050000064308,152.11149999959162,156.22489999805111,150.71370000077877,138.06559999648016,135.54769999609562,146.499299997231,152.24480000324547,141.84899999963818]},"vkquake":{"median":182.56470000051195,"min":175.0328000052832,"max":202.0394999999553,"samples":[187.46079999982612,187.51189999602502,175.0328000052832,181.45979999826523,193.18229999771575,180.123400001321,182.56470000051195,202.0394999999553,179.3385999990278]}}},"steps":[{"title":"Directory checks shared across a whole load","files":"common.c, sv_main.c, cl_parse.c, gl_rmisc.c, host.c","body":"Optional replacement textures and models miss in every loose directory. One stat per missing directory now serves the whole server spawn, client precache and R_NewMap, instead of one per candidate file. The cache ends with the load (and on Host_Error), so files added between loads are found.","batch":"ab-dircache","samples":5,"note":"prev = this morning's image-search and texture-batching build","initial":[178.59000000316883,159.50449999945704],"change":[130.3764999975101,99.9761999992188]},{"title":"Local client signon messages handled between ticks","files":"host.c","body":"Each signon round trip waited for the next 72 Hz server tick. While a local client signs on and nobody else is in game, the server now reads and answers its messages every frame between ticks, without physics, QuakeC frames or advancing time, so the simulation keeps its normal tick budget. (Measured first as full extra server frames; reworked after review with the same timing.)","batch":"ab-signon","samples":5,"note":"","initial":[157.80069999891566,144.8471999974572],"change":[98.18780000205152,82.5297999981558]},{"title":"No frame-rate cap during that signon","files":"host.c","body":"The screen is frozen for loading, so the last few round trips no longer wait for a 144 Hz frame slot. Normal capping resumes at signon 4.","batch":"ab-uncap","samples":5,"note":"","initial":[144.58579999336507,138.84690000122646],"change":[88.29520000290358,76.17439999739872]},{"title":"Sounds kept across map changes","files":"snd_dma.c, q_sound.h","body":"Sounds loaded from a PACK keep their cached samples across maps while the same PACK still provides them. Loose files reload every map, samples built for a different output rate are rebuilt, and table slots are never handed to another name while kept.","batch":"ab-sound","samples":5,"note":"","initial":[131.90330000361428,130.69549999636365],"change":[77.3540000009234,57.45580000075279]},{"title":"Texture names from a pool","files":"gl_texmgr.c","body":"glGenTextures returns values, so NVIDIA's threaded driver must stop and catch up with its worker. Names now come from a pool generated in bulk outside the load, so the first map's texture commit no longer blocks (61 ms -> 0.7 ms).","batch":"ab-names","samples":5,"note":"","initial":[131.47680000110995,119.85899999854155],"change":[62.73709999368293,52.52679999830434]},{"title":"Buffer names from a pool","files":"gl_rmisc.c, gl_mesh.c, r_brush.c, gl_vidsdl.c","body":"The same applies to glGenBuffers for alias-model meshes and the brush VBO. The pool is refilled for each new GL context.","batch":"ab-bufnames","samples":5,"note":"","initial":[119.60450000333367,112.9335000005085],"change":[53.06410000048345,52.18369999784045]},{"title":"Last frame held while a local client signs on","files":"gl_screen.c","body":"Map changes already freeze the screen behind the loading plaque. A first load from the console now does the same for at most two seconds, so CPU loading overlaps the driver instead of waiting on a console frame. Verified with a first presented in-game frame probe (glFinish after the first post-signon swap), not only the signon marker.","batch":"ab-hold2","samples":9,"note":"one binary; hold toggled by a diagnostic switch; 9 samples","initial":[112.49340000358643,96.0821999979089],"change":[51.55440000089584,41.775899997446686],"first_frame":{"initial":[112.49340000358643,104.02070000418462],"change":[60.61800000315998,52.55030000262195]}}],"steady":"Timedemo FPS +2–4% vs the previous build, quit 146 vs 146 ms, all 1,700 texture uploads identical.","note":"Measured with the build before the review fixes listed under Checks; a seven-run A/B shows the same timing with the fixes. Fresh process per run, one warm-up per engine, nine measured rounds in rotating order. QSS, FTEQW and ezQuake were further behind on these tests and were not part of this head-to-head. In the five-run six-engine suite above, the same build's initial load was 102 ms against Ironwail's 112 ms: QSS-M's first load varies more between runs (a one-time NVIDIA driver stall), so treat initial load as a near tie with Ironwail. Map changes are clearly fastest in both.","checks_html":"<p><strong>Gameplay FPS.<\/strong> Native timedemos at 800 × 600, two warm-ups then three measured passes per map, builds in ABBA order. Previous build against the final build:<\/p><div class=\"tw\"><table class=\"data\"><thead><tr><th>Demo<\/th><th>Before (FPS)<\/th><th>Final (FPS)<\/th><th>Change<\/th><\/tr><\/thead><tbody><tr><td>aerowalk<\/td><td>3,005<\/td><td>3,124<\/td><td>+4.0%<\/td><\/tr><tr><td>dm3<\/td><td>3,017<\/td><td>3,107<\/td><td>+3.0%<\/td><\/tr><tr><td>ctf2m8<\/td><td>2,942<\/td><td>3,007<\/td><td>+2.2%<\/td><\/tr><\/tbody><\/table><\/div><p><strong>Quit.<\/strong> Nine-run A/B against the original build: 146.3 ms before, 146.4 ms after.<\/p><p><strong>Textures.<\/strong> With <code>tex_verify 1<\/code>, all 721 start and 979 e1m1 mip upload records match the original build exactly. This compares the CPU upload data and flags, not a GPU readback.<\/p><p><strong>Tests.<\/strong> 7 compiled regression tests pass, including <code>test_gl_name_pools.py<\/code> added with the review fixes.<\/p><div class=\"links\"><a href=\"loading-optimization/final-2026-10-06/source.patch\">Source patch<\/a><a href=\"loading-optimization/final-2026-10-06/head-to-head/results.json\">Head-to-head JSON<\/a><a href=\"loading-optimization/final-2026-10-06/fps-check/results.json\">FPS check<\/a><a href=\"loading-optimization/final-2026-10-06/quit-ab/results.json\">Quit A/B<\/a><a href=\"loading-optimization/final-2026-10-06/texture-verification/verification.json\">Texture verification<\/a><a href=\"loading-optimization/final-2026-10-06/qssm-fast-loading-build.zip\">Test build (zip)<\/a><\/div><p><strong>Review fixes.<\/strong> A follow-up review found six edge cases; all are fixed and covered by tests. Map-loading timing with the fixes, seven runs each: initial 120 ms vs 118 ms before the fixes, change 47 vs 47 ms.<\/p><ul class=\"small muted\"><li><strong>Sound slots:<\/strong> kept entries are never reassigned to another name, so long-lived sound pointers (temp entities, menus) stay valid; past one map's worth the table resets as the original code did.<\/li><li><strong>Changed sound files:<\/strong> reuse is limited to PACK-backed sounds whose PACK still provides them; loose files reload every map.<\/li><li><strong>Audio rate changes:<\/strong> cached samples built for another output rate are rebuilt on use, including after a failed audio restart.<\/li><li><strong>Signon timing:<\/strong> between-tick signon steps exchange messages only, with no physics, QuakeC frame or time advance, and only while no other client is in game. With <code>host_framerate 0.01<\/code> loads complete normally.<\/li><li><strong>Directories created during a load:<\/strong> <code>Sys_mkdir<\/code> drops the load-time directory cache, so a mod that creates a folder and file mid-load sees it immediately.<\/li><li><strong>vid_restart:<\/strong> texture and buffer name pools are kept when the GL context survives and reset only for a new context, so no names are abandoned.<\/li><\/ul>","rejected_html":"<p><strong>Synchronous GL debug output from startup.<\/strong> It removed NVIDIA's one-time stall on the first map load (initial 127 vs 169 ms), but it keeps the driver single-threaded for the whole session. Gameplay FPS and map changes got slower, so it was not kept.<\/p><div class=\"tw\"><table class=\"data\"><thead><tr><th>Demo<\/th><th>Threaded driver (FPS)<\/th><th>Sync debug on (FPS)<\/th><th>Change<\/th><\/tr><\/thead><tbody><tr><td>aerowalk<\/td><td>2,965<\/td><td>2,702<\/td><td>-8.9%<\/td><\/tr><tr><td>dm3<\/td><td>2,885<\/td><td>2,805<\/td><td>-2.8%<\/td><\/tr><tr><td>ctf2m8<\/td><td>2,942<\/td><td>2,744<\/td><td>-6.7%<\/td><\/tr><\/tbody><\/table><\/div><p>Also measured and dropped: sync only during the first load (slower on both tests), dummy texture or GL-call warm-ups at startup (no effect), serial texture preparation (slower), a longer idle before the first map (no effect), and the earlier sky, storage, flush and mesh-storage probes.<\/p><div class=\"links\"><a href=\"loading-optimization/final-2026-10-06/rejected-startup-sync/results.json\">Lifecycle A/B<\/a><a href=\"loading-optimization/final-2026-10-06/rejected-startup-sync-fps/results.json\">FPS A/B<\/a><a href=\"loading-optimization/final-2026-10-06/rejected-loadsync-and-probes.patch\">Patch kept for reference<\/a><\/div>"},"fps":{"maps":[{"key":"aerowalk","title":"Aerowalk","note":"1,445 frames","group":"suite"},{"key":"ztndm3","title":"ZTNDM3","note":"1,442 frames","group":"suite"},{"key":"dm3","title":"DM3 · The Abandoned Base","note":"1,442 frames","group":"suite"},{"key":"bravado","title":"Bravado","note":"1,442 frames","group":"suite"},{"key":"ctf3m2","title":"CTF3M2","note":"1,442 frames","group":"suite"},{"key":"schloss","title":"Schloss","note":"1,442 frames","group":"suite"},{"key":"e1m2","title":"E1M2 · Castle of the Damned","note":"1,442 frames","group":"suite"},{"key":"dm2","title":"DM2 · Claustrophobopolis","note":"1,442 frames","group":"suite"},{"key":"ctf2m8","title":"CTF2M8","note":"1,442 frames","group":"suite"},{"key":"ctf","title":"CTF match · ctf3m2","note":"16 players, 51,716 frames, scr_autoid 0","group":"demo","na":{}},{"key":"adtears","title":"ad_tears speedrun","note":"Arcane Dimensions 1.80p1, Sphere easy run 2:14, 9,989 frames","group":"demo","na":{"ezquake":"No AD or protocol 999 support"}}],"stats":{"aerowalk":{"qssm":{"samples":[2537.2,2620.3,2647.0,2556.1,2647.4],"n":5,"median":2620.3,"min":2537.2,"max":2647.4},"ironwail":{"samples":[3045.4,3010.6,3082.9,3087.2,3029.9],"n":5,"median":3045.4,"min":3010.6,"max":3087.2},"vkquake":{"samples":[2380.5,2549.4,2566.5,2608.4,2194.4],"n":5,"median":2549.4,"min":2194.4,"max":2608.4},"qss":{"samples":[2391.5,2414.6,2436.8,2421.9,2383.5],"n":5,"median":2414.6,"min":2383.5,"max":2436.8},"fteqw":{"samples":[2886.8,3015.6,2950.1,3022.5,2990.9],"n":5,"median":2990.9,"min":2886.8,"max":3022.5},"ezquake":{"samples":[3344.6,3301.0,3275.3,3418.4,3415.0],"n":5,"median":3344.6,"min":3275.3,"max":3418.4}},"ztndm3":{"qssm":{"samples":[2705.6,2667.9,2745.4,2095.0,2416.7],"n":5,"median":2667.9,"min":2095.0,"max":2745.4},"ironwail":{"samples":[3034.5,3086.3,2962.6,3113.5,3064.7],"n":5,"median":3064.7,"min":2962.6,"max":3113.5},"vkquake":{"samples":[2572.9,2589.2,2546.0,2530.7,2534.0],"n":5,"median":2546.0,"min":2530.7,"max":2589.2},"qss":{"samples":[2442.3,2457.6,2441.5,2449.3,2440.5],"n":5,"median":2442.3,"min":2440.5,"max":2457.6},"fteqw":{"samples":[3159.3,3112.9,3228.1,3220.0,3210.9],"n":5,"median":3210.9,"min":3112.9,"max":3228.1},"ezquake":{"samples":[3368.1,3384.7,3390.1,3381.7,3354.8],"n":5,"median":3381.7,"min":3354.8,"max":3390.1}},"dm3":{"qssm":{"samples":[2493.6,2775.0,2709.6,2776.2,2669.7],"n":5,"median":2709.6,"min":2493.6,"max":2776.2},"ironwail":{"samples":[3092.0,3126.4,3116.1,2836.4,3147.5],"n":5,"median":3116.1,"min":2836.4,"max":3147.5},"vkquake":{"samples":[2681.2,2171.2,2660.7,2660.4,2644.2],"n":5,"median":2660.4,"min":2171.2,"max":2681.2},"qss":{"samples":[2251.1,2248.8,2251.9,2190.0,2252.8],"n":5,"median":2251.1,"min":2190.0,"max":2252.8},"fteqw":{"samples":[3389.7,3285.6,3327.1,3267.0,3264.2],"n":5,"median":3285.6,"min":3264.2,"max":3389.7},"ezquake":{"samples":[3401.0,3339.5,3323.6,3371.6,3351.3],"n":5,"median":3351.3,"min":3323.6,"max":3401.0}},"bravado":{"qssm":{"samples":[2454.3,2495.7,2532.5,2463.2,2522.5],"n":5,"median":2495.7,"min":2454.3,"max":2532.5},"ironwail":{"samples":[3081.5,3130.3,3096.7,3114.1,3112.2],"n":5,"median":3112.2,"min":3081.5,"max":3130.3},"vkquake":{"samples":[2574.4,2577.9,2576.0,2567.6,2544.9],"n":5,"median":2574.4,"min":2544.9,"max":2577.9},"qss":{"samples":[2226.5,2232.0,2266.5,2236.3,2261.2],"n":5,"median":2236.3,"min":2226.5,"max":2266.5},"fteqw":{"samples":[2707.9,2798.3,2752.3,2796.0,2820.5],"n":5,"median":2796.0,"min":2707.9,"max":2820.5},"ezquake":{"samples":[3411.0,3368.2,3371.8,3395.0,3351.1],"n":5,"median":3371.8,"min":3351.1,"max":3411.0}},"ctf3m2":{"qssm":{"samples":[2571.1,2510.4,2571.2,2527.0,2480.1],"n":5,"median":2527.0,"min":2480.1,"max":2571.2},"ironwail":{"samples":[3070.1,3141.3,3112.3,3127.4,2991.9],"n":5,"median":3112.3,"min":2991.9,"max":3141.3},"vkquake":{"samples":[2527.0,2614.3,2517.2,2587.2,2566.5],"n":5,"median":2566.5,"min":2517.2,"max":2614.3},"qss":{"samples":[2175.9,2191.3,2171.4,2178.2,2121.9],"n":5,"median":2175.9,"min":2121.9,"max":2191.3},"fteqw":{"samples":[2922.0,2925.5,2938.5,2765.5,2945.2],"n":5,"median":2925.5,"min":2765.5,"max":2945.2},"ezquake":{"samples":[3422.3,3422.8,3379.1,3455.7,3364.0],"n":5,"median":3422.3,"min":3364.0,"max":3455.7}},"schloss":{"qssm":{"samples":[2508.5,2464.7,2463.3,2454.3,2491.5],"n":5,"median":2464.7,"min":2454.3,"max":2508.5},"ironwail":{"samples":[3136.0,3121.5,3053.3,3109.2,3141.7],"n":5,"median":3121.5,"min":3053.3,"max":3141.7},"vkquake":{"samples":[2469.1,2494.4,2489.4,2497.7,2472.7],"n":5,"median":2489.4,"min":2469.1,"max":2497.7},"qss":{"samples":[2039.0,2041.8,2059.3,2039.3,2053.9],"n":5,"median":2041.8,"min":2039.0,"max":2059.3},"fteqw":{"samples":[2698.4,2702.1,2713.7,2706.8,2647.0],"n":5,"median":2702.1,"min":2647.0,"max":2713.7},"ezquake":{"samples":[3341.1,3363.5,3365.9,3355.0,3404.1],"n":5,"median":3363.5,"min":3341.1,"max":3404.1}},"e1m2":{"qssm":{"samples":[2694.6,2659.6,2733.4,2694.2,2762.0],"n":5,"median":2694.6,"min":2659.6,"max":2762.0},"ironwail":{"samples":[3100.0,3180.9,3138.4,3182.7,3144.4],"n":5,"median":3144.4,"min":3100.0,"max":3182.7},"vkquake":{"samples":[2628.5,2642.7,2606.2,2562.1,2564.4],"n":5,"median":2606.2,"min":2562.1,"max":2642.7},"qss":{"samples":[2217.2,2155.3,2197.9,2211.3,2218.8],"n":5,"median":2211.3,"min":2155.3,"max":2218.8},"fteqw":{"samples":[3127.4,3136.8,3120.2,3125.5,3116.3],"n":5,"median":3125.5,"min":3116.3,"max":3136.8},"ezquake":{"samples":[3393.0,3386.2,3375.5,3382.4,3210.7],"n":5,"median":3382.4,"min":3210.7,"max":3393.0}},"dm2":{"qssm":{"samples":[2797.5,2823.9,2757.9,2840.0,2727.9],"n":5,"median":2797.5,"min":2727.9,"max":2840.0},"ironwail":{"samples":[3152.7,3137.3,3152.2,3083.5,3028.4],"n":5,"median":3137.3,"min":3028.4,"max":3152.7},"vkquake":{"samples":[2675.0,2506.2,2592.4,2670.6,2464.6],"n":5,"median":2592.4,"min":2464.6,"max":2675.0},"qss":{"samples":[2462.4,2448.9,2466.4,2463.0,2458.7],"n":5,"median":2462.4,"min":2448.9,"max":2466.4},"fteqw":{"samples":[3326.4,3403.3,3399.8,3346.0,3340.7],"n":5,"median":3346.0,"min":3326.4,"max":3403.3},"ezquake":{"samples":[3359.0,3407.3,3420.2,3357.5,3428.7],"n":5,"median":3407.3,"min":3357.5,"max":3428.7}},"ctf2m8":{"qssm":{"samples":[2711.8,2720.4,2656.5,2759.1,2725.0],"n":5,"median":2720.4,"min":2656.5,"max":2759.1},"ironwail":{"samples":[3193.1,3160.7,3087.5,3167.8,3149.2],"n":5,"median":3160.7,"min":3087.5,"max":3193.1},"vkquake":{"samples":[2641.0,2606.9,2662.6,2622.9,2648.0],"n":5,"median":2641.0,"min":2606.9,"max":2662.6},"qss":{"samples":[2320.1,2320.2,2315.6,2241.1,2305.3],"n":5,"median":2315.6,"min":2241.1,"max":2320.2},"fteqw":{"samples":[3070.6,3138.4,3146.0,3165.2,3102.6],"n":5,"median":3138.4,"min":3070.6,"max":3165.2},"ezquake":{"samples":[3343.7,3422.9,3395.4,3413.8,3458.2],"n":5,"median":3413.8,"min":3343.7,"max":3458.2}},"ctf":{"qssm":{"samples":[1997.8,1996.7,1999.5,1996.1,1994.7],"n":5,"median":1996.7,"min":1994.7,"max":1999.5},"ironwail":{"samples":[3007.8,3015.4,3006.0,3028.8,3005.8],"n":5,"median":3007.8,"min":3005.8,"max":3028.8},"vkquake":{"samples":[2301.4,2285.7,2291.2,2295.3,2241.1],"n":5,"median":2291.2,"min":2241.1,"max":2301.4},"qss":{"samples":[2338.4,2344.2,2325.7,2363.2,2350.6],"n":5,"median":2344.2,"min":2325.7,"max":2363.2},"fteqw":{"samples":[1461.3,1454.3,1457.5,1457.3,1462.4],"n":5,"median":1457.5,"min":1454.3,"max":1462.4},"ezquake":{"samples":[3278.1,3301.0,3319.6,3305.6,3288.1],"n":5,"median":3301.0,"min":3278.1,"max":3319.6}},"adtears":{"qssm":{"samples":[1184.2,1181.5,1192.6,1191.2,1191.7],"n":5,"median":1191.2,"min":1181.5,"max":1192.6},"ironwail":{"samples":[2461.3,2523.5,2446.2,2479.1,2365.1],"n":5,"median":2461.3,"min":2365.1,"max":2523.5},"vkquake":{"samples":[1091.2,1122.8,1131.2,1148.4,1115.3],"n":5,"median":1122.8,"min":1091.2,"max":1148.4},"qss":{"samples":[913.5,923.4,914.4,936.6,931.6],"n":5,"median":923.4,"min":913.5,"max":936.6},"fteqw":{"samples":[599.1,594.2,616.6,625.7,605.9],"n":5,"median":605.9,"min":594.2,"max":625.7},"ezquake":null}},"geomean":{"qssm":2630.863337892473,"ironwail":3112.5389088315264,"vkquake":2580.1690514388747,"qss":2279.695162235951,"fteqw":3050.7314279324737,"ezquake":3381.9782549241636},"geomean_stats":{"qssm":{"samples":[2605.7720949171226,2634.8353447840273,2644.477509046958,2564.3270982856016,2601.9460942565443],"n":5,"median":2630.863337892473,"min":2564.3270982856016,"max":2644.477509046958},"ironwail":{"samples":[3100.2088606112184,3121.3512551390095,3088.6536778904897,3089.7761660404435,3089.4357851204963],"n":5,"median":3112.5389088315264,"min":3088.6536778904897,"max":3121.3512551390095},"vkquake":{"samples":[2570.4223641645713,2524.1774605813994,2579.0708959485432,2589.1706601127144,2511.404696254306],"n":5,"median":2580.1690514388747,"min":2511.404696254306,"max":2589.1706601127144},"qss":{"samples":[2276.9685079412,2274.934840931283,2285.9355725226937,2265.9915386496896,2273.7072614086846],"n":5,"median":2279.695162235951,"min":2265.9915386496896,"max":2285.9355725226937},"fteqw":{"samples":[3023.019965182401,3050.2701513927313,3055.4115092387515,3037.7629358910663,3041.354029745734],"n":5,"median":3050.7314279324737,"min":3023.019965182401,"max":3055.4115092387515},"ezquake":{"samples":[3375.848240743239,3377.134459490995,3366.077470440796,3392.2072478319615,3370.195332680289],"n":5,"median":3381.9782549241636,"min":3366.077470440796,"max":3392.2072478319615}},"before":{"aerowalk":1806.8,"ztndm3":1831.7,"dm3":1714.5,"bravado":1713.0,"ctf3m2":1690.9,"schloss":1543.1,"e1m2":1688.3,"dm2":1849.6,"ctf2m8":1776.7,"ctf":1988.6,"adtears":809.6},"before_geomean":1732.612422381097,"before_label":"installed 1.6.9, same day","definition":"Native timedemo frames per second for a 20-second recorded 360° camera turn, first pass in a fresh process. The nine-map figure is the geometric mean of per-map medians.","note":"Timedemo measures playback throughput in a fresh process; it is not a prediction of live-match FPS. Gameplay demos use the same method; QSS-M runs them with scr_autoid 0, and Ironwail and vkQuake get no unfocused sleep. See the FPS investigation for warm-process results."},"investigation":{"sections":[{"date":"October 6, 2026 · driver 610.88","title":"Why QSS-M's timedemo FPS was low","findings":[{"h":"Map loading was inside the timer (fixed)","p":"QSS-M loaded a demo's models, sounds and lightmaps during the first timed frames, about 100 ms on Aerowalk. Other engines load while parsing the first message, before timing starts. Loading demo precaches up front raised fresh-process FPS by 26–33%."},{"h":"The first ~2 seconds run in single-threaded driver mode","p":"NVIDIA switches its OpenGL driver to threaded mode about two seconds after an engine starts rendering, with one 60–80 ms stall. A fresh-process timedemo runs entirely before that switch. Every engine pays it, but QSS-M's per-frame driver work makes it pay more."},{"h":"The HUD is the next target","p":"Every frame pays a fixed ~190 µs windowed present on this PC, the same with SDL2 or SDL3. Beyond that, QSS-M's immediate-mode HUD costs about 26 µs per frame; hiding it lifts warm FPS from 3,097 to 3,391, past Ironwail. Batching 2D drawing is the planned fix."}],"panels":[{"title":"Demo precache moved out of the timed frames","sub":"shipped · fresh-process FPS, five passes per map","intro":"Same source and harness, before and after loading demo precaches inside the serverinfo frame (cl_parse.c). Demos can't download files, so nothing is lost by loading early.","tables":[{"caption":"Median FPS, one warm-up process then five fresh processes per map","rows":[["Map","Before (FPS)","After (FPS)","Change"],["Aerowalk","2,049","2,579","+26%"],["DM3 · The Abandoned Base","2,055","2,741","+33%"],["CTF2M8","2,040","2,654","+30%"]]},{"caption":"Aerowalk, passes in one process: the before build has a 90–100 ms load frame in every pass","rows":[["Pass in one process","Before: FPS","slowest frame","After: FPS","slowest frame"],["1","1,890","91 ms","2,292","7 ms"],["2","2,849","46 ms","2,676","62 ms"],["3","2,809","44 ms","2,986","4 ms"],["4","2,867","47 ms","3,118","4 ms"]]}],"links":[["Investigation data","data-2026-10-06/gameplay-demos/investigation-20261006.json"],["Probe patch","data-2026-10-06/gameplay-demos/probe-tdframe-stages-glcount.patch"]]},{"title":"Driver warm-up in fresh processes","sub":"why pass 1 is slower than pass 3","intro":"The one-time stall lands wherever the driver switches modes. Idling about two seconds first, even at only 144 FPS, moves it before the first pass; frame count alone does not. Ironwail warms up across passes the same way.","tables":[{"caption":"Aerowalk FPS per pass, same process","rows":[["Before the first timedemo","Pass 1","Pass 2","Pass 3"],["Nothing (as in the benchmark)","2,348","2,671","3,033"],["3,000 idle frames, uncapped","2,605","3,134","3,157"],["~2 seconds idle at 144 FPS","2,703","3,033",""],["Ironwail, nothing","2,867","3,167","3,314"]]}]},{"title":"Frame budget","sub":"per-frame CPU time, µs, warm pass","intro":"Timers around each stage of QSS-M's frame. The swap includes the driver processing the frame's GL commands. A bare clear-and-swap test shows ~190 µs is the windowed present floor on this PC for any engine.","tables":[{"caption":"QSS-M stage timings","rows":[["Aerowalk, QSS-M","Pass 1 FPS","Warm FPS","Swap µs","Other drawing µs","Demo read µs"],["Normal","2,270","3,096","251","43","15"],["HUD hidden","2,702","3,391","228","37","17"],["No world, HUD on","2,864","3,762","211","25","16"],["No world, no HUD","2,957","4,198","191","18","15"]]},{"caption":"Present floor test","rows":[["Minimal window, clear and swap","Swap µs per frame","Max FPS"],["SDL2","192","5,200"],["SDL3 (QSS-M)","192","5,208"],["SDL3 + 70 immediate-mode quads","188","5,322"]]},{"caption":"Immediate-mode HUD draws per frame","rows":[["Draw function","glBegin blocks per frame"],["Draw_Pic","11"],["Draw_Character","8"],["Draw_FillPlayer","2"],["Draw_String","2"],["Draw_Fill","2"],["Draw_CharactersRGBA","2"]]}],"after":"Renaming the executable (quakespasm.exe, bench.exe, ironwail.exe) changed nothing, so no NVIDIA application profile is involved. Sound mixing costs about 3 µs per frame.","links":[["Swap test source","data-2026-10-06/gameplay-demos/swaptest.c"],["Profiler script","data-2026-10-06/gameplay-demos/profile_td.py"]]}]},{"date":"October 5, 2026 · driver 591.86","title":"Earlier investigation","findings":[{"h":"Fresh processes hide warm speed","p":"In one process, QSS-M on Aerowalk went from 2,102 FPS on the first timedemo to 2,840 FPS on later passes. The ranking above uses first passes in fresh processes, which is where that warm-up cost shows."},{"h":"Presentation is the biggest CPU stage","p":"About 230 µs per frame is spent inside the buffer swap at 800 × 600, against roughly 27 µs of GPU render time. The swap interval includes driver work and waiting, so it isn't pure Windows overhead."},{"h":"Small fixes, no big FPS win yet","p":"The observer HUD now caches its icons, and six targeted renderer experiments were measured. None established a consistent gain; the remaining gap needs a driver-level trace."}],"panels":[{"title":"Warm process effect","sub":"QSS-M only · Aerowalk · eight passes per process","intro":"Same executable, same PC. The first pass in each process is much slower than the passes after it, in every condition tried, including scene caching off.","tables":[{"caption":"QSS-M only · Aerowalk · FPS · eight passes in each process","rows":[["Diagnostic condition","First pass","Median of passes 2–8","Evidence"],["800 × 600 · renderer defaults","2,102","2,840",{"t":"Native log","h":["fps/diagnostics/baseline_repeat.log"]}],["800 × 600 · main sky/flame settings","2,056","2,802",{"t":"Native log","h":["fps/diagnostics/fastsky_repeat.log"]}],["800 × 600 · scene cache off","2,130","2,906",{"t":"Native log","h":["fps/diagnostics/scene_off_repeat.log"]}],["3840 × 2160 · renderer defaults","1,922","2,080",{"t":"Native log","h":["fps/diagnostics/4k_repeat.log"]}],["3840 × 2160 · main sky/flame settings","1,936","2,066",{"t":"Native log","h":["fps/diagnostics/4k_fastsky_repeat.log"]}],["800 × 600 · menu settle before first pass","2,364","2,758",{"t":"Native log","h":["fps/diagnostics/menu_settle_repeat.log"]}]]}],"links":[["Diagnostic results","fps/diagnostics/results.json"],["Benchmark cvar query","fps/diagnostics/settings-query.log"]]},{"title":"Warmed comparison across engines","sub":"Aerowalk · one process per engine","intro":"Two discarded warm-ups, then six timedemos in one process per engine. QSS-M closes much of the gap once warm, but ezQuake and Ironwail still lead. vkQuake completed only its first pass and is excluded.","tables":[{"caption":"Aerowalk · windowed · supplemental native FPS","rows":[["Engine","First pass","Median of passes 3–8"],["ezQuake","3,576","3,597"],["Ironwail","3,095","3,411"],["FTEQW","2,944","3,177"],["QSS-M","1,950","2,814"],["QSS","2,232","2,639"],["vkQuake","2,761","Incomplete · excluded"]]}],"links":[["Warmed comparison JSON","fps/optimization/comparison.json"]]},{"title":"Where a frame's time goes","sub":"CPU and GPU stage timings, µs","intro":"Instrumented builds timed each stage of a frame. CPU and GPU intervals overlap, so they must not be added together.","tables":[{"caption":"Normal playback · instrumented current-source MSVC build · µs per frame","rows":[["Mode","FPS","Render + HUD","Swap / present","Other work","Evidence"],["window 800","3,370","84.5","198.1","14.2",{"t":"Log","h":["fps/optimization/window_800.log"]}],["fullscreen 800","4,739","74.3","124.7","12.0",{"t":"Log","h":["fps/optimization/fullscreen_800.log"]}],["window 4k","2,842","79.4","259.4","13.2",{"t":"Log","h":["fps/optimization/window_4k.log"]}]]},{"caption":"Ordinary Aerowalk playback · instrumented cache build · µs","rows":[["Mode / block","CPU render + HUD","CPU swap","GPU render interval","Evidence"],["window 800 · block 1","35.6","230.3","27.1",{"t":"Log","h":["fps/optimization/hud-cache/gpu-0-window_800.log"]}],["fullscreen 800 · block 2","29.9","156.2","37.3",{"t":"Log","h":["fps/optimization/hud-cache/gpu-1-fullscreen_800.log"]}],["fullscreen 800 · block 3","122.4","95.9","44.7",{"t":"Log","h":["fps/optimization/hud-cache/gpu-2-fullscreen_800.log"]}],["window 800 · block 4","35.7","230.4","27.0",{"t":"Log","h":["fps/optimization/hud-cache/gpu-3-window_800.log"]}],["window 4k · block 5","35.4","301.0","190.7",{"t":"Log","h":["fps/optimization/hud-cache/gpu-4-window_4k.log"]}],["window 4k · block 6","36.3","300.0","190.2",{"t":"Log","h":["fps/optimization/hud-cache/gpu-5-window_4k.log"]}]]},{"caption":"Median of six measured profiler passes per map/resolution · µs · scroll horizontally for all stages","rows":[["Resolution","Map","CPU 3D","CPU HUD/post","CPU swap","CPU outside render","GPU render interval"],["800 × 600","aerowalk","27.8","10.9","241.8","86.8","71.2"],["800 × 600","dm3","23.3","12.2","223.9","125.3","49.8"],["800 × 600","ctf2m8","24.1","11.8","229.0","99.7","66.3"],["3840 × 2160","aerowalk","28.5","11.6","363.1","82.3","240.4"],["3840 × 2160","dm3","23.2","12.8","372.8","114.6","248.7"],["3840 × 2160","ctf2m8","24.6","13.0","401.8","97.8","269.1"]]}],"links":[["Frame-stage JSON","fps/optimization/video-profile.json"],["GPU timing JSON","fps/optimization/hud-cache/gpu-results.json"],["Timedemo profile JSON","fps/optimization/probes/timedemo-render.json"],["CPU stack sample","fps/optimization/cpu-profile.txt"]]},{"title":"Targeted renderer experiments","sub":"six changes tried, none kept","intro":"Each experiment ran against its own baseline in the same executable, with counterbalanced order and eight measured samples per mode and resolution.","tables":[{"caption":"Aerowalk · observed median change within each experiment","rows":[["Experiment","800 × 600","4K","Finding","Evidence"],["Forced GPU synchronization","-24.7%","-29.8%","Slower at both resolutions; leave off.",{"t":"Data","h":["fps/optimization/probes/finish-probe.json"]}],["Hide demo controls","-2.4%","-5.8%","No improvement established. Default controls may already be hidden; no production UI change.",{"t":"Data","h":["fps/optimization/probes/bar-probe.json"]}],["Submit before presentation","+0.8%","+0.6%","Less than 1% change; no meaningful win established.",{"t":"Data","h":["fps/optimization/probes/flush-probe.json"]}],["Submit after 3D","-2.8%","-0.3%","No consistent win established; no production change.",{"t":"Data","h":["fps/optimization/probes/flush-probe.json"]}],["Offscreen gamma path","-5.6%","-2.5%","Slower. Gamma changes slightly; this diagnostic is not a visual-equivalence comparison.",{"t":"Data","h":["fps/optimization/probes/gamma-path-probe.json"]}],["Skip duplicate world shader flags","-1.6%","+2.1%","No consistent win: lower at 800×600, higher at 4K, with overlapping ranges. No production renderer change.",{"t":"Data","h":["fps/optimization/probes/uniform-probe.json"]}]],"wrap":[3]},{"caption":"Demo parser / rewind CPU time · median µs per frame","rows":[["Map","Read from demo","Snapshot phase","Rewind delta phase"],["aerowalk","14.8","5.1","4.8"],["dm3","16.0","6.4","5.7"],["ctf2m8","18.0","7.3","6.5"]]}],"after":"Demo parsing and rewind tracking cost about 15–18 µs per frame, far less than rendering and presentation."},{"title":"Observer HUD cache","sub":"shipped · 360 timedemo passes","intro":"The observer HUD searched for an optional weapon picture and resolved nine icons every frame. It now caches the result until the HUD or game reloads. Nine maps, ABBA build order, six measured passes per build, map and resolution.","tables":[{"caption":"Median FPS per map, before and after the cache","rows":[["Map","800 × 600 before","after","change","4K before","after","change"],["aerowalk","2,796","2,824","+1.0%","2,017","2,161","+7.1%"],["ztndm3","2,847","2,861","+0.5%","1,979","2,120","+7.1%"],["dm3","2,664","2,618","-1.7%","1,884","1,912","+1.4%"],["bravado","2,590","2,682","+3.5%","2,022","1,954","-3.4%"],["ctf3m2","2,496","2,591","+3.8%","1,987","1,911","-3.8%"],["schloss","2,338","2,256","-3.5%","1,763","1,766","+0.1%"],["e1m2","2,600","2,534","-2.5%","1,866","1,933","+3.6%"],["dm2","2,800","2,858","+2.1%","2,035","1,975","-3.0%"],["ctf2m8","2,658","2,708","+1.9%","1,962","1,836","-6.4%"],["Geometric mean","2,639","2,652","+0.5%","1,944","1,948","+0.2%"]]}],"after":"Gains are under 1% on the geometric mean and the before/after ranges overlap on most maps, so this is a cleanup rather than an FPS win.","links":[["Before/after JSON","fps/optimization/hud-cache/gpu-results.json"],["Source patch","fps/optimization/hud-cache/source.patch"],["Regression test","fps/optimization/hud-cache/test_observer_hud_cache.py"]]}]}]},"method":{"sessions":"<p>Each engine gets five lifecycle sessions (ready, load start, change to e1m1, quit), five separate launches straight into start, and five separate connections from the menu to a local server. Engine order rotates each round, and every session is a fresh process from an isolated portable copy.<\/p><p>All copies use the same stock pak0/pak1 bytes, an 800 × 600 client area checked from the window itself, FOV 90, VSync and MSAA off, sound on, and a 144 FPS limit. OS file and driver caches stay warm; this is not a cold-boot test.<\/p><p>Quakespasm-family clients run with <code>-listen 8<\/code> so they don't throttle while unfocused, bound to loopback. FTEQW runs with <code>-noupdates<\/code> so its update prompt can't block a session. ezQuake's actions are scheduled through native <code>serverexec<\/code> stages and <code>f_spawn<\/code> callbacks, because its startup ignores <code>wait<\/code>.<\/p><p>The local NetQuake server is the installed QSS-M 1.6.9 dedicated build on 127.0.0.1:26001, running e1m1 with protocol 15, for every NetQuake client. ezQuake joins a separate FTE QuakeWorld server on 127.0.0.1:27501.<\/p><p>Times come from Python <code>perf_counter<\/code>, with native console logs polled every 1 ms. Medians and ranges describe these five local runs, not statistical significance. Commands, configs, hashes, every observed event and exit codes are in the raw JSON.<\/p><p>October 6 reruns use NVIDIA driver 610.88; the October 5 page used 591.86. Every engine was re-measured on October 6, so the standings compare like with like.<\/p>","fps":"<p>The demos are protocol-15 NetQuake recordings made in QSS-M: a stationary camera turning about 360° over 20 seconds at the first deathmatch spawn of each map. Stock id1 game code, no monsters, no other players. CTF maps test their geometry, not CTF gameplay.<\/p><p>One engine runs at a time. Each map and engine gets one discarded warm-up and five measured timedemos, each in a fresh process, with engine order rotated between passes. Startup and map loading fall outside the engines' timedemo timers.<\/p><p>vkQuake renders with Vulkan; the others use OpenGL. Renderer defaults, particles and interpolation differ between engines, so image quality and workload are close but not identical. \"ms / frame\" is 1000 ÷ FPS. These runs don't measure 1% lows, stutter, input latency or network play.<\/p><p>The cross-map figure is the geometric mean of each map's median FPS, so every map counts equally.<\/p>","denver":"<p>Fresh client, menu settle, then a hostname <code>connect<\/code> to denver.quakeone.com:26000 timed to native signon stage 4. The server (CRMod 7 on QSS-M 1.6.9) ran aerowalk with nobody connected before each attempt, and every client had the same map and 35 custom sounds cached.<\/p><p>Protocol extensions were disabled where supported. Real network and server scheduling are included. ezQuake can't join a NetQuake server, so it has no result here.<\/p><p>This test ran on October 5 with the installed QSS-M build and was not repeated for the October 6 refresh.<\/p>"},"builds":[{"name":"QSS-M · current source","version":"1.6.9 + uncommitted changes (source.patch)","renderer":"OpenGL","sha":"4aca5a55a63818482ccff350f0b3784c4a88449f5a7740fc002e5a36eb62ede2","qssm":true},{"name":"QSS-M · map-loading head-to-head","version":"loading changes before review fixes","renderer":"OpenGL","sha":"742631726d3e5177cf0e8ef31394dab5b996c27c33dfc2054de0052dfed12004","qssm":true},{"name":"QSS-M · installed","version":"1.6.9-7da539b","renderer":"OpenGL","sha":"c8f2fbde0c9c2cba091ae58851c8e24e0174708b5bb9afb2f9220f94fc5a3175","qssm":true},{"name":"Ironwail","version":"v0.8.2","renderer":"OpenGL","sha":"4092b1bb31af1555f27e7d8ce945fddbea0eac0d97e74e87d544ff2e54835f1e","qssm":false},{"name":"vkQuake","version":"1.36.0","renderer":"Vulkan","sha":"8a0e4b0b0bc37471991f56bb85d56145869d3b0967a8aac89cedaefa01baf9cc","qssm":false},{"name":"QSS","version":"2024-March-01 (requested archive)","renderer":"OpenGL","sha":"95d4799a96ee5e84a7bb593ec3ce439a55ca9678331a652737e04949e2cd0f44","qssm":false},{"name":"FTEQW","version":"git-30-f2576ed","renderer":"OpenGL","sha":"b4c42192534634c523b2d9d9a98153930d9d2cc7ff6d5d366b397359d8b47f2e","qssm":false},{"name":"ezQuake","version":"3.6.9","renderer":"OpenGL","sha":"1b4896a54a2a5c4f91cf64ae6e00d2264f37097ba6a06de150f218a4ee004318","qssm":false}],"raw":[{"group":"October 6 reruns (this page)","items":[["Lifecycle JSON","data-2026-10-06/lifecycle/results.json"],["Lifecycle CSV","data-2026-10-06/lifecycle-samples.csv"],["FPS JSON","data-2026-10-06/fps/fps-results.json"],["FPS CSV","data-2026-10-06/fps-samples.csv"],["QSS-M installed · lifecycle","data-2026-10-06/lifecycle-qssm-installed/results.json"],["QSS-M installed · FPS","data-2026-10-06/fps-qssm-installed/fps-results.json"],["QSS-M · current build lifecycle","data-2026-10-06/lifecycle-qssm-current/results.json"],["QSS-M · current build FPS","data-2026-10-06/fps-qssm-current/fps-results.json"],["QSS-M source patch (this build)","data-2026-10-06/qssm-source.patch"],["QSS-M test build (zip)","data-2026-10-06/qssm-test-build.zip"],["Rerun driver script","data-2026-10-06/refresh.py"],["Report build script","data-2026-10-06/build_report.py"]]},{"group":"Map loading work","items":[["Head-to-head JSON","loading-optimization/final-2026-10-06/head-to-head/results.json"],["Per-step A/B results","loading-optimization/final-2026-10-06/steps/"],["Source patch","loading-optimization/final-2026-10-06/source.patch"],["Test build (zip)","loading-optimization/final-2026-10-06/qssm-fast-loading-build.zip"]]},{"group":"October 5 originals","items":[["Previous page","index-2026-10-05.html"],["Lifecycle JSON","results.json"],["Lifecycle CSV","samples.csv"],["FPS JSON","fps-results.json"],["FPS CSV","fps-samples.csv"],["Lifecycle script","lifecycle/benchmark.py"],["FPS script","fps/measure.py"],["Recording script","fps/record.py"],["Demo hashes and camera positions","fps/demos.json"],["Reproduction notes","README.md"]]}]}</script>
+<script>
+(() => {
+  const D = JSON.parse(document.getElementById('report-data').textContent);
+  const $ = (s, r = document) => r.querySelector(s);
+  const el = (tag, cls, html) => { const e = document.createElement(tag); if (cls) e.className = cls; if (html != null) e.innerHTML = html; return e; };
+  const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+  const fmt = (v, d = 0) => v == null ? '–' : Number(v).toLocaleString('en-US', { minimumFractionDigits: d, maximumFractionDigits: d });
+  const ENG = D.engines;              // {key:{name,version,renderer,...}}
+  const ORDER = D.engine_order;
+  const name = k => ENG[k] ? ENG[k].name : k;
+
+  /* Theme toggle: system -> light -> dark */
+  const themes = ['system', 'light', 'dark'];
+  let theme = 'system';
+  try { theme = localStorage.getItem('qel-theme') || 'system'; } catch (e) {}
+  const applyTheme = () => {
+    if (theme === 'system') document.documentElement.removeAttribute('data-theme');
+    else document.documentElement.setAttribute('data-theme', theme);
+    $('#theme').textContent = 'Theme: ' + theme;
+  };
+  $('#theme').onclick = () => { theme = themes[(themes.indexOf(theme) + 1) % 3]; try { localStorage.setItem('qel-theme', theme); } catch (e) {} applyTheme(); };
+  applyTheme();
+
+  /* Tooltip */
+  const tip = $('#tip');
+  const showTip = (t, x, y) => { tip.textContent = t; tip.classList.add('on'); const w = tip.offsetWidth; tip.style.left = Math.max(8, Math.min(innerWidth - w - 8, x - w / 2)) + 'px'; tip.style.top = (y - 34) + 'px'; };
+  const hideTip = () => tip.classList.remove('on');
+  document.addEventListener('pointerover', e => { const t = e.target.closest('[data-tip]'); if (!t) return; const r = t.getBoundingClientRect(); showTip(t.dataset.tip, r.left + r.width / 2, r.top); });
+  document.addEventListener('pointerout', e => { if (e.target.closest('[data-tip]')) hideTip(); });
+  document.addEventListener('focusin', e => { const t = e.target.closest('[data-tip]'); if (!t) return; const r = t.getBoundingClientRect(); showTip(t.dataset.tip, r.left + r.width / 2, r.top); });
+  document.addEventListener('focusout', hideTip);
+  addEventListener('scroll', hideTip, { passive: true });
+
+  /* Shared horizontal bar chart: median bar, min-max bracket, run dots, optional QSS-M "before" marker */
+  function niceMax(v) { const p = Math.pow(10, Math.floor(Math.log10(v))); for (const m of [1, 1.2, 1.6, 2, 3, 4, 6, 8, 10]) if (m * p >= v) return m * p; return 10 * p; }
+  function barChart(host, cfg) {
+    // cfg: {title, sub, def, unit, digits, higher, rows:[{key,label,sub,s:{samples,median,min,max}|null,na}], ghost:{key,value,label}, note}
+    const rows = cfg.rows.slice().sort((a, b) => {
+      if (!a.s || a.s.median == null) return 1; if (!b.s || b.s.median == null) return -1;
+      return cfg.higher ? b.s.median - a.s.median : a.s.median - b.s.median;
+    });
+    const vals = rows.flatMap(r => r.s && r.s.median != null ? r.s.samples.filter(v => v != null) : []);
+    if (cfg.ghost) vals.push(cfg.ghost.value);
+    const max = niceMax(Math.max(...vals) * 1.04);
+    const pct = v => (v / max * 100).toFixed(3) + '%';
+    const best = rows[0] && rows[0].s ? rows[0].s.median : null;
+    let html = '<div class="chart-title"><h3>' + esc(cfg.title) + '</h3><span>' + esc(cfg.sub) + '</span></div>';
+    if (cfg.def) html += '<p class="chart-def">' + cfg.def + '</p>';
+    html += '<div class="rows">';
+    for (const r of rows) {
+      const q = r.key === 'qssm' || r.q;
+      if (!r.s || r.s.median == null) {
+        html += '<div class="row na' + (q ? ' qssm' : '') + '"><div class="name">' + esc(r.label) + (r.sub ? '<small>' + esc(r.sub) + '</small>' : '') + '</div><div class="track"><div class="base"></div></div><div class="val">' + esc(r.na || 'Not applicable') + '</div></div>';
+        continue;
+      }
+      const s = r.s, d = cfg.digits ?? 0;
+      let track = '<div class="base"></div><div class="bar" style="width:' + pct(s.median) + '"></div><div class="span" style="left:' + pct(s.min) + ';width:calc(' + pct(s.max) + ' - ' + pct(s.min) + ')"></div>';
+      s.samples.forEach((v, i) => { if (v != null) track += '<span class="dot" tabindex="0" style="left:' + pct(v) + '" data-tip="' + esc(r.label) + ' · run ' + (i + 1) + ': ' + fmt(v, d === 0 ? 1 : d) + ' ' + cfg.unit + '"></span>'; });
+      if (cfg.ghost && cfg.ghost.key === r.key) track += '<div class="ghost" style="left:' + pct(cfg.ghost.value) + '" data-label="' + esc(cfg.ghost.label) + '" data-tip="' + esc(cfg.ghost.tip) + '"></div>';
+      const rel = best && s.median !== best ? (cfg.higher ? (best / s.median) : (s.median / best)) : null;
+      html += '<div class="row' + (q ? ' qssm' : '') + '"><div class="name">' + esc(r.label) + (r.sub ? '<small>' + esc(r.sub) + '</small>' : '') + '</div><div class="track">' + track + '</div><div class="val">' + fmt(s.median, d) + ' <span class="x">' + cfg.unit + '</span><small>' + fmt(s.min, d) + '–' + fmt(s.max, d) + (rel ? ' · ' + rel.toFixed(2) + '×' : ' · best') + '</small></div></div>';
+    }
+    html += '</div><div class="axis"><div></div><div class="ticks">';
+    for (let i = 0; i <= 4; i++) html += '<span style="left:' + (i * 25) + '%">' + fmt(max * i / 4, max < 10 ? 1 : 0) + '</span>';
+    html += '</div><div></div></div>';
+    html += '<div class="legend"><span><i class="lq"></i>QSS-M median</span><span><i class="lb"></i>Other engines</span><span><i class="ld"></i>Each run</span><span><i class="lr"></i>Fastest–slowest</span><span>×: how far behind the best median</span>' + (cfg.ghost ? '<span><i class="lg"></i>' + esc(cfg.ghost.legend) + '</span>' : '') + '</div>';
+    if (cfg.note) html += '<p class="note">' + cfg.note + '</p>';
+    host.innerHTML = html;
+  }
+
+  function seg(host, items, current, onPick) {
+    host.innerHTML = '';
+    for (const it of items) {
+      const b = el('button', null, esc(it.label)); b.type = 'button'; b.dataset.k = it.key;
+      b.setAttribute('aria-pressed', String(it.key === current));
+      b.onclick = () => { for (const x of host.children) x.setAttribute('aria-pressed', String(x === b)); onPick(it.key); };
+      host.appendChild(b);
+    }
+  }
+
+  /* ---------- Hero ---------- */
+  $('#hero-date').textContent = D.meta.date_label;
+  $('#hero-lede').innerHTML = D.meta.lede;
+  $('#rig').innerHTML = D.meta.rig.map(([k, v]) => '<div><span>' + esc(k) + '</span><span>' + esc(v) + '</span></div>').join('');
+  $('#headline').innerHTML = D.headline.map(h => '<div><div class="k">' + esc(h.k) + '</div><div class="v">' + h.v + '</div><div class="d">' + esc(h.d) + '</div></div>').join('');
+  $('#std-date').textContent = D.meta.measured;
+
+  /* ---------- Standings matrix ---------- */
+  const M = D.lifecycle.metrics;
+  (() => {
+    let h = '<thead><tr><th scope="col">Test</th>' + ORDER.map(k => '<th scope="col" class="' + (k === 'qssm' ? 'q' : '') + '">' + esc(name(k)) + '</th>').join('') + '</tr></thead><tbody>';
+    const rowsDef = M.map(m => ({ key: m.key, label: m.title, sub: 'ms · lower is faster' + (m.dated ? ' · ' + m.dated : ''), higher: false, stat: k => m.stats[k] && m.stats[k].median, unranked: m.unranked || [], digits: 0 }));
+    rowsDef.push({ key: 'fps', label: 'FPS · nine-map mean', sub: 'geometric mean · higher is faster', higher: true, stat: k => D.fps.geomean[k], unranked: [], digits: 0 });
+    for (const m of D.fps.maps.filter(x => x.group === 'demo'))
+      rowsDef.push({ key: 'fps:' + m.key, label: 'FPS · ' + m.title, sub: 'median FPS · higher is faster', higher: true, stat: k => D.fps.stats[m.key][k] ? D.fps.stats[m.key][k].median : null, unranked: [], digits: 0 });
+    for (const r of rowsDef) {
+      const vals = ORDER.filter(k => !r.unranked.includes(k)).map(k => r.stat(k)).filter(v => v != null);
+      const sorted = vals.slice().sort((a, b) => r.higher ? b - a : a - b);
+      h += '<tr><th scope="row"><button type="button" data-go="' + r.key + '">' + esc(r.label) + '</button><small>' + esc(r.sub) + '</small></th>';
+      for (const k of ORDER) {
+        const v = r.stat(k);
+        if (v == null) { h += '<td class="' + (k === 'qssm' ? 'q' : '') + '"><span class="cell na">n/a</span></td>'; continue; }
+        if (r.unranked.includes(k)) { h += '<td class="' + (k === 'qssm' ? 'q' : '') + '"><span class="cell na" title="Different protocol; not ranked">' + fmt(v, r.digits) + ' <span class="rank">–</span></span></td>'; continue; }
+        const rank = sorted.indexOf(v) + 1;
+        h += '<td class="' + (k === 'qssm' ? 'q' : '') + '"><span class="cell"><span>' + fmt(v, r.digits) + '</span><span class="rank' + (rank === 1 ? ' r1' : '') + '" title="Rank ' + rank + ' of ' + sorted.length + '">' + rank + '</span></span></td>';
+      }
+      h += '</tr>';
+    }
+    $('#matrix').innerHTML = h + '</tbody>';
+    $('#matrix').addEventListener('click', e => {
+      const b = e.target.closest('[data-go]'); if (!b) return;
+      if (b.dataset.go === 'fps') { pickMap('all'); location.hash = 'fps'; return; }
+      if (b.dataset.go.startsWith('fps:')) { pickMap(b.dataset.go.slice(4)); $('#fps').scrollIntoView(); return; }
+      pickLife(b.dataset.go); const btn = $('#life-tests [data-k="' + b.dataset.go + '"]'); if (btn) for (const x of btn.parentNode.children) x.setAttribute('aria-pressed', String(x === btn));
+      $('#lifecycle').scrollIntoView();
+    });
+    $('#matrix-note').innerHTML = D.lifecycle.matrix_note;
+  })();
+
+  /* ---------- Lifecycle ---------- */
+  function pickLife(key) {
+    const m = M.find(x => x.key === key);
+    const ghost = m.before ? { key: 'qssm', value: m.before.median, label: 'before ' + fmt(m.before.median) + ' ms', legend: 'QSS-M before this work (' + m.before.label + ')', tip: 'QSS-M ' + m.before.label + ': median ' + fmt(m.before.median, 1) + ' ms' } : null;
+    barChart($('#life-chart'), {
+      title: m.title, sub: 'ms · lower is faster · ' + (m.dated || D.meta.measured), def: esc(m.definition), unit: 'ms', digits: 0, higher: false, ghost,
+      rows: ORDER.map(k => ({ key: k, label: name(k), sub: ENG[k].version, s: m.stats[k] && m.stats[k].median != null ? m.stats[k] : null, na: m.na && m.na[k] })),
+      note: m.note || ''
+    });
+  }
+  seg($('#life-tests'), M.map(m => ({ key: m.key, label: m.short })), 'initial', pickLife);
+  pickLife('initial');
+  (() => {
+    let h = '<caption>Median [fastest–slowest], then every run in order, ms. Blank: not applicable.</caption><thead><tr><th>Engine</th>' + M.map(m => '<th>' + esc(m.short) + '</th>').join('') + '</tr></thead><tbody>';
+    for (const k of ORDER) {
+      h += '<tr class="' + (k === 'qssm' ? 'qssm' : '') + '"><td>' + esc(name(k)) + '</td>' + M.map(m => { const s = m.stats[k]; if (!s || s.median == null) return '<td>–</td>'; return '<td title="' + s.samples.map(v => v == null ? '–' : v.toFixed(1)).join(', ') + '">' + fmt(s.median) + ' <span class="muted">[' + fmt(s.min) + '–' + fmt(s.max) + ']</span></td>'; }).join('') + '</tr>';
+    }
+    h += '</tbody>';
+    $('#life-table').innerHTML = h;
+  })();
+
+  /* ---------- Map loading story ---------- */
+  const L = D.loading;
+  $('#load-date').textContent = L.date;
+  const lm = (k, e) => L.summary[k][e].median;
+  $('#load-split').innerHTML = [
+    ['Initial map load · start', 'initial'], ['Map change · e1m1', 'change']
+  ].map(([t, k]) => { const others = ['ironwail', 'vkquake'].map(e => [e, lm(k, e)]).sort((a, b) => a[1] - b[1]); return '<div><div class="k">' + t + '</div><div class="v"><span class="from">' + fmt(lm(k, 'baseline')) + ' →</span> <span class="to">' + fmt(lm(k, 'candidate')) + ' ms</span></div><p>Fastest in this head-to-head. Next: ' + esc(name(others[0][0])) + ' at ' + fmt(others[0][1]) + ' ms. Median of nine runs.</p></div>'; }).join('')
+    + '<div><div class="k">Held steady</div><div class="v">FPS · quit · textures</div><p>' + esc(L.steady) + '</p></div>';
+  const LNAMES = { baseline: 'QSS-M · before', candidate: 'QSS-M · now', ironwail: name('ironwail'), vkquake: name('vkquake') };
+  function pickLoad(k) {
+    barChart($('#load-chart'), {
+      title: k === 'initial' ? 'Initial map load · start' : 'Map change · start → e1m1', sub: 'ms · lower is faster · nine runs · ' + L.date, unit: 'ms', digits: 0, higher: false,
+      rows: ['candidate', 'baseline', 'ironwail', 'vkquake'].map(e => ({ key: e === 'candidate' ? 'qssm' : e, q: e === 'baseline' ? false : undefined, label: LNAMES[e], sub: e === 'baseline' ? 'original build' : e === 'candidate' ? 'current source' : ENG[e].version, s: L.summary[k][e] })),
+      note: esc(L.note)
+    });
+  }
+  seg($('#load-tests'), [{ key: 'initial', label: 'Initial load' }, { key: 'change', label: 'Map change' }], 'initial', pickLoad);
+  pickLoad('initial');
+  (() => {
+    const all = L.steps.flatMap(s => [...s.initial, ...s.change]); const mx = Math.max(...all);
+    $('#load-steps').innerHTML = L.steps.map(s => {
+      const pair = (lab, v) => '<div class="dl"><span>' + lab + '</span><span class="pair" data-tip="' + lab + ': ' + v[0].toFixed(1) + ' → ' + v[1].toFixed(1) + ' ms"><i class="b" style="width:' + (v[0] / mx * 100) + '%"></i><i class="a" style="width:' + (v[1] / mx * 100) + '%"></i></span><span class="num">' + fmt(v[0]) + ' → ' + fmt(v[1]) + ' ms</span></div>';
+      let meta = '<code>' + esc(s.files) + '</code> · ' + s.samples + ' runs per side';
+      if (s.first_frame) meta += ' · first presented frame: ' + fmt(s.first_frame.initial[0]) + ' → ' + fmt(s.first_frame.initial[1]) + ' ms (initial), ' + fmt(s.first_frame.change[0]) + ' → ' + fmt(s.first_frame.change[1]) + ' ms (change)';
+      return '<li class="step"><div><h4>' + esc(s.title) + '</h4><p>' + esc(s.body) + '</p><div class="meta">' + meta + '</div></div><div class="delta">' + pair('Initial', s.initial) + pair('Change', s.change) + '</div></li>';
+    }).join('');
+  })();
+  $('#load-checks').innerHTML = L.checks_html;
+  $('#load-rejected').innerHTML = L.rejected_html;
+
+  /* ---------- FPS ---------- */
+  const F = D.fps;
+  let fpsMap = 'all', fpsUnit = 'fps';
+  const sel = $('#fps-map');
+  const SUITE = F.maps.filter(m => m.group !== 'demo'), DEMOS = F.maps.filter(m => m.group === 'demo');
+  sel.innerHTML = '<optgroup label="Nine-map suite"><option value="all">All nine maps · geometric mean</option>' + SUITE.map(m => '<option value="' + m.key + '">' + esc(m.title) + '</option>').join('') + '</optgroup>'
+    + '<optgroup label="Gameplay demos">' + DEMOS.map(m => '<option value="' + m.key + '">' + esc(m.title) + '</option>').join('') + '</optgroup>';
+  function toMs(s) { if (!s) return s; const inv = v => v == null ? null : 1000 / v; return { samples: s.samples.map(inv), median: inv(s.median), min: inv(s.max), max: inv(s.min) }; }
+  function renderFps() {
+    const ms = fpsUnit === 'ms';
+    let rows, title, ghost = null, sub;
+    if (fpsMap === 'all') {
+      title = 'All nine maps';
+      rows = ORDER.map(k => { const g = F.geomean_stats[k]; return { key: k, label: name(k), sub: ENG[k].version + ' · ' + ENG[k].renderer, s: ms ? toMs(g) : g }; });
+      if (F.before_geomean) ghost = { key: 'qssm', value: ms ? 1000 / F.before_geomean : F.before_geomean, label: 'before ' + (ms ? (1000 / F.before_geomean).toFixed(3) : fmt(F.before_geomean)), legend: 'QSS-M installed build (' + F.before_label + ')', tip: 'QSS-M ' + F.before_label + ': ' + fmt(F.before_geomean) + ' FPS geometric mean' };
+      sub = 'geometric mean of per-map medians · dots are per-pass geometric means';
+    } else {
+      const m = F.maps.find(x => x.key === fpsMap); title = m.title;
+      rows = ORDER.map(k => ({ key: k, label: name(k), sub: ENG[k].version + ' · ' + ENG[k].renderer, s: F.stats[fpsMap][k] ? (ms ? toMs(F.stats[fpsMap][k]) : F.stats[fpsMap][k]) : null, na: (m.na || {})[k] }));
+      const b = F.before && F.before[fpsMap];
+      if (b) ghost = { key: 'qssm', value: ms ? 1000 / b : b, label: 'before ' + (ms ? (1000 / b).toFixed(3) : fmt(b)), legend: 'QSS-M installed build (' + F.before_label + ')', tip: 'QSS-M ' + F.before_label + ': ' + fmt(b) + ' FPS median' };
+      sub = 'median of five passes · ' + m.note;
+    }
+    barChart($('#fps-chart'), { title, sub: (ms ? 'ms per frame · lower is faster · ' : 'FPS · higher is faster · ') + sub, unit: ms ? 'ms' : 'FPS', digits: ms ? 3 : 0, higher: !ms, rows, ghost, note: F.note });
+  }
+  function pickMap(k) { fpsMap = k; sel.value = k; renderFps(); }
+  sel.onchange = () => pickMap(sel.value);
+  for (const b of $('#fps-unit').children) b.onclick = () => { fpsUnit = b.dataset.u; for (const x of $('#fps-unit').children) x.setAttribute('aria-pressed', String(x === b)); renderFps(); };
+  renderFps();
+  (() => {
+    let h = '<thead><tr><th scope="col">Map</th>' + ORDER.map(k => '<th scope="col" class="' + (k === 'qssm' ? 'q' : '') + '">' + esc(name(k)) + '</th>').join('') + '</tr></thead><tbody>';
+    const rowFor = (label, key, get) => {
+      const vals = ORDER.map(get), top = Math.max(...vals.filter(v => v != null));
+      let r = '<tr><th scope="row">' + (key ? '<button type="button" data-map="' + key + '">' + esc(label) + '</button>' : esc(label)) + '</th>';
+      ORDER.forEach((k, i) => { const v = vals[i]; if (v == null) { r += '<td class="' + (k === 'qssm' ? 'q' : '') + '" title="Not applicable">–</td>'; return; } r += '<td class="' + (k === 'qssm' ? 'q ' : '') + (v === top ? 'top' : '') + '" data-tip="' + esc(name(k) + ' · ' + label + ': ' + fmt(v) + ' FPS') + '">' + fmt(v) + (v === top ? ' ●' : '') + '<span class="hb"><i style="width:' + (v / top * 100).toFixed(1) + '%"></i></span></td>'; });
+      return r + '</tr>';
+    };
+    for (const m of SUITE) h += rowFor(m.title, m.key, k => F.stats[m.key][k].median);
+    h += '</tbody><tfoot>' + rowFor('Geometric mean', null, k => F.geomean[k]) + '</tfoot>';
+    $('#fps-heat').innerHTML = h;
+    let d = '<thead><tr><th scope="col">Demo</th>' + ORDER.map(k => '<th scope="col" class="' + (k === 'qssm' ? 'q' : '') + '">' + esc(name(k)) + '</th>').join('') + '</tr></thead><tbody>';
+    for (const m of DEMOS) d += rowFor(m.title, m.key, k => F.stats[m.key][k] ? F.stats[m.key][k].median : null);
+    $('#fps-demo-heat').innerHTML = d + '</tbody>';
+    $('#fps-demo-note').innerHTML = DEMOS.map(m => '<strong>' + esc(m.title) + ':</strong> ' + esc(m.note)).join('. ') + '. Dashes mark engines that can\'t play the demo.';
+    for (const id of ['#fps-heat', '#fps-demo-heat']) $(id).addEventListener('click', e => { const b = e.target.closest('[data-map]'); if (!b) return; pickMap(b.dataset.map); $('#fps').scrollIntoView(); });
+    $('#fps-heat-note').innerHTML = '● marks the fastest engine on each map. The thin bar under each value is its share of that map\'s fastest median.';
+  })();
+
+  /* ---------- Investigation ---------- */
+  const I = D.investigation;
+  $('#inv-date').textContent = I.sections[0].date;
+  const cellHtml = c => typeof c === 'string' ? esc(c) : '<a href="' + esc(c.h[0]) + '">' + esc(c.t) + '</a>';
+  const panelHtml = p => {
+    let body = p.intro ? '<p>' + p.intro + '</p>' : '';
+    for (const t of p.tables) {
+      body += '<div class="tw"><table class="data">' + (t.caption ? '<caption>' + esc(t.caption) + '</caption>' : '') + '<thead><tr>' + t.rows[0].map(c => '<th>' + esc(typeof c === 'string' ? c : c.t) + '</th>').join('') + '</tr></thead><tbody>';
+      for (const r of t.rows.slice(1)) body += '<tr class="' + (/QSS-M/.test(typeof r[0] === 'string' ? r[0] : r[0].t) ? 'qssm' : '') + '">' + r.map((c, i) => '<td' + ((t.wrap || []).includes(i) ? ' class="wrap-cell"' : '') + '>' + cellHtml(c) + '</td>').join('') + '</tr>';
+      body += '</tbody></table></div>';
+    }
+    if (p.after) body += '<p>' + p.after + '</p>';
+    if (p.links) body += '<div class="links">' + p.links.map(([t, h]) => '<a href="' + esc(h) + '">' + esc(t) + '</a>').join('') + '</div>';
+    return '<details class="more"><summary>' + esc(p.title) + '<small>' + esc(p.sub || '') + '</small></summary><div class="in">' + body + '</div></details>';
+  };
+  $('#inv-findings').innerHTML = I.sections[0].findings.map(f => '<div><h4>' + esc(f.h) + '</h4><p>' + f.p + '</p></div>').join('');
+  $('#inv-panels').innerHTML = I.sections[0].panels.map(panelHtml).join('') + I.sections.slice(1).map(s =>
+    '<h3 class="inv-sub">' + esc(s.title) + ' <span class="flag old">' + esc(s.date) + '</span></h3><div class="findings">' + s.findings.map(f => '<div><h4>' + esc(f.h) + '</h4><p>' + f.p + '</p></div>').join('') + '</div>' + s.panels.map(panelHtml).join('')).join('');
+
+  /* ---------- Method ---------- */
+  $('#defs').innerHTML = M.map(m => '<dt>' + esc(m.title) + '</dt><dd>' + esc(m.definition) + '</dd>').join('') + '<dt>FPS</dt><dd>' + esc(F.definition) + '</dd>';
+  $('#method-sessions').innerHTML = D.method.sessions;
+  $('#method-fps').innerHTML = D.method.fps;
+  $('#method-denver').innerHTML = D.method.denver;
+  $('#builds').innerHTML = '<thead><tr><th>Engine</th><th>Version</th><th>Renderer</th><th>Executable SHA-256</th></tr></thead><tbody>' + D.builds.map(b => '<tr class="' + (b.qssm ? 'qssm' : '') + '"><td>' + esc(b.name) + '</td><td>' + esc(b.version) + '</td><td>' + esc(b.renderer) + '</td><td class="hash" style="text-align:left">' + esc(b.sha) + '</td></tr>').join('') + '</tbody>';
+  $('#raw-links').innerHTML = D.raw.map(g => '<p class="small" style="margin:10px 0 4px;font-weight:600">' + esc(g.group) + '</p><div class="links">' + g.items.map(([t, h]) => '<a href="' + esc(h) + '">' + esc(t) + '</a>').join('') + '</div>').join('');
+  $('#foot').innerHTML = D.meta.footer;
+
+  /* Active nav link */
+  const links = [...document.querySelectorAll('.nav a')];
+  const io = new IntersectionObserver(es => { for (const e of es) if (e.isIntersecting) for (const a of links) a.classList.toggle('on', a.getAttribute('href') === '#' + e.target.id); }, { rootMargin: '-40% 0px -55% 0px' });
+  for (const a of links) { const s = document.querySelector(a.getAttribute('href')); if (s) io.observe(s); }
+})();
+</script>
+</body>
+</html>

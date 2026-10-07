@@ -1,0 +1,110 @@
+{
+  "method": "Throwaway optimized current-source MSVC build with CPU wall-clock instrumentation around GL_BeginRendering and SDL_GL_SwapWindow. Ordinary 20-second Aerowalk playback, uncapped, vsync/MSAA off, sound on. Skip first 3000 rendered frames, then aggregate one five-second interval per mode. This samples part of the turn; it is not a full timedemo or cross-engine live-FPS comparison. Swap time includes graphics-driver/presentation work and possible GPU backpressure; it is not pure Windows overhead or a GPU timer. Conditions ran sequentially; single-block results are exploratory. Production source and installed binary were unchanged.",
+  "samples": [
+    {
+      "condition": "window_800",
+      "result": {
+        "frames": 16848.0,
+        "seconds": 5.000151,
+        "fps": 3369.5,
+        "render_us": 84.532,
+        "swap_us": 198.089,
+        "other_us": 14.159
+      },
+      "geometry": {
+        "width": 800,
+        "height": 600
+      },
+      "command": [
+        "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\engine-fps-optimization-20261005\\video\\window_800\\quakespasm.exe",
+        "-basedir",
+        "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\engine-fps-optimization-20261005\\video\\window_800",
+        "-nohome",
+        "-noquakeimport",
+        "-listen",
+        "-noudp",
+        "-nojoy",
+        "-noice",
+        "-condebug",
+        "-benchvid",
+        "-window",
+        "-width",
+        "800",
+        "-height",
+        "600"
+      ],
+      "config": "vid_width 800\nvid_height 600\nvid_fullscreen 0\nvid_vsync 0\nfov 90\nviewsize 100\nhost_maxfps 0\nsys_throttle -1\ncl_demoreel 0\ncl_discord_presence 0\nr_scale 1\nvid_fsaa 0\necho BENCH_VIDEO\nplaydemo fps_aerowalk\n",
+      "exe_sha256": "3718899b3b07ab2f398ee4d93c48d69b66803eba7603f03ff16c63d92caa220b"
+    },
+    {
+      "condition": "fullscreen_800",
+      "result": {
+        "frames": 23697.0,
+        "seconds": 5.000087,
+        "fps": 4739.32,
+        "render_us": 74.325,
+        "swap_us": 124.679,
+        "other_us": 11.996
+      },
+      "geometry": {
+        "width": 800,
+        "height": 600
+      },
+      "command": [
+        "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\engine-fps-optimization-20261005\\video\\fullscreen_800\\quakespasm.exe",
+        "-basedir",
+        "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\engine-fps-optimization-20261005\\video\\fullscreen_800",
+        "-nohome",
+        "-noquakeimport",
+        "-listen",
+        "-noudp",
+        "-nojoy",
+        "-noice",
+        "-condebug",
+        "-benchvid",
+        "-fullscreen",
+        "-width",
+        "800",
+        "-height",
+        "600"
+      ],
+      "config": "vid_width 800\nvid_height 600\nvid_fullscreen 1\nvid_vsync 0\nfov 90\nviewsize 100\nhost_maxfps 0\nsys_throttle -1\ncl_demoreel 0\ncl_discord_presence 0\nr_scale 1\nvid_fsaa 0\necho BENCH_VIDEO\nplaydemo fps_aerowalk\n",
+      "exe_sha256": "3718899b3b07ab2f398ee4d93c48d69b66803eba7603f03ff16c63d92caa220b"
+    },
+    {
+      "condition": "window_4k",
+      "result": {
+        "frames": 14209.0,
+        "seconds": 5.000189,
+        "fps": 2841.69,
+        "render_us": 79.373,
+        "swap_us": 259.377,
+        "other_us": 13.153
+      },
+      "geometry": {
+        "width": 3840,
+        "height": 2160
+      },
+      "command": [
+        "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\engine-fps-optimization-20261005\\video\\window_4k\\quakespasm.exe",
+        "-basedir",
+        "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\engine-fps-optimization-20261005\\video\\window_4k",
+        "-nohome",
+        "-noquakeimport",
+        "-listen",
+        "-noudp",
+        "-nojoy",
+        "-noice",
+        "-condebug",
+        "-benchvid",
+        "-window",
+        "-width",
+        "3840",
+        "-height",
+        "2160"
+      ],
+      "config": "vid_width 3840\nvid_height 2160\nvid_fullscreen 0\nvid_vsync 0\nfov 90\nviewsize 100\nhost_maxfps 0\nsys_throttle -1\ncl_demoreel 0\ncl_discord_presence 0\nr_scale 1\nvid_fsaa 0\necho BENCH_VIDEO\nplaydemo fps_aerowalk\n",
+      "exe_sha256": "3718899b3b07ab2f398ee4d93c48d69b66803eba7603f03ff16c63d92caa220b"
+    }
+  ]
+}

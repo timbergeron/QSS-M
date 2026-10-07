@@ -1,0 +1,989 @@
+diff --git a/Quake/cl_parse.c b/Quake/cl_parse.c
+index a55fc441..1ad6769b 100644
+--- a/Quake/cl_parse.c
++++ b/Quake/cl_parse.c
+@@ -1396,7 +1396,16 @@ static void CL_KeepaliveMessage (void)
+ CL_ParseServerInfo
+ ==================
+ */
++static void CL_ParseServerInfo_Load (void);
++
+ static void CL_ParseServerInfo (void)
++{
++	COM_BeginLoadCache ();
++	CL_ParseServerInfo_Load ();
++	COM_EndLoadCache ();
++}
++
++static void CL_ParseServerInfo_Load (void)
+ {
+ 	const char	*str;
+ 	int		i;
+@@ -1702,6 +1711,19 @@ static void CL_ParseServerInfo (void)
+ 		CL_PrintWrongGameDirWarning();
+ 
+ 	S_Voip_MapChange();
++
++	/* A demo can't download anything, so load its precaches now, inside the
++	 * serverinfo frame, as vanilla Quake does; otherwise the deferred loading
++	 * lands in the first timed timedemo frames. A sky fetch or transfer that
++	 * starts here leaves the rest to the usual per-frame path. */
++	if (cls.demoplayback)
++	{
++		extern qboolean curl_download_active;
++		int tries;
++		for (tries = 0; tries < 4 && !CL_CheckDownloads (); tries++)
++			if (cls.download.active || curl_download_active || Sky_AsyncDownload_IsActive ())
++				break;
++	}
+ 	CL_ConnectTimingMark ("serverinfo parsed");
+ }
+ 
+diff --git a/Quake/common.c b/Quake/common.c
+index fd331851..aa99c797 100644
+--- a/Quake/common.c
++++ b/Quake/common.c
+@@ -3272,6 +3272,123 @@ static int COM_FindPackFileIndex (pack_t *pak, const char *filename)
+ 	return -1;
+ }
+ 
++/*
++While a level loads, remember which loose-file parent directories exist, so a
++missing replacement texture or model costs one stat per directory rather than
++one per candidate. PACK entries and files in existing directories still get
++their normal lookup. Scopes nest; the cache is dropped when the outermost one
++ends, so files added between loads are still found.
++*/
++#define COM_DIRCACHE_SLOTS	256
++typedef struct
++{
++	unsigned int	hash;
++	qboolean		exists;
++	char			*path;
++} com_dircache_t;
++static com_dircache_t	com_dircache[COM_DIRCACHE_SLOTS];
++static int				com_dircache_depth, com_dircache_count;
++static SDL_AtomicInt	com_dircache_stale;	// a directory was created, possibly on another thread
++
++void COM_BeginLoadCache (void)
++{
++	com_dircache_depth++;
++}
++
++// Called by Sys_mkdir from any thread: the main thread drops the cache at its
++// next lookup, so a load that creates a directory sees it straight away.
++void COM_MarkLoadCacheStale (void)
++{
++	SDL_SetAtomicInt (&com_dircache_stale, 1);
++}
++
++// Forget every cached directory but stay inside any open load scope.
++void COM_InvalidateLoadCache (void)
++{
++	int i;
++
++	for (i = 0; i < COM_DIRCACHE_SLOTS; i++)
++	{
++		free (com_dircache[i].path);
++		com_dircache[i].path = NULL;
++	}
++	com_dircache_count = 0;
++}
++
++void COM_EndLoadCache (void)
++{
++	if (com_dircache_depth > 1)
++	{
++		com_dircache_depth--;
++		return;
++	}
++	com_dircache_depth = 0;
++	COM_InvalidateLoadCache ();
++}
++
++// Host_Error unwinds past open scopes, so it drops the cache outright.
++void COM_AbortLoadCache (void)
++{
++	if (com_dircache_depth)
++	{
++		com_dircache_depth = 1;
++		COM_EndLoadCache ();
++	}
++}
++
++static int COM_FileTypeForSearch (const char *path)
++{
++	const char *slash;
++#ifdef _WIN32
++	const char *backslash;
++#endif
++	size_t len, i;
++	unsigned int hash, slot;
++	com_dircache_t *entry;
++	int type;
++
++	if (!com_dircache_depth)
++		return Sys_FileType (path);
++	if (SDL_GetAtomicInt (&com_dircache_stale))
++	{
++		SDL_SetAtomicInt (&com_dircache_stale, 0);
++		COM_InvalidateLoadCache ();
++	}
++
++	slash = strrchr (path, '/');
++#ifdef _WIN32
++	backslash = strrchr (path, '\\');
++	if (!slash || (backslash && backslash > slash))
++		slash = backslash;
++#endif
++	if (!slash || slash == path)
++		return Sys_FileType (path);
++
++	len = slash - path;
++	for (i = 0, hash = 2166136261u; i < len; i++)
++		hash = (hash ^ (unsigned char)path[i]) * 16777619u;
++	for (slot = hash % COM_DIRCACHE_SLOTS; com_dircache[slot].path; slot = (slot + 1) % COM_DIRCACHE_SLOTS)
++	{
++		entry = &com_dircache[slot];
++		if (entry->hash == hash && !strncmp (entry->path, path, len) && !entry->path[len])
++			return entry->exists ? Sys_FileType (path) : FS_ENT_NONE;
++	}
++
++	type = Sys_FileType (path);
++	if (com_dircache_count >= COM_DIRCACHE_SLOTS / 2)
++		return type;
++	entry = &com_dircache[slot];
++	entry->path = (char *) malloc (len + 1);
++	if (!entry->path)
++		return type;
++	memcpy (entry->path, path, len);
++	entry->path[len] = '\0';
++	entry->hash = hash;
++	entry->exists = type != FS_ENT_NONE || (Sys_FileType (entry->path) & FS_ENT_DIRECTORY);
++	com_dircache_count++;
++	return type;
++}
++
+ static int COM_FindFile_impl (const char *filename, int *handle, FILE **file,
+ 							unsigned int *path_id, const searchpath_t **source);
+ 
+@@ -3384,7 +3501,7 @@ static int COM_FindFile_impl (const char *filename, int *handle, FILE **file,
+ 			}
+ 
+ 			q_snprintf (netpath, sizeof(netpath), "%s/%s",search->filename, filename);
+-			if (! (Sys_FileType(netpath) & FS_ENT_FILE))
++			if (! (COM_FileTypeForSearch(netpath) & FS_ENT_FILE))
+ 				continue;
+ 
+ 			if (path_id)
+@@ -3563,6 +3680,24 @@ int COM_FOpenFile (const char *filename, FILE **file, unsigned int *path_id)
+ 	return COM_FindFile (filename, NULL, file, path_id, NULL);
+ }
+ 
++// Return the first candidate index with an open file, preserving filename-first
++// precedence.
++int COM_FOpenFileCandidates (const char *const *filenames, int count, FILE **file, unsigned int *path_id)
++{
++	int i;
++
++	*file = NULL;
++	COM_BeginLoadCache ();
++	for (i = 0; i < count; i++)
++	{
++		COM_FindFile (filenames[i], NULL, file, path_id, NULL);
++		if (*file)
++			break;
++	}
++	COM_EndLoadCache ();
++	return *file ? i : -1;
++}
++
+ /*
+ ============
+ COM_CloseFile
+diff --git a/Quake/common.h b/Quake/common.h
+index 2a08da3f..85e0f10c 100644
+--- a/Quake/common.h
++++ b/Quake/common.h
+@@ -507,6 +507,12 @@ FILE *FSZIP_Deflate(FILE *src, qofs_t srcsize, qofs_t outsize, const char *entry
+ void COM_WriteFile (const char *filename, const void *data, int len);
+ int COM_OpenFile (const char *filename, int *handle, unsigned int *path_id);
+ int COM_FOpenFile (const char *filename, FILE **file, unsigned int *path_id);
++int COM_FOpenFileCandidates (const char *const *filenames, int count, FILE **file, unsigned int *path_id);
++void COM_BeginLoadCache (void);
++void COM_EndLoadCache (void);
++void COM_AbortLoadCache (void);
++void COM_InvalidateLoadCache (void);
++void COM_MarkLoadCacheStale (void);
+ qboolean COM_FileExists (const char *filename, unsigned int *path_id);
+ const searchpath_t *COM_FileSearchPath (const char *filename); // valid until the search paths change
+ qboolean COM_ConfigFileUsesConfigsDir (const char *filename);
+diff --git a/Quake/gl_mesh.c b/Quake/gl_mesh.c
+index c50f1102..86448e6c 100644
+--- a/Quake/gl_mesh.c
++++ b/Quake/gl_mesh.c
+@@ -399,13 +399,13 @@ void GLMesh_LoadVertexBuffer (qmodel_t *m, aliashdr_t *mainhdr)
+ 	{
+ 		// upload indexes buffer
+ 		GL_DeleteBuffersFunc (1, &m->meshindexesvbo);
+-		GL_GenBuffersFunc (1, &m->meshindexesvbo);
++		m->meshindexesvbo = GL_GenBufferName ();
+ 		GL_BindBufferFunc (GL_ELEMENT_ARRAY_BUFFER, m->meshindexesvbo);
+ 		GL_BufferDataFunc (GL_ELEMENT_ARRAY_BUFFER, (GLsizeiptr)GLMesh_CheckedSize (numindexes, sizeof (unsigned short), "GLMesh_LoadVertexBuffer"), ebodata, GL_STATIC_DRAW);
+ 
+ 		// upload vertexes buffer
+ 		GL_DeleteBuffersFunc (1, &m->meshvbo);
+-		GL_GenBuffersFunc (1, &m->meshvbo);
++		m->meshvbo = GL_GenBufferName ();
+ 		GL_BindBufferFunc (GL_ARRAY_BUFFER, m->meshvbo);
+ 		GL_BufferDataFunc (GL_ARRAY_BUFFER, (GLsizeiptr)totalvbosize, vbodata, GL_STATIC_DRAW);
+ 
+diff --git a/Quake/gl_rmisc.c b/Quake/gl_rmisc.c
+index b5687c85..bb8e004c 100644
+--- a/Quake/gl_rmisc.c
++++ b/Quake/gl_rmisc.c
+@@ -843,7 +843,16 @@ static void R_ParseWorldspawn (void)
+ R_NewMap
+ ===============
+ */
++static void R_NewMap_Load (void);
++
+ void R_NewMap (void)
++{
++	COM_BeginLoadCache ();
++	R_NewMap_Load ();
++	COM_EndLoadCache ();
++}
++
++static void R_NewMap_Load (void)
+ {
+ 	int		i;
+ 	double t0, tprev;
+@@ -1176,6 +1185,46 @@ void GL_BindBuffer (GLenum target, GLuint buffer)
+ 	}
+ }
+ 
++/*
++====================
++GL_GenBufferName
++
++glGenBuffers returns values, so a threaded driver must stop and catch up with
++its worker. Level loads take names from a pool generated in bulk, which
++GL_ResetBufferNames refills for each new context.
++====================
++*/
++static GLuint	gl_buffernames[256];
++static int		gl_numbuffernames;
++static void		*gl_buffernames_context;	// the context the pooled names belong to
++
++GLuint GL_GenBufferName (void)
++{
++	if (!gl_numbuffernames)
++	{
++		GL_GenBuffersFunc (countof(gl_buffernames), gl_buffernames);
++		gl_numbuffernames = countof(gl_buffernames);
++		gl_buffernames_context = SDL_GL_GetCurrentContext ();
++	}
++	return gl_buffernames[--gl_numbuffernames];
++}
++
++// vid_restart usually keeps the context, and its pooled names with it; only a
++// new context invalidates them (they can't be deleted there: the same numbers
++// may already name live objects).
++void GL_ResetBufferNames (void)
++{
++	if (gl_numbuffernames && gl_buffernames_context == SDL_GL_GetCurrentContext ())
++		return;
++	gl_numbuffernames = 0;
++	if (gl_vbo_able)
++	{
++		GL_GenBuffersFunc (countof(gl_buffernames), gl_buffernames);
++		gl_numbuffernames = countof(gl_buffernames);
++		gl_buffernames_context = SDL_GL_GetCurrentContext ();
++	}
++}
++
+ /*
+ ====================
+ GL_ClearBufferBindings
+diff --git a/Quake/gl_screen.c b/Quake/gl_screen.c
+index 608dbeaa..700646be 100644
+--- a/Quake/gl_screen.c
++++ b/Quake/gl_screen.c
+@@ -8402,6 +8402,12 @@ void SCR_UpdateScreen (void)
+ 	Sbar_ScoreboardFrame ();
+ 	vid.numpages = (gl_triplebuffer.value) ? 3 : 2;
+ 
++	/* A local server's client signs on within a few frames, and drawing them
++	 * only waits on the GL driver; hold the last frame as the loading plaque
++	 * does. Host_LocalSignon stops holding after two seconds. */
++	if (Host_LocalSignon ())
++		return;
++
+ 	if (scr_disabled_for_loading)
+ 	{
+ 		extern qboolean curl_download_active;	// cl_main.c #webdl
+diff --git a/Quake/gl_texmgr.c b/Quake/gl_texmgr.c
+index 24a2bec7..285b925d 100644
+--- a/Quake/gl_texmgr.c
++++ b/Quake/gl_texmgr.c
+@@ -1171,30 +1171,30 @@ static int TexMgr_ItemColorBucket (const byte *p)
+ }
+ 
+ /* A grid avoids repeatedly sampling the same few columns of a wide skin. */
+-static size_t TexMgr_ItemColorIndex (size_t sample, size_t width, size_t height)
+-{
+-	size_t columns = q_min(width, (size_t)64), rows = q_min(height, (size_t)64);
+-	size_t x = ((sample % columns) * 2 + 1) * width / (columns * 2);
+-	size_t y = ((sample / columns) * 2 + 1) * height / (rows * 2);
+-	return y * width + x;
+-}
+-
+ static qboolean TexMgr_SampleItemColor (const byte *pixels, size_t width, size_t height, vec3_t color)
+ {
+ 	double weights[25] = {0}, sums[25][3] = {{0}};
+ 	double best_distance = DBL_MAX;
+ 	int best = -1, bucket, c;
+-	size_t i, selected = 0;
++	size_t i, x, y, selected = 0;
++	size_t columns = q_min(width, (size_t)64), rows = q_min(height, (size_t)64);
++	size_t offsets[64], row_offsets[64];
++	signed char buckets[64 * 64];
+ 	/* Bound upload-time sampling even for large replacement skins. */
+-	size_t count = q_min(width, (size_t)64) * q_min(height, (size_t)64);
+-	for (i = 0; i < count; i++)
+-	{
+-		size_t index = TexMgr_ItemColorIndex(i, width, height);
++	for (x = 0; x < columns; x++)
++		offsets[x] = (x * 2 + 1) * width / (columns * 2);
++	for (y = 0; y < rows; y++)
++		row_offsets[y] = ((y * 2 + 1) * height / (rows * 2)) * width;
++	for (y = 0, i = 0; y < rows; y++)
++	for (x = 0; x < columns; x++, i++)
++	{
++		size_t index = row_offsets[y] + offsets[x];
+ 		const byte *p = pixels + index * 4;
+ 		int hi = q_max(p[0], q_max(p[1], p[2]));
+ 		int lo = q_min(p[0], q_min(p[1], p[2]));
+ 		double weight;
+ 		bucket = TexMgr_ItemColorBucket(p);
++		buckets[i] = (signed char)bucket;
+ 		if (bucket < 0)
+ 			continue;
+ 		weight = (hi - lo + 1) * (double)hi;
+@@ -1209,12 +1209,13 @@ static qboolean TexMgr_SampleItemColor (const byte *pixels, size_t width, size_t
+ 		return false;
+ 	for (c = 0; c < 3; c++)
+ 		sums[best][c] /= weights[best];
+-	for (i = 0; i < count; i++)
++	for (y = 0, i = 0; y < rows; y++)
++	for (x = 0; x < columns; x++, i++)
+ 	{
+-		size_t index = TexMgr_ItemColorIndex(i, width, height);
++		size_t index = row_offsets[y] + offsets[x];
+ 		const byte *p = pixels + index * 4;
+ 		double distance = 0;
+-		if (TexMgr_ItemColorBucket(p) != best)
++		if (buckets[i] != best)
+ 			continue;
+ 		for (c = 0; c < 3; c++)
+ 		{
+@@ -1250,10 +1251,10 @@ qboolean TexMgr_GetItemColor (gltexture_t *texture, vec3_t color)
+ 
+ /*
+ ================
+-TexMgr_NewTexture
++TexMgr_AllocTexture -- a texture record without a GL name
+ ================
+ */
+-gltexture_t *TexMgr_NewTexture (void)
++static gltexture_t *TexMgr_AllocTexture (void)
+ {
+ 	gltexture_t *glt;
+ 
+@@ -1276,11 +1277,34 @@ gltexture_t *TexMgr_NewTexture (void)
+ 	glt->next = active_gltextures;
+ 	active_gltextures = glt;
+ 
+-	glGenTextures(1, &glt->texnum);
+ 	numgltextures++;
+ 	return glt;
+ }
+ 
++/* glGenTextures returns values, so a threaded driver must stop and catch up
++ * with its worker. Level loads take names from a pool generated in bulk. */
++static GLuint	texmgr_names[1024];
++static int		texmgr_numnames;
++static void		*texmgr_names_context;	// the context the pooled names belong to
++
++static GLuint TexMgr_GenName (void)
++{
++	if (!texmgr_numnames)
++	{
++		glGenTextures (countof(texmgr_names), texmgr_names);
++		texmgr_numnames = countof(texmgr_names);
++		texmgr_names_context = SDL_GL_GetCurrentContext ();
++	}
++	return texmgr_names[--texmgr_numnames];
++}
++
++gltexture_t *TexMgr_NewTexture (void)
++{
++	gltexture_t *glt = TexMgr_AllocTexture ();
++	glt->texnum = TexMgr_GenName ();
++	return glt;
++}
++
+ static void GL_DeleteTexture (gltexture_t *texture);
+ 
+ static void TexMgr_FreeOwnedSource (gltexture_t *glt)
+@@ -2865,6 +2889,8 @@ typedef struct texprep_result_s
+ 	size_t allocation_size;
+ 	byte *pixels;
+ 	texprep_level_t levels[TEXPREP_MAX_MIPS];
++	qboolean itemcolor_valid;
++	vec3_t itemcolor;
+ } texprep_result_t;
+ 
+ typedef struct texprep_jobstate_s
+@@ -3054,6 +3080,13 @@ static void TexPrep_FreeResult (texprep_result_t *result)
+ 	result->allocation_size = 0;
+ }
+ 
++static void TexPrep_PrepareItemColor (texprep_jobstate_t *state)
++{
++	texprep_result_t *result = &state->result;
++	result->itemcolor_valid = state->job->owner && TexMgr_SampleItemColor (
++		result->pixels + result->levels[0].offset, result->width, result->height, result->itemcolor);
++}
++
+ static void TexPrep_PrepareOne (texprep_jobstate_t *state)
+ {
+ 	texmgr_loadjob_t *job = state->job;
+@@ -3252,6 +3285,8 @@ static void TexPrep_PrepareOne (texprep_jobstate_t *state)
+ 		}
+ 	}
+ 
++	TexPrep_PrepareItemColor (state);
++
+ done:
+ 	free (resampled);
+ 	free (work);
+@@ -3279,11 +3314,10 @@ static const char *TexPrep_StatusName (texprep_status_t status)
+ 	}
+ }
+ 
+-static gltexture_t *TexPrep_Commit (const texprep_jobstate_t *state)
++static gltexture_t *TexPrep_Commit (const texprep_jobstate_t *state, gltexture_t *glt)
+ {
+ 	const texmgr_loadjob_t *job = state->job;
+ 	const texprep_result_t *result = &state->result;
+-	gltexture_t *glt = TexMgr_NewTexture ();
+ 	unsigned int level;
+ 	int internalformat;
+ 
+@@ -3300,7 +3334,8 @@ static gltexture_t *TexPrep_Commit (const texprep_jobstate_t *state)
+ 	glt->width = result->width;
+ 	glt->height = result->height;
+ 	glt->flags = result->effective_flags;
+-	TexMgr_CacheItemColor(glt, result->pixels + result->levels[0].offset);
++	glt->itemcolor_valid = result->itemcolor_valid;
++	VectorCopy (result->itemcolor, glt->itemcolor);
+ 
+ 	GL_Bind (glt);
+ 	internalformat = (glt->flags & TEXPREF_ALPHA) ? gl_alpha_format : gl_solid_format;
+@@ -3317,6 +3352,13 @@ static gltexture_t *TexPrep_Commit (const texprep_jobstate_t *state)
+ 	return glt;
+ }
+ 
++static void TexPrep_CommitBatch (texprep_jobstate_t *states, texmgr_loadjob_t *jobs, size_t count)
++{
++	size_t i;
++	for (i = 0; i < count; i++)
++		*jobs[i].destination = TexPrep_Commit (&states[i], TexMgr_NewTexture ());
++}
++
+ void TexMgr_LoadImageBatch (texmgr_loadjob_t *jobs, size_t count)
+ {
+ 	texprep_jobstate_t *states;
+@@ -3383,11 +3425,7 @@ void TexMgr_LoadImageBatch (texmgr_loadjob_t *jobs, size_t count)
+ 		}
+ 	}
+ 
+-	for (i = 0; i < count; i++)
+-	{
+-		gltexture_t *loaded = TexPrep_Commit (&states[i]);
+-		*jobs[i].destination = loaded;
+-	}
++	TexPrep_CommitBatch (states, jobs, count);
+ 	committed = profile ? Sys_DoubleTime () : 0;
+ 
+ 	if (profile)
+@@ -3721,6 +3759,8 @@ void TexMgr_ReloadImages (void)
+ 
+ 	TexMgr_ColormapTexture_Free(NULL);	//just flush colourmapped cache instead of reloading them all unecessarily.
+ 	GL_ClearBindings ();
++	if (texmgr_names_context != SDL_GL_GetCurrentContext ())
++		texmgr_numnames = 0;	// pooled names belonged to the old context
+ 
+ 	for (glt = active_gltextures; glt; glt = glt->next)
+ 	{
+diff --git a/Quake/gl_vidsdl.c b/Quake/gl_vidsdl.c
+index 7205a051..268d3edc 100644
+--- a/Quake/gl_vidsdl.c
++++ b/Quake/gl_vidsdl.c
+@@ -2296,6 +2296,7 @@ static void GL_Init (void)
+ 	if (cls.state == ca_connected)
+ 		GL_EnsureGameShaders ();
+ 	GL_ClearBufferBindings ();
++	GL_ResetBufferNames ();
+ 	
+ }
+ 
+diff --git a/Quake/glquake.h b/Quake/glquake.h
+index 06a7f9bf..1c32881e 100644
+--- a/Quake/glquake.h
++++ b/Quake/glquake.h
+@@ -721,6 +721,8 @@ extern byte *skipsubmodels;
+ 
+ void GL_BindBuffer (GLenum target, GLuint buffer);
+ void GL_ClearBufferBindings (void);
++GLuint GL_GenBufferName (void);
++void GL_ResetBufferNames (void);
+ 
+ void GLSLGamma_DeleteTexture (void);
+ void GLSLGamma_BeginFrame (void);
+diff --git a/Quake/host.c b/Quake/host.c
+index 3b093234..06bd2db9 100644
+--- a/Quake/host.c
++++ b/Quake/host.c
+@@ -675,6 +675,7 @@ void Host_EndGame (const char *message, ...)
+ 	else
+ 		CL_Disconnect ();
+ 
++	COM_AbortLoadCache ();
+ 	Host_Longjmp (host_abortserver, 1);
+ }
+ 
+@@ -727,6 +728,7 @@ void Host_Error (const char *error, ...)
+ 
+ 	inerror = false;
+ 
++	COM_AbortLoadCache ();
+ 	Host_Longjmp (host_abortserver, 1);
+ }
+ 
+@@ -1558,8 +1560,42 @@ Share the FPS cap between the frame filter and the client wait.
+ */
+ 
+ 
++/* Message-only signon steps send replies outside the normal tick, so allow
++ * them only while no other client is in game to receive extra updates. */
++static qboolean Host_SignonStepsAllowed (void)
++{
++	int i;
++	client_t *c;
++
++	for (i = 0, c = svs.clients; i < svs.maxclients; i++, c++)
++		if (c->active && c->spawned)
++			return false;
++	return true;
++}
++
++/* A local client signing on only waits on its own server, so its first two
++ * seconds run without the FPS cap or sleeps and with the screen held (see
++ * SCR_UpdateScreen). A signon that takes longer, e.g. waiting on a download,
++ * goes back to normal frames instead of spinning. */
++#define HOST_LOCAL_SIGNON_WINDOW	2.0
++static double host_local_signon_start;
++
++qboolean Host_LocalSignon (void)
++{
++	if (!sv.active || cls.state != ca_connected || cls.signon >= SIGNONS || cls.demoplayback)
++	{
++		host_local_signon_start = 0;
++		return false;
++	}
++	if (!host_local_signon_start)
++		host_local_signon_start = realtime;
++	return realtime - host_local_signon_start < HOST_LOCAL_SIGNON_WINDOW;
++}
++
+ static double Host_FrameInterval (void)
+ {
++	if (Host_LocalSignon ())
++		return 0;
+ 	if ((host_maxfps.value>0 || cls.state == ca_disconnected) && !cls.timedemo)
+ 	{
+ 		float maxfps;
+@@ -1588,6 +1624,8 @@ void Host_Throttle (double elapsed)
+ 	double interval = Host_FrameInterval ();
+ 	double remaining;
+ 
++	if (Host_LocalSignon ())
++		return;
+ 	if (interval <= 0)
+ 	{
+ 		SDL_Delay (1); // retain the uncapped client's sys_throttle behavior
+@@ -2411,6 +2449,7 @@ void _Host_Frame (double time)
+ 	static double		time2 = 0;
+ 	static double		time3 = 0;
+ 	int			pass1, pass2, pass3;
++	qboolean	signon_steps;
+ 
+ 	if (Host_Setjmp (host_abortserver) )
+ 		return;			// something bad happened, or the server disconnected
+@@ -2481,8 +2520,21 @@ void _Host_Frame (double time)
+ 
+ 	CL_AccumulateCmd ();
+ 
++	/* A local client signing on would wait for the next tick at every round
++	 * trip. Between ticks, exchange its messages only (no physics, QuakeC
++	 * frame or time advance) so the simulation keeps its normal tick budget. */
++	signon_steps = Host_LocalSignon () && Host_SignonStepsAllowed ();
++
+ 	//Run the server+networking (client->server->client), at a different rate from everything else
+-	if (accumtime >= host_netinterval)
++	if (accumtime < host_netinterval && signon_steps)
++	{
++		CL_SendCmd ();
++		PR_SwitchQCVM(&sv.qcvm);
++		SV_RunClientMessages ();
++		SV_SendClientMessages ();
++		PR_SwitchQCVM(NULL);
++	}
++	else if (accumtime >= host_netinterval)
+ 	{
+ 		float realframetime = host_frametime;
+ 		if (host_netinterval)
+diff --git a/Quake/image.c b/Quake/image.c
+index ada77044..47b9cd73 100644
+--- a/Quake/image.c
++++ b/Quake/image.c
+@@ -617,9 +617,13 @@ returns its format with the file open.  loadfilename is left set to the hit.
+ */
+ static enum imgkind Image_Locate (const char *name, FILE **out)
+ {
+-	FILE	*f;
+-	char *prefixes[3] = {"", "textures/", "textures/"};
+-	int i;
++	static const char *const prefixes[] = {"", "textures/", "textures/"};
++	static const char *const extensions[] = {"dds", "tga", "png", "jpeg", "jpg", "pcx"};
++	static const enum imgkind kinds[] = {IMG_DDS, IMG_TGA, IMG_PNG, IMG_JPEG, IMG_JPEG, IMG_PCX};
++	char paths[19][MAX_OSPATH];
++	const char *candidates[19];
++	enum imgkind formats[19];
++	int i, j, count = 0, hit;
+ 
+ 	const char *origname = name;
+ 
+@@ -635,66 +639,20 @@ static enum imgkind Image_Locate (const char *name, FILE **out)
+ 		if (strstr(name, "progs/player.mdl_") && !gl_load24bit_skins.value) // woods #loadskins
+ 			break;
+ 
+-		q_snprintf (loadfilename, sizeof(loadfilename), "%s%s.dds", prefixes[i], name);
+-		COM_FOpenFile (loadfilename, &f, NULL);
+-		if (f)
+-		{
+-			*out = f;
+-			return IMG_DDS;
+-		}
+-
+-		q_snprintf (loadfilename, sizeof(loadfilename), "%s%s.tga", prefixes[i], name);
+-		COM_FOpenFile (loadfilename, &f, NULL);
+-		if (f)
+-		{
+-			*out = f;
+-			return IMG_TGA;
+-		}
+-
+-		q_snprintf (loadfilename, sizeof(loadfilename), "%s%s.png", prefixes[i], name);
+-		COM_FOpenFile (loadfilename, &f, NULL);
+-		if (f)
+-		{
+-			*out = f;
+-			return IMG_PNG;
+-		}
+-
+-		q_snprintf (loadfilename, sizeof(loadfilename), "%s%s.jpeg", prefixes[i], name);
+-		COM_FOpenFile (loadfilename, &f, NULL);
+-		if (f)
++		for (j = 0; j < countof(extensions); j++)
+ 		{
+-			*out = f;
+-			return IMG_JPEG;
++			q_snprintf (paths[count], sizeof(paths[count]), "%s%s.%s", prefixes[i], name, extensions[j]);
++			candidates[count] = paths[count];
++			formats[count++] = kinds[j];
+ 		}
+-
+-		q_snprintf (loadfilename, sizeof(loadfilename), "%s%s.jpg", prefixes[i], name);
+-		COM_FOpenFile (loadfilename, &f, NULL);
+-		if (f)
+-		{
+-			*out = f;
+-			return IMG_JPEG;
+-		}
+-
+-		q_snprintf (loadfilename, sizeof(loadfilename), "%s%s.pcx", prefixes[i], name);
+-		COM_FOpenFile (loadfilename, &f, NULL);
+-		if (f)
+-		{
+-			*out = f;
+-			return IMG_PCX;
+-		}
+-	}
+-
+-	name = origname;
+-	q_snprintf (loadfilename, sizeof(loadfilename), "%s%s.lmp", "", name);
+-	COM_FOpenFile (loadfilename, &f, NULL);
+-	if (f)
+-	{
+-		*out = f;
+-		return IMG_LMP;
+ 	}
+ 
+-	*out = NULL;
+-	return IMG_NONE;
++	q_snprintf (paths[count], sizeof(paths[count]), "%s.lmp", origname);
++	candidates[count] = paths[count];
++	formats[count++] = IMG_LMP;
++	hit = COM_FOpenFileCandidates (candidates, count, out, NULL);
++	q_strlcpy (loadfilename, paths[hit >= 0 ? hit : count - 1], sizeof(loadfilename));
++	return hit >= 0 ? formats[hit] : IMG_NONE;
+ }
+ 
+ static qboolean Image_PrefetchTake (const char *name, byte **data, int *width, int *height, qboolean *malloced);
+diff --git a/Quake/q_sound.h b/Quake/q_sound.h
+index ffe8e6be..f3e7b831 100644
+--- a/Quake/q_sound.h
++++ b/Quake/q_sound.h
+@@ -36,6 +36,8 @@ typedef struct sfx_s
+ {
+ 	char	name[MAX_QPATH];
+ 	cache_user_t	cache;
++	unsigned int	generation;	// map that last looked this sound up
++	const void		*source;	// PACK search path the samples came from, or NULL
+ } sfx_t;
+ 
+ /* !!! if this is changed, it must be changed in asm_i386.h too !!! */
+diff --git a/Quake/quakedef.h b/Quake/quakedef.h
+index 12ae29bd..d50c7c46 100644
+--- a/Quake/quakedef.h
++++ b/Quake/quakedef.h
+@@ -425,6 +425,7 @@ void ExtraMaps_ParseDescriptions (void); // woods #mapdescriptions
+ extern int max_word_length; // woods #mapdescriptions
+ 
+ void Host_ClearMemory (void);
++qboolean Host_LocalSignon (void);
+ void Host_ServerFrame (void);
+ void Host_InitCommands (void);
+ void Host_Init (void);
+diff --git a/Quake/r_brush.c b/Quake/r_brush.c
+index ccca574a..ae5315b3 100644
+--- a/Quake/r_brush.c
++++ b/Quake/r_brush.c
+@@ -1695,8 +1695,8 @@ void GL_BuildBModelVertexBuffer (void)
+ 
+ 	GL_DeleteBuffersFunc (1, &gl_bmodel_vbo);
+ 	GL_DeleteBuffersFunc (1, &gl_bmodel_lmbounds_vbo);
+-	GL_GenBuffersFunc (1, &gl_bmodel_vbo);
+-	GL_GenBuffersFunc (1, &gl_bmodel_lmbounds_vbo);
++	gl_bmodel_vbo = GL_GenBufferName ();
++	gl_bmodel_lmbounds_vbo = GL_GenBufferName ();
+ 
+ // count all verts in all models
+ 	numverts = 0;
+diff --git a/Quake/server.h b/Quake/server.h
+index 2109d636..3803c91c 100644
+--- a/Quake/server.h
++++ b/Quake/server.h
+@@ -461,6 +461,7 @@ void SV_MoveToGoal (void);
+ void SV_ConnectClient (int clientnum);	//called from the netcode to add new clients. also called from pr_ext to spawn new botclients.
+ void SV_CheckForNewClients (void);
+ void SV_RunClients (void);
++void SV_RunClientMessages (void);
+ void SV_SaveSpawnparms ();
+ void SV_SpawnServer (const char *server);
+ 
+diff --git a/Quake/snd_dma.c b/Quake/snd_dma.c
+index 6bd804ec..944edb25 100644
+--- a/Quake/snd_dma.c
++++ b/Quake/snd_dma.c
+@@ -107,9 +107,12 @@ static int SND_DeterministicSkip (int maxskip, int entnum, int entchannel,
+ 	return 1 + (int)(hash % (unsigned int)(maxskip - 1));
+ }
+ 
+-#define	MAX_SFX		MAX_SOUNDS
++// Sounds are kept across maps (see S_ClearPrecache), so leave room for one
++// full map's precaches on top of the ones kept from earlier maps.
++#define	MAX_SFX		(MAX_SOUNDS * 2 + 256)
+ static sfx_t	*known_sfx = NULL;	// hunk allocated [MAX_SFX]
+ static int	num_sfx;
++static unsigned int	sfx_generation;	// bumped per map; marks entries kept from earlier maps
+ 
+ static sfx_t	*ambient_sfx[NUM_AMBIENTS];
+ 
+@@ -784,10 +787,16 @@ static sfx_t *S_FindName (const char *name)
+ // see if already loaded
+ 	for (i = 0; i < num_sfx; i++)
+ 	{
+-		if (!strcmp(known_sfx[i].name, name))
+-		{
+-			return &known_sfx[i];
+-		}
++		sfx = &known_sfx[i];
++		if (strcmp(sfx->name, name))
++			continue;
++		// samples kept from an earlier map are only trusted while the same
++		// PACK still provides the file; anything else reloads from disk
++		if (sfx->generation != sfx_generation && sfx->cache.data &&
++			(!sfx->source || COM_FileSearchPath (va ("sound/%s", name)) != sfx->source))
++			Cache_Free (&sfx->cache);
++		sfx->generation = sfx_generation;
++		return sfx;
+ 	}
+ 
+ 	if (num_sfx == MAX_SFX)
+@@ -795,6 +804,7 @@ static sfx_t *S_FindName (const char *name)
+ 
+ 	sfx = &known_sfx[i];
+ 	q_strlcpy (sfx->name, name, sizeof(sfx->name));
++	sfx->generation = sfx_generation;
+ 
+ 	num_sfx++;
+ 
+@@ -1724,6 +1734,13 @@ void S_NotificationSound_Copy (void)
+ }
+ 
+ 
++/*
++Keep known sounds and their cached samples across maps, like alias models.
++Cache_Flush (game change, memory pressure) drops the samples and S_LoadSound
++reloads them. Entries are never reused for another name while kept, so long-
++lived sfx_t pointers stay valid; once more than a map's worth accumulates,
++start over as the original code did on every map.
++*/
+ void S_ClearPrecache (void)
+ {
+ 	int		i;
+@@ -1735,15 +1752,18 @@ void S_ClearPrecache (void)
+ 
+ 	S_StopAllSounds (true, false);
+ 
++	sfx_generation++;
++	memset (ambient_sfx, 0, sizeof(ambient_sfx));
++
++	if (num_sfx <= MAX_SOUNDS)
++		return;
+ 	for (sfx = known_sfx, i = 0; i < num_sfx; i++, sfx++)
+ 	{
+ 		if (sfx->cache.data)
+ 			Cache_Free (&sfx->cache);
+ 	}
+-
+ 	memset (known_sfx, 0, MAX_SFX * sizeof(*known_sfx));
+ 	num_sfx = 0;
+-	memset (ambient_sfx, 0, sizeof(ambient_sfx));
+ }
+ 
+ 
+diff --git a/Quake/snd_mem.c b/Quake/snd_mem.c
+index 92116906..d38123bb 100644
+--- a/Quake/snd_mem.c
++++ b/Quake/snd_mem.c
+@@ -168,10 +168,13 @@ sfxcache_t *S_LoadSound (sfx_t *s)
+ 	double	stepscale;
+ 	sfxcache_t	*sc;
+ 
+-// see if still in memory
++// see if still in memory, resampled for the current output rate
+ 	sc = (sfxcache_t *) Cache_Check (&s->cache);
+-	if (sc)
++	if (sc && (!shm || sc->speed == shm->speed))
+ 		return sc;
++	if (sc)
++		Cache_Free (&s->cache);
++	s->source = NULL;
+ 
+ //	Con_Printf ("S_LoadSound: %x\n", (int)stackbuf);
+ 
+@@ -245,7 +248,11 @@ sfxcache_t *S_LoadSound (sfx_t *s)
+ 	sound_filelen = 0;
+ 	data = COM_LoadMallocFile(namebuffer, NULL);
+ 	if (data)
++	{
+ 		sound_filelen = com_filesize;
++		if (file_from_pak)
++			s->source = COM_FileSearchPath (namebuffer);	// lets S_FindName reuse it on later maps
++	}
+ 	if (!data)
+ 	{
+ 		data = COM_LoadMallocFile(s->name, NULL);
+diff --git a/Quake/sv_main.c b/Quake/sv_main.c
+index e299d853..f6b6cc3c 100644
+--- a/Quake/sv_main.c
++++ b/Quake/sv_main.c
+@@ -4655,7 +4655,16 @@ static void SV_ClearClientLocDownloads(void)
+ 	}
+ }
+ 
++static void SV_SpawnServer_Load (const char *server);
++
+ void SV_SpawnServer (const char *server)
++{
++	COM_BeginLoadCache ();
++	SV_SpawnServer_Load (server);
++	COM_EndLoadCache ();
++}
++
++static void SV_SpawnServer_Load (const char *server)
+ {
+ 	static char	dummy[8] = { 0,0,0,0,0,0,0,0 };
+ 	edict_t		*ent;
+diff --git a/Quake/sv_user.c b/Quake/sv_user.c
+index 53be7a54..a09bd41b 100644
+--- a/Quake/sv_user.c
++++ b/Quake/sv_user.c
+@@ -969,6 +969,13 @@ static void NET_GotServerMessage(struct qsocket_s *sock)
+ SV_RunClients
+ ==================
+ */
++/* Read and act on pending client packets without the per-frame movement
++ * work, for message-only steps between server ticks. */
++void SV_RunClientMessages (void)
++{
++	NET_GetServerMessages(NET_GotServerMessage);
++}
++
+ void SV_RunClients (void)
+ {
+ 	int				i;
+diff --git a/Quake/sys_sdl_unix.c b/Quake/sys_sdl_unix.c
+index f1d4dce7..8b155f3b 100644
+--- a/Quake/sys_sdl_unix.c
++++ b/Quake/sys_sdl_unix.c
+@@ -1056,7 +1056,10 @@ void Sys_Init (void)
+ 
+ void Sys_mkdir (const char *path)
+ {
+-	int rc = mkdir (path, 0777);
++	int rc;
++
++	COM_MarkLoadCacheStale ();	// a load in progress must see the new directory
++	rc = mkdir (path, 0777);
+ 	if (rc != 0 && errno == EEXIST)
+ 	{
+ 		struct stat st;
+diff --git a/Quake/sys_sdl_win.c b/Quake/sys_sdl_win.c
+index 5387812d..73b8ea29 100644
+--- a/Quake/sys_sdl_win.c
++++ b/Quake/sys_sdl_win.c
+@@ -1060,6 +1060,7 @@ void Sys_Init (void)
+ 
+ void Sys_mkdir (const char *path)
+ {
++	COM_MarkLoadCacheStale ();	// a load in progress must see the new directory
+ 	if (CreateDirectory(path, NULL) != 0)
+ 		return;
+ 	if (GetLastError() != ERROR_ALREADY_EXISTS)

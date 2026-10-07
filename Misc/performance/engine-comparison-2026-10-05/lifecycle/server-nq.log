@@ -1,0 +1,21 @@
+
+LOG started on: 10/05/2026 19:18:02 
+
+IPv4 UDP Initialized
+IPv6 UDP Initialized
+Exe: 02:37:09 Oct  5 2026
+384.0 megabyte heap
+
+Language initialization
+Couldn't load 'localization/loc_english.txt'
+from 'C:\Users\Tim Bergeron\source\repos\QSS-M\.codex-build\engine-lifecycle-six-20261005\server-nq'
+
+========= Quake Initialized =========
+
+execing server.cfg
+execing autoexec.cfg
+unnamed renamed to BenchClient
+unnamed renamed to BenchClient
+unnamed renamed to BenchClient
+unnamed renamed to BenchClient
+unnamed renamed to BenchClient

@@ -1,0 +1,1420 @@
+{
+  "bench": "ctf",
+  "title": "CTF match \u00b7 ctf3m2 \u00b7 16 players",
+  "game": "id1",
+  "demo": "ctfmatch",
+  "method": "One discarded warm-up then five fresh-process native timedemos per engine, rotating engine order; 800x600 window, VSync/MSAA off, uncapped, sound on; same settings as the nine-map FPS suite. QSS-M runs with scr_autoid 0.",
+  "files": {
+    "id1/ctfmatch.dem": "9e6d50481c2dbc2e2669502b474cbcefc0e62229c6d993b5a9327a7103a2dabb",
+    "id1/pak3.pak": "06ed548b5fa186afe46cffc221701a02452a1580fb60a70efaec7d939e73f608",
+    "id1/maps/ctf3m2.bsp": "c564fc3c31638913fe9ce2b734cce0741ed58ff6e91c8908e40d05222c2ccce8"
+  },
+  "engines": {
+    "qssm": {
+      "exe": "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\map-load-finish-20261006\\bin-fps1\\quakespasm.exe",
+      "sha256": "65cc5c111224336583dade5210894ae4f708fe398e539de022c7746ce28c9afc"
+    },
+    "ironwail": {
+      "exe": "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\engine-fps-20261005\\engines\\ironwail\\ironwail-0.8.2-win64\\ironwail.exe",
+      "sha256": "4092b1bb31af1555f27e7d8ce945fddbea0eac0d97e74e87d544ff2e54835f1e"
+    },
+    "vkquake": {
+      "exe": "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\engine-fps-20261005\\engines\\vkquake\\vkQuake.exe",
+      "sha256": "8a0e4b0b0bc37471991f56bb85d56145869d3b0967a8aac89cedaefa01baf9cc"
+    },
+    "qss": {
+      "exe": "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\engine-fps-20261005\\engines\\qss\\quakespasm-spiked-win64.exe",
+      "sha256": "95d4799a96ee5e84a7bb593ec3ce439a55ca9678331a652737e04949e2cd0f44"
+    },
+    "fteqw": {
+      "exe": "C:\\Users\\Tim Bergeron\\Desktop\\Engines\\FTE Stuff\\FTE\\fteqw64.exe",
+      "sha256": "b4c42192534634c523b2d9d9a98153930d9d2cc7ff6d5d366b397359d8b47f2e"
+    },
+    "ezquake": {
+      "exe": "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\engine-fps-20261005\\engines\\ezquake\\ezquake.exe",
+      "sha256": "1b4896a54a2a5c4f91cf64ae6e00d2264f37097ba6a06de150f218a4ee004318"
+    }
+  },
+  "samples": [
+    {
+      "engine": "qssm",
+      "bench": "ctf",
+      "run": 0,
+      "warmup": true,
+      "result": {
+        "frames": 51711,
+        "seconds": 27.7,
+        "fps": 1869.1,
+        "line": "51711 frames  27.7 seconds 1869.1 fps"
+      },
+      "window_pixels": {
+        "width": 800,
+        "height": 600
+      },
+      "elapsed_wall_seconds": 28.45300000000134,
+      "foreground": true,
+      "command": [
+        "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\fps-expanded-20261006\\demoruns\\ctf\\qssm\\quakespasm.exe",
+        "-basedir",
+        "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\fps-expanded-20261006\\demoruns\\ctf\\qssm",
+        "-nohome",
+        "-condebug",
+        "-window",
+        "-width",
+        "800",
+        "-height",
+        "600",
+        "-nojoy",
+        "-noice",
+        "-listen",
+        "-noudp",
+        "-noquakeimport"
+      ],
+      "config": "vid_width 800\nvid_height 600\nvid_fullscreen 0\nvid_vsync 0\nfov 90\nviewsize 100\nhost_maxfps 0\nsys_throttle -1\ncl_demoreel 0\ncl_discord_presence 0\nr_scale 1\nvid_fsaa 0\nscr_autoid 0\necho FPS_BENCH_qssm_ctf_1791323704346862200\nvid_width\nvid_height\nvid_vsync\ntimedemo ctfmatch\n",
+      "log": "demoruns/logs/qssm-ctf-warmup.log"
+    },
+    {
+      "engine": "ironwail",
+      "bench": "ctf",
+      "run": 0,
+      "warmup": true,
+      "result": {
+        "frames": 51711,
+        "seconds": 18.7,
+        "fps": 2758.7,
+        "line": "51711 frames  18.7 seconds 2758.7 fps"
+      },
+      "window_pixels": {
+        "width": 800,
+        "height": 600
+      },
+      "elapsed_wall_seconds": 19.6559999999954,
+      "foreground": true,
+      "command": [
+        "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\fps-expanded-20261006\\demoruns\\ctf\\ironwail\\ironwail.exe",
+        "-basedir",
+        "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\fps-expanded-20261006\\demoruns\\ctf\\ironwail",
+        "-nohome",
+        "-condebug",
+        "-window",
+        "-width",
+        "800",
+        "-height",
+        "600",
+        "-nojoy",
+        "-noice",
+        "-listen",
+        "-noudp"
+      ],
+      "config": "vid_width 800\nvid_height 600\nvid_fullscreen 0\nvid_vsync 0\nfov 90\nviewsize 100\nhost_maxfps 0\nr_scale 1\nvid_fsaa 0\nsys_throttle -1\necho FPS_BENCH_ironwail_ctf_1791323732799308900\nvid_width\nvid_height\nvid_vsync\ntimedemo ctfmatch\n",
+      "log": "demoruns/logs/ironwail-ctf-warmup.log"
+    },
+    {
+      "engine": "vkquake",
+      "bench": "ctf",
+      "run": 0,
+      "warmup": true,
+      "result": {
+        "frames": 51711,
+        "seconds": 24.2,
+        "fps": 2137.4,
+        "line": "51711 frames  24.2 seconds 2137.4 fps"
+      },
+      "window_pixels": {
+        "width": 800,
+        "height": 600
+      },
+      "elapsed_wall_seconds": 25.57800000000134,
+      "foreground": true,
+      "command": [
+        "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\fps-expanded-20261006\\demoruns\\ctf\\vkquake\\vkQuake.exe",
+        "-basedir",
+        "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\fps-expanded-20261006\\demoruns\\ctf\\vkquake",
+        "-nohome",
+        "-condebug",
+        "-window",
+        "-width",
+        "800",
+        "-height",
+        "600",
+        "-nojoy",
+        "-noice",
+        "-listen",
+        "-noudp"
+      ],
+      "config": "vid_width 800\nvid_height 600\nvid_fullscreen 0\nvid_vsync 0\nfov 90\nviewsize 100\nhost_maxfps 0\nr_scale 1\nvid_fsaa 0\nsys_throttle -1\necho FPS_BENCH_vkquake_ctf_1791323752449254000\nvid_width\nvid_height\nvid_vsync\ntimedemo ctfmatch\n",
+      "log": "demoruns/logs/vkquake-ctf-warmup.log"
+    },
+    {
+      "engine": "qss",
+      "bench": "ctf",
+      "run": 0,
+      "warmup": true,
+      "result": {
+        "frames": 51711,
+        "seconds": 23.3,
+        "fps": 2222.0,
+        "line": "51711 frames  23.3 seconds 2222.0 fps"
+      },
+      "window_pixels": {
+        "width": 800,
+        "height": 600
+      },
+      "elapsed_wall_seconds": 24.10899999999674,
+      "foreground": true,
+      "command": [
+        "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\fps-expanded-20261006\\demoruns\\ctf\\qss\\quakespasm-spiked-win64.exe",
+        "-basedir",
+        "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\fps-expanded-20261006\\demoruns\\ctf\\qss",
+        "-nohome",
+        "-condebug",
+        "-window",
+        "-width",
+        "800",
+        "-height",
+        "600",
+        "-nojoy",
+        "-noice",
+        "-listen",
+        "-noudp"
+      ],
+      "config": "vid_width 800\nvid_height 600\nvid_fullscreen 0\nvid_vsync 0\nfov 90\nviewsize 100\nhost_maxfps 0\nsys_throttle -1\nr_scale 1\nvid_fsaa 0\necho FPS_BENCH_qss_ctf_1791323778035946200\nvid_width\nvid_height\nvid_vsync\ntimedemo ctfmatch\n",
+      "log": "demoruns/logs/qss-ctf-warmup.log"
+    },
+    {
+      "engine": "fteqw",
+      "bench": "ctf",
+      "run": 0,
+      "warmup": true,
+      "result": {
+        "frames": 51712,
+        "seconds": 37.1,
+        "fps": 1395.3,
+        "line": "51712 frames  37.1 seconds 1395.3 fps"
+      },
+      "window_pixels": {
+        "width": 800,
+        "height": 600
+      },
+      "elapsed_wall_seconds": 39.18800000000192,
+      "foreground": true,
+      "command": [
+        "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\fps-expanded-20261006\\demoruns\\ctf\\fteqw\\fteqw64.exe",
+        "-basedir",
+        "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\fps-expanded-20261006\\demoruns\\ctf\\fteqw",
+        "-nohome",
+        "-condebug",
+        "-window",
+        "-width",
+        "800",
+        "-height",
+        "600",
+        "-nojoy",
+        "-noice",
+        "-noupdates",
+        "+exec",
+        "fpsbench.cfg"
+      ],
+      "config": "vid_width 800\nvid_height 600\nvid_fullscreen 0\nvid_vsync 0\nfov 90\nviewsize 100\nvid_renderer gl\ncl_maxfps 0\ncl_idlefps 0\nvid_multisample 0\nlog_readable 1\necho FPS_BENCH_fteqw_ctf_1791323802147503300\nvid_width\nvid_height\nvid_vsync\ntimedemo ctfmatch\n",
+      "log": "demoruns/logs/fteqw-ctf-warmup.log"
+    },
+    {
+      "engine": "ezquake",
+      "bench": "ctf",
+      "run": 0,
+      "warmup": true,
+      "result": {
+        "frames": 51711,
+        "seconds": 16.5,
+        "fps": 3137.7,
+        "line": "51711 frames  16.5 seconds 3137.7 fps"
+      },
+      "window_pixels": {
+        "width": 800,
+        "height": 600
+      },
+      "elapsed_wall_seconds": 18.375,
+      "foreground": true,
+      "command": [
+        "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\fps-expanded-20261006\\demoruns\\ctf\\ezquake\\ezquake.exe",
+        "-basedir",
+        "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\fps-expanded-20261006\\demoruns\\ctf\\ezquake",
+        "-nohome",
+        "-condebug",
+        "-window",
+        "-width",
+        "800",
+        "-height",
+        "600",
+        "-nojoy",
+        "-noice",
+        "+cl_verify_qwprotocol",
+        "0",
+        "+set",
+        "vid_win_width",
+        "800",
+        "+set",
+        "vid_win_height",
+        "600",
+        "+set",
+        "vid_width",
+        "800",
+        "+set",
+        "vid_height",
+        "600"
+      ],
+      "config": "vid_width 800\nvid_height 600\nvid_fullscreen 0\nvid_vsync 0\nfov 90\nviewsize 100\ncl_maxfps 0\ncl_physfps 77\nsys_inactivesleep 0\nvid_vsync 0\nvid_win_width 800\nvid_win_height 600\nvid_framebuffer_scale 1\nlog fpsbench\necho FPS_BENCH_ezquake_ctf_1791323841343781100\nvid_width\nvid_height\nvid_vsync\ntimedemo ctfmatch\n",
+      "log": "demoruns/logs/ezquake-ctf-warmup.log"
+    },
+    {
+      "engine": "ironwail",
+      "bench": "ctf",
+      "run": 1,
+      "warmup": false,
+      "result": {
+        "frames": 51711,
+        "seconds": 17.2,
+        "fps": 3007.8,
+        "line": "51711 frames  17.2 seconds 3007.8 fps"
+      },
+      "window_pixels": {
+        "width": 800,
+        "height": 600
+      },
+      "elapsed_wall_seconds": 17.859000000004016,
+      "foreground": true,
+      "command": [
+        "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\fps-expanded-20261006\\demoruns\\ctf\\ironwail\\ironwail.exe",
+        "-basedir",
+        "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\fps-expanded-20261006\\demoruns\\ctf\\ironwail",
+        "-nohome",
+        "-condebug",
+        "-window",
+        "-width",
+        "800",
+        "-height",
+        "600",
+        "-nojoy",
+        "-noice",
+        "-listen",
+        "-noudp"
+      ],
+      "config": "vid_width 800\nvid_height 600\nvid_fullscreen 0\nvid_vsync 0\nfov 90\nviewsize 100\nhost_maxfps 0\nr_scale 1\nvid_fsaa 0\nsys_throttle -1\necho FPS_BENCH_ironwail_ctf_1791323859733643200\nvid_width\nvid_height\nvid_vsync\ntimedemo ctfmatch\n",
+      "log": "demoruns/logs/ironwail-ctf-01.log"
+    },
+    {
+      "engine": "vkquake",
+      "bench": "ctf",
+      "run": 1,
+      "warmup": false,
+      "result": {
+        "frames": 51711,
+        "seconds": 22.5,
+        "fps": 2301.4,
+        "line": "51711 frames  22.5 seconds 2301.4 fps"
+      },
+      "window_pixels": {
+        "width": 800,
+        "height": 600
+      },
+      "elapsed_wall_seconds": 23.625,
+      "foreground": true,
+      "command": [
+        "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\fps-expanded-20261006\\demoruns\\ctf\\vkquake\\vkQuake.exe",
+        "-basedir",
+        "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\fps-expanded-20261006\\demoruns\\ctf\\vkquake",
+        "-nohome",
+        "-condebug",
+        "-window",
+        "-width",
+        "800",
+        "-height",
+        "600",
+        "-nojoy",
+        "-noice",
+        "-listen",
+        "-noudp"
+      ],
+      "config": "vid_width 800\nvid_height 600\nvid_fullscreen 0\nvid_vsync 0\nfov 90\nviewsize 100\nhost_maxfps 0\nr_scale 1\nvid_fsaa 0\nsys_throttle -1\necho FPS_BENCH_vkquake_ctf_1791323877609000700\nvid_width\nvid_height\nvid_vsync\ntimedemo ctfmatch\n",
+      "log": "demoruns/logs/vkquake-ctf-01.log"
+    },
+    {
+      "engine": "qss",
+      "bench": "ctf",
+      "run": 1,
+      "warmup": false,
+      "result": {
+        "frames": 51711,
+        "seconds": 22.1,
+        "fps": 2338.4,
+        "line": "51711 frames  22.1 seconds 2338.4 fps"
+      },
+      "window_pixels": {
+        "width": 800,
+        "height": 600
+      },
+      "elapsed_wall_seconds": 22.75,
+      "foreground": true,
+      "command": [
+        "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\fps-expanded-20261006\\demoruns\\ctf\\qss\\quakespasm-spiked-win64.exe",
+        "-basedir",
+        "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\fps-expanded-20261006\\demoruns\\ctf\\qss",
+        "-nohome",
+        "-condebug",
+        "-window",
+        "-width",
+        "800",
+        "-height",
+        "600",
+        "-nojoy",
+        "-noice",
+        "-listen",
+        "-noudp"
+      ],
+      "config": "vid_width 800\nvid_height 600\nvid_fullscreen 0\nvid_vsync 0\nfov 90\nviewsize 100\nhost_maxfps 0\nsys_throttle -1\nr_scale 1\nvid_fsaa 0\necho FPS_BENCH_qss_ctf_1791323901244685100\nvid_width\nvid_height\nvid_vsync\ntimedemo ctfmatch\n",
+      "log": "demoruns/logs/qss-ctf-01.log"
+    },
+    {
+      "engine": "fteqw",
+      "bench": "ctf",
+      "run": 1,
+      "warmup": false,
+      "result": {
+        "frames": 51712,
+        "seconds": 35.4,
+        "fps": 1461.3,
+        "line": "51712 frames  35.4 seconds 1461.3 fps"
+      },
+      "window_pixels": {
+        "width": 800,
+        "height": 600
+      },
+      "elapsed_wall_seconds": 36.45300000000134,
+      "foreground": true,
+      "command": [
+        "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\fps-expanded-20261006\\demoruns\\ctf\\fteqw\\fteqw64.exe",
+        "-basedir",
+        "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\fps-expanded-20261006\\demoruns\\ctf\\fteqw",
+        "-nohome",
+        "-condebug",
+        "-window",
+        "-width",
+        "800",
+        "-height",
+        "600",
+        "-nojoy",
+        "-noice",
+        "-noupdates",
+        "+exec",
+        "fpsbench.cfg"
+      ],
+      "config": "vid_width 800\nvid_height 600\nvid_fullscreen 0\nvid_vsync 0\nfov 90\nviewsize 100\nvid_renderer gl\ncl_maxfps 0\ncl_idlefps 0\nvid_multisample 0\nlog_readable 1\necho FPS_BENCH_fteqw_ctf_1791323924002810700\nvid_width\nvid_height\nvid_vsync\ntimedemo ctfmatch\n",
+      "log": "demoruns/logs/fteqw-ctf-01.log"
+    },
+    {
+      "engine": "ezquake",
+      "bench": "ctf",
+      "run": 1,
+      "warmup": false,
+      "result": {
+        "frames": 51711,
+        "seconds": 15.8,
+        "fps": 3278.1,
+        "line": "51711 frames  15.8 seconds 3278.1 fps"
+      },
+      "window_pixels": {
+        "width": 800,
+        "height": 600
+      },
+      "elapsed_wall_seconds": 17.25,
+      "foreground": true,
+      "command": [
+        "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\fps-expanded-20261006\\demoruns\\ctf\\ezquake\\ezquake.exe",
+        "-basedir",
+        "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\fps-expanded-20261006\\demoruns\\ctf\\ezquake",
+        "-nohome",
+        "-condebug",
+        "-window",
+        "-width",
+        "800",
+        "-height",
+        "600",
+        "-nojoy",
+        "-noice",
+        "+cl_verify_qwprotocol",
+        "0",
+        "+set",
+        "vid_win_width",
+        "800",
+        "+set",
+        "vid_win_height",
+        "600",
+        "+set",
+        "vid_width",
+        "800",
+        "+set",
+        "vid_height",
+        "600"
+      ],
+      "config": "vid_width 800\nvid_height 600\nvid_fullscreen 0\nvid_vsync 0\nfov 90\nviewsize 100\ncl_maxfps 0\ncl_physfps 77\nsys_inactivesleep 0\nvid_vsync 0\nvid_win_width 800\nvid_win_height 600\nvid_framebuffer_scale 1\nlog fpsbench\necho FPS_BENCH_ezquake_ctf_1791323960467246700\nvid_width\nvid_height\nvid_vsync\ntimedemo ctfmatch\n",
+      "log": "demoruns/logs/ezquake-ctf-01.log"
+    },
+    {
+      "engine": "qssm",
+      "bench": "ctf",
+      "run": 1,
+      "warmup": false,
+      "result": {
+        "frames": 51711,
+        "seconds": 25.7,
+        "fps": 2013.8,
+        "line": "51711 frames  25.7 seconds 2013.8 fps"
+      },
+      "window_pixels": {
+        "width": 800,
+        "height": 600
+      },
+      "elapsed_wall_seconds": 26.25,
+      "foreground": true,
+      "command": [
+        "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\fps-expanded-20261006\\demoruns\\ctf\\qssm\\quakespasm.exe",
+        "-basedir",
+        "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\fps-expanded-20261006\\demoruns\\ctf\\qssm",
+        "-nohome",
+        "-condebug",
+        "-window",
+        "-width",
+        "800",
+        "-height",
+        "600",
+        "-nojoy",
+        "-noice",
+        "-listen",
+        "-noudp",
+        "-noquakeimport"
+      ],
+      "config": "vid_width 800\nvid_height 600\nvid_fullscreen 0\nvid_vsync 0\nfov 90\nviewsize 100\nhost_maxfps 0\nsys_throttle -1\ncl_demoreel 0\ncl_discord_presence 0\nr_scale 1\nvid_fsaa 0\nscr_autoid 0\necho FPS_BENCH_qssm_ctf_1791323977721005700\nvid_width\nvid_height\nvid_vsync\ntimedemo ctfmatch\n",
+      "log": "demoruns/logs/qssm-ctf-01.log"
+    },
+    {
+      "engine": "vkquake",
+      "bench": "ctf",
+      "run": 2,
+      "warmup": false,
+      "result": {
+        "frames": 51711,
+        "seconds": 22.6,
+        "fps": 2285.7,
+        "line": "51711 frames  22.6 seconds 2285.7 fps"
+      },
+      "window_pixels": {
+        "width": 800,
+        "height": 600
+      },
+      "elapsed_wall_seconds": 23.85899999999674,
+      "foreground": true,
+      "command": [
+        "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\fps-expanded-20261006\\demoruns\\ctf\\vkquake\\vkQuake.exe",
+        "-basedir",
+        "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\fps-expanded-20261006\\demoruns\\ctf\\vkquake",
+        "-nohome",
+        "-condebug",
+        "-window",
+        "-width",
+        "800",
+        "-height",
+        "600",
+        "-nojoy",
+        "-noice",
+        "-listen",
+        "-noudp"
+      ],
+      "config": "vid_width 800\nvid_height 600\nvid_fullscreen 0\nvid_vsync 0\nfov 90\nviewsize 100\nhost_maxfps 0\nr_scale 1\nvid_fsaa 0\nsys_throttle -1\necho FPS_BENCH_vkquake_ctf_1791324003981578700\nvid_width\nvid_height\nvid_vsync\ntimedemo ctfmatch\n",
+      "log": "demoruns/logs/vkquake-ctf-02.log"
+    },
+    {
+      "engine": "qss",
+      "bench": "ctf",
+      "run": 2,
+      "warmup": false,
+      "result": {
+        "frames": 51711,
+        "seconds": 22.1,
+        "fps": 2344.2,
+        "line": "51711 frames  22.1 seconds 2344.2 fps"
+      },
+      "window_pixels": {
+        "width": 800,
+        "height": 600
+      },
+      "elapsed_wall_seconds": 22.656000000002678,
+      "foreground": true,
+      "command": [
+        "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\fps-expanded-20261006\\demoruns\\ctf\\qss\\quakespasm-spiked-win64.exe",
+        "-basedir",
+        "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\fps-expanded-20261006\\demoruns\\ctf\\qss",
+        "-nohome",
+        "-condebug",
+        "-window",
+        "-width",
+        "800",
+        "-height",
+        "600",
+        "-nojoy",
+        "-noice",
+        "-listen",
+        "-noudp"
+      ],
+      "config": "vid_width 800\nvid_height 600\nvid_fullscreen 0\nvid_vsync 0\nfov 90\nviewsize 100\nhost_maxfps 0\nsys_throttle -1\nr_scale 1\nvid_fsaa 0\necho FPS_BENCH_qss_ctf_1791324027846427400\nvid_width\nvid_height\nvid_vsync\ntimedemo ctfmatch\n",
+      "log": "demoruns/logs/qss-ctf-02.log"
+    },
+    {
+      "engine": "fteqw",
+      "bench": "ctf",
+      "run": 2,
+      "warmup": false,
+      "result": {
+        "frames": 51712,
+        "seconds": 35.6,
+        "fps": 1454.3,
+        "line": "51712 frames  35.6 seconds 1454.3 fps"
+      },
+      "window_pixels": {
+        "width": 800,
+        "height": 600
+      },
+      "elapsed_wall_seconds": 36.67199999999866,
+      "foreground": true,
+      "command": [
+        "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\fps-expanded-20261006\\demoruns\\ctf\\fteqw\\fteqw64.exe",
+        "-basedir",
+        "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\fps-expanded-20261006\\demoruns\\ctf\\fteqw",
+        "-nohome",
+        "-condebug",
+        "-window",
+        "-width",
+        "800",
+        "-height",
+        "600",
+        "-nojoy",
+        "-noice",
+        "-noupdates",
+        "+exec",
+        "fpsbench.cfg"
+      ],
+      "config": "vid_width 800\nvid_height 600\nvid_fullscreen 0\nvid_vsync 0\nfov 90\nviewsize 100\nvid_renderer gl\ncl_maxfps 0\ncl_idlefps 0\nvid_multisample 0\nlog_readable 1\necho FPS_BENCH_fteqw_ctf_1791324050506833400\nvid_width\nvid_height\nvid_vsync\ntimedemo ctfmatch\n",
+      "log": "demoruns/logs/fteqw-ctf-02.log"
+    },
+    {
+      "engine": "ezquake",
+      "bench": "ctf",
+      "run": 2,
+      "warmup": false,
+      "result": {
+        "frames": 51711,
+        "seconds": 15.7,
+        "fps": 3301.0,
+        "line": "51711 frames  15.7 seconds 3301.0 fps"
+      },
+      "window_pixels": {
+        "width": 800,
+        "height": 600
+      },
+      "elapsed_wall_seconds": 17.20300000000134,
+      "foreground": true,
+      "command": [
+        "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\fps-expanded-20261006\\demoruns\\ctf\\ezquake\\ezquake.exe",
+        "-basedir",
+        "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\fps-expanded-20261006\\demoruns\\ctf\\ezquake",
+        "-nohome",
+        "-condebug",
+        "-window",
+        "-width",
+        "800",
+        "-height",
+        "600",
+        "-nojoy",
+        "-noice",
+        "+cl_verify_qwprotocol",
+        "0",
+        "+set",
+        "vid_win_width",
+        "800",
+        "+set",
+        "vid_win_height",
+        "600",
+        "+set",
+        "vid_width",
+        "800",
+        "+set",
+        "vid_height",
+        "600"
+      ],
+      "config": "vid_width 800\nvid_height 600\nvid_fullscreen 0\nvid_vsync 0\nfov 90\nviewsize 100\ncl_maxfps 0\ncl_physfps 77\nsys_inactivesleep 0\nvid_vsync 0\nvid_win_width 800\nvid_win_height 600\nvid_framebuffer_scale 1\nlog fpsbench\necho FPS_BENCH_ezquake_ctf_1791324087191373200\nvid_width\nvid_height\nvid_vsync\ntimedemo ctfmatch\n",
+      "log": "demoruns/logs/ezquake-ctf-02.log"
+    },
+    {
+      "engine": "qssm",
+      "bench": "ctf",
+      "run": 2,
+      "warmup": false,
+      "result": {
+        "frames": 51711,
+        "seconds": 25.5,
+        "fps": 2024.3,
+        "line": "51711 frames  25.5 seconds 2024.3 fps"
+      },
+      "window_pixels": {
+        "width": 800,
+        "height": 600
+      },
+      "elapsed_wall_seconds": 26.125,
+      "foreground": true,
+      "command": [
+        "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\fps-expanded-20261006\\demoruns\\ctf\\qssm\\quakespasm.exe",
+        "-basedir",
+        "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\fps-expanded-20261006\\demoruns\\ctf\\qssm",
+        "-nohome",
+        "-condebug",
+        "-window",
+        "-width",
+        "800",
+        "-height",
+        "600",
+        "-nojoy",
+        "-noice",
+        "-listen",
+        "-noudp",
+        "-noquakeimport"
+      ],
+      "config": "vid_width 800\nvid_height 600\nvid_fullscreen 0\nvid_vsync 0\nfov 90\nviewsize 100\nhost_maxfps 0\nsys_throttle -1\ncl_demoreel 0\ncl_discord_presence 0\nr_scale 1\nvid_fsaa 0\nscr_autoid 0\necho FPS_BENCH_qssm_ctf_1791324104387971900\nvid_width\nvid_height\nvid_vsync\ntimedemo ctfmatch\n",
+      "log": "demoruns/logs/qssm-ctf-02.log"
+    },
+    {
+      "engine": "ironwail",
+      "bench": "ctf",
+      "run": 2,
+      "warmup": false,
+      "result": {
+        "frames": 51711,
+        "seconds": 17.1,
+        "fps": 3015.4,
+        "line": "51711 frames  17.1 seconds 3015.4 fps"
+      },
+      "window_pixels": {
+        "width": 800,
+        "height": 600
+      },
+      "elapsed_wall_seconds": 17.890999999995984,
+      "foreground": true,
+      "command": [
+        "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\fps-expanded-20261006\\demoruns\\ctf\\ironwail\\ironwail.exe",
+        "-basedir",
+        "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\fps-expanded-20261006\\demoruns\\ctf\\ironwail",
+        "-nohome",
+        "-condebug",
+        "-window",
+        "-width",
+        "800",
+        "-height",
+        "600",
+        "-nojoy",
+        "-noice",
+        "-listen",
+        "-noudp"
+      ],
+      "config": "vid_width 800\nvid_height 600\nvid_fullscreen 0\nvid_vsync 0\nfov 90\nviewsize 100\nhost_maxfps 0\nr_scale 1\nvid_fsaa 0\nsys_throttle -1\necho FPS_BENCH_ironwail_ctf_1791324130520123000\nvid_width\nvid_height\nvid_vsync\ntimedemo ctfmatch\n",
+      "log": "demoruns/logs/ironwail-ctf-02.log"
+    },
+    {
+      "engine": "qss",
+      "bench": "ctf",
+      "run": 3,
+      "warmup": false,
+      "result": {
+        "frames": 51711,
+        "seconds": 22.2,
+        "fps": 2325.7,
+        "line": "51711 frames  22.2 seconds 2325.7 fps"
+      },
+      "window_pixels": {
+        "width": 800,
+        "height": 600
+      },
+      "elapsed_wall_seconds": 23.0,
+      "foreground": true,
+      "command": [
+        "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\fps-expanded-20261006\\demoruns\\ctf\\qss\\quakespasm-spiked-win64.exe",
+        "-basedir",
+        "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\fps-expanded-20261006\\demoruns\\ctf\\qss",
+        "-nohome",
+        "-condebug",
+        "-window",
+        "-width",
+        "800",
+        "-height",
+        "600",
+        "-nojoy",
+        "-noice",
+        "-listen",
+        "-noudp"
+      ],
+      "config": "vid_width 800\nvid_height 600\nvid_fullscreen 0\nvid_vsync 0\nfov 90\nviewsize 100\nhost_maxfps 0\nsys_throttle -1\nr_scale 1\nvid_fsaa 0\necho FPS_BENCH_qss_ctf_1791324148425494900\nvid_width\nvid_height\nvid_vsync\ntimedemo ctfmatch\n",
+      "log": "demoruns/logs/qss-ctf-03.log"
+    },
+    {
+      "engine": "fteqw",
+      "bench": "ctf",
+      "run": 3,
+      "warmup": false,
+      "result": {
+        "frames": 51712,
+        "seconds": 35.5,
+        "fps": 1457.5,
+        "line": "51712 frames  35.5 seconds 1457.5 fps"
+      },
+      "window_pixels": {
+        "width": 800,
+        "height": 600
+      },
+      "elapsed_wall_seconds": 36.59300000000076,
+      "foreground": true,
+      "command": [
+        "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\fps-expanded-20261006\\demoruns\\ctf\\fteqw\\fteqw64.exe",
+        "-basedir",
+        "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\fps-expanded-20261006\\demoruns\\ctf\\fteqw",
+        "-nohome",
+        "-condebug",
+        "-window",
+        "-width",
+        "800",
+        "-height",
+        "600",
+        "-nojoy",
+        "-noice",
+        "-noupdates",
+        "+exec",
+        "fpsbench.cfg"
+      ],
+      "config": "vid_width 800\nvid_height 600\nvid_fullscreen 0\nvid_vsync 0\nfov 90\nviewsize 100\nvid_renderer gl\ncl_maxfps 0\ncl_idlefps 0\nvid_multisample 0\nlog_readable 1\necho FPS_BENCH_fteqw_ctf_1791324171431054200\nvid_width\nvid_height\nvid_vsync\ntimedemo ctfmatch\n",
+      "log": "demoruns/logs/fteqw-ctf-03.log"
+    },
+    {
+      "engine": "ezquake",
+      "bench": "ctf",
+      "run": 3,
+      "warmup": false,
+      "result": {
+        "frames": 51711,
+        "seconds": 15.6,
+        "fps": 3319.6,
+        "line": "51711 frames  15.6 seconds 3319.6 fps"
+      },
+      "window_pixels": {
+        "width": 800,
+        "height": 600
+      },
+      "elapsed_wall_seconds": 17.110000000000582,
+      "foreground": true,
+      "command": [
+        "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\fps-expanded-20261006\\demoruns\\ctf\\ezquake\\ezquake.exe",
+        "-basedir",
+        "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\fps-expanded-20261006\\demoruns\\ctf\\ezquake",
+        "-nohome",
+        "-condebug",
+        "-window",
+        "-width",
+        "800",
+        "-height",
+        "600",
+        "-nojoy",
+        "-noice",
+        "+cl_verify_qwprotocol",
+        "0",
+        "+set",
+        "vid_win_width",
+        "800",
+        "+set",
+        "vid_win_height",
+        "600",
+        "+set",
+        "vid_width",
+        "800",
+        "+set",
+        "vid_height",
+        "600"
+      ],
+      "config": "vid_width 800\nvid_height 600\nvid_fullscreen 0\nvid_vsync 0\nfov 90\nviewsize 100\ncl_maxfps 0\ncl_physfps 77\nsys_inactivesleep 0\nvid_vsync 0\nvid_win_width 800\nvid_win_height 600\nvid_framebuffer_scale 1\nlog fpsbench\necho FPS_BENCH_ezquake_ctf_1791324208018775100\nvid_width\nvid_height\nvid_vsync\ntimedemo ctfmatch\n",
+      "log": "demoruns/logs/ezquake-ctf-03.log"
+    },
+    {
+      "engine": "qssm",
+      "bench": "ctf",
+      "run": 3,
+      "warmup": false,
+      "result": {
+        "frames": 51711,
+        "seconds": 27.3,
+        "fps": 1892.2,
+        "line": "51711 frames  27.3 seconds 1892.2 fps"
+      },
+      "window_pixels": {
+        "width": 800,
+        "height": 600
+      },
+      "elapsed_wall_seconds": 27.953999999997905,
+      "foreground": true,
+      "command": [
+        "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\fps-expanded-20261006\\demoruns\\ctf\\qssm\\quakespasm.exe",
+        "-basedir",
+        "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\fps-expanded-20261006\\demoruns\\ctf\\qssm",
+        "-nohome",
+        "-condebug",
+        "-window",
+        "-width",
+        "800",
+        "-height",
+        "600",
+        "-nojoy",
+        "-noice",
+        "-listen",
+        "-noudp",
+        "-noquakeimport"
+      ],
+      "config": "vid_width 800\nvid_height 600\nvid_fullscreen 0\nvid_vsync 0\nfov 90\nviewsize 100\nhost_maxfps 0\nsys_throttle -1\ncl_demoreel 0\ncl_discord_presence 0\nr_scale 1\nvid_fsaa 0\nscr_autoid 0\necho FPS_BENCH_qssm_ctf_1791324225130971600\nvid_width\nvid_height\nvid_vsync\ntimedemo ctfmatch\n",
+      "log": "demoruns/logs/qssm-ctf-03.log"
+    },
+    {
+      "engine": "ironwail",
+      "bench": "ctf",
+      "run": 3,
+      "warmup": false,
+      "result": {
+        "frames": 51711,
+        "seconds": 17.2,
+        "fps": 3006.0,
+        "line": "51711 frames  17.2 seconds 3006.0 fps"
+      },
+      "window_pixels": {
+        "width": 800,
+        "height": 600
+      },
+      "elapsed_wall_seconds": 17.889999999999418,
+      "foreground": true,
+      "command": [
+        "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\fps-expanded-20261006\\demoruns\\ctf\\ironwail\\ironwail.exe",
+        "-basedir",
+        "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\fps-expanded-20261006\\demoruns\\ctf\\ironwail",
+        "-nohome",
+        "-condebug",
+        "-window",
+        "-width",
+        "800",
+        "-height",
+        "600",
+        "-nojoy",
+        "-noice",
+        "-listen",
+        "-noudp"
+      ],
+      "config": "vid_width 800\nvid_height 600\nvid_fullscreen 0\nvid_vsync 0\nfov 90\nviewsize 100\nhost_maxfps 0\nr_scale 1\nvid_fsaa 0\nsys_throttle -1\necho FPS_BENCH_ironwail_ctf_1791324253096386800\nvid_width\nvid_height\nvid_vsync\ntimedemo ctfmatch\n",
+      "log": "demoruns/logs/ironwail-ctf-03.log"
+    },
+    {
+      "engine": "vkquake",
+      "bench": "ctf",
+      "run": 3,
+      "warmup": false,
+      "result": {
+        "frames": 51711,
+        "seconds": 22.6,
+        "fps": 2291.2,
+        "line": "51711 frames  22.6 seconds 2291.2 fps"
+      },
+      "window_pixels": {
+        "width": 800,
+        "height": 600
+      },
+      "elapsed_wall_seconds": 23.764999999999418,
+      "foreground": true,
+      "command": [
+        "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\fps-expanded-20261006\\demoruns\\ctf\\vkquake\\vkQuake.exe",
+        "-basedir",
+        "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\fps-expanded-20261006\\demoruns\\ctf\\vkquake",
+        "-nohome",
+        "-condebug",
+        "-window",
+        "-width",
+        "800",
+        "-height",
+        "600",
+        "-nojoy",
+        "-noice",
+        "-listen",
+        "-noudp"
+      ],
+      "config": "vid_width 800\nvid_height 600\nvid_fullscreen 0\nvid_vsync 0\nfov 90\nviewsize 100\nhost_maxfps 0\nr_scale 1\nvid_fsaa 0\nsys_throttle -1\necho FPS_BENCH_vkquake_ctf_1791324270988463300\nvid_width\nvid_height\nvid_vsync\ntimedemo ctfmatch\n",
+      "log": "demoruns/logs/vkquake-ctf-03.log"
+    },
+    {
+      "engine": "fteqw",
+      "bench": "ctf",
+      "run": 4,
+      "warmup": false,
+      "result": {
+        "frames": 51712,
+        "seconds": 35.5,
+        "fps": 1457.3,
+        "line": "51712 frames  35.5 seconds 1457.3 fps"
+      },
+      "window_pixels": {
+        "width": 800,
+        "height": 600
+      },
+      "elapsed_wall_seconds": 36.59399999999732,
+      "foreground": true,
+      "command": [
+        "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\fps-expanded-20261006\\demoruns\\ctf\\fteqw\\fteqw64.exe",
+        "-basedir",
+        "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\fps-expanded-20261006\\demoruns\\ctf\\fteqw",
+        "-nohome",
+        "-condebug",
+        "-window",
+        "-width",
+        "800",
+        "-height",
+        "600",
+        "-nojoy",
+        "-noice",
+        "-noupdates",
+        "+exec",
+        "fpsbench.cfg"
+      ],
+      "config": "vid_width 800\nvid_height 600\nvid_fullscreen 0\nvid_vsync 0\nfov 90\nviewsize 100\nvid_renderer gl\ncl_maxfps 0\ncl_idlefps 0\nvid_multisample 0\nlog_readable 1\necho FPS_BENCH_fteqw_ctf_1791324294762289200\nvid_width\nvid_height\nvid_vsync\ntimedemo ctfmatch\n",
+      "log": "demoruns/logs/fteqw-ctf-04.log"
+    },
+    {
+      "engine": "ezquake",
+      "bench": "ctf",
+      "run": 4,
+      "warmup": false,
+      "result": {
+        "frames": 51711,
+        "seconds": 15.6,
+        "fps": 3305.6,
+        "line": "51711 frames  15.6 seconds 3305.6 fps"
+      },
+      "window_pixels": {
+        "width": 800,
+        "height": 600
+      },
+      "elapsed_wall_seconds": 17.139999999999418,
+      "foreground": true,
+      "command": [
+        "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\fps-expanded-20261006\\demoruns\\ctf\\ezquake\\ezquake.exe",
+        "-basedir",
+        "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\fps-expanded-20261006\\demoruns\\ctf\\ezquake",
+        "-nohome",
+        "-condebug",
+        "-window",
+        "-width",
+        "800",
+        "-height",
+        "600",
+        "-nojoy",
+        "-noice",
+        "+cl_verify_qwprotocol",
+        "0",
+        "+set",
+        "vid_win_width",
+        "800",
+        "+set",
+        "vid_win_height",
+        "600",
+        "+set",
+        "vid_width",
+        "800",
+        "+set",
+        "vid_height",
+        "600"
+      ],
+      "config": "vid_width 800\nvid_height 600\nvid_fullscreen 0\nvid_vsync 0\nfov 90\nviewsize 100\ncl_maxfps 0\ncl_physfps 77\nsys_inactivesleep 0\nvid_vsync 0\nvid_win_width 800\nvid_win_height 600\nvid_framebuffer_scale 1\nlog fpsbench\necho FPS_BENCH_ezquake_ctf_1791324331367040600\nvid_width\nvid_height\nvid_vsync\ntimedemo ctfmatch\n",
+      "log": "demoruns/logs/ezquake-ctf-04.log"
+    },
+    {
+      "engine": "qssm",
+      "bench": "ctf",
+      "run": 4,
+      "warmup": false,
+      "result": {
+        "frames": 51711,
+        "seconds": 26.4,
+        "fps": 1959.0,
+        "line": "51711 frames  26.4 seconds 1959.0 fps"
+      },
+      "window_pixels": {
+        "width": 800,
+        "height": 600
+      },
+      "elapsed_wall_seconds": 27.01600000000326,
+      "foreground": true,
+      "command": [
+        "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\fps-expanded-20261006\\demoruns\\ctf\\qssm\\quakespasm.exe",
+        "-basedir",
+        "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\fps-expanded-20261006\\demoruns\\ctf\\qssm",
+        "-nohome",
+        "-condebug",
+        "-window",
+        "-width",
+        "800",
+        "-height",
+        "600",
+        "-nojoy",
+        "-noice",
+        "-listen",
+        "-noudp",
+        "-noquakeimport"
+      ],
+      "config": "vid_width 800\nvid_height 600\nvid_fullscreen 0\nvid_vsync 0\nfov 90\nviewsize 100\nhost_maxfps 0\nsys_throttle -1\ncl_demoreel 0\ncl_discord_presence 0\nr_scale 1\nvid_fsaa 0\nscr_autoid 0\necho FPS_BENCH_qssm_ctf_1791324348511613100\nvid_width\nvid_height\nvid_vsync\ntimedemo ctfmatch\n",
+      "log": "demoruns/logs/qssm-ctf-04.log"
+    },
+    {
+      "engine": "ironwail",
+      "bench": "ctf",
+      "run": 4,
+      "warmup": false,
+      "result": {
+        "frames": 51711,
+        "seconds": 17.1,
+        "fps": 3028.8,
+        "line": "51711 frames  17.1 seconds 3028.8 fps"
+      },
+      "window_pixels": {
+        "width": 800,
+        "height": 600
+      },
+      "elapsed_wall_seconds": 17.718000000000757,
+      "foreground": true,
+      "command": [
+        "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\fps-expanded-20261006\\demoruns\\ctf\\ironwail\\ironwail.exe",
+        "-basedir",
+        "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\fps-expanded-20261006\\demoruns\\ctf\\ironwail",
+        "-nohome",
+        "-condebug",
+        "-window",
+        "-width",
+        "800",
+        "-height",
+        "600",
+        "-nojoy",
+        "-noice",
+        "-listen",
+        "-noudp"
+      ],
+      "config": "vid_width 800\nvid_height 600\nvid_fullscreen 0\nvid_vsync 0\nfov 90\nviewsize 100\nhost_maxfps 0\nr_scale 1\nvid_fsaa 0\nsys_throttle -1\necho FPS_BENCH_ironwail_ctf_1791324375537150500\nvid_width\nvid_height\nvid_vsync\ntimedemo ctfmatch\n",
+      "log": "demoruns/logs/ironwail-ctf-04.log"
+    },
+    {
+      "engine": "vkquake",
+      "bench": "ctf",
+      "run": 4,
+      "warmup": false,
+      "result": {
+        "frames": 51711,
+        "seconds": 22.5,
+        "fps": 2295.3,
+        "line": "51711 frames  22.5 seconds 2295.3 fps"
+      },
+      "window_pixels": {
+        "width": 800,
+        "height": 600
+      },
+      "elapsed_wall_seconds": 23.76600000000326,
+      "foreground": true,
+      "command": [
+        "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\fps-expanded-20261006\\demoruns\\ctf\\vkquake\\vkQuake.exe",
+        "-basedir",
+        "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\fps-expanded-20261006\\demoruns\\ctf\\vkquake",
+        "-nohome",
+        "-condebug",
+        "-window",
+        "-width",
+        "800",
+        "-height",
+        "600",
+        "-nojoy",
+        "-noice",
+        "-listen",
+        "-noudp"
+      ],
+      "config": "vid_width 800\nvid_height 600\nvid_fullscreen 0\nvid_vsync 0\nfov 90\nviewsize 100\nhost_maxfps 0\nr_scale 1\nvid_fsaa 0\nsys_throttle -1\necho FPS_BENCH_vkquake_ctf_1791324393265960000\nvid_width\nvid_height\nvid_vsync\ntimedemo ctfmatch\n",
+      "log": "demoruns/logs/vkquake-ctf-04.log"
+    },
+    {
+      "engine": "qss",
+      "bench": "ctf",
+      "run": 4,
+      "warmup": false,
+      "result": {
+        "frames": 51711,
+        "seconds": 21.9,
+        "fps": 2363.2,
+        "line": "51711 frames  21.9 seconds 2363.2 fps"
+      },
+      "window_pixels": {
+        "width": 800,
+        "height": 600
+      },
+      "elapsed_wall_seconds": 22.54699999999866,
+      "foreground": true,
+      "command": [
+        "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\fps-expanded-20261006\\demoruns\\ctf\\qss\\quakespasm-spiked-win64.exe",
+        "-basedir",
+        "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\fps-expanded-20261006\\demoruns\\ctf\\qss",
+        "-nohome",
+        "-condebug",
+        "-window",
+        "-width",
+        "800",
+        "-height",
+        "600",
+        "-nojoy",
+        "-noice",
+        "-listen",
+        "-noudp"
+      ],
+      "config": "vid_width 800\nvid_height 600\nvid_fullscreen 0\nvid_vsync 0\nfov 90\nviewsize 100\nhost_maxfps 0\nsys_throttle -1\nr_scale 1\nvid_fsaa 0\necho FPS_BENCH_qss_ctf_1791324417033966400\nvid_width\nvid_height\nvid_vsync\ntimedemo ctfmatch\n",
+      "log": "demoruns/logs/qss-ctf-04.log"
+    },
+    {
+      "engine": "ezquake",
+      "bench": "ctf",
+      "run": 5,
+      "warmup": false,
+      "result": {
+        "frames": 51711,
+        "seconds": 15.7,
+        "fps": 3288.1,
+        "line": "51711 frames  15.7 seconds 3288.1 fps"
+      },
+      "window_pixels": {
+        "width": 800,
+        "height": 600
+      },
+      "elapsed_wall_seconds": 17.29699999999866,
+      "foreground": true,
+      "command": [
+        "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\fps-expanded-20261006\\demoruns\\ctf\\ezquake\\ezquake.exe",
+        "-basedir",
+        "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\fps-expanded-20261006\\demoruns\\ctf\\ezquake",
+        "-nohome",
+        "-condebug",
+        "-window",
+        "-width",
+        "800",
+        "-height",
+        "600",
+        "-nojoy",
+        "-noice",
+        "+cl_verify_qwprotocol",
+        "0",
+        "+set",
+        "vid_win_width",
+        "800",
+        "+set",
+        "vid_win_height",
+        "600",
+        "+set",
+        "vid_width",
+        "800",
+        "+set",
+        "vid_height",
+        "600"
+      ],
+      "config": "vid_width 800\nvid_height 600\nvid_fullscreen 0\nvid_vsync 0\nfov 90\nviewsize 100\ncl_maxfps 0\ncl_physfps 77\nsys_inactivesleep 0\nvid_vsync 0\nvid_win_width 800\nvid_win_height 600\nvid_framebuffer_scale 1\nlog fpsbench\necho FPS_BENCH_ezquake_ctf_1791324439584925900\nvid_width\nvid_height\nvid_vsync\ntimedemo ctfmatch\n",
+      "log": "demoruns/logs/ezquake-ctf-05.log"
+    },
+    {
+      "engine": "qssm",
+      "bench": "ctf",
+      "run": 5,
+      "warmup": false,
+      "result": {
+        "frames": 51711,
+        "seconds": 25.5,
+        "fps": 2025.8,
+        "line": "51711 frames  25.5 seconds 2025.8 fps"
+      },
+      "window_pixels": {
+        "width": 800,
+        "height": 600
+      },
+      "elapsed_wall_seconds": 26.218000000000757,
+      "foreground": true,
+      "command": [
+        "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\fps-expanded-20261006\\demoruns\\ctf\\qssm\\quakespasm.exe",
+        "-basedir",
+        "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\fps-expanded-20261006\\demoruns\\ctf\\qssm",
+        "-nohome",
+        "-condebug",
+        "-window",
+        "-width",
+        "800",
+        "-height",
+        "600",
+        "-nojoy",
+        "-noice",
+        "-listen",
+        "-noudp",
+        "-noquakeimport"
+      ],
+      "config": "vid_width 800\nvid_height 600\nvid_fullscreen 0\nvid_vsync 0\nfov 90\nviewsize 100\nhost_maxfps 0\nsys_throttle -1\ncl_demoreel 0\ncl_discord_presence 0\nr_scale 1\nvid_fsaa 0\nscr_autoid 0\necho FPS_BENCH_qssm_ctf_1791324456890800800\nvid_width\nvid_height\nvid_vsync\ntimedemo ctfmatch\n",
+      "log": "demoruns/logs/qssm-ctf-05.log"
+    },
+    {
+      "engine": "ironwail",
+      "bench": "ctf",
+      "run": 5,
+      "warmup": false,
+      "result": {
+        "frames": 51711,
+        "seconds": 17.2,
+        "fps": 3005.8,
+        "line": "51711 frames  17.2 seconds 3005.8 fps"
+      },
+      "window_pixels": {
+        "width": 800,
+        "height": 600
+      },
+      "elapsed_wall_seconds": 17.984000000004016,
+      "foreground": true,
+      "command": [
+        "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\fps-expanded-20261006\\demoruns\\ctf\\ironwail\\ironwail.exe",
+        "-basedir",
+        "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\fps-expanded-20261006\\demoruns\\ctf\\ironwail",
+        "-nohome",
+        "-condebug",
+        "-window",
+        "-width",
+        "800",
+        "-height",
+        "600",
+        "-nojoy",
+        "-noice",
+        "-listen",
+        "-noudp"
+      ],
+      "config": "vid_width 800\nvid_height 600\nvid_fullscreen 0\nvid_vsync 0\nfov 90\nviewsize 100\nhost_maxfps 0\nr_scale 1\nvid_fsaa 0\nsys_throttle -1\necho FPS_BENCH_ironwail_ctf_1791324483127674400\nvid_width\nvid_height\nvid_vsync\ntimedemo ctfmatch\n",
+      "log": "demoruns/logs/ironwail-ctf-05.log"
+    },
+    {
+      "engine": "vkquake",
+      "bench": "ctf",
+      "run": 5,
+      "warmup": false,
+      "result": {
+        "frames": 51711,
+        "seconds": 23.1,
+        "fps": 2241.1,
+        "line": "51711 frames  23.1 seconds 2241.1 fps"
+      },
+      "window_pixels": {
+        "width": 800,
+        "height": 600
+      },
+      "elapsed_wall_seconds": 24.234000000004016,
+      "foreground": true,
+      "command": [
+        "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\fps-expanded-20261006\\demoruns\\ctf\\vkquake\\vkQuake.exe",
+        "-basedir",
+        "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\fps-expanded-20261006\\demoruns\\ctf\\vkquake",
+        "-nohome",
+        "-condebug",
+        "-window",
+        "-width",
+        "800",
+        "-height",
+        "600",
+        "-nojoy",
+        "-noice",
+        "-listen",
+        "-noudp"
+      ],
+      "config": "vid_width 800\nvid_height 600\nvid_fullscreen 0\nvid_vsync 0\nfov 90\nviewsize 100\nhost_maxfps 0\nr_scale 1\nvid_fsaa 0\nsys_throttle -1\necho FPS_BENCH_vkquake_ctf_1791324501129114600\nvid_width\nvid_height\nvid_vsync\ntimedemo ctfmatch\n",
+      "log": "demoruns/logs/vkquake-ctf-05.log"
+    },
+    {
+      "engine": "qss",
+      "bench": "ctf",
+      "run": 5,
+      "warmup": false,
+      "result": {
+        "frames": 51711,
+        "seconds": 22.0,
+        "fps": 2350.6,
+        "line": "51711 frames  22.0 seconds 2350.6 fps"
+      },
+      "window_pixels": {
+        "width": 800,
+        "height": 600
+      },
+      "elapsed_wall_seconds": 22.640999999995984,
+      "foreground": true,
+      "command": [
+        "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\fps-expanded-20261006\\demoruns\\ctf\\qss\\quakespasm-spiked-win64.exe",
+        "-basedir",
+        "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\fps-expanded-20261006\\demoruns\\ctf\\qss",
+        "-nohome",
+        "-condebug",
+        "-window",
+        "-width",
+        "800",
+        "-height",
+        "600",
+        "-nojoy",
+        "-noice",
+        "-listen",
+        "-noudp"
+      ],
+      "config": "vid_width 800\nvid_height 600\nvid_fullscreen 0\nvid_vsync 0\nfov 90\nviewsize 100\nhost_maxfps 0\nsys_throttle -1\nr_scale 1\nvid_fsaa 0\necho FPS_BENCH_qss_ctf_1791324525365609800\nvid_width\nvid_height\nvid_vsync\ntimedemo ctfmatch\n",
+      "log": "demoruns/logs/qss-ctf-05.log"
+    },
+    {
+      "engine": "fteqw",
+      "bench": "ctf",
+      "run": 5,
+      "warmup": false,
+      "result": {
+        "frames": 51712,
+        "seconds": 35.4,
+        "fps": 1462.4,
+        "line": "51712 frames  35.4 seconds 1462.4 fps"
+      },
+      "window_pixels": {
+        "width": 800,
+        "height": 600
+      },
+      "elapsed_wall_seconds": 36.42199999999866,
+      "foreground": true,
+      "command": [
+        "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\fps-expanded-20261006\\demoruns\\ctf\\fteqw\\fteqw64.exe",
+        "-basedir",
+        "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\fps-expanded-20261006\\demoruns\\ctf\\fteqw",
+        "-nohome",
+        "-condebug",
+        "-window",
+        "-width",
+        "800",
+        "-height",
+        "600",
+        "-nojoy",
+        "-noice",
+        "-noupdates",
+        "+exec",
+        "fpsbench.cfg"
+      ],
+      "config": "vid_width 800\nvid_height 600\nvid_fullscreen 0\nvid_vsync 0\nfov 90\nviewsize 100\nvid_renderer gl\ncl_maxfps 0\ncl_idlefps 0\nvid_multisample 0\nlog_readable 1\necho FPS_BENCH_fteqw_ctf_1791324548007217000\nvid_width\nvid_height\nvid_vsync\ntimedemo ctfmatch\n",
+      "log": "demoruns/logs/fteqw-ctf-05.log"
+    }
+  ]
+}

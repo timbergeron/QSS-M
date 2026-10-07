@@ -1,0 +1,130 @@
+LOG started on: 10/06/2026 13:43:39 
+Playing registered version.
+Console initialized.
+WIPX_OpenSocket: Address family not supported by protocol family
+WIPX_Init: Unable to open control socket, IPX disabled
+Exe: QSS 2024-03-01
+256.0 megabyte heap
+Video mode 800x600x24 144Hz (24-bit z-buffer, 0x FSAA) initialized
+GL_VENDOR: NVIDIA Corporation
+GL_RENDERER: NVIDIA GeForce RTX 4070/PCIe/SSE2
+GL_VERSION: 4.6.0 NVIDIA 610.88
+FOUND: ARB_vertex_buffer_object
+FOUND: GL_ARB_buffer_storage
+FOUND: ARB_multitexture
+GL_MAX_TEXTURE_UNITS: 4
+FOUND: ARB_texture_env_combine
+FOUND: ARB_texture_env_add
+FOUND: SDL_GL_SetSwapInterval
+FOUND: EXT_texture_filter_anisotropic
+FOUND: ARB_texture_non_power_of_two
+FOUND: GLSL
+FOUND: glGenerateMipmap
+
+Sound Initialization
+SDL audio spec  : 44100 Hz, 1024 samples, 2 channels
+SDL audio driver: wasapi - Speakers (Logitech G432 Gaming Headset), 65536 bytes buffer
+Audio: 16 bit, stereo, 44100 Hz
+CDAudio disabled at compile time
+
+Language initialization
+Couldn't load 'localization/loc_english.txt'
+from 'C:\Users\Tim Bergeron\source\repos\QSS-M\.codex-build\fps-expanded-20261006\runs\ctf-qss'
+
+========= Quake Initialized =========
+
+execing quake.rc
+execing default.cfg
+execing fpsbench.cfg
+Using renderer/network isolation.
+REPEAT_BEGIN 
+PASS_0 
+Playing demo from ctfmatch.dem.
+Using protocol 15
+
+
+
+Red Alert - By EG
+"timelimit" changed to "20"
+host:    Denver CTF - Omi's love shack
+version: ManQuake 1.00 
+tcp/ip:  0.0.0.0
+map:     ctf3m2
+players: 7 active (16 max)
+
+#1  deepfriednewbie   -99   1:04:59
+   136.37.112.xxx
+#2  infin               0   0:33:16
+   135.23.248.xxx
+#3  wolff               0   0:40:33
+   174.58.50.xxx
+#4  player              0   0:30:51
+   76.176.6.xxx
+#5  woods              0  0:00:39
+   98.145.119.xxx
+#6  moof                0   0:32:58
+   75.172.4.xxx
+#7  freekill            0   0:30:05
+   173.91.56.xxx
+(woods): our quad
+(woods): our quad
+(woods): our quad
+(woods): our quad
+(woods): our quad
+woods ��� the ���� ����!
+moof ��� the ��� ����!
+infin gets lead poisoned by woods's shotgun
+You get the Double-barrelled Shotgun, 52 shells
+wolff got his head blown off by woods's buckshot
+You get the Rocket Launcher, 25 shells, 30 nails, 21 rockets
+uns has connected with proquake version 3.50
+You receive 15 health
+You receive 25 health
+Quad Damage is wearing off
+(woods): next quad at: 54
+(woods): next quad at: 54
+(woods): next quad at: 54
+You receive 25 health
+moof was shocked by player's thunderbolt
+moof ���� the ��� flag!
+player �������� the ��� ����!
+(woods): yes / base good / now
+(woods): yes / base good / now
+(woods): yes / base good / now
+player was shocked by infin's thunderbolt
+woods �������� the ���� ����!
+����������堐00:38.17�
+player gets an assist for returning the ����!
+player gets an assist for fragging the ���� carrier!
+wolff ��� the ��� ����!
+You receive 25 health
+wolff rides woods's rocket
+wolff ���� the ��� flag!
+wolff ��� the ��� ����!
+You receive 25 health
+freekill was shocked by infin's thunderbolt
+(woods): quad soon
+(woods): quad soon
+(woods): quad soon
+Match ends in 19 minutes
+"timelimit" changed to "19"
+(player): @ �red elevator� �48/97�no weapons�
+(player): @ �red elevator� �48/97�no weapons�
+woods ��� the ���� ����!
+You receive 15 health
+You receive 25 health
+(player): @ �quad� �14/19�no weapons�
+(player): @ �quad� �14/19�no weapons�
+(player): @ �quad� �14/19�no weapons�
+player got his head blown off by moof's buckshot
+(player): Need help @ �quad�
+(player): Need help @ �quad�
+(player): Need help @ �quad�
+(player): Need help @ �quad�
+(player): ENEMY QUAD 18:52
+(player): ENEMY QUAD 18:52
+moof rides woods's rocket
+You receive 25 health
+You receive 25 health
+You receive 25 health
+REPEAT_DONE 

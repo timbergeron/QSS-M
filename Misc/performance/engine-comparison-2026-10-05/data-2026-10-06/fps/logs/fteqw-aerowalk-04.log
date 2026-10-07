@@ -1,0 +1,20 @@
+--- fte\qconsole.log ---
+FPS_BENCH_fteqw_aerowalk_1791324888651438900
+2026-10-06 15:14:48 "vid_width" is "800"
+2026-10-06 15:14:48 Default: "0"
+2026-10-06 15:14:48 "vid_height" is "600"
+2026-10-06 15:14:48 Default: "0"
+2026-10-06 15:14:48 "vid_vsync" is "0" (default)
+2026-10-06 15:14:48 Playing demo from fps_aerowalk.dem.
+2026-10-06 15:14:48 Setting windowed mode 800*600 OpenGL
+2026-10-06 15:14:49 GL_VENDOR: NVIDIA Corporation
+2026-10-06 15:14:49 GL_RENDERER: NVIDIA GeForce RTX 4070/PCIe/SSE2
+2026-10-06 15:14:49 GL_VERSION: 4.6.0 NVIDIA 610.88
+2026-10-06 15:14:49 OpenGL renderer initialized
+2026-10-06 15:14:49 ^Ue080^Ue081^Ue081^Ue081^Ue081^Ue081^Ue081 Quake Initialized ^Ue081^Ue081^Ue081^Ue081^Ue081^Ue081^Ue082
+2026-10-06 15:14:49 
+2026-10-06 15:14:49 
+2026-10-06 15:14:49 ^Ue01d^Ue01e^Ue01e^Ue01e^Ue01e^Ue01e^Ue01e^Ue01e^Ue01e^Ue01e^Ue01e^Ue01e^Ue01e^Ue01e^Ue01e^Ue01e^Ue01e^Ue01e^Ue01f
+2026-10-06 15:14:49 
+2026-10-06 15:14:49 Aerowalk
+2026-10-06 15:14:50 1446 frames   0.5 seconds 3022.5 fps

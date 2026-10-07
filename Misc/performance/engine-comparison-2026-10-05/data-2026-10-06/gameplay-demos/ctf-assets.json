@@ -1,0 +1,20 @@
+{
+ "source": "Desktop/qssm/id1/paks ctf3maps.pak, ctf4maps.pak",
+ "files": {
+  "progs/star.mdl": "3c0ba85927923d0e562ae663c775362f1be25bcbe0e2d62731ed8f1f021725ab",
+  "progs/bit.mdl": "bb3df0c75ff4f6b0cf1437e010c4fa5e1a56cfc26900d12934502bcae3a1fb9d",
+  "progs/v_star.mdl": "abf29c0250b5cf95fe8237e389fe852222ff121c603fb0a3cd923696a22a7f2e",
+  "progs/flag.mdl": "7c07065297995682240cdb2a634e185991296f8dc0de5d4123e3e48ce160e3ae",
+  "sound/weapons/chain1.wav": "2b62c292f87665f9b6dbbc716c24875e67d4206c548440b79443a14fa9ee7ba8",
+  "sound/weapons/chain2.wav": "e0991b1a92351720cf85030db91bb1a896c5aa3f7ed01bcb73c7534ca798b32e",
+  "sound/weapons/chain3.wav": "cc1bdca575e0dd0fe1986fe590b85f6c27dca84a3de89e20306e61c4677686fd",
+  "sound/weapons/bounce2.wav": "d2da688ec5fc64f24b798b645eb80b8cdd60c6e7d44cb68a7e05e2264e1e69d5",
+  "sound/misc/flagtk.wav": "169c79f55823a2b5eb39fe2b30d6232df0456a743f86da61b6a2639346c0a2ee",
+  "sound/misc/flagcap.wav": "0fb86d81a0614914e2c53076972b0d253da24c90d9d75ead5f8ef490dde00d43",
+  "sound/rune/rune1.wav": "90dd50b25175c8d514a52165429e9ca6b90c45dddbb0f301e5873146b4a4a06c",
+  "sound/rune/rune2.wav": "933046049bae4d866250ad9a6e0a4b2a9385caffb4156daaca39ff7110a71126",
+  "sound/rune/rune22.wav": "eea46c6de070db55002b9ebf7e1badb961ed4ecff50d458b41324c63eae5d71c",
+  "sound/rune/rune3.wav": "508d89890db17f828cde9511ebd97241ecfe07bbb6e5cba8c7538ab02e31b19f",
+  "sound/rune/rune4.wav": "c66471b98562c0628fe9d8dba43c46d1846d3c4b52b23cea143df933598fc1d5"
+ }
+}

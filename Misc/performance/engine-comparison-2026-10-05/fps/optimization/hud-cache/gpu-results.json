@@ -1,0 +1,239 @@
+{
+  "method": "Disposable release build containing the HUD cache fix and asynchronous GPU timestamp profiling. Ordinary Aerowalk playback, fixed 2\u201312 second interval, one timestamp pair per 16 rendered frames; query results read only when available. CPU render/HUD and swap are wall times, GPU interval is completion time between sampled timestamps. GPU and CPU intervals overlap; do not add them or subtract them to assign pure OS overhead. Two blocks per mode; fullscreen varies substantially. This instrumented build is excluded from before/after FPS results.",
+  "samples": [
+    {
+      "condition": "window_800",
+      "result": {
+        "frames": 35937.0,
+        "seconds": 9.99996,
+        "fps": 3593.71,
+        "render_us": 35.569,
+        "swap_us": 230.269,
+        "other_us": 12.426,
+        "gpu_us": 27.149,
+        "samples": 2245.0
+      },
+      "geometry": {
+        "width": 800,
+        "height": 600
+      },
+      "command": [
+        "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\engine-fps-optimization-20261005\\gpu\\20261005-201551\\00-window_800\\quakespasm.exe",
+        "-basedir",
+        "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\engine-fps-optimization-20261005\\gpu\\20261005-201551\\00-window_800",
+        "-nohome",
+        "-noquakeimport",
+        "-listen",
+        "-noudp",
+        "-nojoy",
+        "-noice",
+        "-condebug",
+        "-benchgpu",
+        "-window",
+        "-width",
+        "800",
+        "-height",
+        "600"
+      ],
+      "config": "vid_width 800\nvid_height 600\nvid_fullscreen 0\nvid_vsync 0\nfov 90\nviewsize 100\nhost_maxfps 0\nsys_throttle -1\ncl_demoreel 0\ncl_discord_presence 0\nr_scale 1\nvid_fsaa 0\necho BENCH_GPU_PLAYBACK\nplaydemo fps_aerowalk\n",
+      "exe_sha256": "8d73cc9c56d39ea7c728b05cab4d5277cbcad7cdf5146e385176f4f4773f645a",
+      "log": "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\engine-fps-optimization-20261005\\gpu\\20261005-201551\\00-window_800\\qconsole.log",
+      "published_log": "gpu-0-window_800.log"
+    },
+    {
+      "condition": "fullscreen_800",
+      "result": {
+        "frames": 50998.0,
+        "seconds": 9.999791,
+        "fps": 5099.91,
+        "render_us": 29.937,
+        "swap_us": 156.16,
+        "other_us": 9.985,
+        "gpu_us": 37.34,
+        "samples": 3187.0
+      },
+      "geometry": {
+        "width": 800,
+        "height": 600
+      },
+      "command": [
+        "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\engine-fps-optimization-20261005\\gpu\\20261005-201551\\01-fullscreen_800\\quakespasm.exe",
+        "-basedir",
+        "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\engine-fps-optimization-20261005\\gpu\\20261005-201551\\01-fullscreen_800",
+        "-nohome",
+        "-noquakeimport",
+        "-listen",
+        "-noudp",
+        "-nojoy",
+        "-noice",
+        "-condebug",
+        "-benchgpu",
+        "-fullscreen",
+        "-width",
+        "800",
+        "-height",
+        "600"
+      ],
+      "config": "vid_width 800\nvid_height 600\nvid_fullscreen 1\nvid_vsync 0\nfov 90\nviewsize 100\nhost_maxfps 0\nsys_throttle -1\ncl_demoreel 0\ncl_discord_presence 0\nr_scale 1\nvid_fsaa 0\necho BENCH_GPU_PLAYBACK\nplaydemo fps_aerowalk\n",
+      "exe_sha256": "8d73cc9c56d39ea7c728b05cab4d5277cbcad7cdf5146e385176f4f4773f645a",
+      "log": "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\engine-fps-optimization-20261005\\gpu\\20261005-201551\\01-fullscreen_800\\qconsole.log",
+      "published_log": "gpu-1-fullscreen_800.log"
+    },
+    {
+      "condition": "fullscreen_800",
+      "result": {
+        "frames": 43394.0,
+        "seconds": 10.000017,
+        "fps": 4339.39,
+        "render_us": 122.449,
+        "swap_us": 95.9,
+        "other_us": 12.098,
+        "gpu_us": 44.746,
+        "samples": 2712.0
+      },
+      "geometry": {
+        "width": 800,
+        "height": 600
+      },
+      "command": [
+        "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\engine-fps-optimization-20261005\\gpu\\20261005-201551\\02-fullscreen_800\\quakespasm.exe",
+        "-basedir",
+        "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\engine-fps-optimization-20261005\\gpu\\20261005-201551\\02-fullscreen_800",
+        "-nohome",
+        "-noquakeimport",
+        "-listen",
+        "-noudp",
+        "-nojoy",
+        "-noice",
+        "-condebug",
+        "-benchgpu",
+        "-fullscreen",
+        "-width",
+        "800",
+        "-height",
+        "600"
+      ],
+      "config": "vid_width 800\nvid_height 600\nvid_fullscreen 1\nvid_vsync 0\nfov 90\nviewsize 100\nhost_maxfps 0\nsys_throttle -1\ncl_demoreel 0\ncl_discord_presence 0\nr_scale 1\nvid_fsaa 0\necho BENCH_GPU_PLAYBACK\nplaydemo fps_aerowalk\n",
+      "exe_sha256": "8d73cc9c56d39ea7c728b05cab4d5277cbcad7cdf5146e385176f4f4773f645a",
+      "log": "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\engine-fps-optimization-20261005\\gpu\\20261005-201551\\02-fullscreen_800\\qconsole.log",
+      "published_log": "gpu-2-fullscreen_800.log"
+    },
+    {
+      "condition": "window_800",
+      "result": {
+        "frames": 35901.0,
+        "seconds": 9.99999,
+        "fps": 3590.1,
+        "render_us": 35.699,
+        "swap_us": 230.428,
+        "other_us": 12.416,
+        "gpu_us": 27.0,
+        "samples": 2243.0
+      },
+      "geometry": {
+        "width": 800,
+        "height": 600
+      },
+      "command": [
+        "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\engine-fps-optimization-20261005\\gpu\\20261005-201551\\03-window_800\\quakespasm.exe",
+        "-basedir",
+        "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\engine-fps-optimization-20261005\\gpu\\20261005-201551\\03-window_800",
+        "-nohome",
+        "-noquakeimport",
+        "-listen",
+        "-noudp",
+        "-nojoy",
+        "-noice",
+        "-condebug",
+        "-benchgpu",
+        "-window",
+        "-width",
+        "800",
+        "-height",
+        "600"
+      ],
+      "config": "vid_width 800\nvid_height 600\nvid_fullscreen 0\nvid_vsync 0\nfov 90\nviewsize 100\nhost_maxfps 0\nsys_throttle -1\ncl_demoreel 0\ncl_discord_presence 0\nr_scale 1\nvid_fsaa 0\necho BENCH_GPU_PLAYBACK\nplaydemo fps_aerowalk\n",
+      "exe_sha256": "8d73cc9c56d39ea7c728b05cab4d5277cbcad7cdf5146e385176f4f4773f645a",
+      "log": "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\engine-fps-optimization-20261005\\gpu\\20261005-201551\\03-window_800\\qconsole.log",
+      "published_log": "gpu-3-window_800.log"
+    },
+    {
+      "condition": "window_4k",
+      "result": {
+        "frames": 28695.0,
+        "seconds": 10.000207,
+        "fps": 2869.44,
+        "render_us": 35.394,
+        "swap_us": 300.971,
+        "other_us": 12.136,
+        "gpu_us": 190.726,
+        "samples": 1793.0
+      },
+      "geometry": {
+        "width": 3840,
+        "height": 2160
+      },
+      "command": [
+        "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\engine-fps-optimization-20261005\\gpu\\20261005-201551\\04-window_4k\\quakespasm.exe",
+        "-basedir",
+        "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\engine-fps-optimization-20261005\\gpu\\20261005-201551\\04-window_4k",
+        "-nohome",
+        "-noquakeimport",
+        "-listen",
+        "-noudp",
+        "-nojoy",
+        "-noice",
+        "-condebug",
+        "-benchgpu",
+        "-window",
+        "-width",
+        "3840",
+        "-height",
+        "2160"
+      ],
+      "config": "vid_width 3840\nvid_height 2160\nvid_fullscreen 0\nvid_vsync 0\nfov 90\nviewsize 100\nhost_maxfps 0\nsys_throttle -1\ncl_demoreel 0\ncl_discord_presence 0\nr_scale 1\nvid_fsaa 0\necho BENCH_GPU_PLAYBACK\nplaydemo fps_aerowalk\n",
+      "exe_sha256": "8d73cc9c56d39ea7c728b05cab4d5277cbcad7cdf5146e385176f4f4773f645a",
+      "log": "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\engine-fps-optimization-20261005\\gpu\\20261005-201551\\04-window_4k\\qconsole.log",
+      "published_log": "gpu-4-window_4k.log"
+    },
+    {
+      "condition": "window_4k",
+      "result": {
+        "frames": 28695.0,
+        "seconds": 9.999978,
+        "fps": 2869.51,
+        "render_us": 36.265,
+        "swap_us": 300.047,
+        "other_us": 12.18,
+        "gpu_us": 190.214,
+        "samples": 1793.0
+      },
+      "geometry": {
+        "width": 3840,
+        "height": 2160
+      },
+      "command": [
+        "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\engine-fps-optimization-20261005\\gpu\\20261005-201551\\05-window_4k\\quakespasm.exe",
+        "-basedir",
+        "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\engine-fps-optimization-20261005\\gpu\\20261005-201551\\05-window_4k",
+        "-nohome",
+        "-noquakeimport",
+        "-listen",
+        "-noudp",
+        "-nojoy",
+        "-noice",
+        "-condebug",
+        "-benchgpu",
+        "-window",
+        "-width",
+        "3840",
+        "-height",
+        "2160"
+      ],
+      "config": "vid_width 3840\nvid_height 2160\nvid_fullscreen 0\nvid_vsync 0\nfov 90\nviewsize 100\nhost_maxfps 0\nsys_throttle -1\ncl_demoreel 0\ncl_discord_presence 0\nr_scale 1\nvid_fsaa 0\necho BENCH_GPU_PLAYBACK\nplaydemo fps_aerowalk\n",
+      "exe_sha256": "8d73cc9c56d39ea7c728b05cab4d5277cbcad7cdf5146e385176f4f4773f645a",
+      "log": "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\engine-fps-optimization-20261005\\gpu\\20261005-201551\\05-window_4k\\qconsole.log",
+      "published_log": "gpu-5-window_4k.log"
+    }
+  ]
+}

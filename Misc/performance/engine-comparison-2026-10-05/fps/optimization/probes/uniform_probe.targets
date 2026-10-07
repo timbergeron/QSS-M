@@ -1,0 +1,1 @@
+<Project xmlns="http://schemas.microsoft.com/developer/msbuild/2003"><ItemGroup><ClCompile Remove="..\..\Quake\r_world.c"/><ClCompile Remove="..\..\Quake\gl_rmisc.c"/><ClCompile Include="$(MSBuildThisFileDirectory)r_world_uniform.c"/><ClCompile Include="$(MSBuildThisFileDirectory)gl_rmisc_uniform.c"/></ItemGroup></Project>

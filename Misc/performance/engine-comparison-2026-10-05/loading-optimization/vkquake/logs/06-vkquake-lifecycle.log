@@ -1,0 +1,165 @@
+LOG started on: 10/06/2026 09:50:41 
+Playing registered version.
+Console initialized.
+IPv4 UDP Initialized
+WIPX_OpenSocket: Address family not supported by protocol family
+WIPX_Init: Unable to open control socket, IPX disabled
+Exe: 00:59:09 Aug 29 2026 
+
+Vulkan Initialization
+Using Vulkan 1.1
+Instance extensions:
+ VK_KHR_surface
+ VK_KHR_win32_surface
+ VK_KHR_get_surface_capabilities2
+ VK_KHR_get_physical_device_properties2
+
+Vendor: NVIDIA
+Device: NVIDIA GeForce RTX 4070
+Driver: NVIDIA 610.88
+Using subgroup operations
+Using ray queries
+Using present wait
+Device extensions:
+ VK_KHR_swapchain
+ VK_KHR_get_memory_requirements2
+ VK_KHR_dedicated_allocation
+ VK_EXT_subgroup_size_control
+ VK_EXT_full_screen_exclusive
+ VK_KHR_present_id2
+ VK_KHR_present_wait2
+ VK_KHR_acceleration_structure
+ VK_KHR_push_descriptor
+ VK_EXT_descriptor_indexing
+ VK_KHR_buffer_device_address
+ VK_KHR_deferred_host_operations
+ VK_KHR_shader_float_controls
+ VK_KHR_spirv_1_4
+ VK_KHR_acceleration_structure
+ VK_KHR_ray_query
+Using A2B10G10R10 color buffer format
+Using D32_S8 depth buffer format
+
+Creating command buffers
+Initializing staging
+
+Sound Initialization
+SDL audio spec  : 44100 Hz, 2 channels
+SDL audio driver: wasapi - Speakers (Realtek(R) Audio), 32768 bytes buffer
+SDL audio initialized: samples=16384, samplebits=16, channels=2
+Audio: 16 bit, stereo, 44100 Hz
+
+Language initialization
+Couldn't load 'localization/loc_english.txt'
+from 'C:\Users\Tim Bergeron\source\repos\QSS-M\.codex-build\map-load-20261005\final-ab\vkquake\vkquake'
+
+========= Quake Initialized =========
+
+execing quake.rc
+execing default.cfg
+execing benchmark.cfg
+BENCH_SESSION_1791305441112563800 
+BENCH_READY 
+BENCH_BEGIN_initial 
+SpawnServer: start
+Clearing memory
+progs.dat occupies 403K.
+trying to open external vis file
+maps/start.vis not found, trying id1.vis
+external vis not found
+40 entities inhibited
+Server spawned.
+
+=====================================
+
+Map checklist (start.bsp):
+
+[x] lightmap data
+[x] vis data
+[x] trigger_changelevel (5)
+[x] info_intermission (4)
+[x] skill spawnflags/triggers
+[x] info_player_coop (4/3+)
+[x] info_player_deathmatch (6/5+)
+[x] music track (4)
+[x] map title (Introduction)
+
+=====================================
+
+CL_EstablishConnection: connected to local
+Client LOCAL connected
+
+vkQuake 1.36.0 Server (24778 CRC)
+Serverinfo packet received.
+
+
+
+Introduction
+Using protocol 15
+Couldn't find a cdrip for track 4
+CL_SignonReply: 1
+progs.dat occupies 403K.
+unconnected tried to name "BenchClient"
+
+BenchClient tried to prespawn
+CL_SignonReply: 2
+BenchClient tried to color 0 0
+
+BenchClient tried to spawn 
+CL_SignonReply: 3
+BenchClient tried to begin
+CL_SignonReply: 4
+BENCH_BEGIN_change 
+Sending clc_disconnect
+SpawnServer: e1m1
+Clearing memory
+progs.dat occupies 403K.
+Loaded external entity file maps/e1m1@c49d.ent
+trying to open external vis file
+maps/e1m1.vis not found, trying id1.vis
+external vis not found
+33 entities inhibited
+Server spawned.
+
+=====================================
+
+Map checklist (e1m1.bsp):
+
+[x] lightmap data
+[x] vis data
+[x] trigger_changelevel (e1m2)
+[x] info_intermission (4)
+[x] skill spawnflags/triggers
+[x] info_player_coop (3/3+)
+[x] info_player_deathmatch (5/5+)
+[x] music track (6)
+[x] map title (the Slipgate Complex)
+
+=====================================
+
+CL_EstablishConnection: connected to local
+Client LOCAL connected
+
+vkQuake 1.36.0 Server (24778 CRC)
+Serverinfo packet received.
+
+
+
+the Slipgate Complex
+Using protocol 15
+Couldn't find a cdrip for track 6
+CL_SignonReply: 1
+progs.dat occupies 403K.
+unconnected tried to name "BenchClient"
+
+BenchClient tried to prespawn
+CL_SignonReply: 2
+BenchClient tried to color 0 0
+
+BenchClient tried to spawn 
+CL_SignonReply: 3
+BenchClient tried to begin
+CL_SignonReply: 4
+BENCH_BEGIN_quit 
+Sending clc_disconnect
+Shutting down SDL sound

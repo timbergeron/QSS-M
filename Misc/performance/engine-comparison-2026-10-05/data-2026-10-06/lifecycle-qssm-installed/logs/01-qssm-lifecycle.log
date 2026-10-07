@@ -1,0 +1,310 @@
+
+LOG started on: 10/06/2026 13:14:44 
+
+Console initialized.
+IPv4 UDP Initialized
+IPv6 UDP Initialized
+Exe: 04:25:21 Oct  6 2026
+384.0 megabyte heap
+
+Sound Initialization
+Video mode 800x600x24 144Hz 2x scale (24-bit z-buffer, 0x FSAA) initialized
+GL_VENDOR: NVIDIA Corporation
+GL_RENDERER: NVIDIA GeForce RTX 4070/PCIe/SSE2
+GL_VERSION: 4.6.0 NVIDIA 610.88
+FOUND: ARB_vertex_buffer_object
+FOUND: GL_ARB_buffer_storage
+FOUND: ARB_multitexture
+GL_MAX_TEXTURE_UNITS: 4
+FOUND: ARB_texture_env_combine
+FOUND: ARB_texture_env_add
+FOUND: SDL_GL_SetSwapInterval
+FOUND: EXT_texture_filter_anisotropic
+FOUND: ARB_texture_non_power_of_two
+FOUND: GLSL
+GL_MAX_TEXTURE_IMAGE_UNITS: 32
+FOUND: brush model instancing
+FOUND: Framebuffer Objects
+Enabled: GLSL gamma
+FOUND: glBlendFuncSeparate
+Enabled: GLSL alias model rendering
+Enabled: EXT_packed_pixels
+FOUND: glGenerateMipmap
+SDL audio spec  : 44100 Hz, 1024 samples, 2 mix channels (callback: 2 ch, surround: on)
+SDL audio device: 44100 Hz, 2 ch, SDL_AUDIO_F32LE, 441 sample frames
+SDL audio driver: wasapi - Speakers (Realtek(R) Audio), 65536 bytes buffer
+Audio: 16 bit, stereo, 44100 Hz
+
+Language initialization
+Couldn't load 'localization/loc_english.txt'
+from 'C:\Users\Tim Bergeron\source\repos\QSS-M\.codex-build\report-refresh-20261006\lifecycle-installed\qssm'
+
+========= Quake Initialized =========
+
+execing quake.rc
+execing default.cfg
+execing benchmark.cfg
+BENCH_SESSION_1791317684660813600 
+BENCH_READY 
+BENCH_BEGIN_initial 
+SpawnServer: start
+SV_SpawnServer pre-clear: 0.0ms
+Clearing memory
+SV_SpawnServer clear memory: 0.3ms
+SV_SpawnServer draw reload: 0.0ms
+FindFile: can't find csprogs.dat
+progs.dat occupies 403K.
+Patch for incorrect ogre smash state applied
+SV_SpawnServer load progs: 3.9ms
+Mod_LoadTextures maps/start.bsp: findfile 84.3ms (3154 calls) texmgr 23.5ms (98 calls) imageload 85.9ms (166 calls)
+TexMgr prepare maps/start.bsp: wall 1.7ms cpu 4.7ms commit 20.3ms, 91 jobs/6 batches (2 parallel), 0.4/2.4 MiB source/prepared
+Mod_LoadBrushModel maps/start.bsp: geom 0.1ms tex 111.2ms light 0.3ms faces 2.0ms
+trying to open external vis file
+maps/start.vis not found, trying id1.vis
+external vis not found
+maps/start.bsp is not watervised
+Mod_LoadBrushModel maps/start.bsp: nodes 0.2ms watervis 0.0ms
+Mod_LoadModel maps/start.bsp: read 0.6ms parse 115.9ms (1433792 bytes)
+SV_SpawnServer world model: 116.6ms
+40 entities inhibited
+ED_LoadFromFile: 48.1ms (models 36.0ms/30 read 2.1ms findfile 20.9ms/696 texmgr 9.6ms/52)
+SV_SpawnServer entities: 48.2ms
+SV_SpawnServer settle physics: 0.0ms
+SV_SpawnServer baselines: 0.0ms
+Server spawned.
+SV_SpawnServer total: 169.0ms
+connecting to ^mlocal -- 127.0.0.1:26002
+connect timing: handshake accepted       +    0.0ms  (total     0.0ms)
+CL_EstablishConnection: connected to local
+Client LOCAL connected
+#
+QSS-M 1.6.9-4c52cae Server (24778 CRC)
+Serverinfo packet received.
+connect timing: serverinfo received      +   67.8ms  (total    67.8ms)
+Using protocol 15(proquake)
+FindFile: can't find progs/ctfmodel.mdl
+FindFile: can't find progs/flag2.mdl
+FindFile: can't find progs/flag3.mdl
+FindFile: can't find progs/flag.mdl
+FindFile: can't find progs/star.mdl
+FindFile: can't find progs/bit.mdl
+FindFile: can't find progs/v_star.mdl
+
+<-------------------------------------->
+
+#Introduction
+connect timing: serverinfo parsed        +    4.5ms  (total    72.3ms)
+FindFile: can't find music/track04.ogg
+FindFile: can't find music/track04.opus
+FindFile: can't find music/track04.mp3
+FindFile: can't find music/track04.flac
+FindFile: can't find music/track04.wav
+FindFile: can't find music/track04.it
+FindFile: can't find music/track04.s3m
+FindFile: can't find music/track04.xm
+FindFile: can't find music/track04.mod
+FindFile: can't find music/track04.umx
+Couldn't find a cdrip for track 4
+CL_SignonReply: 1
+connect timing: signon 1 received        +    0.9ms  (total    73.2ms)
+model precache: 0.0ms (findfile 0.0ms/0 texmgr 0.0ms/0)
+sound precache: 12.2ms (findfile 3.5ms/96)
+R_NewMap gameplay shaders: 284.7ms
+R_NewMap classic particles: 0.1ms
+FindFile: can't find particles/map_start.cfg
+FindFile: can't find map_start.cfg
+R_NewMap pscript clear: 2.4ms
+GL_BuildLightmaps: surfaces 2.6ms
+GL_BuildLightmaps: fill 2.2ms
+GL_BuildLightmaps: occupied 0.8/32.0 MiB, transferred 0.8 MiB (1/1 partial)
+GL_BuildLightmaps: build 4.8ms upload 0.0ms (1 lightmaps)
+R_NewMap lightmaps: 4.9ms
+GL_BuildBModelVertexBuffer: 20.4ms (26930 verts)
+R_NewMap vbo+decals: 20.6ms
+R_NewMap teleporter shader: 0.0ms
+R_NewMap sky: 0.0ms
+R_NewMap worldspawn: 0.0ms
+R_NewMap locs: 0.1ms
+R_NewMap total: 312.8ms
+R_NewMap: 312.8ms (findfile 0.4ms/3 texmgr 0.0ms/1)
+FindFile: can't find csprogs.dat
+progs.dat occupies 403K.
+Patch for incorrect ogre smash state applied
+connect timing: prespawn sent (precache done) +  336.9ms  (total   410.1ms)
+CL_SignonReply: 2
+connect timing: signon 2 (baselines)     +    0.2ms  (total   410.2ms)
+allowing *ver set from BenchClient (not yet spawned)
+CL_SignonReply: 3
+connect timing: signon 3 (spawninfo)     +    3.0ms  (total   413.2ms)
+6.5 MiB data cache used (6.5 MiB peak, 64.0 MiB budget, 0 evictions)
+CL_SignonReply: 4
+connect timing: in game                  +   11.6ms  (total   424.8ms)
+FindFile: can't find connect.cfg
+FindFile: can't find configs/connect.cfg
+BENCH_BEGIN_change 
+Sending clc_disconnect
+Host_ShutdownServer: disconnect message undelivered to 1 clients
+SpawnServer: e1m1
+SV_SpawnServer pre-clear: 0.0ms
+Clearing memory
+SV_SpawnServer clear memory: 1.4ms
+SV_SpawnServer draw reload: 0.0ms
+FindFile: can't find csprogs.dat
+progs.dat occupies 403K.
+Patch for incorrect ogre smash state applied
+SV_SpawnServer load progs: 3.9ms
+Mod_LoadTextures maps/e1m1.bsp: findfile 84.8ms (3154 calls) texmgr 34.6ms (102 calls) imageload 86.4ms (166 calls)
+TexMgr prepare maps/e1m1.bsp: wall 1.4ms cpu 5.1ms commit 30.3ms, 96 jobs/6 batches (2 parallel), 0.4/2.2 MiB source/prepared
+Mod_LoadBrushModel maps/e1m1.bsp: geom 0.1ms tex 122.7ms light 0.2ms faces 1.8ms
+trying to open external vis file
+maps/e1m1.vis not found, trying id1.vis
+external vis not found
+maps/e1m1.bsp is not watervised
+Mod_LoadBrushModel maps/e1m1.bsp: nodes 0.1ms watervis 0.1ms
+Mod_LoadModel maps/e1m1.bsp: read 0.8ms parse 127.0ms (1365176 bytes)
+SV_SpawnServer world model: 127.8ms
+Mod_LoadTextures maps/b_nail0.bsp: findfile 3.1ms (114 calls) texmgr 2.2ms (3 calls) imageload 3.1ms (6 calls)
+TexMgr prepare maps/b_nail0.bsp: wall 0.0ms cpu 0.0ms commit 2.2ms, 3 jobs/1 batches (0 parallel), 0.0/0.0 MiB source/prepared
+Mod_LoadBrushModel maps/b_nail0.bsp: geom 0.0ms tex 5.4ms light 0.1ms faces 0.1ms
+trying to open external vis file
+maps/b_nail0.vis not found, trying id1.vis
+external vis not found
+Mod_DecompressVis: leaf VIS offset out of range on model "maps/b_nail0.bsp"
+Mod_LoadBrushModel maps/b_nail0.bsp: nodes 0.0ms watervis 0.0ms
+Mod_LoadModel maps/b_nail0.bsp: read 0.1ms parse 5.8ms (5044 bytes)
+Mod_LoadTextures maps/b_bh100.bsp: findfile 5.4ms (190 calls) texmgr 1.6ms (9 calls) imageload 5.5ms (10 calls)
+TexMgr prepare maps/b_bh100.bsp: wall 0.0ms cpu 0.0ms commit 1.6ms, 9 jobs/1 batches (0 parallel), 0.0/0.0 MiB source/prepared
+Mod_LoadBrushModel maps/b_bh100.bsp: geom 0.0ms tex 7.2ms light 0.1ms faces 0.1ms
+trying to open external vis file
+maps/b_bh100.vis not found, trying id1.vis
+external vis not found
+Mod_DecompressVis: leaf VIS offset out of range on model "maps/b_bh100.bsp"
+Mod_LoadBrushModel maps/b_bh100.bsp: nodes 0.0ms watervis 0.0ms
+Mod_LoadModel maps/b_bh100.bsp: read 0.1ms parse 7.6ms (8820 bytes)
+Mod_LoadTextures maps/b_shell0.bsp: findfile 3.2ms (114 calls) texmgr 3.7ms (3 calls) imageload 3.3ms (6 calls)
+TexMgr prepare maps/b_shell0.bsp: wall 0.0ms cpu 0.0ms commit 3.7ms, 3 jobs/1 batches (0 parallel), 0.0/0.0 MiB source/prepared
+Mod_LoadBrushModel maps/b_shell0.bsp: geom 0.0ms tex 7.1ms light 0.1ms faces 0.1ms
+trying to open external vis file
+maps/b_shell0.vis not found, trying id1.vis
+external vis not found
+Mod_DecompressVis: leaf VIS offset out of range on model "maps/b_shell0.bsp"
+Mod_LoadBrushModel maps/b_shell0.bsp: nodes 0.0ms watervis 0.0ms
+Mod_LoadModel maps/b_shell0.bsp: read 0.1ms parse 7.4ms (5044 bytes)
+Mod_LoadTextures maps/b_bh10.bsp: findfile 2.4ms (76 calls) texmgr 1.3ms (4 calls) imageload 2.4ms (4 calls)
+TexMgr prepare maps/b_bh10.bsp: wall 0.0ms cpu 0.0ms commit 1.3ms, 4 jobs/1 batches (0 parallel), 0.0/0.0 MiB source/prepared
+Mod_LoadBrushModel maps/b_bh10.bsp: geom 0.0ms tex 3.7ms light 0.1ms faces 0.1ms
+trying to open external vis file
+maps/b_bh10.vis not found, trying id1.vis
+external vis not found
+Mod_DecompressVis: leaf VIS offset out of range on model "maps/b_bh10.bsp"
+Mod_LoadBrushModel maps/b_bh10.bsp: nodes 0.0ms watervis 0.0ms
+Mod_LoadTextures maps/b_bh25.bsp: findfile 6.3ms (228 calls) texmgr 2.2ms (12 calls) imageload 6.4ms (12 calls)
+TexMgr prepare maps/b_bh25.bsp: wall 0.0ms cpu 0.0ms commit 2.2ms, 12 jobs/1 batches (0 parallel), 0.0/0.1 MiB source/prepared
+Mod_LoadBrushModel maps/b_bh25.bsp: geom 0.0ms tex 8.7ms light 0.1ms faces 0.1ms
+trying to open external vis file
+maps/b_bh25.vis not found, trying id1.vis
+external vis not found
+Mod_DecompressVis: leaf VIS offset out of range on model "maps/b_bh25.bsp"
+Mod_LoadBrushModel maps/b_bh25.bsp: nodes 0.0ms watervis 0.0ms
+Mod_LoadModel maps/b_bh25.bsp: read 0.1ms parse 9.0ms (8872 bytes)
+Mod_LoadTextures maps/b_nail1.bsp: findfile 3.7ms (114 calls) texmgr 1.2ms (5 calls) imageload 3.7ms (6 calls)
+TexMgr prepare maps/b_nail1.bsp: wall 0.0ms cpu 0.0ms commit 1.2ms, 5 jobs/1 batches (0 parallel), 0.0/0.0 MiB source/prepared
+Mod_LoadBrushModel maps/b_nail1.bsp: geom 0.0ms tex 4.9ms light 0.1ms faces 0.1ms
+trying to open external vis file
+maps/b_nail1.vis not found, trying id1.vis
+external vis not found
+Mod_DecompressVis: leaf VIS offset out of range on model "maps/b_nail1.bsp"
+Mod_LoadBrushModel maps/b_nail1.bsp: nodes 0.0ms watervis 0.0ms
+Mod_LoadModel maps/b_nail1.bsp: read 0.1ms parse 5.3ms (5044 bytes)
+Mod_LoadTextures maps/b_explob.bsp: findfile 4.5ms (152 calls) texmgr 1.8ms (8 calls) imageload 4.6ms (8 calls)
+TexMgr prepare maps/b_explob.bsp: wall 0.0ms cpu 0.0ms commit 1.8ms, 8 jobs/1 batches (0 parallel), 0.0/0.1 MiB source/prepared
+Mod_LoadBrushModel maps/b_explob.bsp: geom 0.0ms tex 6.4ms light 0.1ms faces 0.1ms
+trying to open external vis file
+maps/b_explob.vis not found, trying id1.vis
+external vis not found
+Mod_DecompressVis: leaf VIS offset out of range on model "maps/b_explob.bsp"
+Mod_LoadBrushModel maps/b_explob.bsp: nodes 0.0ms watervis 0.0ms
+Mod_LoadModel maps/b_explob.bsp: read 0.1ms parse 6.8ms (10220 bytes)
+33 entities inhibited
+ED_LoadFromFile: 77.2ms (models 64.6ms/18 read 1.5ms findfile 41.6ms/1409 texmgr 19.0ms/65)
+SV_SpawnServer entities: 77.2ms
+SV_SpawnServer settle physics: 0.3ms
+SV_SpawnServer baselines: 0.0ms
+Server spawned.
+SV_SpawnServer total: 210.6ms
+connecting to ^mlocal -- 127.0.0.1:26002
+connect timing: handshake accepted       +    0.0ms  (total     0.0ms)
+CL_EstablishConnection: connected to local
+Client LOCAL connected
+#
+QSS-M 1.6.9-4c52cae Server (24778 CRC)
+Serverinfo packet received.
+connect timing: serverinfo received      +    6.3ms  (total     6.4ms)
+Using protocol 15(proquake)
+FindFile: can't find progs/ctfmodel.mdl
+FindFile: can't find progs/flag2.mdl
+FindFile: can't find progs/flag3.mdl
+FindFile: can't find progs/flag.mdl
+FindFile: can't find progs/star.mdl
+FindFile: can't find progs/bit.mdl
+FindFile: can't find progs/v_star.mdl
+
+<-------------------------------------->
+
+#the Slipgate Complex
+connect timing: serverinfo parsed        +    2.9ms  (total     9.2ms)
+FindFile: can't find music/track06.ogg
+FindFile: can't find music/track06.opus
+FindFile: can't find music/track06.mp3
+FindFile: can't find music/track06.flac
+FindFile: can't find music/track06.wav
+FindFile: can't find music/track06.it
+FindFile: can't find music/track06.s3m
+FindFile: can't find music/track06.xm
+FindFile: can't find music/track06.mod
+FindFile: can't find music/track06.umx
+Couldn't find a cdrip for track 6
+CL_SignonReply: 1
+connect timing: signon 1 received        +    0.9ms  (total    10.2ms)
+model precache: 0.0ms (findfile 0.0ms/0 texmgr 0.0ms/0)
+sound precache: 13.3ms (findfile 3.9ms/109)
+R_NewMap gameplay shaders: 0.0ms
+R_NewMap classic particles: 0.1ms
+FindFile: can't find particles/map_e1m1.cfg
+FindFile: can't find map_e1m1.cfg
+R_NewMap pscript clear: 0.9ms
+GL_BuildLightmaps: surfaces 4.9ms
+GL_BuildLightmaps: fill 1.9ms
+GL_BuildLightmaps: occupied 0.8/32.0 MiB, transferred 0.8 MiB (1/1 partial)
+GL_BuildLightmaps: build 6.8ms upload 0.0ms (1 lightmaps)
+R_NewMap lightmaps: 6.8ms
+GL_BuildBModelVertexBuffer: 11.8ms (26870 verts)
+R_NewMap vbo+decals: 12.0ms
+R_NewMap teleporter shader: 0.0ms
+R_NewMap sky: 0.0ms
+R_NewMap worldspawn: 0.0ms
+R_NewMap locs: 0.1ms
+R_NewMap total: 20.0ms
+R_NewMap: 20.0ms (findfile 0.2ms/3 texmgr 0.0ms/1)
+FindFile: can't find csprogs.dat
+progs.dat occupies 403K.
+Patch for incorrect ogre smash state applied
+connect timing: prespawn sent (precache done) +   45.5ms  (total    55.7ms)
+CL_SignonReply: 2
+connect timing: signon 2 (baselines)     +    0.2ms  (total    55.8ms)
+allowing *ver set from BenchClient (not yet spawned)
+CL_SignonReply: 3
+connect timing: signon 3 (spawninfo)     +    3.1ms  (total    59.0ms)
+7.3 MiB data cache used (7.3 MiB peak, 64.0 MiB budget, 0 evictions)
+CL_SignonReply: 4
+connect timing: in game                  +   11.3ms  (total    70.3ms)
+FindFile: can't find connect.cfg
+FindFile: can't find configs/connect.cfg
+BENCH_BEGIN_quit 
+Sending clc_disconnect
+Host_ShutdownServer: disconnect message undelivered to 1 clients
+FindFile: can't find configs/config.cfg
+Wrote config.cfg.
+FindFile: can't find configs/config.cfg
+Shutting down SDL sound
+IN_Shutdown called

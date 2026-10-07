@@ -1,0 +1,105 @@
+LOG started on: 10/05/2026 16:06:09 
+Playing registered version.
+Console initialized.
+IPv4 UDP Initialized
+IPv6 UDP Initialized
+WIPX_OpenSocket: Address family not supported by protocol family
+WIPX_Init: Unable to open control socket, IPX disabled
+Exe: QSS 2024-03-01
+256.0 megabyte heap
+Video mode 800x600x24 144Hz (24-bit z-buffer, 0x FSAA) initialized
+GL_VENDOR: NVIDIA Corporation
+GL_RENDERER: NVIDIA GeForce RTX 4070/PCIe/SSE2
+GL_VERSION: 4.6.0 NVIDIA 591.86
+FOUND: ARB_vertex_buffer_object
+FOUND: GL_ARB_buffer_storage
+FOUND: ARB_multitexture
+GL_MAX_TEXTURE_UNITS: 4
+FOUND: ARB_texture_env_combine
+FOUND: ARB_texture_env_add
+FOUND: SDL_GL_SetSwapInterval
+FOUND: EXT_texture_filter_anisotropic
+FOUND: ARB_texture_non_power_of_two
+FOUND: GLSL
+FOUND: glGenerateMipmap
+
+Sound Initialization
+SDL audio spec  : 44100 Hz, 1024 samples, 2 channels
+SDL audio driver: wasapi - Speakers (Logitech G432 Gaming Headset), 65536 bytes buffer
+Audio: 16 bit, stereo, 44100 Hz
+CDAudio disabled at compile time
+
+Language initialization
+Couldn't load 'localization/loc_english.txt'
+from 'C:\Users\Tim Bergeron\source\repos\QSS-M\.codex-build\engine-lifecycle-six-20261005\remote\qss'
+
+========= Quake Initialized =========
+
+execing quake.rc
+execing default.cfg
+execing benchmark.cfg
+Using renderer/network isolation.
+BENCH_SESSION_1791241569452779200 
+BENCH_BEGIN_connect 
+Port set to 26000
+trying...
+Connection accepted
+CL_EstablishConnection: connected to denver.quakeone.com:26000
+<-- server to client keepalive
+
+                    
+                    
+                    
+                    
+         € ÃÒÍïä  ‚
+                    
+                    
+      ClanRing Multiplayer Server
+                    
+                    
+           original works by 
+   J.P. Grossman & Dave 'Zoid' Kirsch
+                    
+                    
+              €‚
+                    
+                    
+                    
+                    
+                    
+                    
+                    
+                    
+
+
+QSS-M 1.6.9-1aa5a7d Server (37005 CRC)
+Serverinfo packet received.
+Clearing memory
+Using protocol 666(fitz)
+
+
+
+Sanctuary of the Silent Scribes … by infiniti (2 Min Quad Spawns)
+FindFile: can't find music/track00.ogg
+FindFile: can't find music/track00.opus
+FindFile: can't find music/track00.mp3
+FindFile: can't find music/track00.flac
+FindFile: can't find music/track00.wav
+Couldn't find a cdrip for track 0
+CL_SignonReply: 1
+bspx ldr lighting loaded
+FindFile: can't find particles/map_sanctum.cfg
+FindFile: can't find map_sanctum.cfg
+Couldn't load gfx/env/nightmtns_rt
+Couldn't load gfx/env/nightmtns_bk
+Couldn't load gfx/env/nightmtns_lf
+Couldn't load gfx/env/nightmtns_ft
+Couldn't load gfx/env/nightmtns_up
+Couldn't load gfx/env/nightmtns_dn
+FindFile: can't find csprogs.dat
+progs.dat occupies 403K.
+CL_SignonReply: 2
+CRMod: q_version
+CL_SignonReply: 3
+204.1 megabyte data cache
+CL_SignonReply: 4

@@ -1,0 +1,278 @@
+{
+ "date": "2026-10-06",
+ "driver": "610.88",
+ "demo_precache": {
+  "before": {
+   "aerowalk": {
+    "samples": [
+     2049.1,
+     2046.9,
+     2048.0,
+     2066.5,
+     2066.6
+    ],
+    "median": 2049.1,
+    "warmup": 1888.5
+   },
+   "dm3": {
+    "samples": [
+     2078.7,
+     2014.3,
+     2083.1,
+     2010.4,
+     2055.3
+    ],
+    "median": 2055.3,
+    "warmup": 2045.9
+   },
+   "ctf2m8": {
+    "samples": [
+     1963.7,
+     2084.6,
+     2040.3,
+     2061.6,
+     1989.6
+    ],
+    "median": 2040.3,
+    "warmup": 2059.2
+   }
+  },
+  "after": {
+   "aerowalk": {
+    "samples": [
+     2489.5,
+     2571.0,
+     2614.3,
+     2579.1,
+     2628.7
+    ],
+    "median": 2579.1,
+    "warmup": 2552.2
+   },
+   "dm3": {
+    "samples": [
+     2740.9,
+     2654.7,
+     2768.3,
+     2702.6,
+     2762.2
+    ],
+    "median": 2740.9,
+    "warmup": 2583.9
+   },
+   "ctf2m8": {
+    "samples": [
+     2608.8,
+     2653.7,
+     2713.7,
+     2631.4,
+     2669.6
+    ],
+    "median": 2653.7,
+    "warmup": 2663.8
+   }
+  },
+  "method": "cold.py: harness method (one warm-up process, five fresh processes per map). before = bin-final; after = same source plus demo precache in the serverinfo frame (probe build bin-tdprobe2)."
+ },
+ "passes_before": {
+  "fps": [
+   1889.7,
+   2849.2,
+   2808.7,
+   2866.9
+  ],
+  "probes": [
+   {
+    "total_ms": 764.7,
+    "median_ms": 0.3554,
+    "max_ms": 90.58
+   },
+   {
+    "total_ms": 507.2,
+    "median_ms": 0.3072,
+    "max_ms": 45.8
+   },
+   {
+    "total_ms": 514.5,
+    "median_ms": 0.314,
+    "max_ms": 44.43
+   },
+   {
+    "total_ms": 504.0,
+    "median_ms": 0.3039,
+    "max_ms": 46.58
+   }
+  ]
+ },
+ "passes_after": {
+  "fps": [
+   2291.9,
+   2676.3,
+   2985.7,
+   3118.0
+  ],
+  "probes": [
+   {
+    "total_ms": 630.5,
+    "median_ms": 0.3877,
+    "max_ms": 7.38
+   },
+   {
+    "total_ms": 539.9,
+    "median_ms": 0.3144,
+    "max_ms": 62.01
+   },
+   {
+    "total_ms": 484.0,
+    "median_ms": 0.3213,
+    "max_ms": 4.44
+   },
+   {
+    "total_ms": 463.4,
+    "median_ms": 0.3106,
+    "max_ms": 4.11
+   }
+  ]
+ },
+ "settle": {
+  "none": [
+   2348.5,
+   2671.4,
+   3032.9
+  ],
+  "idle_3000_frames": [
+   2605.2,
+   3134.3,
+   3156.7
+  ],
+  "idle_2s_capped": [
+   2703.4,
+   3033.4
+  ],
+  "ironwail_same_process": [
+   2866.8,
+   3167.1,
+   3314.5
+  ]
+ },
+ "exe_name": {
+  "quakespasm": {
+   "fps": [
+    2332.3,
+    2809.5,
+    3145.6
+   ],
+   "stages": {
+    "read": 15.2,
+    "screen": 289.1,
+    "sound": 2.7,
+    "swap": 245.5
+   }
+  },
+  "bench": {
+   "fps": [
+    2377.5,
+    2712.4,
+    3120.3
+   ],
+   "stages": {
+    "read": 15.1,
+    "screen": 292.2,
+    "sound": 2.6,
+    "swap": 249.4
+   }
+  },
+  "ironwail": {
+   "fps": [
+    2376.9,
+    2663.7,
+    3072.3
+   ],
+   "stages": {
+    "read": 15.0,
+    "screen": 296.8,
+    "sound": 2.6,
+    "swap": 252.7
+   }
+  }
+ },
+ "hud": {
+  "default": {
+   "fps": [
+    2270.2,
+    2757.8,
+    3096.5
+   ],
+   "stages": {
+    "read": 15.4,
+    "screen": 294.5,
+    "sound": 2.6,
+    "swap": 251.3
+   }
+  },
+  "no_hud": {
+   "fps": [
+    2701.9,
+    2928.0,
+    3390.9
+   ],
+   "stages": {
+    "read": 16.9,
+    "screen": 265.2,
+    "sound": 2.5,
+    "swap": 228.2
+   }
+  },
+  "no_world_hud": {
+   "fps": [
+    2864.5,
+    3256.9,
+    3761.8
+   ],
+   "stages": {
+    "read": 16.3,
+    "screen": 235.4,
+    "sound": 2.7,
+    "swap": 210.6
+   }
+  },
+  "no_world_no_hud": {
+   "fps": [
+    2957.4,
+    3595.0,
+    4198.0
+   ],
+   "stages": {
+    "read": 15.4,
+    "screen": 209.1,
+    "sound": 2.5,
+    "swap": 191.2
+   }
+  }
+ },
+ "swaptest": {
+  "sdl2_us": [
+   194.0,
+   190.6
+  ],
+  "sdl3_us": [
+   191.7,
+   192.3
+  ],
+  "sdl3_70quads_us": 187.9,
+  "sdl2_70quads_us": 185.4,
+  "note": "Minimal 800x600 window, swap interval 0, clear + swap; mean time inside SDL_GL_SwapWindow over 6000 frames."
+ },
+ "glcalls_per_frame": {
+  "default": 774.9,
+  "no_hud": 420.7,
+  "glBegin_sites": {
+   "Draw_Pic": 11,
+   "Draw_Character": 8,
+   "Draw_FillPlayer": 2,
+   "Draw_String": 2,
+   "Draw_Fill": 2,
+   "Draw_CharactersRGBA": 2
+  }
+ }
+}

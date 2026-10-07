@@ -1,0 +1,8686 @@
+/*
+Copyright (C) 1996-2001 Id Software, Inc.
+Copyright (C) 2002-2009 John Fitzgibbons and others
+Copyright (C) 2007-2008 Kristian Duske
+Copyright (C) 2010-2014 QuakeSpasm developers
+
+This program is free software; you can redistribute it and/or
+modify it under the terms of the GNU General Public License
+as published by the Free Software Foundation; either version 2
+of the License, or (at your option) any later version.
+
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
+
+See the GNU General Public License for more details.
+
+You should have received a copy of the GNU General Public License
+along with this program; if not, write to the Free Software
+Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
+
+*/
+// r_world.c: world model rendering
+
+#include "quakedef.h"
+#include "view.h" // woods #fxaa
+
+extern cvar_t gl_fullbrights, r_drawflat, gl_overbright, r_oldskyleaf, r_showtris; //johnfitz
+extern cvar_t gl_zfix; // QuakeSpasm z-fighting fix
+extern cvar_t r_flatlightstyles;
+extern cvar_t r_drawcandle;
+extern cvar_t gl_max_size;
+extern cvar_t r_lightmap_extra4;
+extern cvar_t r_textureless_dither;
+cvar_t r_scenecache = {"r_scenecache",""};	//spike, an attempt to cope with abusive maps a bit better.
+
+//tb -- scene cache statistics, see glquake.h. Diagnostic only, and absent
+//from player builds: the renderer's hot paths must not carry profiling.
+
+cvar_t r_bmodelcache = {"r_bmodelcache","1",CVAR_ARCHIVE};	//tb -- cache static index buffers for opaque moved bmodel entities.
+cvar_t gl_bmodel_instancing = {"gl_bmodel_instancing", "1", CVAR_ARCHIVE};
+
+typedef struct grass_presence_cache_s grass_presence_cache_t;
+
+byte *SV_FatPVS (vec3_t org, qmodel_t *worldmodel);
+#ifndef SDL_THREADS_DISABLED
+static qboolean RSceneCache_Queue(byte *vis);
+static void RSceneCache_Draw(qboolean water);
+static void RSceneCache_MarkTeleportSurfaces(void);
+#endif
+void RSceneCache_Shutdown(void);
+static qboolean R_GrassBladesActive (void);
+static float R_GrassAnimTime (void);
+static float R_GrassAmount (void);
+static float R_GrassMovement (void);
+static float R_GrassGustScale (void);
+static qboolean R_TextureUsesSurfaceGrass (const texture_t *t);
+static void R_SetGrassColorUniforms (const texture_t *t);
+static qboolean R_GrassEntityAllowsGrass (const entity_t *ent);
+static void R_DrawGrassBlades (qmodel_t *model, entity_t *ent, texchain_t chain);
+static qboolean R_GrassSurfaceCanHaveBlades (const msurface_t *s);
+static grass_presence_cache_t *R_GrassGetPresenceCache (qmodel_t *model, qboolean create);
+static qboolean R_GrassPresenceCacheHasBladeSurfaces (const grass_presence_cache_t *cache);
+static qboolean R_GrassSurfaceCanHaveBladesCached (const grass_presence_cache_t *cache, qmodel_t *model, const msurface_t *s);
+#ifndef SDL_THREADS_DISABLED
+static void R_GrassMarkSurfaceVisibleCached (grass_presence_cache_t *cache, qmodel_t *model, const msurface_t *s);
+#endif
+static int r_grass_scenecache_visframe;
+extern qboolean lightmaps_skipupdates;
+extern char	skybox_name[1024]; // woods -- #fastsky2
+extern qboolean externalskyloaded; // woods -- #fastsky2
+
+extern cvar_t r_skyspeed; // woods #skyspeed
+
+static float Sky_GetTime (void) // woods #skyspeed
+{
+	float clamped_skyspeed = CLAMP(0, r_skyspeed.value, 100);
+	return cl.time * clamped_skyspeed;
+}
+
+//==============================================================================
+//
+// SETUP CHAINS
+//
+//==============================================================================
+
+// woods #caustics
+
+typedef enum {
+	ABOVE_WATER,
+	IS_WATER,
+	UNDER_WATER,
+} surfacetype;
+
+ GLuint causticsTexLoc;
+ GLuint useCausticsTexLoc;
+
+/*
+When R_SetChainTextures names a model, the chain walks below visit only the
+ascending texture indices it gives: the ones that model's surfaces use. Inline
+models share the world's texture array, so a translucent func_wall would
+otherwise walk hundreds of empty chains several times over. Textures outside
+the list may hold stale chain_model entries meanwhile; the walks never look.
+*/
+static qmodel_t		*r_chaintexturemodel;
+static const unsigned short	*r_chaintextures;
+static int			r_numchaintextures;
+
+void R_SetChainTextures (qmodel_t *model, const unsigned short *textures, int numtextures)
+{
+	r_chaintexturemodel = model;
+	r_chaintextures = textures;
+	r_numchaintextures = numtextures;
+}
+
+static FUNC_ALWAYSINLINE int R_ChainTextureCount (const qmodel_t *model)
+{
+	return model == r_chaintexturemodel ? r_numchaintextures : model->numtextures;
+}
+
+static FUNC_ALWAYSINLINE texture_t *R_ChainTexture (const qmodel_t *model, int i)
+{
+	return model->textures[model == r_chaintexturemodel ? r_chaintextures[i] : i];
+}
+
+/*
+================
+R_ClearTextureChains -- ericw 
+
+clears texture chains for all textures used by the given model, and also
+clears the lightmap chains
+================
+*/
+void R_ClearTextureChains (qmodel_t *mod, texchain_t chain)
+{
+	int i;
+
+	// set all chains to null
+	for (i=0 ; i<mod->numtextures ; i++)
+		if (mod->textures[i])
+			mod->textures[i]->texturechains[chain] = NULL;
+
+	// clear lightmap chains
+	for (i=0 ; i<lightmap_count ; i++)
+		lightmaps[i].polys = NULL;
+}
+
+/*
+================
+R_ChainSurface -- ericw -- adds the given surface to its texture chain
+================
+*/
+void R_ChainSurface (msurface_t *surf, texchain_t chain)
+{
+	surf->texturechain = surf->texinfo->texture->texturechains[chain];
+	surf->texinfo->texture->texturechains[chain] = surf;
+}
+
+/*
+================
+R_BackFaceCull -- johnfitz -- returns true if the surface is facing away from vieworg
+================
+*/
+qboolean R_BackFaceCull (msurface_t *surf)
+{
+	double dot;
+
+	if (surf->plane->type < 3)
+		dot = r_refdef.vieworg[surf->plane->type] - surf->plane->dist;
+	else
+		dot = DotProduct (r_refdef.vieworg, surf->plane->normal) - surf->plane->dist;
+
+	if ((dot < 0) ^ !!(surf->flags & SURF_PLANEBACK))
+		return true;
+
+	return false;
+}
+
+#ifndef SDL_THREADS_DISABLED
+static void R_MarkGrassSurfaces (byte *vis)
+{
+	grass_presence_cache_t *presencecache;
+	mleaf_t *leaf;
+	msurface_t *surf, **mark;
+	int i, j;
+
+	if (!vis || !R_GrassBladesActive() || r_drawflat_cheatsafe || r_lightmap_cheatsafe)
+		return;
+	presencecache = R_GrassGetPresenceCache(cl.worldmodel, true);
+	if (!R_GrassPresenceCacheHasBladeSurfaces(presencecache))
+		return;
+
+	r_grass_scenecache_visframe = r_visframecount;
+
+	leaf = &cl.worldmodel->leafs[1];
+	for (i = 0; i < cl.worldmodel->numleafs; i++, leaf++)
+	{
+		if (!(vis[i >> 3] & (1 << (i & 7))))
+			continue;
+		if (R_CullBox(leaf->minmaxs, leaf->minmaxs + 3))
+			continue;
+
+		if (leaf->contents != CONTENTS_SKY || r_oldskyleaf.value)
+		{
+			for (j = 0, mark = leaf->firstmarksurface; j < leaf->nummarksurfaces; j++, mark++)
+			{
+				surf = *mark;
+				if (R_GrassSurfaceCanHaveBladesCached(presencecache, cl.worldmodel, surf))
+					R_GrassMarkSurfaceVisibleCached(presencecache, cl.worldmodel, surf);
+			}
+		}
+	}
+}
+#endif
+
+
+/*
+===============
+R_MarkSurfaces -- johnfitz -- mark surfaces based on PVS and rebuild texture chains
+===============
+*/
+void R_MarkSurfaces (void)
+{
+	byte		*vis;
+	mleaf_t		*leaf;
+	msurface_t	*surf, **mark;
+	int			i, j;
+	qboolean	nearwaterportal;
+	static qmodel_t *dlightmodel;
+	static int dlightframe;
+
+	if (!r_teleport_view)
+		dlightmodel = NULL; // also invalidates a stamp when a cached view begins a new map
+
+	// clear lightmap chains
+	for (i=0 ; i<lightmap_count ; i++)
+		lightmaps[i].polys = NULL;
+
+	// check this leaf for water portals
+	// TODO: loop through all water surfs and use distance to leaf cullbox
+	nearwaterportal = r_scenecache.value!=0;
+	for (i=0, mark = r_viewleaf->firstmarksurface; i < r_viewleaf->nummarksurfaces; i++, mark++)
+		if ((*mark)->flags & SURF_DRAWTURB)
+			nearwaterportal = true;
+
+	// choose vis data
+	if (r_teleport_pvs)
+		vis = r_teleport_pvs;
+	else if (r_novis.value || r_viewleaf->contents == CONTENTS_SOLID || r_viewleaf->contents == CONTENTS_SKY)
+		vis = Mod_NoVisPVS (cl.worldmodel);
+	else if (nearwaterportal)
+		vis = SV_FatPVS (r_origin, cl.worldmodel);
+	else
+		vis = Mod_LeafPVS (r_viewleaf, cl.worldmodel);
+
+	r_visframecount++;
+
+	// set all chains to null
+	for (i=0 ; i<cl.worldmodel->numtextures ; i++)
+		if (cl.worldmodel->textures[i])
+			cl.worldmodel->textures[i]->texturechains[chain_world] = NULL;
+
+#ifndef SDL_THREADS_DISABLED
+	if (RSceneCache_Queue(vis))
+	{
+		RSceneCache_MarkTeleportSurfaces();
+		R_MarkGrassSurfaces(vis);
+		return;
+	}
+	lightmaps_skipupdates = false;
+#endif
+
+	/* A subview changes visibility, not world-space light influence. The first
+	 * legacy walk after a cached main view still needs to mark the lights. */
+	if (!r_teleport_view || dlightmodel != cl.worldmodel || dlightframe != r_framecount)
+	{
+		R_PushDlights ();
+		dlightmodel = cl.worldmodel;
+		dlightframe = r_framecount;
+	}
+
+	// iterate through leaves, marking surfaces
+	leaf = &cl.worldmodel->leafs[1];
+	for (i=0 ; i<cl.worldmodel->numleafs ; i++, leaf++)
+	{
+		if (vis[i>>3] & (1<<(i&7)))
+		{
+			if (R_CullBox(leaf->minmaxs, leaf->minmaxs + 3))
+				continue;
+
+			if (leaf->contents != CONTENTS_SKY || r_oldskyleaf.value)
+				for (j=0, mark = leaf->firstmarksurface; j<leaf->nummarksurfaces; j++, mark++)
+				{
+					surf = *mark;
+					if (surf->visframe != r_visframecount)
+					{
+						surf->visframe = r_visframecount;
+						if (!R_CullBox(surf->mins, surf->maxs) && !R_BackFaceCull (surf))
+						{
+							rs_brushpolys++; //count wpolys here
+							R_ChainSurface(surf, chain_world);
+							R_RenderDynamicLightmaps(cl.worldmodel, surf);
+						}
+					}
+				}
+
+			// add static models
+			if (leaf->efrags)
+				R_StoreEfrags (&leaf->efrags);
+		}
+	}
+}
+
+//==============================================================================
+//
+// DRAW CHAINS
+//
+//==============================================================================
+
+/*
+=============
+R_BeginTransparentDrawing -- ericw
+=============
+*/
+static void R_BeginTransparentDrawing (float entalpha)
+{
+	if (entalpha < 1.0f)
+	{
+		glDepthMask (GL_FALSE);
+		glEnable (GL_BLEND);
+		
+		if (vid_fxaa.value > 0 && GL_BlendFuncSeparateFunc) // woods #fxaa use separate alpha blending when FXAA is enabled to preserve transparency info
+		{
+			// RGB: normal alpha blending, Alpha: copy source alpha
+			GL_BlendFuncSeparateFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA, GL_ONE, GL_ZERO);
+		}
+		else
+		{
+			glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA); // Standard alpha blending
+		}
+		
+		glTexEnvf (GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_MODULATE);
+		glColor4f (1,1,1,entalpha);
+	}
+}
+
+/*
+=============
+R_EndTransparentDrawing -- ericw
+=============
+*/
+static void R_EndTransparentDrawing (float entalpha)
+{
+	if (entalpha < 1.0f)
+	{
+		glDepthMask (GL_TRUE);
+		glDisable (GL_BLEND);
+		glTexEnvf (GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_REPLACE);
+		glColor3f (1, 1, 1);
+	}
+}
+
+/*
+================
+R_DrawTextureChains_ShowTris -- johnfitz
+================
+*/
+void R_DrawTextureChains_ShowTris (qmodel_t *model, texchain_t chain)
+{
+	int			i;
+	msurface_t	*s;
+	texture_t	*t;
+	glpoly_t	*p;
+
+	for (i=0 ; i<R_ChainTextureCount (model) ; i++)
+	{
+		t = R_ChainTexture (model, i);
+		if (!t)
+			continue;
+
+		if (!gl_glsl_water_able && t->texturechains[chain] && (t->texturechains[chain]->flags & SURF_DRAWTURB))
+		{
+			for (s = t->texturechains[chain]; s; s = s->texturechain)
+				for (p = s->polys->next; p; p = p->next)
+				{
+					DrawGLTriangleFan (p);
+				}
+		}
+		else
+		{
+			for (s = t->texturechains[chain]; s; s = s->texturechain)
+			{
+				DrawGLTriangleFan (s->polys);
+			}
+		}
+	}
+}
+
+/*
+================
+R_DrawTextureChains_Drawflat -- johnfitz
+================
+*/
+void R_DrawTextureChains_Drawflat (qmodel_t *model, texchain_t chain)
+{
+	int			i;
+	msurface_t	*s;
+	texture_t	*t;
+	glpoly_t	*p;
+
+	for (i=0 ; i<R_ChainTextureCount (model) ; i++)
+	{
+		t = R_ChainTexture (model, i);
+		if (!t)
+			continue;
+
+		if (!gl_glsl_water_able  && t->texturechains[chain] && (t->texturechains[chain]->flags & SURF_DRAWTURB))
+		{
+			for (s = t->texturechains[chain]; s; s = s->texturechain)
+				for (p = s->polys->next; p; p = p->next)
+				{
+					srand((unsigned int) (uintptr_t) p);
+					glColor3f (rand()%256/255.0, rand()%256/255.0, rand()%256/255.0);
+					DrawGLPoly (p);
+					rs_brushpasses++;
+				}
+		}
+		else
+		{
+			for (s = t->texturechains[chain]; s; s = s->texturechain)
+			{
+				srand((unsigned int) (uintptr_t) s->polys);
+				glColor3f (rand()%256/255.0, rand()%256/255.0, rand()%256/255.0);
+				DrawGLPoly (s->polys);
+				rs_brushpasses++;
+			}
+		}
+	}
+	glColor3f (1,1,1);
+	srand ((int) (cl.time * 1000));
+}
+
+/*
+================
+R_DrawTextureChains_Glow -- johnfitz
+================
+*/
+void R_DrawTextureChains_Glow (qmodel_t *model, entity_t *ent, texchain_t chain)
+{
+	int			i;
+	msurface_t	*s;
+	texture_t	*t;
+	gltexture_t	*glt;
+	qboolean	bound;
+
+	for (i=0 ; i<R_ChainTextureCount (model) ; i++)
+	{
+		t = R_ChainTexture (model, i);
+
+		if (!t || !t->texturechains[chain] || !(glt = R_TextureAnimation(t, ent != NULL ? ent->frame : 0)->fullbright))
+			continue;
+
+		bound = false;
+
+		for (s = t->texturechains[chain]; s; s = s->texturechain)
+		{
+			if (!bound) //only bind once we are sure we need this texture
+			{
+				GL_Bind (glt);
+				bound = true;
+			}
+			DrawGLPoly (s->polys);
+			rs_brushpasses++;
+		}
+	}
+}
+
+//==============================================================================
+//
+// VBO SUPPORT
+//
+//==============================================================================
+
+static unsigned int R_NumTriangleIndicesForSurf (msurface_t *s)
+{
+	return 3 * (R_SurfaceVertCount (s) - 2);	// woods #collinear -- poly may hold fewer verts than numedges
+}
+
+/*
+================
+R_TriangleIndicesForSurf
+
+Writes out the triangle indices needed to draw s as a triangle list.
+The number of indices it will write is given by R_NumTriangleIndicesForSurf.
+================
+*/
+static void R_TriangleIndicesForSurf (msurface_t *s, unsigned int *dest)
+{
+	int i, numverts = R_SurfaceVertCount (s);	// woods #collinear
+	for (i=2; i<numverts; i++)
+	{
+		*dest++ = s->vbo_firstvert;
+		*dest++ = s->vbo_firstvert + i - 1;
+		*dest++ = s->vbo_firstvert + i;
+	}
+}
+
+#define MAX_BATCH_SIZE 65536
+
+static unsigned int vbo_indices[MAX_BATCH_SIZE];
+static unsigned int num_vbo_indices;
+
+/*
+================
+R_ClearBatch
+================
+*/
+static void R_ClearBatch ()
+{
+	num_vbo_indices = 0;
+}
+
+/*
+================
+R_FlushBatch
+
+Draw the current batch if non-empty and clears it, ready for more R_BatchSurface calls.
+================
+*/
+static void R_FlushBatch (surfacetype surftype) // woods #caustics
+{
+	if (num_vbo_indices > 0)
+	{
+		if (surftype == UNDER_WATER && gl_caustics.value && underwatertexture) // woods #caustics
+		{
+			GL_SelectTexture(GL_TEXTURE3);
+			GL_Bind(underwatertexture);
+			GL_Uniform1iFunc(useCausticsTexLoc, 1);
+		}
+		else
+			GL_Uniform1iFunc(useCausticsTexLoc, 0);
+		
+		glDrawElements (GL_TRIANGLES, num_vbo_indices, GL_UNSIGNED_INT, vbo_indices);
+		num_vbo_indices = 0;
+	}
+}
+
+/*
+================
+R_BatchSurface
+
+Add the surface to the current batch, or just draw it immediately if we're not
+using VBOs.
+================
+*/
+static void R_BatchSurface (msurface_t *s, surfacetype surftype) // woods #caustics
+{
+	unsigned int num_surf_indices;
+
+	num_surf_indices = R_NumTriangleIndicesForSurf (s);
+	if (num_surf_indices-1u<=MAX_BATCH_SIZE)	//ericw's qbsp bugs out sometimes. don't crash.
+	{
+		if (num_vbo_indices + num_surf_indices > MAX_BATCH_SIZE)
+			R_FlushBatch(surftype); // woods #caustics
+
+		R_TriangleIndicesForSurf (s, &vbo_indices[num_vbo_indices]);
+		num_vbo_indices += num_surf_indices;
+	}
+}
+
+/*
+================
+R_DrawTextureChains_Multitexture -- johnfitz
+================
+*/
+void R_DrawTextureChains_Multitexture (qmodel_t *model, entity_t *ent, texchain_t chain)
+{
+	int			i, j;
+	msurface_t	*s;
+	texture_t	*t;
+	float		*v;
+	qboolean	bound;
+
+	for (i=0 ; i<R_ChainTextureCount (model) ; i++)
+	{
+		t = R_ChainTexture (model, i);
+
+		if (!t || !t->texturechains[chain] || t->texturechains[chain]->flags & (SURF_DRAWTURB | SURF_DRAWTILED | SURF_NOTEXTURE))
+			continue;
+
+		bound = false;
+		for (s = t->texturechains[chain]; s; s = s->texturechain)
+		{
+			if (!bound) //only bind once we are sure we need this texture
+			{
+				GL_Bind ((R_TextureAnimation(t, ent != NULL ? ent->frame : 0))->gltexture);
+					
+				if (t->texturechains[chain]->flags & SURF_DRAWFENCE)
+					glEnable (GL_ALPHA_TEST); // Flip alpha test back on
+					
+				GL_EnableMultitexture(); // selects TEXTURE1
+				bound = true;
+			}
+			GL_Bind (lightmaps[s->lightmaptexturenum].texture);
+			glBegin(GL_POLYGON);
+			v = s->polys->verts[0];
+			for (j=0 ; j<s->polys->numverts ; j++, v+= VERTEXSIZE)
+			{
+				GL_MTexCoord2fFunc (GL_TEXTURE0_ARB, v[3], v[4]);
+				GL_MTexCoord2fFunc (GL_TEXTURE1_ARB, v[5], v[6]);
+				glVertex3fv (v);
+			}
+			glEnd ();
+			rs_brushpasses++;
+		}
+		GL_DisableMultitexture(); // selects TEXTURE0
+
+		if (bound && t->texturechains[chain]->flags & SURF_DRAWFENCE)
+			glDisable (GL_ALPHA_TEST); // Flip alpha test back off
+	}
+}
+
+/*
+================
+R_DrawTextureChains_NoTexture -- johnfitz
+
+draws surfs whose textures were missing from the BSP
+================
+*/
+void R_DrawTextureChains_NoTexture (qmodel_t *model, texchain_t chain)
+{
+	int			i;
+	msurface_t	*s;
+	texture_t	*t;
+	qboolean	bound;
+
+	for (i=0 ; i<R_ChainTextureCount (model) ; i++)
+	{
+		t = R_ChainTexture (model, i);
+
+		if (!t || !t->texturechains[chain] || !(t->texturechains[chain]->flags & SURF_NOTEXTURE))
+			continue;
+
+		bound = false;
+
+		for (s = t->texturechains[chain]; s; s = s->texturechain)
+		{
+			if (!bound) //only bind once we are sure we need this texture
+			{
+				GL_Bind (t->gltexture);
+				bound = true;
+			}
+			DrawGLPoly (s->polys);
+			rs_brushpasses++;
+		}
+	}
+}
+
+/*
+================
+R_DrawTextureChains_TextureOnly -- johnfitz
+================
+*/
+void R_DrawTextureChains_TextureOnly (qmodel_t *model, entity_t *ent, texchain_t chain)
+{
+	int			i;
+	msurface_t	*s;
+	texture_t	*t;
+	qboolean	bound;
+
+	for (i=0 ; i<R_ChainTextureCount (model) ; i++)
+	{
+		t = R_ChainTexture (model, i);
+
+		if (!t || !t->texturechains[chain] || t->texturechains[chain]->flags & (SURF_DRAWTURB | SURF_DRAWSKY))
+			continue;
+
+		bound = false;
+
+		for (s = t->texturechains[chain]; s; s = s->texturechain)
+		{
+			if (!bound) //only bind once we are sure we need this texture
+			{
+				GL_Bind ((R_TextureAnimation(t, ent != NULL ? ent->frame : 0))->gltexture);
+					
+				if (t->texturechains[chain]->flags & SURF_DRAWFENCE)
+					glEnable (GL_ALPHA_TEST); // Flip alpha test back on
+					
+				bound = true;
+			}
+			DrawGLPoly (s->polys);
+			rs_brushpasses++;
+		}
+
+		if (bound && t->texturechains[chain]->flags & SURF_DRAWFENCE)
+			glDisable (GL_ALPHA_TEST); // Flip alpha test back off
+	}
+}
+
+/*
+================
+GL_WaterAlphaForEntitySurface -- ericw
+ 
+Returns the water alpha to use for the entity and surface combination.
+================
+*/
+float GL_WaterAlphaForEntitySurface (entity_t *ent, msurface_t *s)
+{
+	float entalpha;
+	if (ent == NULL || ent->alpha == ENTALPHA_DEFAULT)
+		entalpha = GL_WaterAlphaForSurface(s);
+	else
+		entalpha = ENTALPHA_DECODE(ent->alpha);
+	return entalpha;
+}
+
+
+static GLuint r_world_program;
+static GLuint r_world_instanced_program;
+extern GLuint gl_bmodel_vbo;
+extern GLuint gl_bmodel_lmbounds_vbo;
+extern GLuint gl_bmodel_instance_vbo;
+
+// uniforms used in frag shader
+static GLuint texLoc;
+static GLuint LMTexLoc;
+static GLuint fullbrightTexLoc;
+static GLuint useFullbrightTexLoc;
+static GLuint useOverbrightLoc;
+static GLuint useAlphaTestLoc;
+static GLuint useLightmapWideLoc;
+static GLuint useLightmapOnlyLoc;
+static GLuint useLightmapExtra4Loc;
+static GLuint lightmapTexelSizeLoc;
+static GLuint useTexturelessDitherLoc;
+static GLuint alphaLoc;
+GLuint clTimeLoc; // woods #caustics
+static GLuint causticsOpacityLoc; // woods #caustics
+static GLint useGrassLoc; // woods #grass
+static GLint grassAmountLoc; // woods #grass
+static GLint grassTimeLoc; // woods #grass
+static GLint grassBaseColorLoc; // woods #grass
+static GLint grassTipColorLoc; // woods #grass
+static GLint grassMovementLoc; // woods #grass
+static GLint grassGustScaleLoc; // woods #grass
+static GLint fogModeLoc;
+
+static GLint instTexLoc;
+static GLint instLMTexLoc;
+static GLint instFullbrightTexLoc;
+static GLint instCausticsTexLoc;
+static GLint instUseFullbrightTexLoc;
+static GLint instUseOverbrightLoc;
+static GLint instUseAlphaTestLoc;
+static GLint instUseCausticsTexLoc;
+static GLint instUseGrassLoc;
+static GLint instUseLightmapWideLoc;
+static GLint instUseLightmapOnlyLoc;
+static GLint instUseLightmapExtra4Loc;
+static GLint instLightmapTexelSizeLoc;
+static GLint instUseTexturelessDitherLoc;
+static GLint instAlphaLoc;
+static GLint instClTimeLoc;
+static GLint instCausticsOpacityLoc;
+static GLint instGrassAmountLoc;
+static GLint instGrassTimeLoc;
+static GLint instGrassBaseColorLoc;
+static GLint instGrassTipColorLoc;
+static GLint instGrassMovementLoc;
+static GLint instGrassGustScaleLoc;
+static GLint instFogModeLoc;
+static GLuint r_grass_program; // woods #grass
+static GLint grassGeomAmountLoc; // woods #grass
+static GLint grassGeomTimeLoc; // woods #grass
+static GLint grassGeomMovementLoc; // woods #grass
+static GLint grassGeomGustScaleLoc; // woods #grass
+static GLint grassGeomFadeDistLoc; // woods #grass
+static GLint grassGeomFogModeLoc;
+static GLint grassGeomEyePosLoc;
+static GLint grassGeomStaticModeLoc;
+static GLint grassGeomStaticNormalLoc;
+static GLint grassGeomStaticTangentLoc;
+static GLint grassGeomStaticLodLoc;
+static GLint grassGeomStaticCellWeightLoc;
+static GLint grassGeomDLightCountLoc;
+static GLint grassGeomDLightPosRadiusLoc;
+static GLint grassGeomDLightColorMinLoc;
+
+#define GRASS_SHADER_DLIGHTS 4 // woods #grass -- keep in sync with GLSL define
+
+
+static struct
+{
+	GLuint program;
+
+	GLuint light_scale;
+	GLuint alpha_scale;
+	GLuint time;
+	GLuint eyepos;
+	GLuint fogalpha;
+	GLuint colour;
+	GLint fogmode;
+	GLint skyfogcolor;
+	GLint use_extra4;
+	GLint texel_size;
+} r_water[4];	//
+
+static void R_SetLightmapExtra4Uniforms (GLint use_loc, GLint texel_size_loc)
+{
+	if (use_loc >= 0)
+		GL_Uniform1iFunc (use_loc,
+			r_lightmap_extra4.value != 0.0f && gl_bmodel_lmbounds_vbo != 0);
+	if (texel_size_loc >= 0)
+		GL_Uniform2fFunc (texel_size_loc,
+			1.0f / q_max(1, LMBLOCK_WIDTH), 1.0f / q_max(1, LMBLOCK_HEIGHT));
+}
+
+static void R_SetTexturelessDitherUniform (GLint loc)
+{
+	if (loc >= 0)
+		GL_Uniform1iFunc (loc, gl_max_size.value == 1.0f && r_textureless_dither.value != 0.0f);
+}
+
+#ifndef vertAttrIndex
+#define vertAttrIndex 0
+#define texCoordsAttrIndex 1
+#define LMCoordsAttrIndex 2
+#define LMBoundsAttrIndex 7
+#define instMat0AttrIndex 3
+#define instMat1AttrIndex 4
+#define instMat2AttrIndex 5
+#define instMat3AttrIndex 6
+#endif
+
+static qboolean R_LightmapExtra4BoundsEnabled (void)
+{
+	return r_lightmap_extra4.value != 0.0f && gl_bmodel_lmbounds_vbo != 0;
+}
+
+static void R_SetupLightmapBoundsAttrib (void)
+{
+	if (!R_LightmapExtra4BoundsEnabled ())
+	{
+		GL_DisableVertexAttribArrayFunc (LMBoundsAttrIndex);
+		return;
+	}
+
+	GL_BindBuffer (GL_ARRAY_BUFFER, gl_bmodel_lmbounds_vbo);
+	GL_EnableVertexAttribArrayFunc (LMBoundsAttrIndex);
+	GL_VertexAttribPointerFunc (LMBoundsAttrIndex, 4, GL_UNSIGNED_SHORT, GL_FALSE,
+		4 * sizeof(unsigned short), (const void *)0);
+}
+
+static void R_EnableLightmapBoundsAttrib (qboolean enable)
+{
+	if (enable && R_LightmapExtra4BoundsEnabled ())
+		GL_EnableVertexAttribArrayFunc (LMBoundsAttrIndex);
+	else
+		GL_DisableVertexAttribArrayFunc (LMBoundsAttrIndex);
+}
+
+typedef struct bmodel_drawbatch_s
+{
+	int				texture;
+	int				lightmap;
+	qboolean		underwater;
+	unsigned int	flags;
+	size_t			firstidx;
+	size_t			numidx;
+	unsigned int	*eboidx;
+} bmodel_drawbatch_t;
+
+typedef struct bmodel_drawcache_s
+{
+	qboolean			valid;
+	qboolean			unsupported;
+	unsigned int		generation;
+	int					lightmap_count;
+	unsigned int		brushpolys;
+	size_t				totalidx;
+	GLuint				ebo;
+	int					numbatches;
+	bmodel_drawbatch_t	*batches;
+	byte				used_lightstyles[(MAX_LIGHTSTYLES + 7) >> 3];
+	int					lightstyle_values[MAX_LIGHTSTYLES];
+	qboolean			has_cached_dlight;
+} bmodel_drawcache_t;
+
+extern unsigned int gl_bmodel_vbo_generation;
+
+static size_t R_BModelDrawCache_DenseIndex (int texture, int lightmap, int underwater, int lmaps)
+{
+	return ((size_t)texture * 2u + (size_t)underwater) * (size_t)lmaps + (size_t)lightmap;
+}
+
+static void R_BModelDrawCache_MarkLightstyles (bmodel_drawcache_t *cache, const msurface_t *surf)
+{
+	int maps;
+
+	for (maps = 0; maps < MAXLIGHTMAPS && surf->styles[maps] != INVALID_LIGHTSTYLE; maps++)
+	{
+		unsigned short style = surf->styles[maps];
+		if (style >= MAX_LIGHTSTYLES)
+			continue;
+		cache->used_lightstyles[style >> 3] |= (1u << (style & 7));
+	}
+}
+
+static qboolean R_BModelDrawCache_UsesLightstyle (const bmodel_drawcache_t *cache, int style)
+{
+	return (cache->used_lightstyles[style >> 3] & (1u << (style & 7))) != 0;
+}
+
+static qboolean R_BModelDrawCache_SurfaceSupported (qmodel_t *model, msurface_t *surf)
+{
+	if (surf->numedges < 3)
+		return true;
+	if (surf->flags & (SURF_DRAWTURB | SURF_DRAWTILED | SURF_DRAWSKY | SURF_NOTEXTURE))
+		return false;
+	if (!surf->texinfo)
+		return false;
+	if ((unsigned int)surf->texinfo->materialidx >= (unsigned int)model->numtextures)
+		return false;
+	if (!model->textures[surf->texinfo->materialidx])
+		return false;
+	if ((unsigned int)surf->lightmaptexturenum >= (unsigned int)lightmap_count)
+		return false;
+	return true;
+}
+
+void R_BModelDrawCache_Cleanup (qmodel_t *mod)
+{
+	bmodel_drawcache_t *cache;
+
+	if (!mod)
+		return;
+	cache = (bmodel_drawcache_t *)mod->bmodel_drawcache;
+	if (!cache)
+		return;
+
+	if (cache->ebo && GL_DeleteBuffersFunc)
+		GL_DeleteBuffersFunc (1, &cache->ebo);
+	free (cache->batches);
+	free (cache);
+	mod->bmodel_drawcache = NULL;
+}
+
+void R_BModelDrawCache_CleanupAll (void)
+{
+	Mod_ForEachModel (R_BModelDrawCache_Cleanup);
+}
+
+static bmodel_drawcache_t *R_BModelDrawCache_Build (qmodel_t *model)
+{
+	bmodel_drawcache_t *cache;
+	unsigned int *counts = NULL;
+	unsigned int *fill = NULL;
+	unsigned int *indices = NULL;
+	int *batchmap = NULL;
+	size_t dense_count, totalidx, lightmaps_per_texture;
+	int i, j, tex, lm, uw, b;
+	msurface_t *surf;
+
+	R_BModelDrawCache_Cleanup (model);
+
+	cache = (bmodel_drawcache_t *)calloc (1, sizeof(*cache));
+	if (!cache)
+		return NULL;
+	model->bmodel_drawcache = cache;
+	cache->generation = gl_bmodel_vbo_generation;
+	cache->lightmap_count = lightmap_count;
+	for (i = 0; i < MAX_LIGHTSTYLES; i++)
+		cache->lightstyle_values[i] = INT_MIN;
+
+	if (lightmap_count <= 0 || model->numtextures <= 0 || model->nummodelsurfaces <= 0)
+		return cache;
+
+	lightmaps_per_texture = (size_t)lightmap_count * 2u;
+	if ((size_t)model->numtextures > ((size_t)-1) / lightmaps_per_texture)
+		return cache;
+	dense_count = (size_t)model->numtextures * lightmaps_per_texture;
+	if (dense_count > ((size_t)-1) / sizeof(*counts))
+		return cache;
+
+	counts = (unsigned int *)calloc (dense_count, sizeof(*counts));
+	if (!counts)
+		return cache;
+
+	for (i = 0, surf = model->surfaces + model->firstmodelsurface; i < model->nummodelsurfaces; i++, surf++)
+	{
+		size_t dense;
+		unsigned int numidx;
+
+		if (surf->numedges < 3)
+			continue;
+		if (!R_BModelDrawCache_SurfaceSupported (model, surf))
+		{
+			cache->unsupported = true;
+			free (counts);
+			return cache;
+		}
+		if (surf->numedges > INT_MAX / 3 + 2)
+		{
+			cache->unsupported = true;
+			free (counts);
+			return cache;
+		}
+
+		tex = surf->texinfo->materialidx;
+		lm = surf->lightmaptexturenum;
+		uw = (surf->flags & SURF_UNDERWATER) ? 1 : 0;
+		dense = R_BModelDrawCache_DenseIndex (tex, lm, uw, lightmap_count);
+		numidx = R_NumTriangleIndicesForSurf (surf);
+		if (numidx > (unsigned int)INT_MAX || counts[dense] > (unsigned int)INT_MAX - numidx)
+		{
+			cache->unsupported = true;
+			free (counts);
+			return cache;
+		}
+		counts[dense] += numidx;
+		cache->brushpolys++;
+		R_BModelDrawCache_MarkLightstyles (cache, surf);
+	}
+
+	for (i = 0, totalidx = 0; (size_t)i < dense_count; i++)
+	{
+		if (!counts[i])
+			continue;
+		if (cache->numbatches == INT_MAX || totalidx > (size_t)-1 - counts[i])
+		{
+			cache->unsupported = true;
+			free (counts);
+			return cache;
+		}
+		cache->numbatches++;
+		totalidx += counts[i];
+	}
+	cache->totalidx = totalidx;
+	if (!cache->numbatches || !totalidx)
+	{
+		free (counts);
+		return cache;
+	}
+	if (totalidx > ((size_t)-1) / sizeof(*indices))
+	{
+		cache->unsupported = true;
+		free (counts);
+		return cache;
+	}
+
+	cache->batches = (bmodel_drawbatch_t *)calloc ((size_t)cache->numbatches, sizeof(*cache->batches));
+	batchmap = (int *)malloc (dense_count * sizeof(*batchmap));
+	fill = (unsigned int *)calloc ((size_t)cache->numbatches, sizeof(*fill));
+	indices = (unsigned int *)malloc (totalidx * sizeof(*indices));
+	if (!cache->batches || !batchmap || !fill || !indices)
+	{
+		free (counts);
+		free (batchmap);
+		free (fill);
+		free (indices);
+		free (cache->batches);
+		cache->batches = NULL;
+		return cache;
+	}
+
+	for (i = 0; (size_t)i < dense_count; i++)
+		batchmap[i] = -1;
+
+	for (tex = 0, b = 0, totalidx = 0; tex < model->numtextures; tex++)
+	{
+		for (uw = 0; uw < 2; uw++)
+		{
+			for (lm = 0; lm < lightmap_count; lm++)
+			{
+				size_t dense = R_BModelDrawCache_DenseIndex (tex, lm, uw, lightmap_count);
+				bmodel_drawbatch_t *batch;
+
+				if (!counts[dense])
+					continue;
+				batchmap[dense] = b;
+				batch = &cache->batches[b++];
+				batch->texture = tex;
+				batch->lightmap = lm;
+				batch->underwater = uw != 0;
+				batch->firstidx = totalidx;
+				batch->numidx = counts[dense];
+				batch->eboidx = (unsigned int *)(uintptr_t)(totalidx * sizeof(*indices));
+				totalidx += counts[dense];
+			}
+		}
+	}
+
+	for (i = 0, surf = model->surfaces + model->firstmodelsurface; i < model->nummodelsurfaces; i++, surf++)
+	{
+		size_t dense;
+		unsigned int numidx;
+		bmodel_drawbatch_t *batch;
+
+		if (surf->numedges < 3)
+			continue;
+
+		tex = surf->texinfo->materialidx;
+		lm = surf->lightmaptexturenum;
+		uw = (surf->flags & SURF_UNDERWATER) ? 1 : 0;
+		dense = R_BModelDrawCache_DenseIndex (tex, lm, uw, lightmap_count);
+		j = batchmap[dense];
+		if (j < 0)
+			continue;
+
+		batch = &cache->batches[j];
+		numidx = R_NumTriangleIndicesForSurf (surf);
+		R_TriangleIndicesForSurf (surf, indices + batch->firstidx + fill[j]);
+		fill[j] += numidx;
+		batch->flags |= surf->flags;
+	}
+
+	GL_GenBuffersFunc (1, &cache->ebo);
+	if (!cache->ebo)
+	{
+		free (counts);
+		free (batchmap);
+		free (fill);
+		free (indices);
+		free (cache->batches);
+		cache->batches = NULL;
+		cache->numbatches = 0;
+		cache->totalidx = 0;
+		return cache;
+	}
+	GL_BindBuffer (GL_ELEMENT_ARRAY_BUFFER, cache->ebo);
+	GL_BufferDataFunc (GL_ELEMENT_ARRAY_BUFFER, (GLsizeiptr)(cache->totalidx * sizeof(*indices)), indices, GL_STATIC_DRAW);
+	GL_BindBuffer (GL_ELEMENT_ARRAY_BUFFER, 0);
+	cache->valid = true;
+
+	free (counts);
+	free (batchmap);
+	free (fill);
+	free (indices);
+	return cache;
+}
+
+static bmodel_drawcache_t *R_BModelDrawCache_Get (qmodel_t *model)
+{
+	bmodel_drawcache_t *cache = (bmodel_drawcache_t *)model->bmodel_drawcache;
+
+	if (cache && (cache->generation != gl_bmodel_vbo_generation || cache->lightmap_count != lightmap_count))
+	{
+		R_BModelDrawCache_Cleanup (model);
+		cache = NULL;
+	}
+	if (!cache)
+		cache = R_BModelDrawCache_Build (model);
+	if (!cache || !cache->valid)
+		return NULL;
+	return cache;
+}
+
+static qboolean R_BModelDrawCache_LightstylesChanged (const bmodel_drawcache_t *cache)
+{
+	int i;
+
+	for (i = 0; i < MAX_LIGHTSTYLES; i++)
+		if (R_BModelDrawCache_UsesLightstyle (cache, i) && cache->lightstyle_values[i] != d_lightstylevalue[i])
+			return true;
+	return false;
+}
+
+static void R_BModelDrawCache_StoreLightstyles (bmodel_drawcache_t *cache)
+{
+	int i;
+
+	for (i = 0; i < MAX_LIGHTSTYLES; i++)
+		if (R_BModelDrawCache_UsesLightstyle (cache, i))
+			cache->lightstyle_values[i] = d_lightstylevalue[i];
+}
+
+static qboolean R_BModelDrawCache_HasActiveDlights (const entity_t *ent)
+{
+	int i;
+	vec3_t mins, maxs;
+
+	if (gl_flashblend.value || !r_dynamic.value || !ent)
+		return false;
+	R_GetEntityBounds (ent, mins, maxs);
+	for (i = 0; i < MAX_DLIGHTS; i++)
+	{
+		float radius, dist2 = 0.0f;
+		int axis;
+
+		if (cl_dlights[i].die < cl.time || !cl_dlights[i].radius || R_DlightStyleScale(&cl_dlights[i]) <= 0.0f)
+			continue;
+		radius = cl_dlights[i].radius;
+		for (axis = 0; axis < 3; axis++)
+		{
+			float delta = 0.0f;
+			if (cl_dlights[i].origin[axis] < mins[axis])
+				delta = mins[axis] - cl_dlights[i].origin[axis];
+			else if (cl_dlights[i].origin[axis] > maxs[axis])
+				delta = cl_dlights[i].origin[axis] - maxs[axis];
+			dist2 += delta * delta;
+		}
+		if (dist2 > radius * radius)
+			continue;
+		return true;
+	}
+	return false;
+}
+
+static void R_BModelDrawCache_UpdateSurfaceLightmap (qmodel_t *model, msurface_t *fa)
+{
+	byte *base;
+	int maps;
+	int smax, tmax;
+
+	if (fa->flags & SURF_DRAWTILED)
+		return;
+
+	for (maps = 0; maps < MAXLIGHTMAPS && fa->styles[maps] != INVALID_LIGHTSTYLE; maps++)
+		if (d_lightstylevalue[fa->styles[maps]] != fa->cached_light[maps])
+			goto dynamic;
+
+	if (fa->dlightframe == r_framecount || fa->cached_dlight)
+	{
+dynamic:
+		if (r_dynamic.value)
+		{
+			struct lightmap_s *lm = &lightmaps[fa->lightmaptexturenum];
+			smax = fa->extents[0]+1;
+			tmax = fa->extents[1]+1;
+			base = lm->pbodata;
+			base += fa->light_t * LMBLOCK_WIDTH * lightmap_bytes + fa->light_s * lightmap_bytes;
+			R_BuildLightMap (model, fa, base, LMBLOCK_WIDTH*lightmap_bytes, currententity, r_framecount, cl_dlights);
+			R_LightmapMarkDirtyRect (lm, fa->light_s, fa->light_t, smax, tmax); // woods #lmrect -- after the bytes, see its comment
+		}
+	}
+}
+
+static void R_BModelDrawCache_UpdateLightmaps (qmodel_t *model, bmodel_drawcache_t *cache)
+{
+	int i;
+	msurface_t *surf;
+	qboolean has_cached_dlight = false;
+
+	if (!r_dynamic.value)
+	{
+		cache->has_cached_dlight = false;
+		return;
+	}
+
+	for (i = 0, surf = model->surfaces + model->firstmodelsurface; i < model->nummodelsurfaces; i++, surf++)
+	{
+		if (surf->numedges < 3)
+			continue;
+		if (surf->flags & SURF_DRAWTILED)
+			continue;
+		if ((unsigned int)surf->lightmaptexturenum >= (unsigned int)lightmap_count)
+			continue;
+		R_BModelDrawCache_UpdateSurfaceLightmap (model, surf);
+		if (surf->cached_dlight)
+			has_cached_dlight = true;
+	}
+
+	cache->has_cached_dlight = has_cached_dlight;
+	R_BModelDrawCache_StoreLightstyles (cache);
+}
+
+qboolean R_DrawBModelDrawCache (qmodel_t *model, entity_t *ent)
+{
+	bmodel_drawcache_t *cache;
+	const float entalpha = (ent != NULL) ? ENTALPHA_DECODE(ent->alpha) : 1.0f;
+	const int overbright = !!gl_overbright.value;
+	const int wide10bits = (gl_lightmap_format == GL_RGB10_A2);
+	int i;
+	int lasttex = -1, lastlm = -1, lastcaustics = -1;
+	texture_t *t, *animt;
+	gltexture_t *fullbright = NULL;
+
+	// External BSP models share the brush VBO and lightmap atlas too. Wait for
+	// late model uploads before caching indices into those shared buffers.
+	if (!r_bmodelcache.value || !ent || !model || model->type != mod_brush ||
+		model->needload || lightmaps_latecached)
+		return false;
+	if (!gl_vbo_able || !GL_GenBuffersFunc || !GL_BufferDataFunc || !GL_DeleteBuffersFunc || !gl_bmodel_vbo)
+		return false;
+	if (r_world_program == 0 || r_drawflat_cheatsafe || r_fullbright_cheatsafe || r_lightmap_cheatsafe)
+		return false;
+	if (!gl_cull.value || entalpha < 1.0f || ent->effects)
+		return false;
+
+	cache = R_BModelDrawCache_Get (model);
+	if (!cache)
+		return false;
+
+	if (R_BModelDrawCache_LightstylesChanged (cache) ||
+		R_BModelDrawCache_HasActiveDlights (ent) ||
+		cache->has_cached_dlight)
+	{
+		R_BModelDrawCache_UpdateLightmaps (model, cache);
+		R_UploadLightmaps ();
+	}
+
+	glDepthMask (GL_TRUE);
+	glDisable (GL_BLEND);
+	glEnable (GL_CULL_FACE);
+	GL_UseProgramFunc (r_world_program);
+
+	GL_BindBuffer (GL_ARRAY_BUFFER, gl_bmodel_vbo);
+	GL_BindBuffer (GL_ELEMENT_ARRAY_BUFFER, cache->ebo);
+
+	GL_EnableVertexAttribArrayFunc (vertAttrIndex);
+	GL_EnableVertexAttribArrayFunc (texCoordsAttrIndex);
+	GL_EnableVertexAttribArrayFunc (LMCoordsAttrIndex);
+
+	GL_VertexAttribPointerFunc (vertAttrIndex,      3, GL_FLOAT, GL_FALSE, VERTEXSIZE * sizeof(float), ((float *)0));
+	GL_VertexAttribPointerFunc (texCoordsAttrIndex, 2, GL_FLOAT, GL_FALSE, VERTEXSIZE * sizeof(float), ((float *)0) + 3);
+	GL_VertexAttribPointerFunc (LMCoordsAttrIndex,  2, GL_FLOAT, GL_FALSE, VERTEXSIZE * sizeof(float), ((float *)0) + 5);
+	R_SetupLightmapBoundsAttrib ();
+
+	GL_Uniform1iFunc (texLoc, 0);
+	GL_Uniform1iFunc (LMTexLoc, 1);
+	GL_Uniform1iFunc (fullbrightTexLoc, 2);
+	GL_Uniform1iFunc (causticsTexLoc, 3);
+	GL_Uniform1iFunc (useFullbrightTexLoc, 0);
+	GL_Uniform1iFunc (useOverbrightLoc, overbright);
+	GL_Uniform1iFunc (useCausticsTexLoc, 0);
+	GL_Uniform1iFunc (useGrassLoc, 0);
+	GL_Uniform1iFunc (useAlphaTestLoc, 0);
+	GL_Uniform1iFunc (useLightmapWideLoc, wide10bits);
+	GL_Uniform1iFunc (useLightmapOnlyLoc, 0);
+	R_SetLightmapExtra4Uniforms (useLightmapExtra4Loc, lightmapTexelSizeLoc);
+	R_SetTexturelessDitherUniform (useTexturelessDitherLoc);
+	GL_Uniform1fFunc (alphaLoc, 1.0f);
+	GL_Uniform1fFunc (clTimeLoc, cl.time);
+	GL_Uniform1fFunc (causticsOpacityLoc, gl_caustics.value);
+	GL_Uniform1fFunc (grassAmountLoc, R_GrassAmount());
+	GL_Uniform1fFunc (grassTimeLoc, R_GrassAnimTime());
+	GL_Uniform1fFunc (grassMovementLoc, R_GrassMovement());
+	GL_Uniform1fFunc (grassGustScaleLoc, R_GrassGustScale());
+	GL_Uniform1iFunc (fogModeLoc, Fog_GetMode());
+
+	for (i = 0; i < cache->numbatches; i++)
+	{
+		bmodel_drawbatch_t *batch = &cache->batches[i];
+		int usecaustics = batch->underwater && gl_caustics.value && underwatertexture;
+
+		t = model->textures[batch->texture];
+		if (!t)
+			continue;
+		animt = R_TextureAnimation (t, ent != NULL ? ent->frame : 0);
+
+		if (batch->texture != lasttex)
+		{
+			GL_SelectTexture (GL_TEXTURE0);
+			GL_Bind (animt->gltexture);
+
+			if (gl_fullbrights.value && (fullbright = animt->fullbright))
+			{
+				GL_SelectTexture (GL_TEXTURE2);
+				GL_Bind (fullbright);
+				GL_Uniform1iFunc (useFullbrightTexLoc, 1);
+			}
+			else
+				GL_Uniform1iFunc (useFullbrightTexLoc, 0);
+
+			if (R_TextureUsesSurfaceGrass(t) && R_GrassEntityAllowsGrass(ent))
+			{
+				GL_Uniform1iFunc (useGrassLoc, 1);
+				R_SetGrassColorUniforms(animt);
+			}
+			else
+				GL_Uniform1iFunc (useGrassLoc, 0);
+
+			lasttex = batch->texture;
+			lastlm = -1;
+		}
+
+		GL_Uniform1iFunc (useAlphaTestLoc, (batch->flags & SURF_DRAWFENCE) != 0);
+
+		if (batch->lightmap != lastlm)
+		{
+			GL_SelectTexture (GL_TEXTURE1);
+			GL_Bind (lightmaps[batch->lightmap].texture);
+			lastlm = batch->lightmap;
+		}
+
+		if (usecaustics != lastcaustics)
+		{
+			if (usecaustics)
+			{
+				GL_SelectTexture (GL_TEXTURE3);
+				GL_Bind (underwatertexture);
+			}
+			GL_Uniform1iFunc (useCausticsTexLoc, usecaustics);
+			lastcaustics = usecaustics;
+		}
+
+		glDrawElements (GL_TRIANGLES, (GLsizei)batch->numidx, GL_UNSIGNED_INT, batch->eboidx);
+		rs_brushpasses++;
+	}
+
+	rs_brushpolys += cache->brushpolys;
+
+	GL_Uniform1iFunc (useAlphaTestLoc, 0);
+	GL_Uniform1iFunc (useCausticsTexLoc, 0);
+	GL_DisableVertexAttribArrayFunc (vertAttrIndex);
+	GL_DisableVertexAttribArrayFunc (texCoordsAttrIndex);
+	GL_DisableVertexAttribArrayFunc (LMCoordsAttrIndex);
+	GL_DisableVertexAttribArrayFunc (LMBoundsAttrIndex);
+	GL_UseProgramFunc (0);
+	GL_SelectTexture (GL_TEXTURE0);
+	GL_BindBuffer (GL_ARRAY_BUFFER, 0);
+	GL_BindBuffer (GL_ELEMENT_ARRAY_BUFFER, 0);
+
+	R_DrawGrassBlades (model, ent, chain_model);
+	return true;
+}
+
+typedef struct bmodel_instance_data_s
+{
+	float matrix[16];
+} bmodel_instance_data_t;
+
+static bmodel_instance_data_t *r_bmodel_instance_data;
+static entity_t **r_bmodel_group_ents;
+static int r_bmodel_instancing_capacity;
+
+void R_DeleteBrushModelInstancingBuffers (void)
+{
+	if (gl_bmodel_instance_vbo && GL_DeleteBuffersFunc)
+	{
+		GL_DeleteBuffersFunc (1, &gl_bmodel_instance_vbo);
+		gl_bmodel_instance_vbo = 0;
+		GL_ClearBufferBindings ();
+	}
+
+	free (r_bmodel_instance_data);
+	free (r_bmodel_group_ents);
+	r_bmodel_instance_data = NULL;
+	r_bmodel_group_ents = NULL;
+	r_bmodel_instancing_capacity = 0;
+}
+
+static qboolean R_ReserveBModelInstancingBuffers (int count)
+{
+	bmodel_instance_data_t *new_instances;
+	entity_t **new_ents;
+
+	if (count <= r_bmodel_instancing_capacity)
+		return true;
+
+	new_instances = (bmodel_instance_data_t *)realloc (r_bmodel_instance_data, (size_t)count * sizeof(*new_instances));
+	if (!new_instances)
+		return false;
+	r_bmodel_instance_data = new_instances;
+
+	new_ents = (entity_t **)realloc (r_bmodel_group_ents, (size_t)count * sizeof(*new_ents));
+	if (!new_ents)
+		return false;
+
+	r_bmodel_group_ents = new_ents;
+	r_bmodel_instancing_capacity = count;
+	return true;
+}
+
+static qboolean R_ModelHasActiveGrassBlades (qmodel_t *model)
+{
+	if (!R_GrassBladesActive())
+		return false;
+	return R_GrassPresenceCacheHasBladeSurfaces(R_GrassGetPresenceCache(model, true));
+}
+
+static qboolean R_CanInstanceBrushEntity (entity_t *ent, bmodel_drawcache_t **cache_out)
+{
+	qmodel_t *model;
+	bmodel_drawcache_t *cache;
+
+	if (cache_out)
+		*cache_out = NULL;
+	if (!gl_bmodel_instancing_able || !gl_bmodel_instancing.value || !r_world_instanced_program)
+		return false;
+	if (!r_bmodelcache.value || !gl_vbo_able || !gl_bmodel_vbo || lightmaps_latecached)
+		return false;
+	if (!gl_cull.value || r_drawflat_cheatsafe || r_fullbright_cheatsafe || r_lightmap_cheatsafe)
+		return false;
+	if (!ent || !(model = ent->model) || model->type != mod_brush || model->needload)
+		return false;
+	if (model->nummodelsurfaces <= 0)
+		return false;
+	// Scene-cache skip bits only describe inline models of the current world.
+	if (model->submodelof == cl.worldmodel && skipsubmodels &&
+		(skipsubmodels[model->submodelidx >> 3] & (1u << (model->submodelidx & 7))))
+		return false;
+	if (ENTALPHA_DECODE(ent->alpha) < 1.0f || ent->effects)
+		return false;
+
+	cache = R_BModelDrawCache_Get(model);
+	if (!cache || cache->unsupported || cache->has_cached_dlight)
+		return false;
+	if (R_BModelDrawCache_HasActiveDlights(ent))
+		return false;
+
+	if (R_GrassEntityAllowsGrass(ent))
+	{
+		int i;
+
+		if (R_ModelHasActiveGrassBlades(model))
+			return false;
+		for (i = 0; i < cache->numbatches; i++)	//the instanced program doesn't implement the shader-grass tint
+		{
+			texture_t *t = model->textures[cache->batches[i].texture];
+			if (t && R_TextureUsesSurfaceGrass(t))
+				return false;
+		}
+	}
+
+	if (cache_out)
+		*cache_out = cache;
+	return true;
+}
+
+static int R_CompareInstancedBrushEntities (const void *lhs, const void *rhs)
+{
+	const entity_t *const *a = (const entity_t *const *)lhs;
+	const entity_t *const *b = (const entity_t *const *)rhs;
+	uintptr_t modela = (uintptr_t)(*a)->model;
+	uintptr_t modelb = (uintptr_t)(*b)->model;
+
+	if (modela < modelb)
+		return -1;
+	if (modela > modelb)
+		return 1;
+	if ((*a)->frame < (*b)->frame)
+		return -1;
+	if ((*a)->frame > (*b)->frame)
+		return 1;
+	if ((uintptr_t)(*a) < (uintptr_t)(*b))
+		return -1;
+	if ((uintptr_t)(*a) > (uintptr_t)(*b))
+		return 1;
+	return 0;
+}
+
+static void R_BuildBrushModelMatrix (const entity_t *ent, float *matrix)
+{
+	vec3_t angles;
+	vec3_t forward, right, up;
+	vec3_t origin;
+	float scale;
+	float zofs;
+
+	VectorCopy(ent->origin, origin);
+	if (gl_zfix.value && !ent->is_static)
+	{
+		origin[0] -= DIST_EPSILON;
+		origin[1] -= DIST_EPSILON;
+		origin[2] -= DIST_EPSILON;
+	}
+
+	VectorCopy(ent->angles, angles);
+	AngleVectors(angles, forward, right, up);
+
+	scale = 1.0f;
+	zofs = 0.0f;
+	if (ent->netstate.scale != ENTSCALE_DEFAULT)
+	{
+		scale = ENTSCALE_DECODE(ent->netstate.scale);
+
+		switch ((ent->netstate.drawflags >> 5) & 3)
+		{
+		case 0:
+			zofs = (ent->model->mins[2] + ent->model->maxs[2]) * 0.5f * (1.0f - scale);
+			break;
+		case 1:
+			zofs = ent->model->mins[2] * (1.0f - scale);
+			break;
+		case 2:
+			zofs = ent->model->maxs[2] * (1.0f - scale);
+			break;
+		default:
+			break;
+		}
+	}
+
+	if (zofs != 0.0f)
+	{
+		origin[0] += up[0] * zofs;
+		origin[1] += up[1] * zofs;
+		origin[2] += up[2] * zofs;
+	}
+
+	matrix[0] = forward[0] * scale;
+	matrix[1] = forward[1] * scale;
+	matrix[2] = forward[2] * scale;
+	matrix[3] = 0.0f;
+
+	matrix[4] = -right[0] * scale;
+	matrix[5] = -right[1] * scale;
+	matrix[6] = -right[2] * scale;
+	matrix[7] = 0.0f;
+
+	matrix[8] = up[0] * scale;
+	matrix[9] = up[1] * scale;
+	matrix[10] = up[2] * scale;
+	matrix[11] = 0.0f;
+
+	matrix[12] = origin[0];
+	matrix[13] = origin[1];
+	matrix[14] = origin[2];
+	matrix[15] = 1.0f;
+}
+
+static void R_DrawBrushModelInstancedGroup (entity_t **ents, int count)
+{
+	bmodel_drawcache_t *cache;
+	const int overbright = !!gl_overbright.value;
+	const int wide10bits = (gl_lightmap_format == GL_RGB10_A2);
+	qmodel_t *model;
+	texture_t *t, *animt;
+	gltexture_t *fullbright = NULL;
+	int frame;
+	int i;
+	int lasttex = -1, lastlm = -1, lastcaustics = -1;
+
+	if (count <= 1)
+	{
+		if (count == 1)
+			R_DrawBrushModel(ents[0]);
+		return;
+	}
+	if (!R_CanInstanceBrushEntity(ents[0], &cache) || !cache)
+	{
+		for (i = 0; i < count; i++)
+			R_DrawBrushModel(ents[i]);
+		return;
+	}
+	if (!R_ReserveBModelInstancingBuffers(count))
+	{
+		for (i = 0; i < count; i++)
+			R_DrawBrushModel(ents[i]);
+		return;
+	}
+
+	model = ents[0]->model;
+	frame = ents[0]->frame;
+
+	for (i = 0; i < count; i++)
+		R_BuildBrushModelMatrix(ents[i], r_bmodel_instance_data[i].matrix);
+
+	if (!gl_bmodel_instance_vbo)
+	{
+		GL_GenBuffersFunc(1, &gl_bmodel_instance_vbo);
+		GL_ClearBufferBindings();
+	}
+	if (!gl_bmodel_instance_vbo)
+	{
+		for (i = 0; i < count; i++)
+			R_DrawBrushModel(ents[i]);
+		return;
+	}
+
+	if (R_BModelDrawCache_LightstylesChanged(cache))
+	{
+		currententity = ents[0];
+		R_BModelDrawCache_UpdateLightmaps(model, cache);
+		R_UploadLightmaps();
+	}
+
+	GL_BindBuffer(GL_ARRAY_BUFFER, gl_bmodel_instance_vbo);
+	GL_BufferDataFunc(GL_ARRAY_BUFFER, (GLsizeiptr)((size_t)count * sizeof(r_bmodel_instance_data[0])), r_bmodel_instance_data, GL_STREAM_DRAW);
+
+	glDepthMask(GL_TRUE);
+	glDisable(GL_BLEND);
+	glEnable(GL_CULL_FACE);
+	GL_UseProgramFunc(r_world_instanced_program);
+
+	GL_BindBuffer(GL_ARRAY_BUFFER, gl_bmodel_vbo);
+	GL_BindBuffer(GL_ELEMENT_ARRAY_BUFFER, cache->ebo);
+
+	GL_EnableVertexAttribArrayFunc(vertAttrIndex);
+	GL_EnableVertexAttribArrayFunc(texCoordsAttrIndex);
+	GL_EnableVertexAttribArrayFunc(LMCoordsAttrIndex);
+	GL_VertexAttribPointerFunc(vertAttrIndex, 3, GL_FLOAT, GL_FALSE, VERTEXSIZE * sizeof(float), ((float *)0));
+	GL_VertexAttribPointerFunc(texCoordsAttrIndex, 2, GL_FLOAT, GL_FALSE, VERTEXSIZE * sizeof(float), ((float *)0) + 3);
+	GL_VertexAttribPointerFunc(LMCoordsAttrIndex, 2, GL_FLOAT, GL_FALSE, VERTEXSIZE * sizeof(float), ((float *)0) + 5);
+	R_SetupLightmapBoundsAttrib ();
+
+	GL_BindBuffer(GL_ARRAY_BUFFER, gl_bmodel_instance_vbo);
+	GL_EnableVertexAttribArrayFunc(instMat0AttrIndex);
+	GL_EnableVertexAttribArrayFunc(instMat1AttrIndex);
+	GL_EnableVertexAttribArrayFunc(instMat2AttrIndex);
+	GL_EnableVertexAttribArrayFunc(instMat3AttrIndex);
+	GL_VertexAttribPointerFunc(instMat0AttrIndex, 4, GL_FLOAT, GL_FALSE, sizeof(r_bmodel_instance_data[0]), (void *)(sizeof(float) * 0));
+	GL_VertexAttribPointerFunc(instMat1AttrIndex, 4, GL_FLOAT, GL_FALSE, sizeof(r_bmodel_instance_data[0]), (void *)(sizeof(float) * 4));
+	GL_VertexAttribPointerFunc(instMat2AttrIndex, 4, GL_FLOAT, GL_FALSE, sizeof(r_bmodel_instance_data[0]), (void *)(sizeof(float) * 8));
+	GL_VertexAttribPointerFunc(instMat3AttrIndex, 4, GL_FLOAT, GL_FALSE, sizeof(r_bmodel_instance_data[0]), (void *)(sizeof(float) * 12));
+	GL_VertexAttribDivisorFunc(instMat0AttrIndex, 1);
+	GL_VertexAttribDivisorFunc(instMat1AttrIndex, 1);
+	GL_VertexAttribDivisorFunc(instMat2AttrIndex, 1);
+	GL_VertexAttribDivisorFunc(instMat3AttrIndex, 1);
+
+	GL_Uniform1iFunc(instTexLoc, 0);
+	GL_Uniform1iFunc(instLMTexLoc, 1);
+	GL_Uniform1iFunc(instFullbrightTexLoc, 2);
+	GL_Uniform1iFunc(instCausticsTexLoc, 3);
+	GL_Uniform1iFunc(instUseFullbrightTexLoc, 0);
+	GL_Uniform1iFunc(instUseOverbrightLoc, overbright);
+	GL_Uniform1iFunc(instUseCausticsTexLoc, 0);
+	GL_Uniform1iFunc(instUseGrassLoc, 0);
+	GL_Uniform1iFunc(instUseAlphaTestLoc, 0);
+	GL_Uniform1iFunc(instUseLightmapWideLoc, wide10bits);
+	GL_Uniform1iFunc(instUseLightmapOnlyLoc, 0);
+	R_SetLightmapExtra4Uniforms (instUseLightmapExtra4Loc, instLightmapTexelSizeLoc);
+	R_SetTexturelessDitherUniform (instUseTexturelessDitherLoc);
+	GL_Uniform1fFunc(instAlphaLoc, 1.0f);
+	GL_Uniform1fFunc(instClTimeLoc, cl.time);
+	GL_Uniform1fFunc(instCausticsOpacityLoc, gl_caustics.value);
+	GL_Uniform1fFunc(instGrassAmountLoc, 0.0f);
+	GL_Uniform1fFunc(instGrassTimeLoc, R_GrassAnimTime());
+	GL_Uniform1fFunc(instGrassMovementLoc, R_GrassMovement());
+	GL_Uniform1fFunc(instGrassGustScaleLoc, R_GrassGustScale());
+	GL_Uniform1iFunc(instFogModeLoc, Fog_GetMode());
+
+	for (i = 0; i < cache->numbatches; i++)
+	{
+		bmodel_drawbatch_t *batch = &cache->batches[i];
+		int usecaustics = batch->underwater && gl_caustics.value && underwatertexture;
+
+		t = model->textures[batch->texture];
+		if (!t)
+			continue;
+		animt = R_TextureAnimation(t, frame);
+
+		if (batch->texture != lasttex)
+		{
+			GL_SelectTexture(GL_TEXTURE0);
+			GL_Bind(animt->gltexture);
+
+			if (gl_fullbrights.value && (fullbright = animt->fullbright))
+			{
+				GL_SelectTexture(GL_TEXTURE2);
+				GL_Bind(fullbright);
+				GL_Uniform1iFunc(instUseFullbrightTexLoc, 1);
+			}
+			else
+				GL_Uniform1iFunc(instUseFullbrightTexLoc, 0);
+
+			GL_Uniform1iFunc(instUseGrassLoc, 0);
+			lasttex = batch->texture;
+			lastlm = -1;
+		}
+
+		GL_Uniform1iFunc(instUseAlphaTestLoc, (batch->flags & SURF_DRAWFENCE) != 0);
+
+		if (batch->lightmap != lastlm)
+		{
+			GL_SelectTexture(GL_TEXTURE1);
+			GL_Bind(lightmaps[batch->lightmap].texture);
+			lastlm = batch->lightmap;
+		}
+
+		if (usecaustics != lastcaustics)
+		{
+			if (usecaustics)
+			{
+				GL_SelectTexture(GL_TEXTURE3);
+				GL_Bind(underwatertexture);
+			}
+			GL_Uniform1iFunc(instUseCausticsTexLoc, usecaustics);
+			lastcaustics = usecaustics;
+		}
+
+		GL_DrawElementsInstancedFunc(GL_TRIANGLES, (GLsizei)batch->numidx, GL_UNSIGNED_INT, batch->eboidx, count);
+		rs_brushpasses += count;
+	}
+
+	rs_brushpolys += cache->brushpolys * count;
+
+	GL_Uniform1iFunc(instUseAlphaTestLoc, 0);
+	GL_Uniform1iFunc(instUseCausticsTexLoc, 0);
+	GL_VertexAttribDivisorFunc(instMat0AttrIndex, 0);
+	GL_VertexAttribDivisorFunc(instMat1AttrIndex, 0);
+	GL_VertexAttribDivisorFunc(instMat2AttrIndex, 0);
+	GL_VertexAttribDivisorFunc(instMat3AttrIndex, 0);
+	GL_DisableVertexAttribArrayFunc(instMat0AttrIndex);
+	GL_DisableVertexAttribArrayFunc(instMat1AttrIndex);
+	GL_DisableVertexAttribArrayFunc(instMat2AttrIndex);
+	GL_DisableVertexAttribArrayFunc(instMat3AttrIndex);
+	GL_DisableVertexAttribArrayFunc(vertAttrIndex);
+	GL_DisableVertexAttribArrayFunc(texCoordsAttrIndex);
+	GL_DisableVertexAttribArrayFunc(LMCoordsAttrIndex);
+	GL_DisableVertexAttribArrayFunc(LMBoundsAttrIndex);
+
+	GL_UseProgramFunc(0);
+	GL_SelectTexture(GL_TEXTURE0);
+	GL_BindBuffer(GL_ARRAY_BUFFER, 0);
+	GL_BindBuffer(GL_ELEMENT_ARRAY_BUFFER, 0);
+}
+
+void R_DrawBrushModelsInstanced (entity_t **ents, int count)
+{
+	int group_start, group_end, i, batchcount;
+
+	if (!count)
+		return;
+	if (!R_ReserveBModelInstancingBuffers(count))
+	{
+		for (i = 0; i < count; i++)
+			R_DrawBrushModel(ents[i]);
+		return;
+	}
+
+	qsort(ents, count, sizeof(*ents), R_CompareInstancedBrushEntities);
+
+	for (group_start = 0; group_start < count; group_start = group_end)
+	{
+		entity_t *ent;
+
+		ent = ents[group_start];
+		for (group_end = group_start + 1; group_end < count && ents[group_end]->model == ent->model && ents[group_end]->frame == ent->frame; group_end++)
+			;
+
+		// A singleton cannot be instanced; let its normal draw handle culling
+		// and cache eligibility once.
+		if (group_end == group_start + 1)
+		{
+			R_DrawBrushModel(ent);
+			continue;
+		}
+
+		batchcount = 0;
+		for (i = group_start; i < group_end; i++)
+		{
+			ent = ents[i];
+
+			if (!R_CanInstanceBrushEntity(ent, NULL))
+			{
+				R_DrawBrushModel(ent);
+				continue;
+			}
+			if (R_CullModelForEntity(ent))
+				continue;
+
+			r_bmodel_group_ents[batchcount++] = ent;
+		}
+
+		R_DrawBrushModelInstancedGroup(r_bmodel_group_ents, batchcount);
+	}
+}
+
+static void GLWorld_DeleteShaderPrograms (void)
+{
+	int i;
+
+	GL_DeleteProgramTracked(&r_world_program);
+	GL_DeleteProgramTracked(&r_world_instanced_program);
+	GL_DeleteProgramTracked(&r_grass_program);
+	for (i = 0; i < countof(r_water); i++)
+		GL_DeleteProgramTracked(&r_water[i].program);
+
+	r_world_program = 0;
+	r_world_instanced_program = 0;
+	texLoc = 0;
+	LMTexLoc = 0;
+	fullbrightTexLoc = 0;
+	causticsTexLoc = 0;
+	useFullbrightTexLoc = 0;
+	useOverbrightLoc = 0;
+	useAlphaTestLoc = 0;
+	useCausticsTexLoc = 0;
+	useLightmapWideLoc = 0;
+	useLightmapOnlyLoc = 0;
+	useLightmapExtra4Loc = 0;
+	lightmapTexelSizeLoc = 0;
+	useTexturelessDitherLoc = 0;
+	alphaLoc = 0;
+	clTimeLoc = 0;
+	causticsOpacityLoc = 0;
+	useGrassLoc = -1;
+	grassAmountLoc = -1;
+	grassTimeLoc = -1;
+	grassBaseColorLoc = -1;
+	grassTipColorLoc = -1;
+	grassMovementLoc = -1;
+	grassGustScaleLoc = -1;
+	fogModeLoc = -1;
+
+	instTexLoc = -1;
+	instLMTexLoc = -1;
+	instFullbrightTexLoc = -1;
+	instCausticsTexLoc = -1;
+	instUseFullbrightTexLoc = -1;
+	instUseOverbrightLoc = -1;
+	instUseAlphaTestLoc = -1;
+	instUseCausticsTexLoc = -1;
+	instUseGrassLoc = -1;
+	instUseLightmapWideLoc = -1;
+	instUseLightmapOnlyLoc = -1;
+	instUseLightmapExtra4Loc = -1;
+	instLightmapTexelSizeLoc = -1;
+	instUseTexturelessDitherLoc = -1;
+	instAlphaLoc = -1;
+	instClTimeLoc = -1;
+	instCausticsOpacityLoc = -1;
+	instGrassAmountLoc = -1;
+	instGrassTimeLoc = -1;
+	instGrassBaseColorLoc = -1;
+	instGrassTipColorLoc = -1;
+	instGrassMovementLoc = -1;
+	instGrassGustScaleLoc = -1;
+	instFogModeLoc = -1;
+
+	r_grass_program = 0;
+	grassGeomAmountLoc = -1;
+	grassGeomTimeLoc = -1;
+	grassGeomMovementLoc = -1;
+	grassGeomGustScaleLoc = -1;
+	grassGeomFadeDistLoc = -1;
+	grassGeomFogModeLoc = -1;
+	grassGeomEyePosLoc = -1;
+	grassGeomStaticModeLoc = -1;
+	grassGeomStaticNormalLoc = -1;
+	grassGeomStaticTangentLoc = -1;
+	grassGeomStaticLodLoc = -1;
+	grassGeomStaticCellWeightLoc = -1;
+	grassGeomDLightCountLoc = -1;
+	grassGeomDLightPosRadiusLoc = -1;
+	grassGeomDLightColorMinLoc = -1;
+
+	for (i = 0; i < countof(r_water); i++)
+	{
+		r_water[i].program = 0;
+		r_water[i].light_scale = 0;
+		r_water[i].alpha_scale = 0;
+		r_water[i].time = 0;
+		r_water[i].eyepos = 0;
+		r_water[i].fogalpha = 0;
+		r_water[i].colour = 0;
+		r_water[i].fogmode = -1;
+		r_water[i].skyfogcolor = -1;
+		r_water[i].use_extra4 = -1;
+		r_water[i].texel_size = -1;
+	}
+}
+
+void GLWorld_DeleteShaders (void)
+{
+	GLWorld_DeleteShaderPrograms ();
+}
+
+#define GRASS_BLADE_MODE_CPU 1
+#define GRASS_BLADE_MODE_SHADER 2
+#define GRASS_DENSITY_MAX 500.0f
+#define GRASS_DIST_MAX 8192.0f
+#define GRASS_DEFAULT_AMOUNT 1.0f
+#define GRASS_DEFAULT_BLADES 2.0f
+#define GRASS_DEFAULT_DENSITY 0.35f
+#define GRASS_DEFAULT_HEIGHT 18.0f
+#define GRASS_DEFAULT_DIST 1024.0f
+#define GRASS_DEFAULT_MOVEMENT 0.35f
+#define GRASS_DEFAULT_LOD 1.0f
+#define GRASS_DEFAULT_GUSTSCALE 0.5f
+#define GRASS_GUSTSCALE_MAX 8.0f
+#define GRASS_CUSTOM_VALUE_MAX 8
+#define GRASS_VERTEX_BATCH_MAX 65532
+#define GRASS_SURFACE_BLADE_MAX 262144
+#define GRASS_SURFACE_CELL_SCAN_MAX 1048576.0
+#define GRASS_LIGHT_CACHE_SIZE 256
+#define GRASS_LIGHT_CACHE_PROBES 8
+#define GRASS_LIGHT_CACHE_CELL 64.0f
+#define GRASS_TIME_WRAP 4096.0
+#define GRASS_SHADER_LOD_LEVELS 4
+
+typedef struct grass_settings_s
+{
+	float amount;
+	float blades;
+	float density;
+	float height;
+	float dist;
+	float movement;
+	float lod;
+	float gustscale;
+} grass_settings_t;
+
+typedef struct grass_lod_params_s
+{
+	float dist;
+	float dist2;
+	float nearclip2;
+	float invfade;
+	float lod;
+	qboolean use_dist;
+} grass_lod_params_t;
+
+typedef struct grass_dlight_s
+{
+	vec3_t origin;
+	vec3_t color;
+	float radius;
+	float minlight;
+	float cull_radius2;
+} grass_dlight_t;
+
+typedef struct grass_dlight_list_s
+{
+	int count;
+	grass_dlight_t lights[MAX_DLIGHTS];
+} grass_dlight_list_t;
+
+typedef struct grass_light_cache_entry_s
+{
+	unsigned int generation;
+	qboolean cheap;
+	int cell[3];
+	vec3_t light;
+} grass_light_cache_entry_t;
+
+typedef struct grass_vertex_s
+{
+	float vertex[3];
+	float color[4];
+	float texcoord[4];
+} grass_vertex_t;
+
+typedef struct grass_shader_vertex_s
+{
+	float base[3];
+	float color[4];
+	float bladecoord[4];
+	float geom[4];
+} grass_shader_vertex_t;
+
+typedef struct grass_cached_blade_s
+{
+	vec3_t pos;
+	unsigned int seed;
+	unsigned int bladebits;
+	unsigned int colorbits;
+	unsigned int amountbits;
+	unsigned int lodbits;
+	float heightscale;
+	int cell_x;
+	int cell_y;
+} grass_cached_blade_t;
+
+typedef struct grass_surface_cache_s
+{
+	const msurface_t *surface;
+	grass_cached_blade_t *blades;
+	int count;
+	int capacity;
+	qboolean built;
+	qboolean failed;
+	GLuint shader_vbo[GRASS_SHADER_LOD_LEVELS];
+	int shader_vertex_count[GRASS_SHADER_LOD_LEVELS];
+	float shader_baseheight[GRASS_SHADER_LOD_LEVELS];
+	vec3_t shader_basecolor[GRASS_SHADER_LOD_LEVELS];
+	vec3_t shader_tipcolor[GRASS_SHADER_LOD_LEVELS];
+	unsigned int shader_lightstyle_hash[GRASS_SHADER_LOD_LEVELS];
+	qboolean shader_built[GRASS_SHADER_LOD_LEVELS];
+	qboolean shader_failed[GRASS_SHADER_LOD_LEVELS];
+} grass_surface_cache_t;
+
+typedef struct grass_model_cache_s
+{
+	qmodel_t *model;
+	int firstsurface;
+	int numsurfaces;
+	float density;
+	float cellsize;
+	grass_surface_cache_t *surfaces;
+	struct grass_model_cache_s *next;
+} grass_model_cache_t;
+
+struct grass_presence_cache_s
+{
+	qmodel_t *model;
+	int firstsurface;
+	int numsurfaces;
+	unsigned int texhash;
+	qboolean has_blade_surfaces;
+	byte *surface_blade_flags;
+	int *surface_visframes;
+	struct grass_presence_cache_s *next;
+};
+
+typedef struct grass_brush_blocker_s
+{
+	vec3_t mins;
+	vec3_t maxs;
+} grass_brush_blocker_t;
+
+static grass_settings_t grass_settings;
+static char grass_settings_string[256];
+static qboolean grass_settings_valid;
+static grass_vertex_t *r_grass_vertex_batch;
+static int r_grass_vertex_count;
+static GLuint r_grass_vertex_vbo;
+static grass_light_cache_entry_t r_grass_light_cache[GRASS_LIGHT_CACHE_SIZE];
+static unsigned int r_grass_light_cache_generation;
+static grass_model_cache_t *r_grass_model_caches;
+static grass_presence_cache_t *r_grass_presence_caches;
+static qmodel_t *r_grass_cache_worldmodel;
+static qmodel_t *r_grass_brush_blocker_worldmodel;
+static byte *r_grass_brush_blocker_submodels;
+static int r_grass_brush_blocker_submodel_count;
+static grass_brush_blocker_t *r_grass_brush_blockers;
+static int r_grass_brush_blocker_count;
+
+static float R_GrassAnimTime (void)
+{
+	double t;
+
+	t = fmod(cl.time, GRASS_TIME_WRAP);
+	if (t < 0.0)
+		t += GRASS_TIME_WRAP;
+	return (float)t;
+}
+
+static qboolean R_GrassUseVertexVBO (void)
+{
+	return r_grass_vertex_vbo != 0 && gl_vbo_able && GL_BufferDataFunc;
+}
+
+static qboolean R_GrassUseStaticShaderVBO (void)
+{
+	return gl_vbo_able && GL_GenBuffersFunc && GL_BufferDataFunc &&
+		GL_ClientActiveTextureFunc && GL_Uniform3fFunc && gl_max_texture_units >= 2;
+}
+
+static qboolean R_GrassValueSeparator (char c)
+{
+	return c == ',' || c == ';' || c == ' ' || c == '\t' || c == '\r' || c == '\n';
+}
+
+static int R_GrassParseValues (const char *s, float *values, int maxvalues)
+{
+	int count;
+
+	count = 0;
+	while (s && *s && count < maxvalues)
+	{
+		char *end;
+		double parsed;
+		float value;
+
+		while (*s && R_GrassValueSeparator(*s))
+			s++;
+		if (!*s)
+			break;
+
+		parsed = strtod(s, &end);
+		value = (float)parsed;
+		if (end == s || !isfinite(parsed) || !isfinite(value))
+			break;
+
+		values[count] = value;
+		count++;
+		s = end;
+		/* Stop on malformed tokens like "0.5x" instead of skipping ahead. */
+		if (*s && !R_GrassValueSeparator(*s))
+			return count;
+	}
+
+	return count;
+}
+
+static void R_GrassSettingsDefaults (grass_settings_t *settings)
+{
+	settings->amount = GRASS_DEFAULT_AMOUNT;
+	settings->blades = GRASS_DEFAULT_BLADES;
+	settings->density = GRASS_DEFAULT_DENSITY;
+	settings->height = GRASS_DEFAULT_HEIGHT;
+	settings->dist = GRASS_DEFAULT_DIST;
+	settings->movement = GRASS_DEFAULT_MOVEMENT;
+	settings->lod = GRASS_DEFAULT_LOD;
+	settings->gustscale = GRASS_DEFAULT_GUSTSCALE;
+}
+
+static const grass_settings_t *R_GrassSettings (void)
+{
+	const char *s;
+	float values[GRASS_CUSTOM_VALUE_MAX];
+	int count;
+
+	s = r_grass.string ? r_grass.string : "";
+	if (grass_settings_valid && !strcmp(grass_settings_string, s))
+		return &grass_settings;
+
+	R_GrassSettingsDefaults(&grass_settings);
+	count = R_GrassParseValues(s, values, countof(values));
+
+	if (count <= 0)
+		grass_settings.amount = 0.0f;
+	else if (count == 1)
+		grass_settings.amount = CLAMP(0.0f, values[0], 1.0f);
+	else if (count >= 7)
+	{
+		grass_settings.amount = CLAMP(0.0f, values[0], 1.0f);
+		grass_settings.blades = values[1];
+		grass_settings.density = values[2];
+		grass_settings.height = values[3];
+		grass_settings.dist = values[4];
+		grass_settings.movement = values[5];
+		grass_settings.lod = values[6];
+		if (count > 7)
+			grass_settings.gustscale = values[7];
+	}
+	else
+	{
+		grass_settings.amount = GRASS_DEFAULT_AMOUNT;
+		grass_settings.blades = values[0];
+		if (count > 1)
+			grass_settings.density = values[1];
+		if (count > 2)
+			grass_settings.height = values[2];
+		if (count > 3)
+			grass_settings.dist = values[3];
+		if (count > 4)
+			grass_settings.movement = values[4];
+		if (count > 5)
+			grass_settings.lod = values[5];
+	}
+
+	q_strlcpy(grass_settings_string, s, sizeof(grass_settings_string));
+	grass_settings_valid = true;
+	return &grass_settings;
+}
+
+static qboolean R_GrassEnabled (void)
+{
+	return R_GrassSettings()->amount > 0.0f;
+}
+
+static float R_GrassAmount (void)
+{
+	return CLAMP(0.0f, R_GrassSettings()->amount, 1.0f);
+}
+
+static float R_GrassMovement (void)
+{
+	return CLAMP(0.0f, R_GrassSettings()->movement, 2.0f);
+}
+
+static float R_GrassGustScale (void)
+{
+	return CLAMP(0.0f, R_GrassSettings()->gustscale, GRASS_GUSTSCALE_MAX);
+}
+
+static int R_GrassBladeMode (void)
+{
+	static qboolean warned_shader_fallback = false;
+	float blades;
+
+	blades = R_GrassSettings()->blades;
+	if (blades <= 0.0f)
+	{
+		warned_shader_fallback = false;
+		return 0;
+	}
+	if (blades >= 2.0f)
+	{
+		if (r_grass_program != 0)
+		{
+			warned_shader_fallback = false;
+			return GRASS_BLADE_MODE_SHADER;
+		}
+		if (!warned_shader_fallback)
+		{
+			Con_Printf("r_grass shader blades requested, but the grass GLSL shader is unavailable; falling back to CPU blades\n");
+			warned_shader_fallback = true;
+		}
+	}
+	else
+		warned_shader_fallback = false;
+
+	return GRASS_BLADE_MODE_CPU;
+}
+
+static qboolean R_GrassTexSeparator (char c)
+{
+	return c == ',' || c == ';' || c == ' ' || c == '\t' || c == '\r' || c == '\n';
+}
+
+static const char *R_TextureGrassBaseName (const char *name)
+{
+	if (name[0] == '+' && name[1] && name[2])
+		return name + 2;
+	return name;
+}
+
+static qboolean R_TextureNameMatchesGrassTex (const char *name, const char *token, size_t token_len)
+{
+	const char *basename;
+
+	basename = R_TextureGrassBaseName(name);
+	if (strlen(basename) != token_len)
+		return false;
+
+	return !q_strncasecmp(basename, token, token_len);
+}
+
+static qboolean R_TextureMatchesGrassTex (const texture_t *t, qboolean *has_tokens)
+{
+	const char *s, *start;
+	size_t token_len;
+
+	*has_tokens = false;
+	if (!r_grass_tex.string)
+		return false;
+
+	s = r_grass_tex.string;
+	while (*s)
+	{
+		while (*s && R_GrassTexSeparator(*s))
+			s++;
+		if (!*s)
+			break;
+
+		start = s;
+		while (*s && !R_GrassTexSeparator(*s))
+			s++;
+
+		token_len = (size_t)(s - start);
+		if (token_len > 0)
+		{
+			*has_tokens = true;
+			if (R_TextureNameMatchesGrassTex(t->name, start, token_len))
+				return true;
+		}
+	}
+
+	return false;
+}
+
+static qboolean R_TextureHasGrass (const texture_t *t)
+{
+	const char *name;
+	qboolean has_tex_tokens;
+
+	if (!R_GrassEnabled() || !t || !t->name[0])
+		return false;
+
+	name = R_TextureGrassBaseName(t->name);
+	if (name[0] == '*' || name[0] == '!' || name[0] == '{')
+		return false;
+	if (!q_strncasecmp(name, "sky", 3))
+		return false;
+
+	if (R_TextureMatchesGrassTex(t, &has_tex_tokens))
+		return true;
+	if (has_tex_tokens)
+		return false;
+
+	return t->grass_detected;
+}
+
+static qboolean R_TextureUsesSurfaceGrass (const texture_t *t)
+{
+	return R_GrassBladeMode() == 0 && R_TextureHasGrass(t);
+}
+
+static qboolean R_GrassBladesActive (void)
+{
+	const grass_settings_t *settings;
+
+	settings = R_GrassSettings();
+	return settings->amount > 0.0f && R_GrassBladeMode() != 0 &&
+		settings->density > 0.0f && settings->height > 0.0f;
+}
+
+static unsigned int R_GrassHashUInt (unsigned int x)
+{
+	x ^= x >> 16;
+	x *= 0x7feb352dU;
+	x ^= x >> 15;
+	x *= 0x846ca68bU;
+	x ^= x >> 16;
+	return x;
+}
+
+static float R_GrassHashFloat (unsigned int x)
+{
+	return (R_GrassHashUInt(x) & 0x00ffffffU) * (1.0f / 16777215.0f);
+}
+
+static float R_GrassBitsToFloat (unsigned int x)
+{
+	return (x & 0x00ffffffU) * (1.0f / 16777215.0f);
+}
+
+static void R_GrassApplyBladeColorVariation (unsigned int colorbits, const vec3_t basein, const vec3_t tipin, vec3_t baseout, vec3_t tipout)
+{
+	float warm, dry, bright, tipboost;
+
+	warm = (float)(colorbits & 0xffU) * (1.0f / 255.0f) - 0.5f;
+	dry = (float)((colorbits >> 8) & 0xffU) * (1.0f / 255.0f) - 0.5f;
+	bright = 0.88f + (float)((colorbits >> 16) & 0xffU) * (0.24f / 255.0f);
+	tipboost = 0.92f + (float)((colorbits >> 24) & 0xffU) * (0.16f / 255.0f);
+
+	baseout[0] = basein[0] * CLAMP(0.78f, bright * (1.0f + warm * 0.10f + dry * 0.06f), 1.22f);
+	baseout[1] = basein[1] * CLAMP(0.78f, bright * (1.0f - dry * 0.05f), 1.22f);
+	baseout[2] = basein[2] * CLAMP(0.78f, bright * (1.0f - warm * 0.08f - dry * 0.06f), 1.22f);
+	tipout[0] = tipin[0] * CLAMP(0.80f, bright * tipboost * (1.0f + warm * 0.12f + dry * 0.08f), 1.25f);
+	tipout[1] = tipin[1] * CLAMP(0.80f, bright * tipboost * (1.0f - dry * 0.04f), 1.25f);
+	tipout[2] = tipin[2] * CLAMP(0.80f, bright * tipboost * (1.0f - warm * 0.10f - dry * 0.08f), 1.25f);
+}
+
+static void R_TextureGrassBladeColors (const texture_t *t, vec3_t base, vec3_t tip)
+{
+	vec3_t color;
+
+	if (t && t->grass_color_valid)
+		VectorCopy(t->grass_color, color);
+	else
+	{
+		color[0] = 0.11f;
+		color[1] = 0.34f;
+		color[2] = 0.045f;
+	}
+
+	VectorScale(color, 0.35f, base);
+	VectorCopy(color, tip);
+}
+
+static void R_SetGrassColorUniforms (const texture_t *t)
+{
+	vec3_t base, tip;
+
+	R_TextureGrassBladeColors(t, base, tip);
+	if (grassBaseColorLoc != -1)
+		GL_Uniform3fFunc(grassBaseColorLoc, base[0], base[1], base[2]);
+	if (grassTipColorLoc != -1)
+		GL_Uniform3fFunc(grassTipColorLoc, tip[0], tip[1], tip[2]);
+}
+
+static void R_GrassAddAmbientLight (vec3_t blocklight)
+{
+	float ambient;
+
+	if (cl.gametype == GAME_DEATHMATCH && cls.state == ca_connected && !cls.demoplayback)
+		return;
+
+	ambient = CLAMP(0.0f, r_ambient.value, 255.0f) * 256.0f;
+	blocklight[0] += ambient;
+	blocklight[1] += ambient;
+	blocklight[2] += ambient;
+}
+
+static void R_GrassSampleHDRLight (const uint32_t *lightmap, int index, float scale, vec3_t sample)
+{
+	static const float rgb9e5tab[32] = {
+		1.0f/(1<<24),	1.0f/(1<<23),	1.0f/(1<<22),	1.0f/(1<<21),	1.0f/(1<<20),	1.0f/(1<<19),	1.0f/(1<<18),	1.0f/(1<<17),
+		1.0f/(1<<16),	1.0f/(1<<15),	1.0f/(1<<14),	1.0f/(1<<13),	1.0f/(1<<12),	1.0f/(1<<11),	1.0f/(1<<10),	1.0f/(1<<9),
+		1.0f/(1<<8),	1.0f/(1<<7),	1.0f/(1<<6),	1.0f/(1<<5),	1.0f/(1<<4),	1.0f/(1<<3),	1.0f/(1<<2),	1.0f/(1<<1),
+		1.0f,			1.0f*(1<<1),	1.0f*(1<<2),	1.0f*(1<<3),	1.0f*(1<<4),	1.0f*(1<<5),	1.0f*(1<<6),	1.0f*(1<<7),
+	};
+	uint32_t e5bgr9;
+	float e;
+
+	e5bgr9 = lightmap[index];
+	e = rgb9e5tab[e5bgr9 >> 27] * (1 << 7) * scale;
+	sample[0] = ((e5bgr9 >> 0) & 0x1ff) * e;
+	sample[1] = ((e5bgr9 >> 9) & 0x1ff) * e;
+	sample[2] = ((e5bgr9 >> 18) & 0x1ff) * e;
+}
+
+static void R_GrassSampleRGBLight (const byte *lightmap, int index, float scale, vec3_t sample)
+{
+	lightmap += index * 3;
+	sample[0] = lightmap[0] * scale;
+	sample[1] = lightmap[1] * scale;
+	sample[2] = lightmap[2] * scale;
+}
+
+static void R_GrassAddWeightedLight (vec3_t blocklight, const vec3_t sample, float weight)
+{
+	blocklight[0] += sample[0] * weight;
+	blocklight[1] += sample[1] * weight;
+	blocklight[2] += sample[2] * weight;
+}
+
+static void R_GrassAddSurfaceLightmap (const qmodel_t *model, const msurface_t *s, const vec3_t point, qboolean interpolate, vec3_t blocklight)
+{
+	float lm_s, lm_t, frac_s, frac_t;
+	int smax, tmax, size, s0, s1, t0, t1, idx00, idx10, idx01, idx11, maps;
+
+	if (r_fullbright_cheatsafe || !model->lightdata)
+	{
+		blocklight[0] += 32768.0f;
+		blocklight[1] += 32768.0f;
+		blocklight[2] += 32768.0f;
+		return;
+	}
+
+	R_GrassAddAmbientLight(blocklight);
+	if (!s->samples)
+		return;
+
+	smax = s->extents[0] + 1;
+	tmax = s->extents[1] + 1;
+	if (smax <= 0 || tmax <= 0)
+		return;
+	size = smax * tmax;
+
+	lm_s = DotProduct(point, s->lmvecs[0]) + s->lmvecs[0][3];
+	lm_t = DotProduct(point, s->lmvecs[1]) + s->lmvecs[1][3];
+	lm_s = CLAMP(0.0f, lm_s, (float)(smax - 1));
+	lm_t = CLAMP(0.0f, lm_t, (float)(tmax - 1));
+
+	if (interpolate)
+	{
+		s0 = (int)floorf(lm_s);
+		t0 = (int)floorf(lm_t);
+		s1 = q_min(s0 + 1, smax - 1);
+		t1 = q_min(t0 + 1, tmax - 1);
+		frac_s = lm_s - s0;
+		frac_t = lm_t - t0;
+	}
+	else
+	{
+		s0 = (int)floorf(lm_s + 0.5f);
+		t0 = (int)floorf(lm_t + 0.5f);
+		s1 = s0;
+		t1 = t0;
+		frac_s = frac_t = 0.0f;
+	}
+
+	idx00 = t0 * smax + s0;
+	idx10 = t0 * smax + s1;
+	idx01 = t1 * smax + s0;
+	idx11 = t1 * smax + s1;
+
+	if (model->flags & MOD_HDRLIGHTING)
+	{
+		const uint32_t *lightmap = (const uint32_t *)s->samples;
+
+		for (maps = 0; maps < MAXLIGHTMAPS && s->styles[maps] != INVALID_LIGHTSTYLE; maps++)
+		{
+			vec3_t sample;
+			float scale = (float)d_lightstylevalue[s->styles[maps]];
+
+			if (interpolate)
+			{
+				R_GrassSampleHDRLight(lightmap, idx00, scale, sample);
+				R_GrassAddWeightedLight(blocklight, sample, (1.0f - frac_s) * (1.0f - frac_t));
+				R_GrassSampleHDRLight(lightmap, idx10, scale, sample);
+				R_GrassAddWeightedLight(blocklight, sample, frac_s * (1.0f - frac_t));
+				R_GrassSampleHDRLight(lightmap, idx01, scale, sample);
+				R_GrassAddWeightedLight(blocklight, sample, (1.0f - frac_s) * frac_t);
+				R_GrassSampleHDRLight(lightmap, idx11, scale, sample);
+				R_GrassAddWeightedLight(blocklight, sample, frac_s * frac_t);
+			}
+			else
+			{
+				R_GrassSampleHDRLight(lightmap, idx00, scale, sample);
+				R_GrassAddWeightedLight(blocklight, sample, 1.0f);
+			}
+			lightmap += size;
+		}
+	}
+	else
+	{
+		const byte *lightmap = (const byte *)s->samples;
+
+		for (maps = 0; maps < MAXLIGHTMAPS && s->styles[maps] != INVALID_LIGHTSTYLE; maps++)
+		{
+			vec3_t sample;
+			float scale = (float)d_lightstylevalue[s->styles[maps]];
+
+			if (interpolate)
+			{
+				R_GrassSampleRGBLight(lightmap, idx00, scale, sample);
+				R_GrassAddWeightedLight(blocklight, sample, (1.0f - frac_s) * (1.0f - frac_t));
+				R_GrassSampleRGBLight(lightmap, idx10, scale, sample);
+				R_GrassAddWeightedLight(blocklight, sample, frac_s * (1.0f - frac_t));
+				R_GrassSampleRGBLight(lightmap, idx01, scale, sample);
+				R_GrassAddWeightedLight(blocklight, sample, (1.0f - frac_s) * frac_t);
+				R_GrassSampleRGBLight(lightmap, idx11, scale, sample);
+				R_GrassAddWeightedLight(blocklight, sample, frac_s * frac_t);
+			}
+			else
+			{
+				R_GrassSampleRGBLight(lightmap, idx00, scale, sample);
+				R_GrassAddWeightedLight(blocklight, sample, 1.0f);
+			}
+			lightmap += size * 3;
+		}
+	}
+}
+
+static void R_GrassPointToEntitySpace (const entity_t *ent, const vec3_t in, vec3_t out)
+{
+	vec3_t local;
+
+	if (!ent)
+	{
+		VectorCopy(in, out);
+		return;
+	}
+
+	VectorSubtract(in, ent->origin, local);
+	if (ent->angles[0] || ent->angles[1] || ent->angles[2])
+	{
+		vec3_t angles, forward, right, up;
+
+		VectorCopy(ent->angles, angles);
+		AngleVectors(angles, forward, right, up);
+		out[0] = DotProduct(local, forward);
+		out[1] = -DotProduct(local, right);
+		out[2] = DotProduct(local, up);
+	}
+	else
+		VectorCopy(local, out);
+}
+
+static void R_GrassPointFromEntitySpace (const entity_t *ent, const vec3_t in, vec3_t out)
+{
+	if (!ent)
+	{
+		VectorCopy(in, out);
+		return;
+	}
+
+	if (ent->angles[0] || ent->angles[1] || ent->angles[2])
+	{
+		vec3_t angles, forward, right, up;
+
+		VectorCopy(ent->angles, angles);
+		AngleVectors(angles, forward, right, up);
+		VectorScale(forward, in[0], out);
+		VectorMA(out, -in[1], right, out);
+		VectorMA(out, in[2], up, out);
+		VectorAdd(out, ent->origin, out);
+	}
+	else
+		VectorAdd(in, ent->origin, out);
+}
+
+static qboolean R_GrassLightIntersectsSurfaceBounds (const msurface_t *s, const vec3_t origin, float radius)
+{
+	int i;
+	vec3_t closest, delta;
+
+	for (i = 0; i < 3; i++)
+		closest[i] = CLAMP(s->mins[i], origin[i], s->maxs[i]);
+
+	VectorSubtract(closest, origin, delta);
+	return DotProduct(delta, delta) < radius * radius;
+}
+
+static void R_GrassBuildDlightList (const msurface_t *s, const entity_t *ent, grass_dlight_list_t *list, qboolean force_scan)
+{
+	int lnum;
+	qboolean use_dlightbits;
+
+	list->count = 0;
+	use_dlightbits = !force_scan && (s->dlightframe == r_framecount);
+	if (!use_dlightbits && !force_scan)
+		return;
+
+	for (lnum = 0; lnum < MAX_DLIGHTS; lnum++)
+	{
+		dlight_t *light;
+		grass_dlight_t *dst;
+		vec3_t lightorg;
+		float cull_radius, stylescale;
+
+		if (use_dlightbits && !(s->dlightbits[lnum >> 5] & (1U << (lnum & 31))))
+			continue;
+
+		light = &cl_dlights[lnum];
+		if (light->die < cl.time || (light->spawn > cl.mtime[0] && cls.demoplayback) || !light->radius)
+			continue;
+		stylescale = R_DlightStyleScale(light);
+		if (stylescale <= 0.0f)
+			continue;
+		cull_radius = light->radius - light->minlight;
+		if (cull_radius <= 0.0f)
+			continue;
+		R_GrassPointToEntitySpace(ent, light->origin, lightorg);
+		if (force_scan && !R_GrassLightIntersectsSurfaceBounds(s, lightorg, cull_radius))
+			continue;
+
+		if (list->count >= MAX_DLIGHTS)
+			break;
+
+		dst = &list->lights[list->count++];
+		VectorCopy(lightorg, dst->origin);
+		VectorScale(light->color, stylescale, dst->color);
+		dst->radius = light->radius;
+		dst->minlight = light->minlight;
+		dst->cull_radius2 = cull_radius * cull_radius;
+	}
+}
+
+static qboolean R_GrassLightstyleIsAnimated (unsigned int style)
+{
+	const lightstyle_t *lightstyle;
+	int i;
+	char first;
+
+	if (style >= MAX_LIGHTSTYLES)
+		return false;
+
+	lightstyle = &cl_lightstyle[style];
+	if (lightstyle->length <= 1)
+		return false;
+
+	first = lightstyle->map[0];
+	for (i = 1; i < lightstyle->length; i++)
+		if (lightstyle->map[i] != first)
+			return true;
+
+	return false;
+}
+
+static qboolean R_GrassSurfaceHasAnimatedLightstyles (const msurface_t *s)
+{
+	int maps;
+
+	if (r_flatlightstyles.value || !r_dynamic.value)
+		return false;
+
+	for (maps = 0; maps < MAXLIGHTMAPS && s->styles[maps] != INVALID_LIGHTSTYLE; maps++)
+	{
+		if (R_GrassLightstyleIsAnimated((unsigned int)s->styles[maps]))
+			return true;
+	}
+
+	return false;
+}
+
+static void R_GrassAddDynamicLights (const grass_dlight_list_t *list, const vec3_t point, vec3_t blocklight)
+{
+	int i;
+
+	for (i = 0; i < list->count; i++)
+	{
+		const grass_dlight_t *light;
+		vec3_t delta;
+		float add, d2;
+
+		light = &list->lights[i];
+		VectorSubtract(point, light->origin, delta);
+		d2 = DotProduct(delta, delta);
+		if (d2 >= light->cull_radius2)
+			continue;
+
+		add = light->radius - sqrtf(d2);
+		if (add <= light->minlight)
+			continue;
+
+		blocklight[0] += add * light->color[0] * 256.0f;
+		blocklight[1] += add * light->color[1] * 256.0f;
+		blocklight[2] += add * light->color[2] * 256.0f;
+	}
+}
+
+static void R_GrassLightForPoint (const qmodel_t *model, const msurface_t *s, const grass_dlight_list_t *dlights, const vec3_t point, qboolean cheap, vec3_t light)
+{
+	int i;
+	vec3_t blocklight;
+
+	blocklight[0] = blocklight[1] = blocklight[2] = 0.0f;
+	R_GrassAddSurfaceLightmap(model, s, point, !cheap, blocklight);
+	if (!cheap && dlights->count)
+		R_GrassAddDynamicLights(dlights, point, blocklight);
+
+	for (i = 0; i < 3; i++)
+		light[i] = CLAMP(0.05f, blocklight[i] * (1.0f / 32768.0f), 2.0f);
+}
+
+static grass_light_cache_entry_t *R_GrassBeginLightCache (void)
+{
+	r_grass_light_cache_generation++;
+	if (!r_grass_light_cache_generation)
+	{
+		memset(r_grass_light_cache, 0, sizeof(r_grass_light_cache));
+		r_grass_light_cache_generation = 1;
+	}
+
+	return r_grass_light_cache;
+}
+
+static void R_GrassLightForPointCached (const qmodel_t *model, const msurface_t *s, const grass_dlight_list_t *dlights, const vec3_t point, qboolean cheap, grass_light_cache_entry_t *cache, vec3_t light)
+{
+	int i, qx, qy, qz;
+	unsigned int hash;
+
+	if (!cache)
+	{
+		R_GrassLightForPoint(model, s, dlights, point, cheap, light);
+		return;
+	}
+
+	qx = (int)floorf(point[0] * (1.0f / GRASS_LIGHT_CACHE_CELL));
+	qy = (int)floorf(point[1] * (1.0f / GRASS_LIGHT_CACHE_CELL));
+	qz = (int)floorf(point[2] * (1.0f / GRASS_LIGHT_CACHE_CELL));
+	hash = R_GrassHashUInt((unsigned int)qx * 73856093U ^ (unsigned int)qy * 19349663U ^ (unsigned int)qz * 83492791U ^ (cheap ? 0x9e3779b9U : 0U));
+
+	for (i = 0; i < GRASS_LIGHT_CACHE_PROBES; i++)
+	{
+		grass_light_cache_entry_t *entry;
+
+		entry = &cache[(hash + (unsigned int)i) & (GRASS_LIGHT_CACHE_SIZE - 1)];
+		if (entry->generation == r_grass_light_cache_generation)
+		{
+			if (entry->cheap == cheap && entry->cell[0] == qx && entry->cell[1] == qy && entry->cell[2] == qz)
+			{
+				VectorCopy(entry->light, light);
+				return;
+			}
+			continue;
+		}
+
+		entry->generation = r_grass_light_cache_generation;
+		entry->cheap = cheap;
+		entry->cell[0] = qx;
+		entry->cell[1] = qy;
+		entry->cell[2] = qz;
+		R_GrassLightForPoint(model, s, dlights, point, cheap, entry->light);
+		VectorCopy(entry->light, light);
+		return;
+	}
+
+	R_GrassLightForPoint(model, s, dlights, point, cheap, light);
+}
+
+static void R_GrassSurfaceNormal (const msurface_t *s, vec3_t normal)
+{
+	VectorCopy(s->plane->normal, normal);
+	if (s->flags & SURF_PLANEBACK)
+		VectorScale(normal, -1.0f, normal);
+}
+
+static unsigned int R_GrassTexStringHash (void)
+{
+	const unsigned char *s;
+	unsigned int hash;
+
+	s = (const unsigned char *)(r_grass_tex.string ? r_grass_tex.string : "");
+	hash = 2166136261U;
+	while (*s)
+	{
+		hash ^= *s++;
+		hash *= 16777619U;
+	}
+
+	return hash;
+}
+
+static qboolean R_GrassSurfaceCanHaveBlades (const msurface_t *s)
+{
+	vec3_t normal;
+
+	if (!s || !s->texinfo || !s->texinfo->texture || !s->polys)
+		return false;
+	if (s->flags & (SURF_DRAWTURB | SURF_DRAWTILED | SURF_NOTEXTURE | SURF_DRAWFENCE))
+		return false;
+	if (!R_TextureHasGrass(s->texinfo->texture))
+		return false;
+
+	R_GrassSurfaceNormal(s, normal);
+	return normal[2] >= 0.35f;
+}
+
+static qboolean R_GrassScanModelForBladeSurfaces (qmodel_t *model)
+{
+	int i, firstsurface, numsurfaces;
+	msurface_t *s;
+
+	if (!model || model->type != mod_brush || !model->surfaces)
+		return false;
+
+	firstsurface = model->firstmodelsurface;
+	numsurfaces = model->nummodelsurfaces;
+	if (firstsurface < 0 || firstsurface > model->numsurfaces ||
+		numsurfaces <= 0 || numsurfaces > model->numsurfaces - firstsurface)
+		return false;
+
+	for (i = 0, s = model->surfaces + firstsurface; i < numsurfaces; i++, s++)
+		if (R_GrassSurfaceCanHaveBlades(s))
+			return true;
+
+	return false;
+}
+
+static qboolean R_GrassRefreshPresenceCache (qmodel_t *model, grass_presence_cache_t *cache)
+{
+	int i, firstsurface, numsurfaces;
+	msurface_t *s;
+
+	if (!cache)
+		return R_GrassScanModelForBladeSurfaces(model);
+
+	cache->has_blade_surfaces = false;
+	if (cache->surface_blade_flags)
+		memset(cache->surface_blade_flags, 0, (size_t)cache->numsurfaces * sizeof(*cache->surface_blade_flags));
+
+	if (!model || model->type != mod_brush || !model->surfaces)
+		return false;
+
+	firstsurface = model->firstmodelsurface;
+	numsurfaces = model->nummodelsurfaces;
+	if (firstsurface < 0 || firstsurface > model->numsurfaces ||
+		numsurfaces <= 0 || numsurfaces > model->numsurfaces - firstsurface)
+		return false;
+
+	for (i = 0, s = model->surfaces + firstsurface; i < numsurfaces; i++, s++)
+	{
+		if (!R_GrassSurfaceCanHaveBlades(s))
+			continue;
+		cache->has_blade_surfaces = true;
+		if (cache->surface_blade_flags)
+			cache->surface_blade_flags[i] = 1;
+	}
+
+	return cache->has_blade_surfaces;
+}
+
+static void R_GrassFreePresenceCache (grass_presence_cache_t *cache)
+{
+	if (!cache)
+		return;
+
+	free(cache->surface_blade_flags);
+	free(cache->surface_visframes);
+	free(cache);
+}
+
+static grass_presence_cache_t *R_GrassGetPresenceCache (qmodel_t *model, qboolean create)
+{
+	grass_presence_cache_t **link, *cache;
+	unsigned int texhash;
+
+	if (!model)
+		return NULL;
+
+	texhash = R_GrassTexStringHash();
+	for (link = &r_grass_presence_caches; (cache = *link); )
+	{
+		if (cache->model != model)
+		{
+			link = &cache->next;
+			continue;
+		}
+
+		if (cache->firstsurface != model->firstmodelsurface ||
+			cache->numsurfaces != model->nummodelsurfaces)
+		{
+			*link = cache->next;
+			R_GrassFreePresenceCache(cache);
+			continue;
+		}
+
+		if (cache->texhash != texhash)
+		{
+			cache->texhash = texhash;
+			R_GrassRefreshPresenceCache(model, cache);
+		}
+		return cache;
+	}
+
+	if (!create)
+		return NULL;
+
+	cache = (grass_presence_cache_t *)calloc(1, sizeof(*cache));
+	if (!cache)
+		return NULL;
+
+	cache->model = model;
+	cache->firstsurface = model->firstmodelsurface;
+	cache->numsurfaces = model->nummodelsurfaces;
+	cache->texhash = texhash;
+	if (cache->numsurfaces > 0)
+	{
+		cache->surface_blade_flags = (byte *)calloc((size_t)cache->numsurfaces, sizeof(*cache->surface_blade_flags));
+		cache->surface_visframes = (int *)calloc((size_t)cache->numsurfaces, sizeof(*cache->surface_visframes));
+	}
+	R_GrassRefreshPresenceCache(model, cache);
+	cache->next = r_grass_presence_caches;
+	r_grass_presence_caches = cache;
+	return cache;
+}
+
+static qboolean R_GrassPresenceCacheHasBladeSurfaces (const grass_presence_cache_t *cache)
+{
+	return cache && cache->has_blade_surfaces;
+}
+
+static int R_GrassSurfacePresenceIndex (const grass_presence_cache_t *cache, const qmodel_t *model, const msurface_t *s)
+{
+	int index;
+
+	if (!cache || !model || !s)
+		return -1;
+
+	index = (int)(s - (model->surfaces + cache->firstsurface));
+	if (index < 0 || index >= cache->numsurfaces)
+		return -1;
+
+	return index;
+}
+
+static qboolean R_GrassSurfaceCanHaveBladesCached (const grass_presence_cache_t *cache, qmodel_t *model, const msurface_t *s)
+{
+	int index;
+
+	index = R_GrassSurfacePresenceIndex(cache, model, s);
+	if (index < 0)
+		return false;
+	if (!cache->surface_blade_flags)
+		return R_GrassSurfaceCanHaveBlades(s);
+
+	return cache->surface_blade_flags[index] != 0;
+}
+
+#ifndef SDL_THREADS_DISABLED
+static void R_GrassMarkSurfaceVisibleCached (grass_presence_cache_t *cache, qmodel_t *model, const msurface_t *s)
+{
+	int index;
+
+	index = R_GrassSurfacePresenceIndex(cache, model, s);
+	if (index < 0 || !cache->surface_visframes)
+		return;
+
+	cache->surface_visframes[index] = r_visframecount;
+}
+#endif
+
+static qboolean R_GrassSurfaceVisibleCached (const grass_presence_cache_t *cache, qmodel_t *model, const msurface_t *s, texchain_t chain, qboolean use_presence_vis)
+{
+	int index;
+
+	if (chain != chain_world)
+		return true;
+	if (!use_presence_vis && s->visframe == r_visframecount)
+		return true;
+
+	index = R_GrassSurfacePresenceIndex(cache, model, s);
+	return index >= 0 && cache->surface_visframes &&
+		cache->surface_visframes[index] == r_visframecount;
+}
+
+static unsigned int R_GrassSurfaceLightstyleHash (const msurface_t *s)
+{
+	unsigned int hash;
+	int maps;
+
+	hash = 2166136261U;
+	for (maps = 0; maps < MAXLIGHTMAPS && s->styles[maps] != INVALID_LIGHTSTYLE; maps++)
+	{
+		hash ^= (unsigned int)s->styles[maps] + 0x9e3779b9U;
+		hash *= 16777619U;
+		hash ^= (unsigned int)d_lightstylevalue[s->styles[maps]];
+		hash *= 16777619U;
+	}
+
+	return hash;
+}
+
+static qboolean R_GrassColorsMatch (const vec3_t a, const vec3_t b)
+{
+	return fabsf(a[0] - b[0]) < 0.0001f &&
+		fabsf(a[1] - b[1]) < 0.0001f &&
+		fabsf(a[2] - b[2]) < 0.0001f;
+}
+
+static void R_GrassLODParams (float dist, float lod, grass_lod_params_t *params)
+{
+	float nearclip;
+
+	params->dist = dist;
+	params->dist2 = dist * dist;
+	params->lod = lod;
+	params->use_dist = dist > 0.0f;
+	if (dist <= 0.0f)
+	{
+		params->nearclip2 = 0.0f;
+		params->invfade = 0.0f;
+		return;
+	}
+
+	nearclip = dist * 0.25f;
+	params->nearclip2 = nearclip * nearclip;
+	params->invfade = 1.0f / (dist - nearclip);
+}
+
+static float R_GrassDensityScaleForDelta (const vec3_t delta, const grass_lod_params_t *params)
+{
+	float d2, d, fade;
+
+	if (!params->use_dist)
+		return 1.0f;
+
+	d2 = DotProduct(delta, delta);
+	if (d2 >= params->dist2)
+		return 0.0f;
+
+	if (params->lod <= 0.0f)
+		return 1.0f;
+
+	if (d2 <= params->nearclip2)
+		return 1.0f;
+
+	d = sqrtf(d2);
+	fade = (params->dist - d) * params->invfade;
+	fade = CLAMP(0.0f, fade, 1.0f);
+	fade = fade * fade * (3.0f - 2.0f * fade);
+	fade *= fade;
+	if (params->lod > 1.0f)
+		fade = powf(fade, params->lod);
+
+	return fade;
+}
+
+static float R_GrassSurfaceDensityScale (const msurface_t *s, const vec3_t vieworg, const grass_lod_params_t *lodparams)
+{
+	int i;
+	vec3_t closest, delta;
+
+	for (i = 0; i < 3; i++)
+		closest[i] = CLAMP(s->mins[i], vieworg[i], s->maxs[i]);
+
+	VectorSubtract(closest, vieworg, delta);
+
+	return R_GrassDensityScaleForDelta(delta, lodparams);
+}
+
+static float R_GrassPointDensityScale (const vec3_t point, const vec3_t vieworg, const grass_lod_params_t *lodparams)
+{
+	vec3_t delta;
+
+	VectorSubtract(point, vieworg, delta);
+
+	return R_GrassDensityScaleForDelta(delta, lodparams);
+}
+
+static qboolean R_GrassSurfaceVolumeCulled (const msurface_t *s, const entity_t *ent, const vec3_t normal, float maxheight, float movement)
+{
+	int i, x, y, z;
+	float sidepad;
+	vec3_t mins, maxs, worldmins, worldmaxs;
+
+	sidepad = 2.0f + maxheight * (0.12f + 0.18f * movement);
+	VectorCopy(s->mins, mins);
+	VectorCopy(s->maxs, maxs);
+
+	for (i = 0; i < 3; i++)
+	{
+		mins[i] -= sidepad;
+		maxs[i] += sidepad;
+		if (normal[i] > 0.0f)
+			maxs[i] += maxheight * normal[i];
+		else
+			mins[i] += maxheight * normal[i];
+	}
+
+	if (!ent || (!ent->origin[0] && !ent->origin[1] && !ent->origin[2] &&
+		!ent->angles[0] && !ent->angles[1] && !ent->angles[2]))
+		return R_CullBox(mins, maxs);
+
+	worldmins[0] = worldmins[1] = worldmins[2] = 999999.0f;
+	worldmaxs[0] = worldmaxs[1] = worldmaxs[2] = -999999.0f;
+	for (x = 0; x < 2; x++)
+	for (y = 0; y < 2; y++)
+	for (z = 0; z < 2; z++)
+	{
+		vec3_t corner, worldcorner;
+
+		corner[0] = x ? maxs[0] : mins[0];
+		corner[1] = y ? maxs[1] : mins[1];
+		corner[2] = z ? maxs[2] : mins[2];
+		R_GrassPointFromEntitySpace(ent, corner, worldcorner);
+		for (i = 0; i < 3; i++)
+		{
+			worldmins[i] = q_min(worldmins[i], worldcorner[i]);
+			worldmaxs[i] = q_max(worldmaxs[i], worldcorner[i]);
+		}
+	}
+
+	return R_CullBox(worldmins, worldmaxs);
+}
+
+static void R_GrassBasisForSurface (const msurface_t *s, const vec3_t normal, vec3_t tangent, vec3_t bitangent)
+{
+	if (fabsf(normal[2]) < 0.98f)
+	{
+		tangent[0] = -normal[1];
+		tangent[1] = normal[0];
+		tangent[2] = 0.0f;
+	}
+	else
+	{
+		tangent[0] = 1.0f;
+		tangent[1] = 0.0f;
+		tangent[2] = 0.0f;
+	}
+	if (VectorNormalize(tangent) == 0.0f)
+	{
+		tangent[0] = 1.0f;
+		tangent[1] = 0.0f;
+		tangent[2] = 0.0f;
+	}
+
+	CrossProduct(normal, tangent, bitangent);
+	VectorNormalize(bitangent);
+}
+
+static void R_GrassShaderSideForPoint (const vec3_t vieworg, const vec3_t point, const vec3_t normal, const vec3_t tangent, vec3_t side)
+{
+	float d;
+	vec3_t viewdir;
+
+	VectorSubtract(vieworg, point, viewdir);
+
+	d = DotProduct(viewdir, normal);
+	VectorMA(viewdir, -d, normal, viewdir);
+	if (VectorNormalize(viewdir) == 0.0f)
+	{
+		VectorCopy(tangent, side);
+		return;
+	}
+
+	CrossProduct(normal, viewdir, side);
+	if (VectorNormalize(side) == 0.0f)
+		VectorCopy(tangent, side);
+}
+
+static unsigned int R_GrassHashCell (int x, int y, unsigned int salt)
+{
+	return R_GrassHashUInt((unsigned int)x * 73856093U ^ (unsigned int)y * 19349663U ^ salt * 83492791U);
+}
+
+static int R_GrassFloorDiv (int value, int divisor)
+{
+	if (value >= 0)
+		return value / divisor;
+	return -((-value + divisor - 1) / divisor);
+}
+
+static int R_GrassHashOffset (unsigned int seed, int size)
+{
+	int offset;
+
+	offset = (int)(R_GrassHashFloat(seed) * (float)size);
+	if (offset >= size)
+		offset = size - 1;
+	return offset;
+}
+
+static int R_GrassCellStepForScale (float scale)
+{
+	if (scale <= 0.015625f)
+		return 8;
+	if (scale <= 0.0625f)
+		return 4;
+	if (scale <= 0.25f)
+		return 2;
+	return 1;
+}
+
+static float R_GrassHashBell (unsigned int seed)
+{
+	float h;
+
+	h = R_GrassHashFloat(seed + 11U);
+	h += R_GrassHashFloat(seed + 47U);
+	h += R_GrassHashFloat(seed + 109U);
+	return h * (1.0f / 3.0f);
+}
+
+static float R_GrassWeatherNoise (float x, float y, unsigned int salt)
+{
+	int ix, iy;
+	float fx, fy, n00, n10, n01, n11;
+
+	ix = (int)floorf(x);
+	iy = (int)floorf(y);
+	fx = x - ix;
+	fy = y - iy;
+	fx = fx * fx * fx * (fx * (fx * 6.0f - 15.0f) + 10.0f);
+	fy = fy * fy * fy * (fy * (fy * 6.0f - 15.0f) + 10.0f);
+
+	n00 = R_GrassHashFloat(R_GrassHashCell(ix, iy, salt));
+	n10 = R_GrassHashFloat(R_GrassHashCell(ix + 1, iy, salt));
+	n01 = R_GrassHashFloat(R_GrassHashCell(ix, iy + 1, salt));
+	n11 = R_GrassHashFloat(R_GrassHashCell(ix + 1, iy + 1, salt));
+
+	return (n00 + (n10 - n00) * fx) * (1.0f - fy) + (n01 + (n11 - n01) * fx) * fy;
+}
+
+static void R_GrassWindBend (const vec3_t pos, float height, float movement, float gustscale, unsigned int seed, vec3_t bend)
+{
+	float time, phase, weather, gust, pulse, eddy, angle, amount;
+	vec3_t dir, swaydir;
+
+	if (movement <= 0.0f)
+	{
+		bend[0] = bend[1] = bend[2] = 0.0f;
+		return;
+	}
+
+	time = R_GrassAnimTime();
+	gustscale = CLAMP(0.0f, gustscale, GRASS_GUSTSCALE_MAX);
+	phase = R_GrassHashFloat(seed + 73U) * M_PI * 2.0f;
+	weather = R_GrassWeatherNoise(pos[0] * 0.0016f + time * 0.004f, pos[1] * 0.0016f - time * 0.003f, 17U);
+	gust = R_GrassWeatherNoise((pos[0] * 0.0065f + time * 0.018f) * gustscale, (pos[1] * 0.0065f - time * 0.011f) * gustscale, 53U);
+	eddy = R_GrassWeatherNoise(pos[0] * 0.014f - time * 0.010f, pos[1] * 0.014f + time * 0.007f, 97U);
+	pulse = 0.5f + 0.5f * sinf(time * (0.18f + weather * 0.16f) * gustscale + phase + gust * M_PI * 2.0f);
+
+	angle = weather * M_PI * 2.0f + (eddy - 0.5f) * 1.15f;
+	dir[0] = cosf(angle);
+	dir[1] = sinf(angle);
+	dir[2] = 0.0f;
+
+	amount = height * movement * (0.035f + 0.13f * gust * (0.45f + 0.55f * pulse));
+	VectorScale(dir, amount, bend);
+	swaydir[0] = -dir[1];
+	swaydir[1] = dir[0];
+	swaydir[2] = 0.0f;
+	VectorMA(bend, height * movement * 0.045f * (eddy - 0.5f), swaydir, bend);
+	bend[2] = 0.0f;
+}
+
+static qboolean R_GrassPointInTriangle2D (float pu, float pv, float au, float av, float bu, float bv, float cu, float cv, float invdenom, float *ba, float *bb, float *bc)
+{
+	*ba = ((bv - cv) * (pu - cu) + (cu - bu) * (pv - cv)) * invdenom;
+	*bb = ((cv - av) * (pu - cu) + (au - cu) * (pv - cv)) * invdenom;
+	*bc = 1.0f - *ba - *bb;
+
+	return *ba >= 0.0f && *bb >= 0.0f && *bc >= 0.0f;
+}
+
+static void R_GrassClearSurfaceShaderVBO (grass_surface_cache_t *cache, int index)
+{
+	if (cache->shader_vbo[index] && gl_vbo_able && GL_DeleteBuffersFunc)
+	{
+		GL_BindBuffer(GL_ARRAY_BUFFER, 0);
+		GL_DeleteBuffersFunc(1, &cache->shader_vbo[index]);
+	}
+	cache->shader_vbo[index] = 0;
+	cache->shader_vertex_count[index] = 0;
+	cache->shader_baseheight[index] = 0.0f;
+	cache->shader_basecolor[index][0] = cache->shader_basecolor[index][1] = cache->shader_basecolor[index][2] = 0.0f;
+	cache->shader_tipcolor[index][0] = cache->shader_tipcolor[index][1] = cache->shader_tipcolor[index][2] = 0.0f;
+	cache->shader_lightstyle_hash[index] = 0;
+	cache->shader_built[index] = false;
+	cache->shader_failed[index] = false;
+}
+
+static void R_GrassClearSurfaceShaderVBOs (grass_surface_cache_t *cache)
+{
+	int i;
+
+	for (i = 0; i < GRASS_SHADER_LOD_LEVELS; i++)
+		R_GrassClearSurfaceShaderVBO(cache, i);
+}
+
+static void R_GrassClearSurfaceCache (grass_surface_cache_t *cache)
+{
+	R_GrassClearSurfaceShaderVBOs(cache);
+	free(cache->blades);
+	cache->blades = NULL;
+	cache->count = 0;
+	cache->capacity = 0;
+	cache->built = false;
+	cache->failed = false;
+	cache->surface = NULL;
+}
+
+static void R_GrassClearModelCache (grass_model_cache_t *cache)
+{
+	int i;
+
+	if (!cache->surfaces)
+		return;
+
+	for (i = 0; i < cache->numsurfaces; i++)
+		R_GrassClearSurfaceCache(&cache->surfaces[i]);
+}
+
+static void R_GrassClearBrushSubmodelBlockers (void)
+{
+	free(r_grass_brush_blocker_submodels);
+	free(r_grass_brush_blockers);
+	r_grass_brush_blocker_submodels = NULL;
+	r_grass_brush_blocker_submodel_count = 0;
+	r_grass_brush_blockers = NULL;
+	r_grass_brush_blocker_count = 0;
+	r_grass_brush_blocker_worldmodel = NULL;
+}
+
+static void R_GrassFreePresenceCaches (void)
+{
+	grass_presence_cache_t *cache, *next;
+
+	for (cache = r_grass_presence_caches; cache; cache = next)
+	{
+		next = cache->next;
+		R_GrassFreePresenceCache(cache);
+	}
+
+	r_grass_presence_caches = NULL;
+}
+
+static void R_GrassRemovePresenceCache (qmodel_t *mod)
+{
+	grass_presence_cache_t **link, *cache;
+
+	for (link = &r_grass_presence_caches; (cache = *link); )
+	{
+		if (cache->model == mod)
+		{
+			*link = cache->next;
+			R_GrassFreePresenceCache(cache);
+		}
+		else
+			link = &cache->next;
+	}
+}
+
+static void R_GrassFreeAllModelCaches (void)
+{
+	grass_model_cache_t *cache, *next;
+
+	for (cache = r_grass_model_caches; cache; cache = next)
+	{
+		next = cache->next;
+		R_GrassClearModelCache(cache);
+		free(cache->surfaces);
+		free(cache);
+	}
+
+	r_grass_model_caches = NULL;
+	R_GrassFreePresenceCaches();
+	r_grass_cache_worldmodel = cl.worldmodel;
+	R_GrassClearBrushSubmodelBlockers();
+}
+
+void R_GrassCache_Cleanup (qmodel_t *mod)
+{
+	grass_model_cache_t **link, *cache;
+
+	if (!mod)
+	{
+		R_GrassFreeAllModelCaches();
+		return;
+	}
+
+	R_GrassRemovePresenceCache(mod);
+
+	for (link = &r_grass_model_caches; (cache = *link); )
+	{
+		if (cache->model == mod)
+		{
+			*link = cache->next;
+			R_GrassClearModelCache(cache);
+			free(cache->surfaces);
+			free(cache);
+		}
+		else
+			link = &cache->next;
+	}
+
+	if (r_grass_cache_worldmodel == mod)
+		r_grass_cache_worldmodel = NULL;
+	if (r_grass_brush_blocker_worldmodel == mod)
+		R_GrassClearBrushSubmodelBlockers();
+}
+
+static void R_GrassClearAllShaderVBOs (void)
+{
+	grass_model_cache_t *cache;
+	int i;
+
+	for (cache = r_grass_model_caches; cache; cache = cache->next)
+	{
+		if (!cache->surfaces)
+			continue;
+		for (i = 0; i < cache->numsurfaces; i++)
+			R_GrassClearSurfaceShaderVBOs(&cache->surfaces[i]);
+	}
+}
+
+void R_GrassShutdown (void)
+{
+	R_GrassFreeAllModelCaches();
+	r_grass_cache_worldmodel = NULL;
+	R_GrassClearBrushSubmodelBlockers();
+	R_GrassShutdownGL();
+	free(r_grass_vertex_batch);
+	r_grass_vertex_batch = NULL;
+	r_grass_vertex_count = 0;
+}
+
+void R_GrassShutdownGL (void)
+{
+	R_GrassClearAllShaderVBOs();
+	if (r_grass_vertex_vbo && gl_vbo_able && GL_DeleteBuffersFunc)
+	{
+		GL_BindBuffer(GL_ARRAY_BUFFER, 0);
+		GL_DeleteBuffersFunc(1, &r_grass_vertex_vbo);
+	}
+	r_grass_vertex_vbo = 0;
+}
+
+static void R_GrassResetCachesIfWorldChanged (void)
+{
+	if (r_grass_cache_worldmodel != cl.worldmodel)
+		R_GrassFreeAllModelCaches();
+}
+
+static qboolean R_GrassAppendCachedBlade (grass_surface_cache_t *cache, const vec3_t pos, int cell_x, int cell_y, unsigned int cellseed)
+{
+	static qboolean warned;
+	grass_cached_blade_t *blade;
+	unsigned int seed;
+
+	if (cache->count >= cache->capacity)
+	{
+		int newcapacity;
+		void *newblades;
+
+		newcapacity = cache->capacity ? cache->capacity * 2 : 256;
+		if (newcapacity < cache->count + 1)
+			newcapacity = cache->count + 1;
+
+		newblades = realloc(cache->blades, sizeof(*cache->blades) * (size_t)newcapacity);
+		if (!newblades)
+		{
+			if (!warned)
+			{
+				warned = true;
+				Con_Printf("R_DrawGrassBlades: failed to allocate grass placement cache\n");
+			}
+			return false;
+		}
+
+		cache->blades = (grass_cached_blade_t *)newblades;
+		cache->capacity = newcapacity;
+	}
+
+	seed = R_GrassHashUInt(cellseed);
+	blade = &cache->blades[cache->count++];
+	VectorCopy(pos, blade->pos);
+	blade->seed = seed;
+	blade->bladebits = R_GrassHashUInt(seed + 61U);
+	blade->colorbits = R_GrassHashUInt(seed + 149U);
+	blade->amountbits = R_GrassHashUInt(seed + 101U);
+	blade->lodbits = R_GrassHashUInt(cellseed + 43U);
+	blade->heightscale = 0.58f + R_GrassHashBell(seed) * 0.86f;
+	blade->cell_x = cell_x;
+	blade->cell_y = cell_y;
+	return true;
+}
+
+static qboolean R_GrassBrushClassBlocksWorldGrass (const char *classname)
+{
+	if (!classname || !classname[0])
+		return false;
+	if (!q_strncasecmp(classname, "func_wall", 9) ||
+		!q_strncasecmp(classname, "func_illusionary", 16) ||
+		!q_strncasecmp(classname, "func_detail", 11))
+		return false;
+
+	return q_strcasestr(classname, "door") != NULL ||
+		q_strcasestr(classname, "plat") != NULL ||
+		q_strcasestr(classname, "train") != NULL ||
+		q_strcasestr(classname, "button") != NULL ||
+		q_strcasestr(classname, "lift") != NULL ||
+		q_strcasestr(classname, "elev") != NULL;
+}
+
+static void R_GrassMarkBrushSubmodelBlocker (const char *modelname)
+{
+	int submodel;
+
+	if (!modelname || modelname[0] != '*' || !r_grass_brush_blocker_submodels)
+		return;
+
+	submodel = Q_atoi(modelname + 1);
+	if (submodel <= 0 || submodel >= r_grass_brush_blocker_submodel_count)
+		return;
+
+	r_grass_brush_blocker_submodels[submodel >> 3] |= (byte)(1u << (submodel & 7));
+}
+
+static qboolean R_GrassBrushSubmodelMarked (const qmodel_t *m)
+{
+	unsigned int submodel;
+
+	if (!m || m->submodelof != cl.worldmodel || !r_grass_brush_blocker_submodels)
+		return false;
+
+	submodel = m->submodelidx;
+	if (submodel >= (unsigned int)r_grass_brush_blocker_submodel_count)
+		return false;
+	return (r_grass_brush_blocker_submodels[submodel >> 3] & (1u << (submodel & 7))) != 0;
+}
+
+static void R_GrassBuildBrushSubmodelBlockers (void)
+{
+	static qboolean warned_alloc;
+	const char *data;
+	int bytes, i, count;
+	qboolean parse_failed;
+
+	R_GrassClearBrushSubmodelBlockers();
+	r_grass_brush_blocker_worldmodel = cl.worldmodel;
+	if (!cl.worldmodel || cl.worldmodel->numsubmodels <= 1 || !cl.worldmodel->entities)
+		return;
+
+	r_grass_brush_blocker_submodel_count = cl.worldmodel->numsubmodels;
+	bytes = (r_grass_brush_blocker_submodel_count + 7) >> 3;
+	r_grass_brush_blocker_submodels = (byte *)calloc(1, (size_t)bytes);
+	if (!r_grass_brush_blocker_submodels)
+	{
+		if (!warned_alloc)
+		{
+			warned_alloc = true;
+			Con_Printf("R_DrawGrassBlades: failed to allocate grass brush blocker map\n");
+		}
+		return;
+	}
+
+	data = cl.worldmodel->entities;
+	parse_failed = false;
+	while ((data = COM_Parse(data)) != NULL)
+	{
+		char classname[128], modelname[64];
+
+		if (com_token[0] != '{')
+			break;
+
+		classname[0] = 0;
+		modelname[0] = 0;
+		while (1)
+		{
+			char key[128];
+
+			data = COM_Parse(data);
+			if (!data)
+			{
+				parse_failed = true;
+				break;
+			}
+			if (com_token[0] == '}')
+				break;
+
+			q_strlcpy(key, com_token, sizeof(key));
+			data = COM_ParseEx(data, CPE_ALLOWTRUNC);
+			if (!data)
+			{
+				parse_failed = true;
+				break;
+			}
+
+			if (!q_strcasecmp(key, "classname"))
+				q_strlcpy(classname, com_token, sizeof(classname));
+			else if (!q_strcasecmp(key, "model"))
+				q_strlcpy(modelname, com_token, sizeof(modelname));
+		}
+
+		if (parse_failed)
+			break;
+		if (R_GrassBrushClassBlocksWorldGrass(classname))
+			R_GrassMarkBrushSubmodelBlocker(modelname);
+	}
+
+	r_grass_brush_blockers = (grass_brush_blocker_t *)calloc((size_t)r_grass_brush_blocker_submodel_count, sizeof(*r_grass_brush_blockers));
+	if (!r_grass_brush_blockers)
+	{
+		if (!warned_alloc)
+		{
+			warned_alloc = true;
+			Con_Printf("R_DrawGrassBlades: failed to allocate grass brush blocker bounds\n");
+		}
+		return;
+	}
+
+	count = cl.model_count < MAX_MODELS ? cl.model_count : MAX_MODELS;
+	for (i = 1; i < count; i++)
+	{
+		qmodel_t *m = cl.model_precache[i];
+		grass_brush_blocker_t *blocker;
+
+		if (!m || m->type != mod_brush || m->name[0] != '*' || !R_GrassBrushSubmodelMarked(m))
+			continue;
+		if (r_grass_brush_blocker_count >= r_grass_brush_blocker_submodel_count)
+			break;
+
+		blocker = &r_grass_brush_blockers[r_grass_brush_blocker_count++];
+		VectorCopy(m->mins, blocker->mins);
+		VectorCopy(m->maxs, blocker->maxs);
+	}
+}
+
+static qboolean R_GrassBrushSubmodelBlocksWorldGrass (const qmodel_t *m)
+{
+	if (r_grass_brush_blocker_worldmodel != cl.worldmodel)
+		R_GrassBuildBrushSubmodelBlockers();
+
+	return R_GrassBrushSubmodelMarked(m);
+}
+
+static qboolean R_GrassBrushEntityBlocksGrass (const entity_t *ent)
+{
+	return ent && ent->model && ent->model->type == mod_brush &&
+		ent->model->name[0] == '*' && R_GrassBrushSubmodelBlocksWorldGrass(ent->model);
+}
+
+static qboolean R_GrassEntityAllowsGrass (const entity_t *ent)
+{
+	if (!ent)
+		return true;
+	if (ENTALPHA_DECODE(ent->alpha) < 1.0f)
+		return false;
+	if (ent->effects & EF_ADDITIVE)
+		return false;
+	if (ent->netstate.scale != ENTSCALE_DEFAULT)
+		return false;
+	if (ent->angles[0] || ent->angles[1] || ent->angles[2])
+		return false;
+	return !R_GrassBrushEntityBlocksGrass(ent);
+}
+
+static qboolean R_GrassPointUnderBrushSubmodel (const vec3_t pos)
+{
+	int i;
+	const float pad = 1.0f;
+
+	if (r_grass_brush_blocker_worldmodel != cl.worldmodel)
+		R_GrassBuildBrushSubmodelBlockers();
+
+	for (i = 0; i < r_grass_brush_blocker_count; i++)
+	{
+		const grass_brush_blocker_t *blocker = &r_grass_brush_blockers[i];
+		if (pos[0] < blocker->mins[0] - pad || pos[0] > blocker->maxs[0] + pad)
+			continue;
+		if (pos[1] < blocker->mins[1] - pad || pos[1] > blocker->maxs[1] + pad)
+			continue;
+		return true;
+	}
+	return false;
+}
+
+static qboolean R_GrassBuildSurfaceCache (grass_surface_cache_t *cache, const qmodel_t *model, const msurface_t *s, float cellsize)
+{
+	static qboolean warned_cell_scan;
+	static qboolean warned_blade_cap;
+	int tri;
+	glpoly_t *p;
+	vec3_t normal;
+
+	R_GrassClearSurfaceCache(cache);
+	cache->surface = s;
+	cache->built = true;
+
+	if (cellsize <= 0.0f || !s->polys)
+		return true;
+
+	R_GrassSurfaceNormal(s, normal);
+	if (normal[2] < 0.35f)
+		return true;
+
+	p = s->polys;
+	for (tri = 2; tri < p->numverts; tri++)
+	{
+		float *va, *vb, *vc;
+		float min_x, max_x, min_y, max_y, denom, invdenom;
+		double cells;
+		int cell_x, cell_y, first_x, last_x, first_y, last_y;
+
+		va = p->verts[0];
+		vb = p->verts[tri - 1];
+		vc = p->verts[tri];
+		if (!isfinite(va[0]) || !isfinite(va[1]) || !isfinite(va[2]) ||
+			!isfinite(vb[0]) || !isfinite(vb[1]) || !isfinite(vb[2]) ||
+			!isfinite(vc[0]) || !isfinite(vc[1]) || !isfinite(vc[2]))
+			continue;
+		denom = (vb[1] - vc[1]) * (va[0] - vc[0]) + (vc[0] - vb[0]) * (va[1] - vc[1]);
+		if (!isfinite(denom) || fabsf(denom) < 0.001f)
+			continue;
+		invdenom = 1.0f / denom;
+
+		min_x = q_min(va[0], q_min(vb[0], vc[0]));
+		max_x = q_max(va[0], q_max(vb[0], vc[0]));
+		min_y = q_min(va[1], q_min(vb[1], vc[1]));
+		max_y = q_max(va[1], q_max(vb[1], vc[1]));
+		if (!isfinite(min_x) || !isfinite(max_x) || !isfinite(min_y) || !isfinite(max_y))
+			continue;
+
+		first_x = (int)floorf(min_x / cellsize);
+		last_x = (int)floorf(max_x / cellsize);
+		first_y = (int)floorf(min_y / cellsize);
+		last_y = (int)floorf(max_y / cellsize);
+
+		cells = ((double)last_x - (double)first_x + 1.0) * ((double)last_y - (double)first_y + 1.0);
+		if (cells > GRASS_SURFACE_CELL_SCAN_MAX)
+		{
+			if (!warned_cell_scan)
+			{
+				warned_cell_scan = true;
+				Con_Printf("R_DrawGrassBlades: skipping oversized grass surface scan\n");
+			}
+			continue;
+		}
+
+		for (cell_y = first_y; cell_y <= last_y; cell_y++)
+		for (cell_x = first_x; cell_x <= last_x; cell_x++)
+		{
+			unsigned int cellseed;
+			float ba, bb, bc, px, py;
+			vec3_t pos;
+
+			if (cache->count >= GRASS_SURFACE_BLADE_MAX)
+			{
+				if (!warned_blade_cap)
+				{
+					warned_blade_cap = true;
+					Con_Printf("R_DrawGrassBlades: capped grass placement cache for one surface\n");
+				}
+				return true;
+			}
+
+			cellseed = R_GrassHashCell(cell_x, cell_y, 0U);
+			px = ((float)cell_x + R_GrassHashFloat(cellseed + 17U)) * cellsize;
+			py = ((float)cell_y + R_GrassHashFloat(cellseed + 31U)) * cellsize;
+			if (!R_GrassPointInTriangle2D(px, py, va[0], va[1], vb[0], vb[1], vc[0], vc[1], invdenom, &ba, &bb, &bc))
+				continue;
+
+			pos[0] = va[0] * ba + vb[0] * bb + vc[0] * bc;
+			pos[1] = va[1] * ba + vb[1] * bb + vc[1] * bc;
+			pos[2] = va[2] * ba + vb[2] * bb + vc[2] * bc;
+			if (model == cl.worldmodel && R_GrassPointUnderBrushSubmodel(pos))
+				continue;
+			if (!R_GrassAppendCachedBlade(cache, pos, cell_x, cell_y, cellseed))
+			{
+				R_GrassClearSurfaceCache(cache);
+				cache->surface = s;
+				cache->built = true;
+				cache->failed = true;
+				return false;
+			}
+		}
+	}
+
+	return true;
+}
+
+static grass_model_cache_t *R_GrassGetModelCache (qmodel_t *model, float density, float cellsize)
+{
+	grass_model_cache_t *cache;
+
+	R_GrassResetCachesIfWorldChanged();
+
+	for (cache = r_grass_model_caches; cache; cache = cache->next)
+	{
+		if (cache->model == model)
+			break;
+	}
+
+	if (!cache)
+	{
+		cache = (grass_model_cache_t *)calloc(1, sizeof(*cache));
+		if (!cache)
+			return NULL;
+
+		cache->model = model;
+		cache->next = r_grass_model_caches;
+		r_grass_model_caches = cache;
+	}
+
+	if (!cache->surfaces || cache->firstsurface != model->firstmodelsurface || cache->numsurfaces != model->nummodelsurfaces || fabsf(cache->density - density) > 0.001f)
+	{
+		R_GrassClearModelCache(cache);
+		free(cache->surfaces);
+
+		cache->firstsurface = model->firstmodelsurface;
+		cache->numsurfaces = model->nummodelsurfaces;
+		cache->density = density;
+		cache->cellsize = cellsize;
+		cache->surfaces = (grass_surface_cache_t *)calloc((size_t)cache->numsurfaces, sizeof(*cache->surfaces));
+		if (!cache->surfaces)
+		{
+			cache->numsurfaces = 0;
+			return NULL;
+		}
+	}
+
+	return cache;
+}
+
+static grass_surface_cache_t *R_GrassGetSurfaceCache (grass_model_cache_t *modelcache, const msurface_t *s)
+{
+	int index;
+	grass_surface_cache_t *cache;
+
+	index = (int)(s - (modelcache->model->surfaces + modelcache->firstsurface));
+	if (index < 0 || index >= modelcache->numsurfaces)
+		return NULL;
+
+	cache = &modelcache->surfaces[index];
+	if (!cache->built || cache->surface != s)
+		R_GrassBuildSurfaceCache(cache, modelcache->model, s, modelcache->cellsize);
+
+	if (cache->failed)
+		return NULL;
+	return cache;
+}
+
+static qboolean R_GrassCachedBladeSelectedForStep (const grass_cached_blade_t *blade, int cellstep)
+{
+	unsigned int blockseed;
+	int block_x, block_y, cell_x, cell_y;
+
+	if (cellstep <= 1)
+		return true;
+
+	block_x = R_GrassFloorDiv(blade->cell_x, cellstep);
+	block_y = R_GrassFloorDiv(blade->cell_y, cellstep);
+	blockseed = R_GrassHashCell(block_x, block_y, (unsigned int)cellstep + 211U);
+	cell_x = block_x * cellstep + R_GrassHashOffset(blockseed + 3U, cellstep);
+	cell_y = block_y * cellstep + R_GrassHashOffset(blockseed + 7U, cellstep);
+
+	return blade->cell_x == cell_x && blade->cell_y == cell_y;
+}
+
+static qboolean R_GrassEnsureVertexBatch (void)
+{
+	static qboolean warned;
+
+	if (!r_grass_vertex_batch)
+	{
+		r_grass_vertex_batch = (grass_vertex_t *)malloc(sizeof(*r_grass_vertex_batch) * GRASS_VERTEX_BATCH_MAX);
+		if (!r_grass_vertex_batch)
+		{
+			if (!warned)
+			{
+				warned = true;
+				Con_Printf("R_DrawGrassBlades: failed to allocate grass vertex batch\n");
+			}
+			return false;
+		}
+	}
+
+	if (!r_grass_vertex_vbo && gl_vbo_able && GL_GenBuffersFunc)
+		GL_GenBuffersFunc(1, &r_grass_vertex_vbo);
+
+	return true;
+}
+
+static void R_GrassFlushVertexBatch (void)
+{
+	static qboolean warned_incomplete;
+	int drawcount;
+	qboolean usevbo;
+
+	if (r_grass_vertex_count <= 0)
+		return;
+
+	usevbo = R_GrassUseVertexVBO();
+	drawcount = r_grass_vertex_count - (r_grass_vertex_count % 3);
+	if (drawcount > 0)
+	{
+		if (usevbo)
+		{
+			GL_BindBuffer(GL_ARRAY_BUFFER, r_grass_vertex_vbo);
+			GL_BufferDataFunc(GL_ARRAY_BUFFER, (GLsizeiptr)(sizeof(*r_grass_vertex_batch) * (size_t)drawcount), r_grass_vertex_batch, GL_STREAM_DRAW);
+		}
+		glDrawArrays(GL_TRIANGLES, 0, drawcount);
+	}
+	if (drawcount != r_grass_vertex_count && !warned_incomplete)
+	{
+		warned_incomplete = true;
+		Con_DPrintf("R_DrawGrassBlades: dropped incomplete grass vertex batch\n");
+	}
+	r_grass_vertex_count = 0;
+}
+
+static void R_GrassBeginVertexBatch (void)
+{
+	qboolean usevbo;
+
+	r_grass_vertex_count = 0;
+
+	usevbo = R_GrassUseVertexVBO();
+	GL_BindBuffer(GL_ELEMENT_ARRAY_BUFFER, 0);
+	if (GL_ClientActiveTextureFunc)
+		GL_ClientActiveTextureFunc(GL_TEXTURE0);
+
+	if (usevbo)
+		GL_BindBuffer(GL_ARRAY_BUFFER, r_grass_vertex_vbo);
+	else
+		GL_BindBuffer(GL_ARRAY_BUFFER, 0);
+
+	glEnableClientState(GL_VERTEX_ARRAY);
+	glEnableClientState(GL_COLOR_ARRAY);
+	glEnableClientState(GL_TEXTURE_COORD_ARRAY);
+	if (usevbo)
+	{
+		glVertexPointer(3, GL_FLOAT, sizeof(*r_grass_vertex_batch), (const GLvoid *)offsetof(grass_vertex_t, vertex));
+		glColorPointer(4, GL_FLOAT, sizeof(*r_grass_vertex_batch), (const GLvoid *)offsetof(grass_vertex_t, color));
+		glTexCoordPointer(4, GL_FLOAT, sizeof(*r_grass_vertex_batch), (const GLvoid *)offsetof(grass_vertex_t, texcoord));
+	}
+	else
+	{
+		glVertexPointer(3, GL_FLOAT, sizeof(*r_grass_vertex_batch), r_grass_vertex_batch[0].vertex);
+		glColorPointer(4, GL_FLOAT, sizeof(*r_grass_vertex_batch), r_grass_vertex_batch[0].color);
+		glTexCoordPointer(4, GL_FLOAT, sizeof(*r_grass_vertex_batch), r_grass_vertex_batch[0].texcoord);
+	}
+}
+
+static void R_GrassEndVertexBatch (void)
+{
+	R_GrassFlushVertexBatch();
+
+	glDisableClientState(GL_TEXTURE_COORD_ARRAY);
+	glDisableClientState(GL_COLOR_ARRAY);
+	glDisableClientState(GL_VERTEX_ARRAY);
+	GL_BindBuffer(GL_ARRAY_BUFFER, 0);
+}
+
+static void R_GrassAddVertex (const vec3_t vertex, const vec3_t color, float s, float t, float seed, float curl)
+{
+	grass_vertex_t *out;
+
+	if (r_grass_vertex_count >= GRASS_VERTEX_BATCH_MAX)
+		R_GrassFlushVertexBatch();
+	if (r_grass_vertex_count >= GRASS_VERTEX_BATCH_MAX)
+		return;
+
+	out = &r_grass_vertex_batch[r_grass_vertex_count++];
+	out->vertex[0] = vertex[0];
+	out->vertex[1] = vertex[1];
+	out->vertex[2] = vertex[2];
+	out->color[0] = color[0];
+	out->color[1] = color[1];
+	out->color[2] = color[2];
+	out->color[3] = 1.0f;
+	out->texcoord[0] = s;
+	out->texcoord[1] = t;
+	out->texcoord[2] = seed;
+	out->texcoord[3] = curl;
+}
+
+static void R_DrawGrassBladeTri (const vec3_t base, const vec3_t normal, const vec3_t side, const vec3_t bend, float height, float width, float shade, float seed, float curl, const vec3_t basecolor, const vec3_t tipcolor)
+{
+	vec3_t left, right, tip;
+	vec3_t shadedbase, shadedtip;
+
+	if ((r_grass_vertex_count % 3) != 0 || r_grass_vertex_count + 3 > GRASS_VERTEX_BATCH_MAX)
+		R_GrassFlushVertexBatch();
+
+	VectorMA(base, width, side, left);
+	VectorMA(base, -width, side, right);
+	VectorMA(base, height, normal, tip);
+	if (curl > 0.0f)
+	{
+		VectorMA(tip, height * curl * 0.16f, side, tip);
+		VectorMA(tip, -height * curl * 0.08f, normal, tip);
+	}
+	VectorAdd(tip, bend, tip);
+
+	VectorScale(basecolor, shade, shadedbase);
+	VectorScale(tipcolor, shade, shadedtip);
+	R_GrassAddVertex(left, shadedbase, -0.055f, -1.0f, seed, curl);
+	R_GrassAddVertex(right, shadedbase, 0.055f, -1.0f, seed, curl);
+	R_GrassAddVertex(tip, shadedtip, 0.0f, 1.0f, seed, curl);
+}
+
+static int R_GrassShaderLODIndexForStep (int cellstep)
+{
+	if (cellstep >= 8)
+		return 3;
+	if (cellstep >= 4)
+		return 2;
+	if (cellstep >= 2)
+		return 1;
+	return 0;
+}
+
+static void R_GrassStoreShaderVBOKey (grass_surface_cache_t *cache, int index, float baseheight, const vec3_t basecolor, const vec3_t tipcolor, unsigned int lightstyle_hash)
+{
+	cache->shader_baseheight[index] = baseheight;
+	VectorCopy(basecolor, cache->shader_basecolor[index]);
+	VectorCopy(tipcolor, cache->shader_tipcolor[index]);
+	cache->shader_lightstyle_hash[index] = lightstyle_hash;
+}
+
+static qboolean R_GrassShaderVBOKeyMatches (const grass_surface_cache_t *cache, int index, float baseheight, const vec3_t basecolor, const vec3_t tipcolor, unsigned int lightstyle_hash)
+{
+	return fabsf(cache->shader_baseheight[index] - baseheight) < 0.001f &&
+		cache->shader_lightstyle_hash[index] == lightstyle_hash &&
+		R_GrassColorsMatch(cache->shader_basecolor[index], basecolor) &&
+		R_GrassColorsMatch(cache->shader_tipcolor[index], tipcolor);
+}
+
+static void R_GrassEmitShaderVertex (grass_shader_vertex_t *out, const vec3_t base, const vec3_t color, float s, float t, float seed, float curl, float height, float width, float lodrand)
+{
+	VectorCopy(base, out->base);
+	out->color[0] = color[0];
+	out->color[1] = color[1];
+	out->color[2] = color[2];
+	out->color[3] = 1.0f;
+	out->bladecoord[0] = s;
+	out->bladecoord[1] = t;
+	out->bladecoord[2] = seed;
+	out->bladecoord[3] = curl;
+	out->geom[0] = height;
+	out->geom[1] = width;
+	out->geom[2] = lodrand;
+	out->geom[3] = 0.0f;
+}
+
+static qboolean R_GrassEnsureSurfaceShaderVBO (qmodel_t *model, const msurface_t *s, grass_surface_cache_t *cache, int cellstep, float baseheight, const vec3_t basecolor, const vec3_t tipcolor)
+{
+	int i, colorindex, lodindex, vertex_count;
+	size_t maxverts;
+	unsigned int lightstyle_hash;
+	vec3_t normal;
+	grass_shader_vertex_t *vertices;
+	grass_dlight_list_t nodlights;
+	grass_light_cache_entry_t *lightcacheptr;
+
+	if (!R_GrassUseStaticShaderVBO() || !cache || cache->count <= 0)
+		return false;
+
+	lodindex = R_GrassShaderLODIndexForStep(cellstep);
+	lightstyle_hash = R_GrassSurfaceLightstyleHash(s);
+	if (cache->shader_built[lodindex] &&
+		R_GrassShaderVBOKeyMatches(cache, lodindex, baseheight, basecolor, tipcolor, lightstyle_hash))
+		return true;
+	if (cache->shader_failed[lodindex] &&
+		R_GrassShaderVBOKeyMatches(cache, lodindex, baseheight, basecolor, tipcolor, lightstyle_hash))
+		return false;
+
+	R_GrassClearSurfaceShaderVBO(cache, lodindex);
+	R_GrassStoreShaderVBOKey(cache, lodindex, baseheight, basecolor, tipcolor, lightstyle_hash);
+
+	R_GrassSurfaceNormal(s, normal);
+	if (normal[2] < 0.35f)
+		return false;
+
+	maxverts = (size_t)cache->count * 3U;
+	vertices = (grass_shader_vertex_t *)malloc(sizeof(*vertices) * maxverts);
+	if (!vertices)
+	{
+		cache->shader_failed[lodindex] = true;
+		return false;
+	}
+
+	nodlights.count = 0;
+	lightcacheptr = R_GrassBeginLightCache();
+	vertex_count = 0;
+
+	for (i = 0; i < cache->count; i++)
+	{
+		const grass_cached_blade_t *blade;
+		unsigned int seed, bladebits;
+		float height, width, shade, widthrand, shaderand, curlrand, curl, seedcoord, lodrand;
+		vec3_t base, light, variedbasecolor, variedtipcolor, litbasecolor, littipcolor;
+
+		blade = &cache->blades[i];
+		if (!R_GrassCachedBladeSelectedForStep(blade, cellstep))
+			continue;
+
+		seed = blade->seed;
+		VectorMA(blade->pos, 0.8f, normal, base);
+
+		bladebits = blade->bladebits;
+		widthrand = (float)(bladebits & 0xffU) * (1.0f / 255.0f);
+		shaderand = (float)((bladebits >> 8) & 0xffU) * (1.0f / 255.0f);
+		height = baseheight * blade->heightscale;
+		width = CLAMP(0.25f, height * (0.018f + widthrand * 0.020f), 0.80f) * 1.05f;
+		shade = 0.75f + shaderand * 0.45f;
+		curlrand = (float)((blade->colorbits >> 24) & 0xffU) * (1.0f / 255.0f);
+		curl = curlrand > 0.90f ? 0.45f + (curlrand - 0.90f) * (0.55f / 0.10f) : 0.0f;
+
+		R_GrassLightForPointCached(model, s, &nodlights, blade->pos, false, lightcacheptr, light);
+		R_GrassApplyBladeColorVariation(blade->colorbits, basecolor, tipcolor, variedbasecolor, variedtipcolor);
+		for (colorindex = 0; colorindex < 3; colorindex++)
+		{
+			litbasecolor[colorindex] = variedbasecolor[colorindex] * light[colorindex] * shade;
+			littipcolor[colorindex] = variedtipcolor[colorindex] * light[colorindex] * shade;
+		}
+
+		seedcoord = (float)(seed & 0xffffU) * (1.0f / 256.0f);
+		lodrand = R_GrassBitsToFloat(blade->lodbits);
+		R_GrassEmitShaderVertex(&vertices[vertex_count++], base, litbasecolor, -0.055f, -1.0f, seedcoord, curl, height, width, lodrand);
+		R_GrassEmitShaderVertex(&vertices[vertex_count++], base, litbasecolor, 0.055f, -1.0f, seedcoord, curl, height, width, lodrand);
+		R_GrassEmitShaderVertex(&vertices[vertex_count++], base, littipcolor, 0.0f, 1.0f, seedcoord, curl, height, width, lodrand);
+	}
+
+	if (vertex_count > 0)
+	{
+		GL_GenBuffersFunc(1, &cache->shader_vbo[lodindex]);
+		if (!cache->shader_vbo[lodindex])
+		{
+			free(vertices);
+			cache->shader_failed[lodindex] = true;
+			return false;
+		}
+		GL_BindBuffer(GL_ARRAY_BUFFER, cache->shader_vbo[lodindex]);
+		GL_BufferDataFunc(GL_ARRAY_BUFFER, (GLsizeiptr)(sizeof(*vertices) * (size_t)vertex_count), vertices, GL_STATIC_DRAW);
+		GL_BindBuffer(GL_ARRAY_BUFFER, 0);
+	}
+
+	free(vertices);
+	cache->shader_vertex_count[lodindex] = vertex_count;
+	cache->shader_built[lodindex] = true;
+	cache->shader_failed[lodindex] = false;
+	return true;
+}
+
+static void R_GrassUploadShaderDlights (const msurface_t *s, const entity_t *ent, qboolean force_scan_dlights)
+{
+	grass_dlight_list_t list;
+	float posradius[GRASS_SHADER_DLIGHTS * 4];
+	float colormin[GRASS_SHADER_DLIGHTS * 4];
+	int i, count;
+
+	if (grassGeomDLightCountLoc < 0)
+		return;
+
+	R_GrassBuildDlightList(s, ent, &list, force_scan_dlights);
+	count = list.count;
+	if (count > GRASS_SHADER_DLIGHTS)
+		count = GRASS_SHADER_DLIGHTS;
+
+	for (i = 0; i < count; i++)
+	{
+		const grass_dlight_t *l = &list.lights[i];
+		posradius[i * 4 + 0] = l->origin[0];
+		posradius[i * 4 + 1] = l->origin[1];
+		posradius[i * 4 + 2] = l->origin[2];
+		posradius[i * 4 + 3] = l->radius;
+		colormin[i * 4 + 0] = l->color[0];
+		colormin[i * 4 + 1] = l->color[1];
+		colormin[i * 4 + 2] = l->color[2];
+		colormin[i * 4 + 3] = l->minlight;
+	}
+
+	GL_Uniform1iFunc(grassGeomDLightCountLoc, count);
+	if (count > 0)
+	{
+		if (grassGeomDLightPosRadiusLoc >= 0)
+			GL_Uniform4fvFunc(grassGeomDLightPosRadiusLoc, count, posradius);
+		if (grassGeomDLightColorMinLoc >= 0)
+			GL_Uniform4fvFunc(grassGeomDLightColorMinLoc, count, colormin);
+	}
+}
+
+static qboolean R_DrawGrassSurfaceShaderVBO (qmodel_t *model, const entity_t *ent, const msurface_t *s, grass_surface_cache_t *cache, int cellstep, float baseheight, const vec3_t basecolor, const vec3_t tipcolor, qboolean force_scan_dlights)
+{
+	int lodindex, drawcount;
+	vec3_t normal, tangent, bitangent;
+
+	if (!R_GrassEnsureSurfaceShaderVBO(model, s, cache, cellstep, baseheight, basecolor, tipcolor))
+		return false;
+
+	lodindex = R_GrassShaderLODIndexForStep(cellstep);
+	drawcount = cache->shader_vertex_count[lodindex];
+	if (drawcount <= 0)
+		return true;
+
+	R_GrassSurfaceNormal(s, normal);
+	R_GrassBasisForSurface(s, normal, tangent, bitangent);
+	if (grassGeomStaticNormalLoc >= 0)
+		GL_Uniform3fFunc(grassGeomStaticNormalLoc, normal[0], normal[1], normal[2]);
+	if (grassGeomStaticTangentLoc >= 0)
+		GL_Uniform3fFunc(grassGeomStaticTangentLoc, tangent[0], tangent[1], tangent[2]);
+	if (grassGeomStaticCellWeightLoc >= 0)
+		GL_Uniform1fFunc(grassGeomStaticCellWeightLoc, (float)(cellstep * cellstep));
+	R_GrassUploadShaderDlights(s, ent, force_scan_dlights);
+
+	GL_BindBuffer(GL_ELEMENT_ARRAY_BUFFER, 0);
+	GL_BindBuffer(GL_ARRAY_BUFFER, cache->shader_vbo[lodindex]);
+	glEnableClientState(GL_VERTEX_ARRAY);
+	glEnableClientState(GL_COLOR_ARRAY);
+	glVertexPointer(3, GL_FLOAT, sizeof(grass_shader_vertex_t), (const GLvoid *)offsetof(grass_shader_vertex_t, base));
+	glColorPointer(4, GL_FLOAT, sizeof(grass_shader_vertex_t), (const GLvoid *)offsetof(grass_shader_vertex_t, color));
+
+	GL_ClientActiveTextureFunc(GL_TEXTURE0);
+	glEnableClientState(GL_TEXTURE_COORD_ARRAY);
+	glTexCoordPointer(4, GL_FLOAT, sizeof(grass_shader_vertex_t), (const GLvoid *)offsetof(grass_shader_vertex_t, bladecoord));
+	GL_ClientActiveTextureFunc(GL_TEXTURE1);
+	glEnableClientState(GL_TEXTURE_COORD_ARRAY);
+	glTexCoordPointer(4, GL_FLOAT, sizeof(grass_shader_vertex_t), (const GLvoid *)offsetof(grass_shader_vertex_t, geom));
+	GL_ClientActiveTextureFunc(GL_TEXTURE0);
+
+	glDrawArrays(GL_TRIANGLES, 0, drawcount);
+
+	GL_ClientActiveTextureFunc(GL_TEXTURE1);
+	glDisableClientState(GL_TEXTURE_COORD_ARRAY);
+	GL_ClientActiveTextureFunc(GL_TEXTURE0);
+	glDisableClientState(GL_TEXTURE_COORD_ARRAY);
+	glDisableClientState(GL_COLOR_ARRAY);
+	glDisableClientState(GL_VERTEX_ARRAY);
+	GL_BindBuffer(GL_ARRAY_BUFFER, 0);
+	return true;
+}
+
+static void R_DrawGrassSurfaceBlades (qmodel_t *model, const entity_t *ent, const msurface_t *s, const grass_surface_cache_t *cache, float grassamount, float baseheight, float movement, float gustscale, const vec3_t vieworg, const grass_lod_params_t *lodparams, float surface_density_scale, const vec3_t basecolor, const vec3_t tipcolor, int mode, qboolean force_scan_dlights)
+{
+	int i, cellstep, colorindex;
+	float cellweight;
+	vec3_t normal, tangent, bitangent, shader_side, shader_bend;
+	grass_dlight_list_t dlights;
+	grass_light_cache_entry_t *lightcacheptr;
+
+	if (!cache || cache->count <= 0 || grassamount <= 0.0f)
+		return;
+	R_GrassSurfaceNormal(s, normal);
+	if (normal[2] < 0.35f)
+		return;
+	R_GrassBasisForSurface(s, normal, tangent, bitangent);
+	R_GrassBuildDlightList(s, ent, &dlights, force_scan_dlights);
+	lightcacheptr = R_GrassBeginLightCache();
+	if (mode == GRASS_BLADE_MODE_SHADER)
+	{
+		shader_side[0] = shader_side[1] = shader_side[2] = 0.0f;
+		shader_bend[0] = shader_bend[1] = shader_bend[2] = 0.0f;
+	}
+
+	cellstep = R_GrassCellStepForScale(surface_density_scale);
+	cellweight = (float)(cellstep * cellstep);
+
+	for (i = 0; i < cache->count; i++)
+	{
+		const grass_cached_blade_t *blade;
+		unsigned int seed, bladebits;
+		float lodscale, lodchance, height, width, shade, widthrand, shaderand, anglerand, curlrand, curl;
+		vec3_t base, light, variedbasecolor, variedtipcolor, litbasecolor, littipcolor;
+		qboolean cheaplight;
+
+		blade = &cache->blades[i];
+		seed = blade->seed;
+
+		if (grassamount < 1.0f && R_GrassBitsToFloat(blade->amountbits) > grassamount)
+			continue;
+		if (!R_GrassCachedBladeSelectedForStep(blade, cellstep))
+			continue;
+
+		lodscale = R_GrassPointDensityScale(blade->pos, vieworg, lodparams);
+		lodchance = lodscale * cellweight;
+		if (lodchance <= 0.0f || (lodchance < 1.0f && R_GrassBitsToFloat(blade->lodbits) > lodchance))
+			continue;
+		cheaplight = (lodscale < 0.5f);
+
+		VectorMA(blade->pos, 0.8f, normal, base);
+
+		bladebits = blade->bladebits;
+		widthrand = (float)(bladebits & 0xffU) * (1.0f / 255.0f);
+		shaderand = (float)((bladebits >> 8) & 0xffU) * (1.0f / 255.0f);
+		anglerand = (float)((bladebits >> 16) & 0xffffU) * (1.0f / 65535.0f);
+		height = baseheight * blade->heightscale;
+		width = CLAMP(0.25f, height * (0.018f + widthrand * 0.020f), 0.80f);
+		shade = 0.75f + shaderand * 0.45f;
+		curlrand = (float)((blade->colorbits >> 24) & 0xffU) * (1.0f / 255.0f);
+		curl = curlrand > 0.90f ? 0.45f + (curlrand - 0.90f) * (0.55f / 0.10f) : 0.0f;
+
+		R_GrassLightForPointCached(model, s, &dlights, blade->pos, cheaplight, lightcacheptr, light);
+		R_GrassApplyBladeColorVariation(blade->colorbits, basecolor, tipcolor, variedbasecolor, variedtipcolor);
+		for (colorindex = 0; colorindex < 3; colorindex++)
+		{
+			litbasecolor[colorindex] = variedbasecolor[colorindex] * light[colorindex];
+			littipcolor[colorindex] = variedtipcolor[colorindex] * light[colorindex];
+		}
+
+		if (mode == GRASS_BLADE_MODE_SHADER)
+		{
+			R_GrassShaderSideForPoint(vieworg, base, normal, tangent, shader_side);
+			R_DrawGrassBladeTri(base, normal, shader_side, shader_bend, height, width * 1.05f, shade, (float)(seed & 0xffffU) * (1.0f / 256.0f), curl, litbasecolor, littipcolor);
+		}
+		else
+		{
+			float angle, ca, sa;
+			vec3_t side, bend;
+
+			angle = anglerand * M_PI * 2.0f;
+			ca = cosf(angle);
+			sa = sinf(angle);
+			side[0] = tangent[0] * ca + bitangent[0] * sa;
+			side[1] = tangent[1] * ca + bitangent[1] * sa;
+			side[2] = tangent[2] * ca + bitangent[2] * sa;
+			R_GrassWindBend(blade->pos, height, movement, gustscale, seed, bend);
+
+			R_DrawGrassBladeTri(base, normal, side, bend, height, width, shade, (float)(seed & 0xffffU) * (1.0f / 256.0f), curl, litbasecolor, littipcolor);
+			if (!cheaplight)
+			{
+				vec3_t side2;
+
+				side2[0] = -tangent[0] * sa + bitangent[0] * ca;
+				side2[1] = -tangent[1] * sa + bitangent[1] * ca;
+				side2[2] = -tangent[2] * sa + bitangent[2] * ca;
+				R_DrawGrassBladeTri(base, normal, side2, bend, height * 0.92f, width * 0.72f, shade * 0.9f, (float)((seed + 113U) & 0xffffU) * (1.0f / 256.0f), curl * 0.75f, litbasecolor, littipcolor);
+			}
+		}
+	}
+}
+
+static void R_DrawGrassBlades (qmodel_t *model, entity_t *ent, texchain_t chain)
+{
+	int i, mode, firstsurface, numsurfaces;
+	float density, grassamount, baseheight, grassdist, grasslod, movement, gustscale, cellsize;
+	const grass_settings_t *settings;
+	grass_lod_params_t lodparams;
+	grass_presence_cache_t *presencecache;
+	grass_model_cache_t *modelcache;
+	msurface_t *s;
+	vec3_t grass_vieworg;
+	qboolean use_static_shader, use_scenecache_visibility, force_scan_dlights;
+
+	if (!R_GrassBladesActive() || r_drawflat_cheatsafe || r_lightmap_cheatsafe)
+		return;
+	if (!model || !R_GrassEntityAllowsGrass(ent))
+		return;
+	presencecache = R_GrassGetPresenceCache(model, true);
+	if (!R_GrassPresenceCacheHasBladeSurfaces(presencecache))
+		return;
+
+	settings = R_GrassSettings();
+	mode = R_GrassBladeMode();
+	density = CLAMP(0.0f, settings->density, GRASS_DENSITY_MAX);
+	grassamount = CLAMP(0.0f, settings->amount, 1.0f);
+	baseheight = CLAMP(1.0f, settings->height, 96.0f);
+	grassdist = CLAMP(0.0f, settings->dist, GRASS_DIST_MAX);
+	grasslod = CLAMP(0.0f, settings->lod, 2.0f);
+	movement = CLAMP(0.0f, settings->movement, 2.0f);
+	gustscale = CLAMP(0.0f, settings->gustscale, GRASS_GUSTSCALE_MAX);
+	cellsize = sqrtf(512.0f / q_max(0.01f, density));
+	use_scenecache_visibility = (chain == chain_world && r_grass_scenecache_visframe == r_visframecount);
+	force_scan_dlights = use_scenecache_visibility && !gl_flashblend.value;
+	R_GrassPointToEntitySpace(ent, r_refdef.vieworg, grass_vieworg);
+	R_GrassLODParams(grassdist, grasslod, &lodparams);
+	use_static_shader = (mode == GRASS_BLADE_MODE_SHADER && grassamount >= 0.999f &&
+		grassGeomStaticModeLoc >= 0 && grassGeomEyePosLoc >= 0 &&
+		grassGeomStaticNormalLoc >= 0 && grassGeomStaticTangentLoc >= 0 &&
+		grassGeomStaticLodLoc >= 0 && grassGeomStaticCellWeightLoc >= 0 &&
+		R_GrassUseStaticShaderVBO());
+	if (!use_static_shader && !R_GrassEnsureVertexBatch())
+		return;
+	modelcache = R_GrassGetModelCache(model, density, cellsize);
+	if (!modelcache)
+		return;
+
+	GL_DisableMultitexture();
+	if (GL_SelectTextureFunc)
+		GL_SelectTexture(GL_TEXTURE0);
+	if (mode == GRASS_BLADE_MODE_SHADER)
+	{
+		GL_UseProgramFunc(r_grass_program);
+		GL_Uniform1fFunc(grassGeomAmountLoc, 1.0f);
+		GL_Uniform1fFunc(grassGeomTimeLoc, R_GrassAnimTime());
+		GL_Uniform1fFunc(grassGeomMovementLoc, movement);
+		GL_Uniform1fFunc(grassGeomGustScaleLoc, gustscale);
+		GL_Uniform1fFunc(grassGeomFadeDistLoc, grassdist);
+		GL_Uniform1iFunc(grassGeomFogModeLoc, Fog_GetMode());
+		if (grassGeomEyePosLoc >= 0)
+			GL_Uniform3fFunc(grassGeomEyePosLoc, grass_vieworg[0], grass_vieworg[1], grass_vieworg[2]);
+		if (grassGeomStaticModeLoc >= 0)
+			GL_Uniform1iFunc(grassGeomStaticModeLoc, use_static_shader ? 1 : 0);
+		if (grassGeomStaticLodLoc >= 0)
+			GL_Uniform1fFunc(grassGeomStaticLodLoc, grasslod);
+	}
+	else if (GL_UseProgramFunc)
+		GL_UseProgramFunc(0);
+	glDisable(GL_TEXTURE_2D);
+	glDisable(GL_BLEND);
+	glDepthMask(GL_TRUE);
+	glEnable(GL_ALPHA_TEST);
+	glAlphaFunc(GL_GREATER, 0.12f);
+	glDisable(GL_CULL_FACE);
+	glShadeModel(GL_SMOOTH);
+
+	if (!use_static_shader)
+		R_GrassBeginVertexBatch();
+	firstsurface = model->firstmodelsurface;
+	numsurfaces = model->nummodelsurfaces;
+	for (i = 0, s = model->surfaces + firstsurface; i < numsurfaces; i++, s++)
+	{
+		texture_t *t, *animt;
+		float surface_density_scale;
+		int surface_cellstep;
+		vec3_t basecolor, tipcolor;
+		grass_surface_cache_t *surfacecache;
+		vec3_t surfacenormal;
+
+		if (!R_GrassSurfaceVisibleCached(presencecache, model, s, chain, use_scenecache_visibility))
+			continue;
+		if (!R_GrassSurfaceCanHaveBladesCached(presencecache, model, s))
+			continue;
+		if (!s->texinfo || !s->polys || (s->flags & (SURF_DRAWTURB | SURF_DRAWTILED | SURF_NOTEXTURE | SURF_DRAWFENCE)))
+			continue;
+
+		t = s->texinfo->texture;
+		if (!R_TextureHasGrass(t))
+			continue;
+
+		surface_density_scale = R_GrassSurfaceDensityScale(s, grass_vieworg, &lodparams);
+		if (surface_density_scale <= 0.001f)
+			continue;
+		R_GrassSurfaceNormal(s, surfacenormal);
+		if (surfacenormal[2] < 0.35f)
+			continue;
+		if (R_GrassSurfaceVolumeCulled(s, ent, surfacenormal, baseheight * 1.35f + 2.0f, movement))
+			continue;
+
+		animt = R_TextureAnimation(t, ent ? ent->frame : 0);
+		R_TextureGrassBladeColors(animt, basecolor, tipcolor);
+		surfacecache = R_GrassGetSurfaceCache(modelcache, s);
+		if (use_static_shader)
+		{
+			surface_cellstep = R_GrassCellStepForScale(surface_density_scale);
+			if (!R_GrassSurfaceHasAnimatedLightstyles(s) &&
+				R_DrawGrassSurfaceShaderVBO(model, ent, s, surfacecache, surface_cellstep, baseheight, basecolor, tipcolor, force_scan_dlights))
+				continue;
+
+			if (grassGeomStaticModeLoc >= 0)
+				GL_Uniform1iFunc(grassGeomStaticModeLoc, 0);
+			if (R_GrassEnsureVertexBatch())
+			{
+				R_GrassBeginVertexBatch();
+				R_DrawGrassSurfaceBlades(model, ent, s, surfacecache, grassamount, baseheight, movement, gustscale, grass_vieworg, &lodparams, surface_density_scale, basecolor, tipcolor, mode, force_scan_dlights);
+				R_GrassEndVertexBatch();
+			}
+			if (grassGeomStaticModeLoc >= 0)
+				GL_Uniform1iFunc(grassGeomStaticModeLoc, 1);
+		}
+		else
+			R_DrawGrassSurfaceBlades(model, ent, s, surfacecache, grassamount, baseheight, movement, gustscale, grass_vieworg, &lodparams, surface_density_scale, basecolor, tipcolor, mode, force_scan_dlights);
+	}
+	if (!use_static_shader)
+		R_GrassEndVertexBatch();
+
+	glShadeModel(GL_FLAT);
+	if (gl_cull.value)
+		glEnable(GL_CULL_FACE);
+	else
+		glDisable(GL_CULL_FACE);
+	glDepthMask(GL_TRUE);
+	glDisable(GL_BLEND);
+	glDisable(GL_ALPHA_TEST);
+	glAlphaFunc(GL_GREATER, 0.666f);
+	glEnable(GL_TEXTURE_2D);
+	glColor4f(1, 1, 1, 1);
+	if (mode == GRASS_BLADE_MODE_SHADER)
+		GL_UseProgramFunc(0);
+}
+
+/*
+=============
+GLGrass_CreateShaders
+=============
+*/
+static void GLGrass_CreateShaders (void)
+{
+	const GLchar *vertSource =
+		"#version 110\n"
+		"\n"
+		"uniform float GrassTime;\n"
+		"uniform float GrassMovement;\n"
+		"uniform float GrassGustScale;\n"
+		"uniform float GrassFadeDist;\n"
+		"uniform vec3 GrassEyePos;\n"
+		"uniform int GrassStaticMode;\n"
+		"uniform vec3 GrassStaticNormal;\n"
+		"uniform vec3 GrassStaticTangent;\n"
+		"uniform float GrassStaticLod;\n"
+		"uniform float GrassStaticCellWeight;\n"
+		"#define GRASS_SHADER_DLIGHTS 4\n"
+		"uniform int GrassDLightCount;\n"
+		"uniform vec4 GrassDLightPosRadius[GRASS_SHADER_DLIGHTS];\n"
+		"uniform vec4 GrassDLightColorMin[GRASS_SHADER_DLIGHTS];\n"
+		"\n"
+		"varying vec4 BladeCoord;\n"
+		"varying vec4 BladeColor;\n"
+		"varying float BladeCull;\n"
+		"varying vec3 BladeDynLight;\n"
+		"varying float FogFragCoord;\n"
+		"\n"
+		"vec3 GrassSafeNormalize(vec3 v, vec3 fallback)\n"
+		"{\n"
+		"	float len2 = dot(v, v);\n"
+		"	if (len2 > 0.000001)\n"
+		"		return v * inversesqrt(len2);\n"
+		"	return fallback;\n"
+		"}\n"
+		"\n"
+		"float GrassWindHash(vec2 p)\n"
+		"{\n"
+		"	return fract(sin(dot(p, vec2(12.9898, 78.233))) * 43758.5453);\n"
+		"}\n"
+		"\n"
+		"float GrassWindNoise(vec2 p)\n"
+		"{\n"
+		"	vec2 i = floor(p);\n"
+		"	vec2 f = fract(p);\n"
+		"	f = f * f * (3.0 - 2.0 * f);\n"
+		"	float a = GrassWindHash(i);\n"
+		"	float b = GrassWindHash(i + vec2(1.0, 0.0));\n"
+		"	float c = GrassWindHash(i + vec2(0.0, 1.0));\n"
+		"	float d = GrassWindHash(i + vec2(1.0, 1.0));\n"
+		"	return mix(mix(a, b, f.x), mix(c, d, f.x), f.y);\n"
+		"}\n"
+		"\n"
+		"float GrassStaticDensityScale(vec3 base)\n"
+		"{\n"
+		"	if (GrassFadeDist <= 0.0)\n"
+		"		return 1.0;\n"
+		"	vec3 delta = base - GrassEyePos;\n"
+		"	float d2 = dot(delta, delta);\n"
+		"	float dist2 = GrassFadeDist * GrassFadeDist;\n"
+		"	if (d2 >= dist2)\n"
+		"		return 0.0;\n"
+		"	if (GrassStaticLod <= 0.0)\n"
+		"		return 1.0;\n"
+		"	float nearclip = GrassFadeDist * 0.25;\n"
+		"	float nearclip2 = nearclip * nearclip;\n"
+		"	if (d2 <= nearclip2)\n"
+		"		return 1.0;\n"
+		"	float fade = (GrassFadeDist - sqrt(d2)) / (GrassFadeDist - nearclip);\n"
+		"	fade = clamp(fade, 0.0, 1.0);\n"
+		"	fade = fade * fade * (3.0 - 2.0 * fade);\n"
+		"	fade *= fade;\n"
+		"	if (GrassStaticLod > 1.0)\n"
+		"		fade = pow(fade, GrassStaticLod);\n"
+		"	return fade;\n"
+		"}\n"
+		"\n"
+		"void main()\n"
+		"{\n"
+		"	vec4 bladeCoord = gl_MultiTexCoord0;\n"
+		"	float tip = clamp((bladeCoord.y + 1.0) * 0.5, 0.0, 1.0);\n"
+		"	float bend = tip * (0.2 + 0.8 * tip);\n"
+		"	float seed = bladeCoord.z;\n"
+		"	float curl = clamp(bladeCoord.w, 0.0, 1.0);\n"
+		"	float bladeCull = 1.0;\n"
+		"	vec3 dynLight = vec3(0.0);\n"
+		"	vec4 vertex = gl_Vertex;\n"
+		"	if (GrassStaticMode != 0)\n"
+		"	{\n"
+		"		vec4 geom = gl_MultiTexCoord1;\n"
+		"		float lodchance = GrassStaticDensityScale(vertex.xyz) * GrassStaticCellWeight;\n"
+		"		if (lodchance <= 0.0 || (lodchance < 1.0 && geom.z > lodchance))\n"
+		"			bladeCull = 0.0;\n"
+		"		vec3 normal = GrassSafeNormalize(GrassStaticNormal, vec3(0.0, 0.0, 1.0));\n"
+		"		vec3 tangent = GrassSafeNormalize(GrassStaticTangent, vec3(1.0, 0.0, 0.0));\n"
+		"		vec3 viewdir = GrassEyePos - vertex.xyz;\n"
+		"		viewdir -= normal * dot(viewdir, normal);\n"
+		"		viewdir = GrassSafeNormalize(viewdir, tangent);\n"
+		"		vec3 side = GrassSafeNormalize(cross(normal, viewdir), tangent);\n"
+		"		float sideSign = 0.0;\n"
+		"		if (bladeCoord.x < -0.0001)\n"
+		"			sideSign = 1.0;\n"
+		"		else if (bladeCoord.x > 0.0001)\n"
+		"			sideSign = -1.0;\n"
+		"		vertex.xyz += (side * (geom.y * sideSign) + normal * (geom.x * tip)) * bladeCull;\n"
+		"		vertex.xyz += (side * (geom.x * curl * 0.16 * tip) - normal * (geom.x * curl * 0.08 * tip)) * bladeCull;\n"
+		"		bend *= bladeCull;\n"
+		"		for (int li = 0; li < GRASS_SHADER_DLIGHTS; li++)\n"
+		"		{\n"
+		"			if (li >= GrassDLightCount)\n"
+		"				break;\n"
+		"			float add = GrassDLightPosRadius[li].w - distance(gl_Vertex.xyz, GrassDLightPosRadius[li].xyz);\n"
+		"			if (add > GrassDLightColorMin[li].w)\n"
+		"				dynLight += (add * (1.0 / 128.0)) * GrassDLightColorMin[li].xyz;\n"
+		"		}\n"
+		"	}\n"
+		"	vec2 worldXY = vertex.xy * 0.0035;\n"
+		"	float gustScale = max(GrassGustScale, 0.0);\n"
+		"	float windAngle = GrassWindNoise(worldXY + vec2(GrassTime * 0.025, GrassTime * -0.018)) * 6.28318;\n"
+		"	vec2 windDir = vec2(cos(windAngle), sin(windAngle));\n"
+		"	float windStr = GrassWindNoise(worldXY * (4.0 * gustScale) - vec2(GrassTime * 0.06, GrassTime * 0.04) * gustScale);\n"
+		"	float jitter = sin(GrassTime * (1.25 + fract(seed * 0.013) * 0.5) + seed * 0.071) * 0.20;\n"
+		"	vertex.xy += (windDir * (0.55 + 0.45 * windStr) + vec2(jitter, jitter * 0.7)) * GrassMovement * bend * 1.6;\n"
+		"	BladeCoord = bladeCoord;\n"
+		"	BladeColor = gl_Color;\n"
+		"	BladeCull = bladeCull;\n"
+		"	BladeDynLight = dynLight;\n"
+		"	gl_Position = gl_ModelViewProjectionMatrix * vertex;\n"
+		"	FogFragCoord = gl_Position.w;\n"
+		"}\n";
+	const GLchar *fragSource =
+		"#version 110\n"
+		"\n"
+		"uniform float GrassAmount;\n"
+		"uniform float GrassTime;\n"
+		"uniform float GrassMovement;\n"
+		"uniform float GrassFadeDist;\n"
+		"uniform int FogMode;\n"
+		"\n"
+		"varying vec4 BladeCoord;\n"
+		"varying vec4 BladeColor;\n"
+		"varying float BladeCull;\n"
+		"varying vec3 BladeDynLight;\n"
+		"varying float FogFragCoord;\n"
+		"\n"
+		"float FogFactor(float dist)\n"
+		"{\n"
+		"	if (FogMode == 1)\n"
+		"		return (gl_Fog.end - dist) / (gl_Fog.end - gl_Fog.start);\n"
+		"	if (FogMode == 2)\n"
+		"		return exp(-gl_Fog.density * dist);\n"
+		"	return exp(-gl_Fog.density * gl_Fog.density * dist * dist);\n"
+		"}\n"
+		"\n"
+		"float GrassHash1(float n)\n"
+		"{\n"
+		"	return fract(sin(n) * 43758.5453);\n"
+		"}\n"
+		"\n"
+		"float FogDitherHash(vec2 p)\n"
+		"{\n"
+		"	return fract(52.9829189 * fract(p.x * 0.06711056 + p.y * 0.00583715));\n"
+		"}\n"
+		"\n"
+		"float FogDither()\n"
+		"{\n"
+		"	vec2 p = floor(gl_FragCoord.xy);\n"
+		"	return (FogDitherHash(p) + FogDitherHash(p + vec2(17.0, 29.0)) - 1.0) * (1.0 / 255.0);\n"
+		"}\n"
+		"\n"
+		"vec4 GrassBlade(vec2 p, float x, float curl)\n"
+		"{\n"
+		"	float hdist = GrassHash1(x * 1.71);\n"
+		"	float s = mix(0.85, 1.75, hdist);\n"
+		"	float tip = clamp((p.y + 1.0) * 0.5, 0.0, 1.0);\n"
+		"	float curltip = curl * smoothstep(0.58, 1.0, tip);\n"
+		"	float sway = (GrassHash1(x * 0.097 + 19.0) - 0.5) * 0.024;\n"
+		"	p.x += tip * (0.2 + 0.8 * tip) * sway;\n"
+		"	p.x -= curltip * (0.022 + 0.052 * tip);\n"
+		"	p.y -= curltip * curltip * 0.055;\n"
+		"	p.x *= s;\n"
+		"	p.y = (1.0 + p.y) * s - 1.0;\n"
+		"	return vec4(mix(vec3(0.05, 0.1, 0.0) * 0.8, vec3(0.0, 0.3, 0.0), (p.y + 1.0) * 0.5 + abs(p.x)), 1.0);\n"
+		"}\n"
+		"\n"
+		"float GrassDither()\n"
+		"{\n"
+		"	return (fract(gl_FragCoord.x * 0.482635532 + gl_FragCoord.y * 0.1353412) - 0.5) * 0.006;\n"
+		"}\n"
+		"\n"
+		"vec3 GrassBladeTexture(vec2 p, float x, float curl)\n"
+		"{\n"
+		"	float v = clamp((p.y + 1.0) * 0.5, 0.0, 1.0);\n"
+		"	float u = clamp(p.x * 9.0 + 0.5, 0.0, 1.0);\n"
+		"	float fiber = GrassHash1(x * 0.041 + floor(u * 32.0) * 3.11 + floor(v * 10.0) * 11.7);\n"
+		"	float center = 1.0 - smoothstep(0.0, 0.035, abs(p.x));\n"
+		"	float edge = smoothstep(0.035, 0.060, abs(p.x));\n"
+		"	float top = smoothstep(0.38, 1.0, v);\n"
+		"	float curltip = curl * smoothstep(0.68, 1.0, v);\n"
+		"	float fibers = (fiber - 0.5) * 0.16;\n"
+		"	float value = mix(0.72, 1.04, v) + fibers + center * (0.055 + top * 0.035) - edge * 0.12;\n"
+		"	vec3 detail = vec3(value);\n"
+		"	detail += vec3(0.060, 0.085, -0.025) * top * (0.45 + 0.55 * fiber);\n"
+		"	detail += vec3(0.025, 0.035, -0.015) * center * (0.35 + 0.65 * v);\n"
+		"	detail *= 1.0 - curltip * 0.10;\n"
+		"	detail += vec3(0.045, 0.060, -0.025) * curltip * (1.0 - edge);\n"
+		"	return clamp(detail, vec3(0.56, 0.56, 0.50), vec3(1.28, 1.34, 1.14));\n"
+		"}\n"
+		"\n"
+		"void main()\n"
+		"{\n"
+		"	float curl = clamp(BladeCoord.w, 0.0, 1.0);\n"
+		"	vec4 blade = GrassBlade(BladeCoord.xy, BladeCoord.z, curl);\n"
+		"	float alpha = GrassAmount * BladeCull;\n"
+		"	if (GrassFadeDist > 0.0)\n"
+		"		alpha *= 1.0 - smoothstep(GrassFadeDist * 0.55, GrassFadeDist * 0.85, FogFragCoord);\n"
+		"	if (alpha < 0.12)\n"
+		"		discard;\n"
+		"	vec3 bladeTexture = GrassBladeTexture(BladeCoord.xy, BladeCoord.z, curl);\n"
+		"	vec3 colour = BladeColor.rgb * bladeTexture * (0.84 + blade.g * 0.45);\n"
+		"\n"
+		"	float side = clamp(abs(BladeCoord.x) * 18.0, 0.0, 1.0);\n"
+		"	float tipBlend = clamp((BladeCoord.y + 1.0) * 0.5, 0.0, 1.0);\n"
+		"	float root = 1.0 - tipBlend;\n"
+		"	float ao = 1.0 - root * root * 0.45;\n"
+		"	float sideShade = 0.94 - side * 0.10 + tipBlend * 0.05;\n"
+		"	colour *= sideShade * ao;\n"
+		"	colour *= 1.0 + BladeDynLight;\n"
+		"\n"
+		"	colour += vec3(GrassDither());\n"
+		"	float fog = FogFactor(FogFragCoord);\n"
+		"	fog = clamp(fog, 0.0, 1.0);\n"
+		"	colour = mix(gl_Fog.color.rgb, colour, fog);\n"
+		"	colour = clamp(colour + vec3(FogDither()), 0.0, 1.0);\n"
+		"	gl_FragColor = vec4(colour, 1.0);\n"
+		"}\n";
+
+	if (!gl_glsl_able)
+		return;
+
+	r_grass_program = GL_CreateProgram (vertSource, fragSource, 0, NULL);
+	if (r_grass_program != 0)
+	{
+		grassGeomAmountLoc = GL_GetUniformLocation (&r_grass_program, "GrassAmount");
+		grassGeomTimeLoc = GL_GetUniformLocation (&r_grass_program, "GrassTime");
+		grassGeomMovementLoc = GL_GetUniformLocation (&r_grass_program, "GrassMovement");
+		grassGeomGustScaleLoc = GL_GetUniformLocation (&r_grass_program, "GrassGustScale");
+		grassGeomFadeDistLoc = GL_GetUniformLocation (&r_grass_program, "GrassFadeDist");
+		grassGeomFogModeLoc = GL_GetUniformLocation (&r_grass_program, "FogMode");
+		grassGeomEyePosLoc = GL_GetUniformLocation (&r_grass_program, "GrassEyePos");
+		grassGeomStaticModeLoc = GL_GetUniformLocation (&r_grass_program, "GrassStaticMode");
+		grassGeomStaticNormalLoc = GL_GetUniformLocation (&r_grass_program, "GrassStaticNormal");
+		grassGeomStaticTangentLoc = GL_GetUniformLocation (&r_grass_program, "GrassStaticTangent");
+		grassGeomStaticLodLoc = GL_GetUniformLocation (&r_grass_program, "GrassStaticLod");
+		grassGeomStaticCellWeightLoc = GL_GetUniformLocation (&r_grass_program, "GrassStaticCellWeight");
+		grassGeomDLightCountLoc = GL_GetUniformLocation (&r_grass_program, "GrassDLightCount");
+		grassGeomDLightPosRadiusLoc = GL_GetUniformLocation (&r_grass_program, "GrassDLightPosRadius");
+		grassGeomDLightColorMinLoc = GL_GetUniformLocation (&r_grass_program, "GrassDLightColorMin");
+	}
+}
+
+/*
+=============
+GLWorld_CreateShaders
+=============
+*/
+static void GLWater_CreateShaders (void)
+{
+	const char *modedefines[countof(r_water)] = {
+		"",
+		"#define LIT\n"
+	};
+	const glsl_attrib_binding_t bindings[] = {
+		{ "Vert", vertAttrIndex },
+		{ "TexCoords", texCoordsAttrIndex },
+		{ "LMCoords", LMCoordsAttrIndex },
+		{ "LMBounds", LMBoundsAttrIndex }
+	};
+
+	// Driver bug workarounds:
+	// - "Intel(R) UHD Graphics 600" version "4.6.0 - Build 26.20.100.7263"
+	//    crashing on glUseProgram with `vec3 Vert` and
+	//    `gl_ModelViewProjectionMatrix * vec4(Vert, 1.0);`. Work around with
+	//    making Vert a vec4. (https://sourceforge.net/p/quakespasm/bugs/39/)
+	const GLchar *vertSource = \
+		"#version 110\n"
+		"%s"
+		"\n"
+		"attribute vec4 Vert;\n"
+		"attribute vec2 TexCoords;\n"
+"#ifdef LIT\n"
+		"attribute vec2 LMCoords;\n"
+		"attribute vec4 LMBounds;\n"
+		"varying vec2 tc_lm;\n"
+		"varying vec4 tc_lmbounds;\n"
+"#endif\n"
+		"\n"
+		"varying float FogFragCoord;\n"
+		"varying vec2 tc_tex;\n"
+		"\n"
+		"void main()\n"
+		"{\n"
+		"	tc_tex = TexCoords;\n"
+"#ifdef LIT\n"
+		"	tc_lm = LMCoords;\n"
+		"	tc_lmbounds = LMBounds;\n"
+"#endif\n"
+		"	gl_Position = gl_ModelViewProjectionMatrix * Vert;\n"
+		"	FogFragCoord = gl_Position.w;\n"
+		"}\n";
+
+	const GLchar *fragSource = \
+		"#version 110\n"
+		"%s"
+		"\n"
+		"uniform sampler2D Tex;\n"
+"#ifdef LIT\n"
+		"uniform sampler2D LMTex;\n"
+		"uniform float LightScale;\n"
+		"uniform bool UseLightmapExtra4;\n"
+		"uniform vec2 LightmapTexelSize;\n"
+		"varying vec2 tc_lm;\n"
+		"varying vec4 tc_lmbounds;\n"
+"#endif\n"
+		"uniform float Alpha;\n"
+		"uniform float WarpTime;\n"
+		"#ifdef LIT\n"
+		"vec4 LightmapBoundsUV()\n"
+		"{\n"
+		"\treturn (tc_lmbounds + vec4(0.5)) * LightmapTexelSize.xyxy;\n"
+		"}\n"
+		"vec2 ClampLightmapUV(vec2 uv, vec2 offset, vec4 bounds)\n"
+		"{\n"
+		"\treturn clamp(uv + offset, bounds.xy, bounds.zw);\n"
+		"}\n"
+		"float LightmapExtra4EdgeBlend(vec4 bounds)\n"
+		"{\n"
+		"\tvec2 edgeDistance = min(tc_lm - bounds.xy, bounds.zw - tc_lm);\n"
+		"\tvec2 edgeTexels = max(edgeDistance / LightmapTexelSize, vec2(0.0));\n"
+		"\treturn smoothstep(0.0, 0.375, min(edgeTexels.x, edgeTexels.y));\n"
+		"}\n"
+		"#endif\n"
+		"uniform int FogMode;\n"
+		"\n"
+		"varying float FogFragCoord;\n"
+		"varying vec2 tc_tex;\n"
+		"\n"
+		"float FogFactor(float dist)\n"
+		"{\n"
+		"	if (FogMode == 1)\n"
+		"		return (gl_Fog.end - dist) / (gl_Fog.end - gl_Fog.start);\n"
+		"	if (FogMode == 2)\n"
+		"		return exp(-gl_Fog.density * dist);\n"
+		"	return exp(-gl_Fog.density * gl_Fog.density * dist * dist);\n"
+		"}\n"
+		"\n"
+		"float FogDitherHash(vec2 p)\n"
+		"{\n"
+		"	return fract(52.9829189 * fract(p.x * 0.06711056 + p.y * 0.00583715));\n"
+		"}\n"
+		"\n"
+		"float FogDither()\n"
+		"{\n"
+		"	vec2 p = floor(gl_FragCoord.xy);\n"
+		"	return (FogDitherHash(p) + FogDitherHash(p + vec2(17.0, 29.0)) - 1.0) * (1.0 / 255.0);\n"
+		"}\n"
+		"\n"
+		"void main()\n"
+		"{\n"
+		"	vec2 ntc = tc_tex;\n"
+		//CYCLE 128
+		//AMP 8*0x10000
+		//SPEED 20
+		//	sintable[i] = AMP + sin(i*3.14159*2/CYCLE)*AMP;
+		//
+		//  r_turb_turb = sintable + ((int)(cl.time*SPEED)&(CYCLE-1));
+		//
+		//	sturb = ((r_turb_s + r_turb_turb[(r_turb_t>>16)&(CYCLE-1)])>>16)&63;
+        //	tturb = ((r_turb_t + r_turb_turb[(r_turb_s>>16)&(CYCLE-1)])>>16)&63;
+        //The following 4 lines SHOULD match the software renderer, except normalised coords rather than snapped texels
+        "#define M_PI 3.14159\n"
+		"#define TIMEBIAS (((WarpTime*20.0)*M_PI*2.0)/128.0)\n"
+		"	ntc += 0.125 + sin(tc_tex.ts*M_PI + TIMEBIAS)*0.125;\n"
+		"	vec4 result = texture2D(Tex, ntc.st);\n"
+"#ifdef LIT\n"
+		"	vec4 lightmapBase = texture2D(LMTex, tc_lm.xy);\n"
+		"	vec4 lightmapColor;\n"
+		"	if (UseLightmapExtra4)\n"
+		"	{\n"
+		"		vec4 bounds = LightmapBoundsUV();\n"
+		"		vec2 s = LightmapTexelSize * 0.28;\n"
+		"		lightmapColor = vec4(0.0);\n"
+		"		lightmapColor += texture2D(LMTex, ClampLightmapUV(tc_lm.xy, vec2(-s.x, -s.y), bounds));\n"
+		"		lightmapColor += texture2D(LMTex, ClampLightmapUV(tc_lm.xy, vec2( s.x, -s.y), bounds));\n"
+		"		lightmapColor += texture2D(LMTex, ClampLightmapUV(tc_lm.xy, vec2(-s.x,  s.y), bounds));\n"
+		"		lightmapColor += texture2D(LMTex, ClampLightmapUV(tc_lm.xy, vec2( s.x,  s.y), bounds));\n"
+		"		lightmapColor *= 0.25;\n"
+		"		lightmapColor = mix(lightmapBase, lightmapColor, LightmapExtra4EdgeBlend(bounds));\n"
+		"	}\n"
+		"	else\n"
+		"		lightmapColor = lightmapBase;\n"
+		"	result *= lightmapColor;\n"
+		"	result.rgb *= LightScale;\n"
+"#endif\n"
+		"	result.a *= Alpha;\n"
+		"	result = clamp(result, 0.0, 1.0);\n"
+		"	float fog = FogFactor(FogFragCoord);\n"
+		"	fog = clamp(fog, 0.0, 1.0);\n"
+		"	result.rgb = mix(gl_Fog.color.rgb, result.rgb, fog);\n"
+		"	result.rgb = clamp(result.rgb + vec3(FogDither()), 0.0, 1.0);\n"
+		"	gl_FragColor = result;\n"
+		"}\n";
+
+	const GLchar *vertSource_sky =
+		"#version 110\n"
+		"\n"
+		"uniform vec3 EyePos;\n"
+		"\n"
+		"attribute vec4 Vert;\n"
+		"attribute vec2 TexCoords;\n"
+		"\n"
+		"varying float FogFragCoord;\n"
+		"varying vec3 SkyDir;\n"
+		"\n"
+		"void main()\n"
+		"{\n"
+			"SkyDir = Vert.xyz - EyePos;\n"
+			"gl_Position = gl_ModelViewProjectionMatrix * Vert;\n"
+			"FogFragCoord = gl_Position.w;\n"
+		"}\n";
+	const GLchar *fragSource_sky =
+		"#version 110\n"
+		"\n"
+		"uniform sampler2D Tex;\n"
+		"uniform sampler2D CloudTex;\n"
+		"uniform float WarpTime;\n"
+		"uniform float Alpha, FogAlpha;\n"
+		"uniform vec3 FogColour;\n"
+		"varying float FogFragCoord;\n"
+		"varying vec3 SkyDir;\n"
+		"void main ()\n"
+		"{\n"
+			"vec2 tccoord;\n"
+			"vec3 dir = SkyDir;\n"
+			"dir.z *= 3.0;\n"
+			"dir.xy *= 2.953125/length(dir);\n"
+			"tccoord = (dir.xy + WarpTime*0.0625);\n"
+			"vec3 sky = vec3(texture2D(Tex, tccoord));\n"
+			"tccoord = (dir.xy + WarpTime*0.125);\n"
+			"vec4 clouds = texture2D(CloudTex, tccoord);\n"
+			"clouds.a *= Alpha;\n"
+			"sky = (sky.rgb*(1.0-clouds.a)) + (clouds.a*clouds.rgb);\n"
+
+#if 1	//sky is logically an infinite distance away, so fog is just an alpha blend with the colour, no distance calcs needed.
+			"if (FogAlpha > 0.0)\n"
+				"sky.rgb = mix(sky.rgb, FogColour.rgb, FogAlpha);\n"
+#else	//do fog as normal. we actually have distance values.
+			"float fog = exp(-gl_Fog.density * gl_Fog.density * FogFragCoord * FogFragCoord);\n"
+			"fog = clamp(fog, 0.0, 1.0) * FogAlpha + (1.0-FogAlpha);\n"
+			"sky.rgb = mix(gl_Fog.color.rgb, sky.rgb, fog);\n"
+#endif
+
+			"gl_FragColor = vec4(sky, 1.0);\n"
+		"}\n";
+
+	const GLchar *vertSource_fastsky =
+		"#version 110\n"
+		"attribute vec4 Vert;\n"
+		"varying float FogFragCoord;\n"
+		"void main()\n"
+		"{\n"
+			"gl_Position = gl_ModelViewProjectionMatrix * Vert;\n"
+			"FogFragCoord = gl_Position.w;\n"
+		"}\n";
+	const GLchar *fragSource_fastsky =
+		"#version 110\n"
+		"\n"
+		"uniform float Alpha, FogAlpha;\n"
+		"uniform vec3 SkyColour;\n"
+		"uniform vec3 FogColour;\n"
+		"varying float FogFragCoord;\n"
+		"void main ()\n"
+		"{\n"
+			"vec3 sky = SkyColour.rgb;\n"
+
+#if 1	//sky is logically an infinite distance away, so fog is just an alpha blend with the colour, no distance calcs needed.
+			"if (FogAlpha > 0.0)\n"
+				"sky.rgb = mix(sky.rgb, FogColour.rgb, FogAlpha);\n"
+#else	//do fog as normal. we actually have distance values.
+			"float fog = exp(-gl_Fog.density * gl_Fog.density * FogFragCoord * FogFragCoord);\n"
+			"fog = clamp(fog, 0.0, 1.0) * FogAlpha + (1.0-FogAlpha);\n"
+			"sky.rgb = mix(gl_Fog.color.rgb, sky.rgb, fog);\n"
+#endif
+			"gl_FragColor = vec4(sky, 1.0);\n"
+		"}\n";
+
+	size_t i;
+	char vtext[1024];
+	char ftext[4096];
+	gl_glsl_water_able = false;
+
+	if (!gl_glsl_able)
+		return;
+
+	for (i = 0; i < countof(r_water); i++)
+	{
+		if (i == 3)
+			r_water[i].program = GL_CreateProgram (vertSource_fastsky, fragSource_fastsky, sizeof(bindings)/sizeof(bindings[0]), bindings);
+		else if (i == 2)
+			r_water[i].program = GL_CreateProgram (vertSource_sky, fragSource_sky, sizeof(bindings)/sizeof(bindings[0]), bindings);
+		else
+		{
+			snprintf(vtext, sizeof(vtext), vertSource, modedefines[i]);
+			snprintf(ftext, sizeof(ftext), fragSource, modedefines[i]);
+			r_water[i].program = GL_CreateProgram (vtext, ftext, sizeof(bindings)/sizeof(bindings[0]), bindings);
+		}
+
+		if (r_water[i].program != 0)
+		{
+			// get uniform locations
+			GLuint texLoc				= ((i!=3)?GL_GetUniformLocation (&r_water[i].program, "Tex"):-1);
+			GLuint LMTexLoc				= ((i==1)?GL_GetUniformLocation (&r_water[i].program, "LMTex"):-1);
+			GLuint CloudTexLoc			= ((i==2)?GL_GetUniformLocation (&r_water[i].program, "CloudTex"):-1);
+			r_water[i].light_scale		= ((i==1)?GL_GetUniformLocation (&r_water[i].program, "LightScale"):-1);
+			r_water[i].use_extra4		= ((i==1)?GL_GetUniformLocation (&r_water[i].program, "UseLightmapExtra4"):-1);
+			r_water[i].texel_size		= ((i==1)?GL_GetUniformLocation (&r_water[i].program, "LightmapTexelSize"):-1);
+			r_water[i].alpha_scale		= ((i!=3)?GL_GetUniformLocation (&r_water[i].program, "Alpha"):-1);
+			r_water[i].time				= ((i!=3)?GL_GetUniformLocation (&r_water[i].program, "WarpTime"):-1);
+			r_water[i].eyepos			= ((i==2)?GL_GetUniformLocation (&r_water[i].program, "EyePos"):-1);
+			r_water[i].fogalpha			= ((i>=2)?GL_GetUniformLocation (&r_water[i].program, "FogAlpha"):-1);
+			r_water[i].colour			= ((i==3)?GL_GetUniformLocation (&r_water[i].program, "SkyColour"):-1);
+			r_water[i].fogmode			= ((i<2)?GL_GetUniformLocation (&r_water[i].program, "FogMode"):-1);
+			r_water[i].skyfogcolor		= ((i>=2)?GL_GetUniformLocation (&r_water[i].program, "FogColour"):-1);
+
+			if (!r_water[i].program)
+				return;
+
+			//bake constants here.
+			GL_UseProgramFunc (r_water[i].program);
+			GL_Uniform1iFunc (texLoc, 0);
+			if (LMTexLoc != -1)
+				GL_Uniform1iFunc (LMTexLoc, 1);
+			if (CloudTexLoc != -1)
+				GL_Uniform1iFunc (CloudTexLoc, 2);
+			GL_UseProgramFunc (0);
+		}
+		else
+			return;	//erk?
+	}
+	gl_glsl_water_able = true;
+}
+
+/*
+================
+R_DrawTextureChains_Water -- johnfitz
+================
+*/
+void R_DrawTextureChains_Water (qmodel_t *model, entity_t *ent, texchain_t chain)
+{
+	int			i;
+	msurface_t	*s;
+	texture_t	*t;
+	glpoly_t	*p;
+	qboolean	bound;
+	float entalpha;
+
+	if (r_drawflat_cheatsafe || r_lightmap_cheatsafe) // ericw -- !r_drawworld_cheatsafe check moved to R_DrawWorld_Water ()
+		return;
+
+	if (gl_glsl_water_able)
+	{
+		int lastlightmap = -2;
+		int mode = -1;
+		const int overbright = !!gl_overbright.value;
+		const int wide10bits = (gl_lightmap_format == GL_RGB10_A2);
+		float lightmapscale = (overbright?2:1) * (wide10bits?4:1);
+		for (i=0 ; i<R_ChainTextureCount (model) ; i++)
+		{
+			t = R_ChainTexture (model, i);
+			if (!t || !t->texturechains[chain] || !(t->texturechains[chain]->flags & SURF_DRAWTURB))
+				continue;
+			s = t->texturechains[chain];
+
+			if ((s->flags & SURF_DRAWTELE) && R_TeleportDrawChain(s, ent))
+				continue;
+
+			entalpha = GL_WaterAlphaForEntitySurface (ent, s);
+			if (entalpha < 1.0f)
+			{
+				glDepthMask (GL_FALSE);
+				glEnable (GL_BLEND);
+			}
+
+// Bind the buffers
+			GL_BindBuffer (GL_ARRAY_BUFFER, gl_bmodel_vbo);
+			GL_BindBuffer (GL_ELEMENT_ARRAY_BUFFER, 0); // indices come from client memory!
+			GL_VertexAttribPointerFunc (vertAttrIndex,      3, GL_FLOAT, GL_FALSE, VERTEXSIZE * sizeof(float), ((float *)0));
+			GL_VertexAttribPointerFunc (texCoordsAttrIndex, 2, GL_FLOAT, GL_FALSE, VERTEXSIZE * sizeof(float), ((float *)0) + 3);
+			GL_VertexAttribPointerFunc (LMCoordsAttrIndex,  2, GL_FLOAT, GL_FALSE, VERTEXSIZE * sizeof(float), ((float *)0) + 5);
+			R_SetupLightmapBoundsAttrib ();
+
+			//actually use the buffers...
+			GL_EnableVertexAttribArrayFunc (vertAttrIndex);
+			GL_EnableVertexAttribArrayFunc (texCoordsAttrIndex);
+
+			GL_SelectTexture (GL_TEXTURE0);
+			GL_Bind (t->gltexture);
+			GL_SelectTexture (GL_TEXTURE1);
+			for (; s; s = s->texturechain)
+			{
+				if (s->lightmaptexturenum != lastlightmap)
+				{
+					R_FlushBatch(IS_WATER); // woods #caustics
+
+					mode = s->lightmaptexturenum>=0 && !r_fullbright_cheatsafe;
+					if (mode)
+					{	//lit
+						GL_EnableVertexAttribArrayFunc (LMCoordsAttrIndex);
+						R_EnableLightmapBoundsAttrib (true);
+						GL_Bind (lightmaps[s->lightmaptexturenum].texture);
+					}
+					else	//unlit
+					{
+						GL_DisableVertexAttribArrayFunc (LMCoordsAttrIndex);
+						R_EnableLightmapBoundsAttrib (false);
+					}
+
+					GL_UseProgramFunc (r_water[mode].program);
+					GL_Uniform1fFunc (r_water[mode].time, cl.time);
+					GL_Uniform1iFunc (r_water[mode].fogmode, Fog_GetMode());
+					if (r_water[mode].light_scale != -1)
+						GL_Uniform1fFunc (r_water[mode].light_scale, lightmapscale);
+					R_SetLightmapExtra4Uniforms (r_water[mode].use_extra4, r_water[mode].texel_size);
+					GL_Uniform1fFunc (r_water[mode].alpha_scale, entalpha);
+					lastlightmap = s->lightmaptexturenum;
+				}
+				R_BatchSurface (s, IS_WATER); // woods #caustics
+
+				rs_brushpasses++;
+			}
+
+			R_FlushBatch (IS_WATER); // woods #caustics
+			GL_UseProgramFunc (0);
+			GL_DisableVertexAttribArrayFunc (vertAttrIndex);
+			GL_DisableVertexAttribArrayFunc (texCoordsAttrIndex);
+			GL_DisableVertexAttribArrayFunc (LMCoordsAttrIndex);
+			GL_DisableVertexAttribArrayFunc (LMBoundsAttrIndex);
+			GL_SelectTexture (GL_TEXTURE0);
+			lastlightmap = -2;
+
+			if (entalpha < 1.0f)
+			{
+				glDepthMask (GL_TRUE);
+				glDisable (GL_BLEND);
+			}
+		}
+	}
+	else
+	{
+		// legacy water for people with such old gpus that they can't even use glsl.
+		for (i=0 ; i<R_ChainTextureCount (model) ; i++)
+		{
+			t = R_ChainTexture (model, i);
+			if (!t || !t->texturechains[chain] || !(t->texturechains[chain]->flags & SURF_DRAWTURB))
+				continue;
+			bound = false;
+			entalpha = 1.0f;
+			for (s = t->texturechains[chain]; s; s = s->texturechain)
+			{
+				if (!bound) //only bind once we are sure we need this texture
+				{
+					entalpha = GL_WaterAlphaForEntitySurface (ent, s);
+					R_BeginTransparentDrawing (entalpha);
+					GL_Bind (t->gltexture);
+					bound = true;
+				}
+				for (p = s->polys->next; p; p = p->next)
+				{
+					DrawWaterPoly (p);
+					rs_brushpasses++;
+				}
+			}
+			R_EndTransparentDrawing (entalpha);
+		}
+	}
+}
+
+/*
+=============
+Liquid runs
+
+The GLSL branch of R_DrawTextureChains_Water split into begin / model / end,
+tracking the program, uniforms, lightmap attributes and blend state it sets
+per texture, so a run of translucent liquid-only brush entities drawn back to
+front sets up the buffers, attributes and programs once instead of per
+entity. Every surface is drawn in the same order with the same program,
+textures, uniforms and blend state as R_DrawTextureChains_Water would use.
+=============
+*/
+static struct
+{
+	int		mode;			// r_water program bound, -1 none
+	int		lastlightmap;	// -2 none
+	int		blend;			// 1 translucent (no depth writes), 0 opaque, -1 unknown
+	float	alpha[2];		// alpha_scale set on each r_water program this run, -1 unset
+	qboolean	constants[2];	// per-run uniforms set on each program
+} r_liquidrun;
+
+qboolean R_LiquidRunAvailable (void)
+{
+	return gl_glsl_water_able && r_world_program && !r_drawflat_cheatsafe &&
+		!r_lightmap_cheatsafe && !r_fullbright_cheatsafe;
+}
+
+void R_LiquidRunBegin (float entalpha)
+{
+	// Same lasting effects as R_DrawTextureChains_LiquidOnly's transparency pair.
+	R_BeginTransparentDrawing (entalpha);
+	R_EndTransparentDrawing (entalpha);
+
+	GL_BindBuffer (GL_ARRAY_BUFFER, gl_bmodel_vbo);
+	GL_BindBuffer (GL_ELEMENT_ARRAY_BUFFER, 0); // indices come from client memory!
+	GL_VertexAttribPointerFunc (vertAttrIndex,      3, GL_FLOAT, GL_FALSE, VERTEXSIZE * sizeof(float), ((float *)0));
+	GL_VertexAttribPointerFunc (texCoordsAttrIndex, 2, GL_FLOAT, GL_FALSE, VERTEXSIZE * sizeof(float), ((float *)0) + 3);
+	GL_VertexAttribPointerFunc (LMCoordsAttrIndex,  2, GL_FLOAT, GL_FALSE, VERTEXSIZE * sizeof(float), ((float *)0) + 5);
+	R_SetupLightmapBoundsAttrib ();
+	GL_EnableVertexAttribArrayFunc (vertAttrIndex);
+	GL_EnableVertexAttribArrayFunc (texCoordsAttrIndex);
+
+	r_liquidrun.mode = -1;
+	r_liquidrun.lastlightmap = -2;
+	r_liquidrun.blend = -1;
+	r_liquidrun.alpha[0] = r_liquidrun.alpha[1] = -1.0f;
+	r_liquidrun.constants[0] = r_liquidrun.constants[1] = false;
+}
+
+static void R_LiquidRunBlend (qboolean translucent)
+{
+	if (r_liquidrun.blend == (translucent ? 1 : 0))
+		return;
+	if (translucent)
+	{
+		glDepthMask (GL_FALSE);
+		glEnable (GL_BLEND);
+	}
+	else if (r_liquidrun.blend == 1)
+	{	// what R_DrawTextureChains_Water leaves after a translucent texture
+		glDepthMask (GL_TRUE);
+		glDisable (GL_BLEND);
+	}
+	r_liquidrun.blend = translucent ? 1 : 0;
+}
+
+// textures: the ascending texture indices the model's surfaces use, or NULL for all
+void R_LiquidRunDrawModel (qmodel_t *model, entity_t *ent, texchain_t chain, const unsigned short *textures, int numtextures)
+{
+	const int overbright = !!gl_overbright.value;
+	const int wide10bits = (gl_lightmap_format == GL_RGB10_A2);
+	const float lightmapscale = (overbright?2:1) * (wide10bits?4:1);
+	int i, count = textures ? numtextures : model->numtextures;
+	msurface_t *s;
+	texture_t *t;
+
+	for (i=0 ; i<count ; i++)
+	{
+		float entalpha;
+
+		t = model->textures[textures ? textures[i] : i];
+		if (!t || !t->texturechains[chain] || !(t->texturechains[chain]->flags & SURF_DRAWTURB))
+			continue;
+		s = t->texturechains[chain];
+
+		R_FlushBatch (IS_WATER);
+		entalpha = GL_WaterAlphaForEntitySurface (ent, s);
+		R_LiquidRunBlend (entalpha < 1.0f);
+
+		GL_SelectTexture (GL_TEXTURE0);
+		GL_Bind (t->gltexture);
+		GL_SelectTexture (GL_TEXTURE1);
+		r_liquidrun.lastlightmap = -2;
+		for (; s; s = s->texturechain)
+		{
+			if (s->lightmaptexturenum != r_liquidrun.lastlightmap)
+			{
+				int mode;
+
+				R_FlushBatch (IS_WATER);
+				mode = s->lightmaptexturenum>=0 && !r_fullbright_cheatsafe;
+				if (mode)
+				{	//lit
+					GL_EnableVertexAttribArrayFunc (LMCoordsAttrIndex);
+					R_EnableLightmapBoundsAttrib (true);
+					GL_Bind (lightmaps[s->lightmaptexturenum].texture);
+				}
+				else	//unlit
+				{
+					GL_DisableVertexAttribArrayFunc (LMCoordsAttrIndex);
+					R_EnableLightmapBoundsAttrib (false);
+				}
+				if (r_liquidrun.mode != mode)
+				{
+					GL_UseProgramFunc (r_water[mode].program);
+					r_liquidrun.mode = mode;
+				}
+				if (!r_liquidrun.constants[mode])
+				{
+					GL_Uniform1fFunc (r_water[mode].time, cl.time);
+					GL_Uniform1iFunc (r_water[mode].fogmode, Fog_GetMode());
+					if (r_water[mode].light_scale != -1)
+						GL_Uniform1fFunc (r_water[mode].light_scale, lightmapscale);
+					R_SetLightmapExtra4Uniforms (r_water[mode].use_extra4, r_water[mode].texel_size);
+					r_liquidrun.constants[mode] = true;
+				}
+				if (r_liquidrun.alpha[mode] != entalpha)
+				{
+					GL_Uniform1fFunc (r_water[mode].alpha_scale, entalpha);
+					r_liquidrun.alpha[mode] = entalpha;
+				}
+				r_liquidrun.lastlightmap = s->lightmaptexturenum;
+			}
+			R_BatchSurface (s, IS_WATER); // woods #caustics
+
+			rs_brushpasses++;
+		}
+	}
+	R_FlushBatch (IS_WATER); // before the caller changes the entity matrix
+}
+
+void R_LiquidRunEnd (void)
+{
+	R_FlushBatch (IS_WATER);
+	GL_UseProgramFunc (0);
+	GL_DisableVertexAttribArrayFunc (vertAttrIndex);
+	GL_DisableVertexAttribArrayFunc (texCoordsAttrIndex);
+	GL_DisableVertexAttribArrayFunc (LMCoordsAttrIndex);
+	GL_DisableVertexAttribArrayFunc (LMBoundsAttrIndex);
+	GL_SelectTexture (GL_TEXTURE0);
+	R_LiquidRunBlend (false);
+}
+
+/*
+=============
+Solid runs
+
+R_DrawTextureChains' GLSL path split the same way, for runs of translucent
+brush entities whose surfaces are all plain lightmapped textures (maps such as
+Peril's start.bsp hold hundreds of see-through func_walls). The program,
+buffers, attributes and per-frame uniforms are set up once per run; each
+entity then uploads any pending lightmaps and draws every texture with the
+same binds, uniforms and alpha R_DrawTextureChains_GLSL would, in the same
+order. Its NoTexture and water passes find nothing to draw for these models,
+and grass-bearing entities are left to the ordinary path.
+
+The run carries one batch across surfaces and entities while everything that
+reaches the draw is the same, and flushes it before any of that changes (a
+different texture, fullbright, grass, alpha test, lightmap, water side or
+alpha), before a lightmap upload, and before the entity matrix changes
+(R_SolidRunFlush, called by the run's owner). Every surface still goes to the
+GPU in the same order under the same state, in fewer draws. Uniforms are
+tracked because the per-texture sets are skipped when nothing changed.
+=============
+*/
+static struct
+{
+	qboolean	open;			// the batch holds surfaces for the state below
+	gltexture_t	*tex;
+	gltexture_t	*fbtex;			// NULL: fullbright off
+	texture_t	*grasstex;		// NULL: grass off
+	int			alphatest, lightmap, underwater;
+	float		batchalpha;
+
+	// uniforms as set on r_world_program
+	float		alpha;			// -1 unset
+	int			fullbright;		// useFullbrightTexLoc, -1 unset
+	int			grassuniform;	// useGrassLoc
+	texture_t	*grass;			// whose grass colours are set
+	int			alphatestuniform;
+} r_solidrun;
+
+qboolean R_SolidRunModel (entity_t *ent)
+{
+	qmodel_t *m = ent->model;
+	msurface_t *s;
+	int i;
+
+	if (!r_world_program || r_drawflat_cheatsafe || r_lightmap_cheatsafe || r_fullbright_cheatsafe)
+		return false;
+	if (R_GrassBladesActive () && R_GrassEntityAllowsGrass (ent))
+		return false;
+	if (m->nummodelsurfaces <= 0)
+		return false;
+	for (i = 0, s = &m->surfaces[m->firstmodelsurface]; i < m->nummodelsurfaces; i++, s++)
+		if (s->flags & (SURF_DRAWTURB | SURF_DRAWTILED | SURF_NOTEXTURE | SURF_DRAWSKY))
+			return false;
+	return true;
+}
+
+void R_SolidRunBegin (float entalpha)
+{
+	const int	overbright = !!gl_overbright.value;
+	const int	wide10bits = (gl_lightmap_format == GL_RGB10_A2);
+
+	// Same lasting effects as R_DrawTextureChains' transparency pair.
+	R_BeginTransparentDrawing (entalpha);
+	R_EndTransparentDrawing (entalpha);
+
+	glDepthMask (GL_FALSE);
+	glEnable (GL_BLEND);
+	GL_UseProgramFunc (r_world_program);
+
+	GL_BindBuffer (GL_ARRAY_BUFFER, gl_bmodel_vbo);
+	GL_BindBuffer (GL_ELEMENT_ARRAY_BUFFER, 0); // indices come from client memory!
+	GL_EnableVertexAttribArrayFunc (vertAttrIndex);
+	GL_EnableVertexAttribArrayFunc (texCoordsAttrIndex);
+	GL_EnableVertexAttribArrayFunc (LMCoordsAttrIndex);
+	GL_VertexAttribPointerFunc (vertAttrIndex,      3, GL_FLOAT, GL_FALSE, VERTEXSIZE * sizeof(float), ((float *)0));
+	GL_VertexAttribPointerFunc (texCoordsAttrIndex, 2, GL_FLOAT, GL_FALSE, VERTEXSIZE * sizeof(float), ((float *)0) + 3);
+	GL_VertexAttribPointerFunc (LMCoordsAttrIndex,  2, GL_FLOAT, GL_FALSE, VERTEXSIZE * sizeof(float), ((float *)0) + 5);
+	R_SetupLightmapBoundsAttrib ();
+
+	GL_Uniform1iFunc (texLoc, 0);
+	GL_Uniform1iFunc (LMTexLoc, 1);
+	GL_Uniform1iFunc (fullbrightTexLoc, 2);
+	GL_Uniform1iFunc (causticsTexLoc, 3);
+	GL_Uniform1iFunc (useFullbrightTexLoc, 0);
+	GL_Uniform1iFunc (useOverbrightLoc, overbright);
+	GL_Uniform1iFunc (useCausticsTexLoc, 0);
+	GL_Uniform1iFunc (useGrassLoc, 0);
+	GL_Uniform1iFunc (useAlphaTestLoc, 0);
+	GL_Uniform1iFunc (useLightmapWideLoc, wide10bits);
+	GL_Uniform1iFunc (useLightmapOnlyLoc, 0);
+	R_SetLightmapExtra4Uniforms (useLightmapExtra4Loc, lightmapTexelSizeLoc);
+	R_SetTexturelessDitherUniform (useTexturelessDitherLoc);
+	GL_Uniform1fFunc (clTimeLoc, cl.time);
+	GL_Uniform1fFunc (causticsOpacityLoc, gl_caustics.value);
+	GL_Uniform1fFunc (grassAmountLoc, R_GrassAmount());
+	GL_Uniform1fFunc (grassTimeLoc, R_GrassAnimTime());
+	GL_Uniform1fFunc (grassMovementLoc, R_GrassMovement());
+	GL_Uniform1fFunc (grassGustScaleLoc, R_GrassGustScale());
+	GL_Uniform1iFunc (fogModeLoc, Fog_GetMode());
+	// what the sets above leave on the program
+	r_solidrun.alpha = -1.0f;
+	r_solidrun.fullbright = 0;
+	r_solidrun.grass = NULL;
+	r_solidrun.grassuniform = 0;
+	r_solidrun.alphatestuniform = 0;
+	r_solidrun.open = false;
+}
+
+void R_SolidRunFlush (void)
+{
+	if (r_solidrun.open)
+		R_FlushBatch (r_solidrun.underwater ? UNDER_WATER : ABOVE_WATER);
+	r_solidrun.open = false;
+}
+
+// draws the chains R_SolidRunModel accepted; the caller has chained them and
+// named the model's textures with R_SetChainTextures
+void R_SolidRunDrawModel (qmodel_t *model, entity_t *ent, texchain_t chain)
+{
+	const float	entalpha = ENTALPHA_DECODE(ent->alpha);
+	int			i, underwater;
+	msurface_t	*s;
+	texture_t	*t, *animt, *grasstex;
+	gltexture_t	*fbtex;
+	int			alphatest;
+
+	if (R_LightmapUploadPending ())
+	{	// the batch must draw with the lightmaps as they were
+		R_SolidRunFlush ();
+		GL_SelectTexture (GL_TEXTURE0);
+		R_UploadLightmaps ();
+	}
+
+	for (i=0 ; i<R_ChainTextureCount (model) ; i++)
+	{
+		t = R_ChainTexture (model, i);
+
+		if (!t || !t->texturechains[chain] || t->texturechains[chain]->flags & (SURF_DRAWTURB | SURF_DRAWTILED | SURF_NOTEXTURE))
+			continue;
+
+		animt = R_TextureAnimation(t, ent->frame);
+		fbtex = gl_fullbrights.value ? animt->fullbright : NULL;
+		grasstex = (R_TextureUsesSurfaceGrass(t) && R_GrassEntityAllowsGrass(ent)) ? animt : NULL;
+		alphatest = (t->texturechains[chain]->flags & SURF_DRAWFENCE) ? 1 : 0;
+
+		for (underwater = 0; underwater < 2; underwater++)
+		{
+			for (s = t->texturechains[chain]; s; s = s->texturechain)
+			{
+				if ((!underwater && !(s->flags & SURF_UNDERWATER)) || (underwater && (s->flags & SURF_UNDERWATER)))
+				{
+					if (!r_solidrun.open || r_solidrun.tex != animt->gltexture || r_solidrun.fbtex != fbtex ||
+						r_solidrun.grasstex != grasstex || r_solidrun.alphatest != alphatest ||
+						r_solidrun.lightmap != s->lightmaptexturenum || r_solidrun.underwater != underwater ||
+						r_solidrun.batchalpha != entalpha)
+					{
+						R_SolidRunFlush ();
+
+						if (fbtex)
+						{
+							GL_SelectTexture (GL_TEXTURE2);
+							GL_Bind (fbtex);
+						}
+						if (r_solidrun.fullbright != (fbtex ? 1 : 0))
+						{
+							r_solidrun.fullbright = fbtex ? 1 : 0;
+							GL_Uniform1iFunc (useFullbrightTexLoc, r_solidrun.fullbright);
+						}
+						GL_SelectTexture (GL_TEXTURE0);
+						GL_Bind (animt->gltexture);
+						if (grasstex)
+						{
+							if (!r_solidrun.grassuniform)
+								GL_Uniform1iFunc (useGrassLoc, 1);
+							if (r_solidrun.grass != grasstex)
+								R_SetGrassColorUniforms(grasstex);
+							r_solidrun.grassuniform = 1;
+							r_solidrun.grass = grasstex;
+						}
+						else if (r_solidrun.grassuniform)
+						{
+							GL_Uniform1iFunc (useGrassLoc, 0);
+							r_solidrun.grassuniform = 0;
+						}
+						if (r_solidrun.alphatestuniform != alphatest)
+						{
+							GL_Uniform1iFunc (useAlphaTestLoc, alphatest);
+							r_solidrun.alphatestuniform = alphatest;
+						}
+						if (r_solidrun.alpha != entalpha)
+						{
+							GL_Uniform1fFunc (alphaLoc, entalpha);
+							r_solidrun.alpha = entalpha;
+						}
+						GL_SelectTexture (GL_TEXTURE1);
+						GL_Bind (lightmaps[s->lightmaptexturenum].texture);
+
+						r_solidrun.open = true;
+						r_solidrun.tex = animt->gltexture;
+						r_solidrun.fbtex = fbtex;
+						r_solidrun.grasstex = grasstex;
+						r_solidrun.alphatest = alphatest;
+						r_solidrun.lightmap = s->lightmaptexturenum;
+						r_solidrun.underwater = underwater;
+						r_solidrun.batchalpha = entalpha;
+					}
+					R_BatchSurface(s, underwater ? UNDER_WATER : ABOVE_WATER);
+
+					rs_brushpasses++;
+				}
+			}
+		}
+	}
+}
+
+void R_SolidRunEnd (void)
+{
+	R_SolidRunFlush ();
+	if (r_solidrun.alphatestuniform)
+	{
+		GL_Uniform1iFunc (useAlphaTestLoc, 0);	// as R_DrawTextureChains_GLSL leaves it
+		r_solidrun.alphatestuniform = 0;
+	}
+	GL_DisableVertexAttribArrayFunc (vertAttrIndex);
+	GL_DisableVertexAttribArrayFunc (texCoordsAttrIndex);
+	GL_DisableVertexAttribArrayFunc (LMCoordsAttrIndex);
+	GL_DisableVertexAttribArrayFunc (LMBoundsAttrIndex);
+	GL_UseProgramFunc (0);
+	GL_SelectTexture (GL_TEXTURE0);
+	glDepthMask (GL_TRUE);
+	glDisable (GL_BLEND);
+}
+
+/*
+================
+R_DrawTextureChains_White -- johnfitz -- draw sky and water as white polys when r_lightmap is 1
+================
+*/
+void R_DrawTextureChains_White (qmodel_t *model, texchain_t chain)
+{
+	int			i;
+	msurface_t	*s;
+	texture_t	*t;
+
+	glDisable (GL_TEXTURE_2D);
+	for (i=0 ; i<R_ChainTextureCount (model) ; i++)
+	{
+		t = R_ChainTexture (model, i);
+
+		if (!t || !t->texturechains[chain] || !(t->texturechains[chain]->flags & SURF_DRAWTILED))
+			continue;
+
+		for (s = t->texturechains[chain]; s; s = s->texturechain)
+		{
+			DrawGLPoly (s->polys);
+			rs_brushpasses++;
+		}
+	}
+	glEnable (GL_TEXTURE_2D);
+}
+
+/*
+================
+R_DrawLightmapChains -- johnfitz -- R_BlendLightmaps stripped down to almost nothing
+================
+*/
+void R_DrawLightmapChains (void)
+{
+	int			i, j;
+	glpoly_t	*p;
+	float		*v;
+
+	for (i=0 ; i<lightmap_count ; i++)
+	{
+		if (!lightmaps[i].polys)
+			continue;
+
+		GL_Bind (lightmaps[i].texture);
+		for (p = lightmaps[i].polys; p; p=p->chain)
+		{
+			glBegin (GL_POLYGON);
+			v = p->verts[0];
+			for (j=0 ; j<p->numverts ; j++, v+= VERTEXSIZE)
+			{
+				glTexCoord2f (v[5], v[6]);
+				glVertex3fv (v);
+			}
+			glEnd ();
+			rs_brushpasses++;
+		}
+	}
+}
+
+/*
+=============
+GLWorld_CreateShaders
+=============
+*/
+void GLWorld_CreateShaders (void)
+{
+	const glsl_attrib_binding_t bindings[] = {
+		{ "Vert", vertAttrIndex },
+		{ "TexCoords", texCoordsAttrIndex },
+		{ "LMCoords", LMCoordsAttrIndex },
+		{ "LMBounds", LMBoundsAttrIndex }
+	};
+	const glsl_attrib_binding_t instancedBindings[] = {
+		{ "Vert", vertAttrIndex },
+		{ "TexCoords", texCoordsAttrIndex },
+		{ "LMCoords", LMCoordsAttrIndex },
+		{ "LMBounds", LMBoundsAttrIndex },
+		{ "InstanceMat0", instMat0AttrIndex },
+		{ "InstanceMat1", instMat1AttrIndex },
+		{ "InstanceMat2", instMat2AttrIndex },
+		{ "InstanceMat3", instMat3AttrIndex }
+	};
+
+	// Driver bug workarounds:
+	// - "Intel(R) UHD Graphics 600" version "4.6.0 - Build 26.20.100.7263"
+	//    crashing on glUseProgram with `vec3 Vert` and
+	//    `gl_ModelViewProjectionMatrix * vec4(Vert, 1.0);`. Work around with
+	//    making Vert a vec4. (https://sourceforge.net/p/quakespasm/bugs/39/)
+	const GLchar *vertSource = \
+		"#version 110\n"
+		"\n"
+		"attribute vec4 Vert;\n"
+		"attribute vec2 TexCoords;\n"
+		"attribute vec2 LMCoords;\n"
+		"attribute vec4 LMBounds;\n"
+		"\n"
+		"varying float FogFragCoord;\n"
+		"varying vec2 tc_tex;\n"
+		"varying vec2 tc_lm;\n"
+		"varying vec4 tc_lmbounds;\n"
+		"\n"
+		"void main()\n"
+		"{\n"
+		"	tc_tex = TexCoords;\n"
+		"	tc_lm = LMCoords;\n"
+		"	tc_lmbounds = LMBounds;\n"
+		"	gl_Position = gl_ModelViewProjectionMatrix * Vert;\n"
+		"	FogFragCoord = gl_Position.w;\n"
+		"}\n";
+	const GLchar *vertSourceInstanced = \
+		"#version 110\n"
+		"\n"
+		"attribute vec4 Vert;\n"
+		"attribute vec2 TexCoords;\n"
+		"attribute vec2 LMCoords;\n"
+		"attribute vec4 InstanceMat0;\n"
+		"attribute vec4 LMBounds;\n"
+		"attribute vec4 InstanceMat1;\n"
+		"attribute vec4 InstanceMat2;\n"
+		"attribute vec4 InstanceMat3;\n"
+		"\n"
+		"varying float FogFragCoord;\n"
+		"varying vec2 tc_tex;\n"
+		"varying vec2 tc_lm;\n"
+		"varying vec4 tc_lmbounds;\n"
+		"\n"
+		"void main()\n"
+		"{\n"
+		"	mat4 instance = mat4(InstanceMat0, InstanceMat1, InstanceMat2, InstanceMat3);\n"
+		"	vec4 worldVert = instance * Vert;\n"
+		"	tc_tex = TexCoords;\n"
+		"	tc_lm = LMCoords;\n"
+		"	tc_lmbounds = LMBounds;\n"
+		"	gl_Position = gl_ModelViewProjectionMatrix * worldVert;\n"
+		"	FogFragCoord = gl_Position.w;\n"
+		"}\n";
+	
+	const GLchar *fragSource = \
+		"#version 110\n"
+		"\n"
+		"#define M_PI 3.14159\n"
+		"\n"
+		"uniform sampler2D Tex;\n"
+		"uniform sampler2D LMTex;\n"
+		"uniform sampler2D FullbrightTex;\n"
+		"uniform sampler2D CausticsTex;\n"
+		"uniform bool UseFullbrightTex;\n"
+		"uniform bool UseOverbright;\n"
+		"uniform bool UseAlphaTest;\n"
+		"uniform bool UseCausticsTex;\n"
+		"uniform bool UseGrass;\n"
+		"uniform bool UseLightmapWide;\n"
+		"uniform bool UseLightmapOnly;\n"
+		"uniform bool UseLightmapExtra4;\n"
+		"uniform vec2 LightmapTexelSize;\n"
+		"uniform bool UseTexturelessDither;\n"
+		"uniform float Alpha;\n"
+		"uniform float ClTime;\n"
+		"uniform float CausticsOpacity;\n"
+		"uniform float GrassAmount;\n"
+		"uniform float GrassTime;\n"
+		"uniform vec3 GrassBaseColor;\n"
+		"uniform vec3 GrassTipColor;\n"
+		"uniform float GrassMovement;\n"
+		"uniform float GrassGustScale;\n"
+		"uniform int FogMode;\n"
+		"\n"
+		"varying float FogFragCoord;\n"
+		"varying vec2 tc_tex;\n"
+		"varying vec2 tc_lm;\n"
+		"varying vec4 tc_lmbounds;\n"
+		"\n"
+		"float FogFactor(float dist)\n"
+		"{\n"
+		"	if (FogMode == 1)\n"
+		"		return (gl_Fog.end - dist) / (gl_Fog.end - gl_Fog.start);\n"
+		"	if (FogMode == 2)\n"
+		"		return exp(-gl_Fog.density * dist);\n"
+		"	return exp(-gl_Fog.density * gl_Fog.density * dist * dist);\n"
+		"}\n"
+		"\n"
+		"vec4 LightmapBoundsUV()\n"
+		"{\n"
+		"\treturn (tc_lmbounds + vec4(0.5)) * LightmapTexelSize.xyxy;\n"
+		"}\n"
+		"\n"
+		"vec2 ClampLightmapUV(vec2 uv, vec2 offset, vec4 bounds)\n"
+		"{\n"
+		"\treturn clamp(uv + offset, bounds.xy, bounds.zw);\n"
+		"}\n"
+		"\n"
+		"float LightmapExtra4EdgeBlend(vec4 bounds)\n"
+		"{\n"
+		"\tvec2 edgeDistance = min(tc_lm - bounds.xy, bounds.zw - tc_lm);\n"
+		"\tvec2 edgeTexels = max(edgeDistance / LightmapTexelSize, vec2(0.0));\n"
+		"\treturn smoothstep(0.0, 0.375, min(edgeTexels.x, edgeTexels.y));\n"
+		"}\n"
+		"\n"
+		"float FogDitherHash(vec2 p)\n"
+		"{\n"
+		"	return fract(52.9829189 * fract(p.x * 0.06711056 + p.y * 0.00583715));\n"
+		"}\n"
+		"\n"
+		"float FogDither()\n"
+		"{\n"
+		"	vec2 p = floor(gl_FragCoord.xy);\n"
+		"	return (FogDitherHash(p) + FogDitherHash(p + vec2(17.0, 29.0)) - 1.0) * (1.0 / 255.0);\n"
+		"}\n"
+		"\n"
+		"float TexturelessDither()\n"
+		"{\n"
+		"	vec2 p = floor(gl_FragCoord.xy);\n"
+		"	return FogDitherHash(p + vec2(13.0, 7.0)) +\n"
+		"	       FogDitherHash(p + vec2(29.0, 17.0)) - 1.0;\n"
+		"}\n"
+		"\n"
+		"float GrassHash(vec2 p)\n"
+		"{\n"
+		"	return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453123);\n"
+		"}\n"
+		"\n"
+		"float GrassNoise(vec2 p)\n"
+		"{\n"
+		"	vec2 i = floor(p);\n"
+		"	vec2 f = fract(p);\n"
+		"	f = f * f * f * (f * (f * 6.0 - 15.0) + 10.0);\n"
+		"	return mix(mix(GrassHash(i), GrassHash(i + vec2(1.0, 0.0)), f.x),\n"
+		"	           mix(GrassHash(i + vec2(0.0, 1.0)), GrassHash(i + vec2(1.0, 1.0)), f.x), f.y);\n"
+		"}\n"
+		"\n"
+		"vec2 GrassFlow(vec2 p)\n"
+		"{\n"
+		"	float gustScale = max(GrassGustScale, 0.0);\n"
+		"	float weather = GrassNoise(p * 0.018 + vec2(GrassTime * 0.018, -GrassTime * 0.011));\n"
+		"	float eddy = GrassNoise(p * 0.057 + vec2(-GrassTime * 0.021, GrassTime * 0.014));\n"
+		"	float gust = GrassNoise(p * (0.13 * gustScale) + vec2(GrassTime * 0.045, -GrassTime * 0.028) * gustScale);\n"
+		"	float pulse = 0.5 + 0.5 * sin(GrassTime * (0.18 + weather * 0.16) * gustScale + gust * 6.28318);\n"
+		"	float angle = weather * M_PI * 2.0 + (eddy - 0.5) * 1.15;\n"
+		"	vec2 dir = vec2(cos(angle), sin(angle));\n"
+		"	vec2 side = vec2(-dir.y, dir.x);\n"
+		"	return dir * (0.035 + 0.115 * gust * pulse) + side * (0.045 * (eddy - 0.5));\n"
+		"}\n"
+		"\n"
+		"float GrassBlade(vec2 uv, vec2 scale, float seed)\n"
+		"{\n"
+		"	vec2 q = uv * scale + seed;\n"
+		"	vec2 cell = floor(q);\n"
+		"	vec2 f = fract(q);\n"
+		"	float rnd = GrassHash(cell + seed);\n"
+		"	float hdist = (GrassHash(cell + vec2(4.7, 8.3) + seed) + GrassHash(cell + vec2(9.2, 1.6) + seed) + GrassHash(cell + vec2(2.5, 12.1) + seed) + GrassHash(cell + vec2(15.3, 5.4) + seed)) * 0.25;\n"
+		"	float height = 0.48 + 0.48 * hdist;\n"
+		"	float width = 0.018 + 0.022 * GrassHash(cell + vec2(9.1, 2.4));\n"
+		"	float root = 0.20 + 0.60 * GrassHash(cell + vec2(12.5, 6.6) + seed);\n"
+		"	float tip = f.y * f.y;\n"
+		"	float wind = dot(GrassFlow(cell + seed), vec2(1.0, 0.35)) * GrassMovement;\n"
+		"	float sway = 0.035 * cos(GrassTime * 0.95 + rnd * 6.28318 + cell.y * 0.17) * GrassMovement;\n"
+		"	float center = root + tip * (wind + sway + (rnd - 0.5) * 0.18);\n"
+		"	float shape = 1.0 - smoothstep(0.0, width, abs(f.x - center));\n"
+		"	shape *= smoothstep(0.02, 0.18, f.y);\n"
+		"	shape *= 1.0 - smoothstep(height, height + 0.08, f.y);\n"
+		"	return shape * (0.65 + 0.35 * rnd);\n"
+		"}\n"
+		"\n"
+		"void main()\n"
+		"{\n"
+		"	vec4 result = texture2D(Tex, tc_tex.xy);\n"
+		"	vec4 lightmapBase = texture2D(LMTex, tc_lm.xy);\n"
+		"	vec4 lightmapColor;\n"
+		"	if (UseLightmapExtra4)\n"
+		"	{\n"
+		"		// Approximate light -extra4 with four variance-matched sub-texel samples.\n"
+		"		// The original compiler's sub-samples are not recoverable clientside,\n"
+		"		// so this deliberately trades some sharpness for smoother transitions.\n"
+		"		vec4 bounds = LightmapBoundsUV();\n"
+		"		vec2 s = LightmapTexelSize * 0.28;\n"
+		"		lightmapColor = vec4(0.0);\n"
+		"		lightmapColor += texture2D(LMTex, ClampLightmapUV(tc_lm.xy, vec2(-s.x, -s.y), bounds));\n"
+		"		lightmapColor += texture2D(LMTex, ClampLightmapUV(tc_lm.xy, vec2( s.x, -s.y), bounds));\n"
+		"		lightmapColor += texture2D(LMTex, ClampLightmapUV(tc_lm.xy, vec2(-s.x,  s.y), bounds));\n"
+		"		lightmapColor += texture2D(LMTex, ClampLightmapUV(tc_lm.xy, vec2( s.x,  s.y), bounds));\n"
+		"		lightmapColor *= 0.25;\n"
+		"		lightmapColor = mix(lightmapBase, lightmapColor, LightmapExtra4EdgeBlend(bounds));\n"
+		"	}\n"
+		"	else\n"
+		"		lightmapColor = lightmapBase; // Sample lightmap early\n"
+		"	if (UseLightmapWide)\n"
+		"	    lightmapColor.rgb *= 4.0;\n"
+		"	float lightBrightness = (lightmapColor.r + lightmapColor.g + lightmapColor.b) / 3.0;\n"
+		"	float surfaceLightFactor = clamp(lightBrightness * 1.5, 0.0, 1.0);\n"
+		"	vec3 grassLightColor = lightmapColor.rgb;\n"
+		"	if (UseOverbright)\n"
+		"		grassLightColor *= 2.0;\n"
+		"	float grassLightBrightness = (grassLightColor.r + grassLightColor.g + grassLightColor.b) / 3.0;\n"
+		"	float grassLightFactor = clamp(grassLightBrightness * 1.5, 0.0, 1.0);\n"
+		"	if (UseLightmapOnly)\n"
+		"		result = vec4(0.5, 0.5, 0.5, 1.0);\n"
+		"	if (UseAlphaTest && (result.a < 0.666))\n"
+		"		discard;\n"
+		"	result *= lightmapColor;\n"
+		"	if (UseOverbright)\n"
+		"		result.rgb *= 2.0;\n"
+		"	if (UseGrass && GrassAmount > 0.0)\n"
+		"	{\n"
+		"		float grass = GrassBlade(tc_tex.xy, vec2(48.0, 18.0), 0.0);\n"
+		"		grass += 0.65 * GrassBlade(tc_tex.xy + vec2(0.17, 0.41), vec2(72.0, 27.0), 19.7);\n"
+		"		grass = clamp(grass, 0.0, 1.0);\n"
+		"		float grassVar = GrassNoise(tc_tex.xy * 18.0 + GrassTime * 0.03);\n"
+		"		vec3 grassColor = mix(GrassBaseColor, GrassTipColor, grassVar);\n"
+		"		grassColor *= max(grassLightColor, vec3(0.05));\n"
+		"		float grassAlpha = grass * GrassAmount * grassLightFactor;\n"
+		"		vec3 grassMix = mix(result.rgb * 0.65, grassColor, 0.75);\n"
+		"		result.rgb = mix(result.rgb, grassMix, grassAlpha);\n"
+		"	}\n"
+		"	if (UseFullbrightTex)\n"
+		"		result += texture2D(FullbrightTex, tc_tex.xy);\n"
+		"\n"
+		"	if (UseCausticsTex)\n"
+		"	{\n"
+		"       // --- Chromatic Aberration Start --- \n"
+		"       const float aberrationAmount = 0.0015; // Hardcoded faint aberration strength \n"
+		"       float causticsSpeed = 0.5; \n"
+		"		vec2 causticsCoord = vec2(\n"
+		"			(tc_tex.x + sin(0.465 * (causticsSpeed * ClTime + tc_tex.y))) * -0.1234375,\n"
+		"			(tc_tex.y + sin(0.465 * (causticsSpeed * ClTime + tc_tex.x))) * -0.1234375\n"
+		"		);\n"
+		"       vec2 offsetR = vec2(aberrationAmount, 0.0);\n"
+		"       vec2 offsetB = vec2(-aberrationAmount, 0.0);\n"
+		"       float causticsR = texture2D(CausticsTex, causticsCoord + offsetR).r;\n"
+		"       float causticsG = texture2D(CausticsTex, causticsCoord).g;\n"
+		"       float causticsB = texture2D(CausticsTex, causticsCoord + offsetB).b;\n"
+		"       float causticsA = texture2D(CausticsTex, causticsCoord).a;\n"
+		"		vec4 caustics = vec4(causticsR, causticsG, causticsB, causticsA);\n"
+		"\n"
+		"       // --- Second Layer ----------------------------------------------------- \n"
+		"       vec2 causticsCoord2 = vec2(\n"
+		"           (tc_tex.x + sin(0.395 * (causticsSpeed * ClTime - tc_tex.y))) * -0.093,\n"
+		"           (tc_tex.y + sin(0.475 * (causticsSpeed * ClTime - tc_tex.x))) * -0.093\n"
+		"       );\n"
+		"       vec3 c2 = texture2D(CausticsTex, causticsCoord2).rgb;\n"
+		"       vec3 causticsRGB = max(caustics.rgb, c2);\n"
+		"\n"
+		"       // --- Blend using Light Factor --- \n"
+		"       // Modulate the base CausticsOpacity by the calculated lightFactor\n"
+		"       float finalCausticsOpacity = CausticsOpacity * surfaceLightFactor;\n"
+		"       result.rgb = mix(result.rgb, causticsRGB * result.rgb * 2.0, finalCausticsOpacity);\n"
+		"	}\n"
+		"\n"
+		"	result = clamp(result, 0.0, 1.0);\n"
+		"	float fog = FogFactor(FogFragCoord);\n"
+		"	fog = clamp(fog, 0.0, 1.0);\n"
+		"	result = mix(gl_Fog.color, result, fog);\n"
+		"	vec3 dither = vec3(FogDither());\n"
+		"	if (UseTexturelessDither)\n"
+		"		dither += vec3(TexturelessDither() * (0.35 / 255.0));\n"
+		"	result.rgb = clamp(result.rgb + dither, 0.0, 1.0);\n"
+		"	result.a = Alpha;\n" // FIXME: This will make almost transparent things cut holes though heavy fog
+		"	gl_FragColor = result;\n"
+		"}\n";
+
+	GLWorld_DeleteShaderPrograms();
+
+	if (!gl_glsl_alias_able)
+		return;
+
+	r_world_program = GL_CreateProgram (vertSource, fragSource, sizeof(bindings)/sizeof(bindings[0]), bindings);
+	
+	if (r_world_program != 0)
+	{
+		// get uniform locations
+		texLoc = GL_GetUniformLocation (&r_world_program, "Tex");
+		LMTexLoc = GL_GetUniformLocation (&r_world_program, "LMTex");
+		fullbrightTexLoc = GL_GetUniformLocation (&r_world_program, "FullbrightTex");
+		causticsTexLoc = GL_GetUniformLocation(&r_world_program, "CausticsTex"); // woods #caustics
+		useFullbrightTexLoc = GL_GetUniformLocation (&r_world_program, "UseFullbrightTex");
+		useOverbrightLoc = GL_GetUniformLocation (&r_world_program, "UseOverbright");
+		useAlphaTestLoc = GL_GetUniformLocation (&r_world_program, "UseAlphaTest");
+		useCausticsTexLoc = GL_GetUniformLocation(&r_world_program, "UseCausticsTex"); // woods #caustics
+		useGrassLoc = GL_GetUniformLocation (&r_world_program, "UseGrass"); // woods #grass
+		useLightmapWideLoc = GL_GetUniformLocation (&r_world_program, "UseLightmapWide");
+		useLightmapOnlyLoc = GL_GetUniformLocation (&r_world_program, "UseLightmapOnly");
+		useLightmapExtra4Loc = GL_GetUniformLocation (&r_world_program, "UseLightmapExtra4");
+		lightmapTexelSizeLoc = GL_GetUniformLocation (&r_world_program, "LightmapTexelSize");
+		useTexturelessDitherLoc = GL_GetUniformLocation (&r_world_program, "UseTexturelessDither");
+		alphaLoc = GL_GetUniformLocation (&r_world_program, "Alpha");
+		clTimeLoc = GL_GetUniformLocation(&r_world_program, "ClTime"); // woods #caustics
+		causticsOpacityLoc = GL_GetUniformLocation(&r_world_program, "CausticsOpacity"); // woods #caustics
+		grassAmountLoc = GL_GetUniformLocation (&r_world_program, "GrassAmount"); // woods #grass
+		grassTimeLoc = GL_GetUniformLocation (&r_world_program, "GrassTime"); // woods #grass
+		grassBaseColorLoc = GL_GetUniformLocation (&r_world_program, "GrassBaseColor"); // woods #grass
+		grassTipColorLoc = GL_GetUniformLocation (&r_world_program, "GrassTipColor"); // woods #grass
+		grassMovementLoc = GL_GetUniformLocation (&r_world_program, "GrassMovement"); // woods #grass
+		grassGustScaleLoc = GL_GetUniformLocation (&r_world_program, "GrassGustScale"); // woods #grass
+		fogModeLoc = GL_GetUniformLocation (&r_world_program, "FogMode");
+
+		GL_UseProgramFunc (r_world_program);
+		GL_Uniform1iFunc (texLoc, 0);
+		GL_Uniform1iFunc (LMTexLoc, 1);
+		GL_Uniform1iFunc (fullbrightTexLoc, 2);
+		GL_Uniform1iFunc (useGrassLoc, 0);
+		GL_Uniform1fFunc (grassGustScaleLoc, R_GrassGustScale());
+		R_SetGrassColorUniforms(NULL);
+		GL_UseProgramFunc (0);
+	}
+
+	if (gl_bmodel_instancing_able)
+	{
+		r_world_instanced_program = GL_CreateProgram (vertSourceInstanced, fragSource, sizeof(instancedBindings)/sizeof(instancedBindings[0]), instancedBindings);
+		if (r_world_instanced_program != 0)
+		{
+			instTexLoc = GL_GetUniformLocation (&r_world_instanced_program, "Tex");
+			instLMTexLoc = GL_GetUniformLocation (&r_world_instanced_program, "LMTex");
+			instFullbrightTexLoc = GL_GetUniformLocation (&r_world_instanced_program, "FullbrightTex");
+			instCausticsTexLoc = GL_GetUniformLocation(&r_world_instanced_program, "CausticsTex"); // woods #caustics
+			instUseFullbrightTexLoc = GL_GetUniformLocation (&r_world_instanced_program, "UseFullbrightTex");
+			instUseOverbrightLoc = GL_GetUniformLocation (&r_world_instanced_program, "UseOverbright");
+			instUseAlphaTestLoc = GL_GetUniformLocation (&r_world_instanced_program, "UseAlphaTest");
+			instUseCausticsTexLoc = GL_GetUniformLocation(&r_world_instanced_program, "UseCausticsTex"); // woods #caustics
+			instUseGrassLoc = GL_GetUniformLocation (&r_world_instanced_program, "UseGrass"); // woods #grass
+			instUseLightmapWideLoc = GL_GetUniformLocation (&r_world_instanced_program, "UseLightmapWide");
+			instUseLightmapOnlyLoc = GL_GetUniformLocation (&r_world_instanced_program, "UseLightmapOnly");
+			instUseLightmapExtra4Loc = GL_GetUniformLocation (&r_world_instanced_program, "UseLightmapExtra4");
+			instLightmapTexelSizeLoc = GL_GetUniformLocation (&r_world_instanced_program, "LightmapTexelSize");
+			instUseTexturelessDitherLoc = GL_GetUniformLocation (&r_world_instanced_program, "UseTexturelessDither");
+			instAlphaLoc = GL_GetUniformLocation (&r_world_instanced_program, "Alpha");
+			instClTimeLoc = GL_GetUniformLocation(&r_world_instanced_program, "ClTime"); // woods #caustics
+			instCausticsOpacityLoc = GL_GetUniformLocation(&r_world_instanced_program, "CausticsOpacity"); // woods #caustics
+			instGrassAmountLoc = GL_GetUniformLocation (&r_world_instanced_program, "GrassAmount"); // woods #grass
+			instGrassTimeLoc = GL_GetUniformLocation (&r_world_instanced_program, "GrassTime"); // woods #grass
+			instGrassBaseColorLoc = GL_GetUniformLocation (&r_world_instanced_program, "GrassBaseColor"); // woods #grass
+			instGrassTipColorLoc = GL_GetUniformLocation (&r_world_instanced_program, "GrassTipColor"); // woods #grass
+			instGrassMovementLoc = GL_GetUniformLocation (&r_world_instanced_program, "GrassMovement"); // woods #grass
+			instGrassGustScaleLoc = GL_GetUniformLocation (&r_world_instanced_program, "GrassGustScale"); // woods #grass
+			instFogModeLoc = GL_GetUniformLocation (&r_world_instanced_program, "FogMode");
+
+			GL_UseProgramFunc (r_world_instanced_program);
+			GL_Uniform1iFunc (instTexLoc, 0);
+			GL_Uniform1iFunc (instLMTexLoc, 1);
+			GL_Uniform1iFunc (instFullbrightTexLoc, 2);
+			GL_Uniform1iFunc (instCausticsTexLoc, 3);
+			GL_Uniform1iFunc (instUseGrassLoc, 0);
+			GL_Uniform1fFunc (instGrassGustScaleLoc, R_GrassGustScale());
+			GL_Uniform3fFunc (instGrassBaseColorLoc, 0.18f, 0.32f, 0.09f);
+			GL_Uniform3fFunc (instGrassTipColorLoc, 0.55f, 0.74f, 0.28f);
+			GL_UseProgramFunc (0);
+		}
+	}
+
+	GLGrass_CreateShaders();
+	GLWater_CreateShaders();
+}
+
+/*
+================
+R_DrawTextureChains_GLSL -- ericw
+
+Draw lightmapped surfaces with fulbrights in one pass, using VBO.
+Requires 3 TMUs, OpenGL 2.0
+================
+*/
+void R_DrawTextureChains_GLSL (qmodel_t *model, entity_t *ent, texchain_t chain)
+{
+	const float	entalpha = (ent != NULL) ?
+			 ENTALPHA_DECODE(ent->alpha) : 1.0f;
+	const int	overbright = !!gl_overbright.value;
+	const int wide10bits = (gl_lightmap_format == GL_RGB10_A2);
+
+	int			i;
+	msurface_t	*s;
+	texture_t	*t;
+	texture_t	*animt;
+	//qboolean	bound; //removed this cos it was pointless anyway
+	int		lastlightmap;
+	gltexture_t	*fullbright = NULL;
+	const unsigned int enteffects = (ent != NULL) ? ent->effects : 0;
+
+// enable blending / disable depth writes
+	if (enteffects & EF_ADDITIVE)
+	{
+		glDepthMask (GL_FALSE);
+		glBlendFunc (GL_SRC_ALPHA, GL_ONE);
+		glEnable (GL_BLEND);
+	}
+	else if (entalpha < 1)
+	{
+		glDepthMask (GL_FALSE);
+		glEnable (GL_BLEND);
+	}
+
+	GL_UseProgramFunc (r_world_program);
+
+// Bind the buffers
+	GL_BindBuffer (GL_ARRAY_BUFFER, gl_bmodel_vbo);
+	GL_BindBuffer (GL_ELEMENT_ARRAY_BUFFER, 0); // indices come from client memory!
+
+	GL_EnableVertexAttribArrayFunc (vertAttrIndex);
+	GL_EnableVertexAttribArrayFunc (texCoordsAttrIndex);
+	GL_EnableVertexAttribArrayFunc (LMCoordsAttrIndex);
+
+	GL_VertexAttribPointerFunc (vertAttrIndex,      3, GL_FLOAT, GL_FALSE, VERTEXSIZE * sizeof(float), ((float *)0));
+	GL_VertexAttribPointerFunc (texCoordsAttrIndex, 2, GL_FLOAT, GL_FALSE, VERTEXSIZE * sizeof(float), ((float *)0) + 3);
+	GL_VertexAttribPointerFunc (LMCoordsAttrIndex,  2, GL_FLOAT, GL_FALSE, VERTEXSIZE * sizeof(float), ((float *)0) + 5);
+	R_SetupLightmapBoundsAttrib ();
+
+// set uniforms
+	GL_Uniform1iFunc (texLoc, 0);
+	GL_Uniform1iFunc (LMTexLoc, 1);
+	GL_Uniform1iFunc (fullbrightTexLoc, 2);
+	GL_Uniform1iFunc(causticsTexLoc, 3); // woods #caustics
+	GL_Uniform1iFunc (useFullbrightTexLoc, 0);
+	GL_Uniform1iFunc (useOverbrightLoc, overbright);
+	GL_Uniform1iFunc(useCausticsTexLoc, 0); // woods #caustics
+	GL_Uniform1iFunc (useGrassLoc, 0); // woods #grass
+	GL_Uniform1iFunc (useAlphaTestLoc, 0);
+	GL_Uniform1iFunc (useLightmapWideLoc, wide10bits);
+	GL_Uniform1iFunc (useLightmapOnlyLoc, 0);
+	R_SetLightmapExtra4Uniforms (useLightmapExtra4Loc, lightmapTexelSizeLoc);
+	R_SetTexturelessDitherUniform (useTexturelessDitherLoc);
+	GL_Uniform1fFunc (alphaLoc, entalpha);
+	GL_Uniform1fFunc(clTimeLoc, cl.time); // woods #caustics
+	GL_Uniform1fFunc(causticsOpacityLoc, gl_caustics.value); // woods #caustics
+	GL_Uniform1fFunc (grassAmountLoc, R_GrassAmount()); // woods #grass
+	GL_Uniform1fFunc (grassTimeLoc, R_GrassAnimTime()); // woods #grass
+	GL_Uniform1fFunc (grassMovementLoc, R_GrassMovement()); // woods #grass
+	GL_Uniform1fFunc (grassGustScaleLoc, R_GrassGustScale()); // woods #grass
+	GL_Uniform1iFunc (fogModeLoc, Fog_GetMode());
+
+	for (i=0 ; i<R_ChainTextureCount (model) ; i++)
+	{
+		t = R_ChainTexture (model, i);
+
+		if (!t || !t->texturechains[chain] || t->texturechains[chain]->flags & (SURF_DRAWTURB | SURF_DRAWTILED | SURF_NOTEXTURE))
+			continue;
+
+		animt = R_TextureAnimation(t, ent != NULL ? ent->frame : 0);
+
+	// Enable/disable TMU 2 (fullbrights)
+	// FIXME: Move below to where we bind GL_TEXTURE0
+		if (gl_fullbrights.value && (fullbright = animt->fullbright))
+		{
+			GL_SelectTexture (GL_TEXTURE2);
+			GL_Bind (fullbright);
+			GL_Uniform1iFunc (useFullbrightTexLoc, 1);
+		}
+		else
+			GL_Uniform1iFunc (useFullbrightTexLoc, 0);
+
+		R_ClearBatch ();
+
+		//bind the appropriate diffuse
+		GL_SelectTexture (GL_TEXTURE0);
+		GL_Bind (animt->gltexture);
+		if (R_TextureUsesSurfaceGrass(t) && R_GrassEntityAllowsGrass(ent))
+		{
+			GL_Uniform1iFunc (useGrassLoc, 1); // woods #grass
+			R_SetGrassColorUniforms(animt); // woods #grass
+		}
+		else
+			GL_Uniform1iFunc (useGrassLoc, 0); // woods #grass
+		if (t->texturechains[chain]->flags & SURF_DRAWFENCE)
+			GL_Uniform1iFunc (useAlphaTestLoc, 1); // Flip alpha test back on
+
+		GL_SelectTexture (GL_TEXTURE1);
+		lastlightmap = -1;	//we're checking anyway, so w/e
+
+		int underwater = 0;
+
+		for (underwater = 0; underwater < 2; underwater++)
+		{
+			for (s = t->texturechains[chain]; s; s = s->texturechain)
+			{
+				if ((!underwater && !(s->flags & SURF_UNDERWATER)) || (underwater && (s->flags & SURF_UNDERWATER)))
+				{
+					if (s->lightmaptexturenum != lastlightmap)
+						R_FlushBatch(underwater ? UNDER_WATER : ABOVE_WATER);
+
+					GL_SelectTexture(GL_TEXTURE1);
+					GL_Bind (lightmaps[s->lightmaptexturenum].texture);
+					lastlightmap = s->lightmaptexturenum;
+					R_BatchSurface(s, underwater ? UNDER_WATER : ABOVE_WATER);
+
+					rs_brushpasses++;
+				}
+			}
+
+			R_FlushBatch(underwater ? UNDER_WATER : ABOVE_WATER);
+		}
+
+
+		if (t->texturechains[chain]->flags & SURF_DRAWFENCE)
+			GL_Uniform1iFunc (useAlphaTestLoc, 0); // Flip alpha test back off
+	}
+
+	// clean up
+	GL_DisableVertexAttribArrayFunc (vertAttrIndex);
+	GL_DisableVertexAttribArrayFunc (texCoordsAttrIndex);
+	GL_DisableVertexAttribArrayFunc (LMCoordsAttrIndex);
+	GL_DisableVertexAttribArrayFunc (LMBoundsAttrIndex);
+
+	GL_UseProgramFunc (0);
+	GL_SelectTexture (GL_TEXTURE0);
+
+	if (enteffects & EF_ADDITIVE)
+	{
+		glDepthMask (GL_TRUE);
+		glBlendFunc (GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);	//our normal alpha setting.
+		glDisable (GL_BLEND);
+	}
+	else if (entalpha < 1)
+	{
+		glDepthMask (GL_TRUE);
+		glDisable (GL_BLEND);
+	}
+}
+
+/*
+================
+R_DrawLightmapChains_GLSL -- ericw
+================
+*/
+void R_DrawLightmapChains_GLSL(qmodel_t* model, entity_t* ent, texchain_t chain)
+{
+	const int	overbright = !!gl_overbright.value;
+	const int wide10bits = (gl_lightmap_format == GL_RGB10_A2);
+
+	int			i;
+	msurface_t* s;
+	texture_t* t;
+	int		lastlightmap;
+
+	GL_UseProgramFunc(r_world_program);
+
+	// Bind the buffers
+	GL_BindBuffer(GL_ARRAY_BUFFER, gl_bmodel_vbo);
+	GL_BindBuffer(GL_ELEMENT_ARRAY_BUFFER, 0); // indices come from client memory!
+
+	GL_EnableVertexAttribArrayFunc(vertAttrIndex);
+	GL_EnableVertexAttribArrayFunc(texCoordsAttrIndex);
+	GL_EnableVertexAttribArrayFunc(LMCoordsAttrIndex);
+
+	GL_VertexAttribPointerFunc(vertAttrIndex, 3, GL_FLOAT, GL_FALSE, VERTEXSIZE * sizeof(float), ((float*)0));
+	GL_VertexAttribPointerFunc(texCoordsAttrIndex, 2, GL_FLOAT, GL_FALSE, VERTEXSIZE * sizeof(float), ((float*)0) + 3);
+	GL_VertexAttribPointerFunc(LMCoordsAttrIndex, 2, GL_FLOAT, GL_FALSE, VERTEXSIZE * sizeof(float), ((float*)0) + 5);
+	R_SetupLightmapBoundsAttrib ();
+
+	// set uniforms
+	GL_Uniform1iFunc(texLoc, 0);
+	GL_Uniform1iFunc(LMTexLoc, 1);
+	GL_Uniform1iFunc(fullbrightTexLoc, 2);
+	GL_Uniform1iFunc(useFullbrightTexLoc, 0);
+	GL_Uniform1iFunc(useOverbrightLoc, overbright);
+	GL_Uniform1iFunc(useAlphaTestLoc, 0);
+	GL_Uniform1iFunc(useCausticsTexLoc, 0);
+	GL_Uniform1iFunc(useGrassLoc, 0); // woods #grass
+	GL_Uniform1iFunc(useLightmapWideLoc, wide10bits);
+	GL_Uniform1fFunc(alphaLoc, 1.0f);
+	GL_Uniform1iFunc(useFullbrightTexLoc, 0);
+	GL_Uniform1iFunc(useLightmapOnlyLoc, 1);
+	R_SetLightmapExtra4Uniforms (useLightmapExtra4Loc, lightmapTexelSizeLoc);
+	R_SetTexturelessDitherUniform (useTexturelessDitherLoc);
+	GL_Uniform1iFunc(fogModeLoc, Fog_GetMode());
+
+	R_ClearBatch();
+	lastlightmap = -1;
+
+	for (i=0 ; i<R_ChainTextureCount (model) ; i++)
+	{
+		t = R_ChainTexture (model, i);
+
+		if (!t || !t->texturechains[chain] || t->texturechains[chain]->flags & (SURF_DRAWTILED | SURF_NOTEXTURE))
+			continue;
+
+		if (t->texturechains[chain]->texinfo->flags & TEX_SPECIAL)
+			continue; // unlit water
+
+		for (s = t->texturechains[chain]; s; s = s->texturechain)
+		{
+			if (s->lightmaptexturenum < 0)
+				continue;
+
+			if (s->lightmaptexturenum != lastlightmap)
+			{
+				R_FlushBatch(ABOVE_WATER);
+
+				GL_SelectTexture(GL_TEXTURE1);
+				GL_Bind(lightmaps[s->lightmaptexturenum].texture);
+				lastlightmap = s->lightmaptexturenum;
+			}
+			R_BatchSurface(s, ABOVE_WATER);
+
+			rs_brushpasses++;
+		}
+	}
+
+	R_FlushBatch(ABOVE_WATER);
+
+	// clean up
+	GL_DisableVertexAttribArrayFunc(vertAttrIndex);
+	GL_DisableVertexAttribArrayFunc(texCoordsAttrIndex);
+	GL_DisableVertexAttribArrayFunc(LMCoordsAttrIndex);
+	GL_DisableVertexAttribArrayFunc(LMBoundsAttrIndex);
+
+	GL_UseProgramFunc(0);
+	GL_SelectTexture(GL_TEXTURE0);
+}
+
+/*
+=============
+R_DrawTextureChains_LiquidOnly
+
+A brush entity whose visible surfaces are all liquid gives R_DrawTextureChains
+nothing to draw, yet in the normal GLSL path it still sets up and tears down the
+world program, attributes and uniforms for every such entity (maps with
+hundreds of translucent liquid brushes pay that per frame). Keep only its
+lasting effects -- the lightmap upload the liquid pass relies on, and the
+transparency blend function -- and return false where it may draw more.
+=============
+*/
+qboolean R_DrawTextureChains_LiquidOnly (entity_t *ent)
+{
+	float entalpha = ENTALPHA_DECODE(ent->alpha);
+
+	if (r_drawflat_cheatsafe || r_fullbright_cheatsafe || r_lightmap_cheatsafe || !r_world_program)
+		return false;
+	if (ent->effects & EF_ADDITIVE)
+		return false;
+	R_UploadLightmaps ();
+	R_BeginTransparentDrawing (entalpha);
+	R_EndTransparentDrawing (entalpha);
+	return true;
+}
+
+/*
+=============
+R_DrawWorld -- johnfitz -- rewritten
+=============
+*/
+void R_DrawTextureChains (qmodel_t *model, entity_t *ent, texchain_t chain)
+{
+	float entalpha;
+	
+	if (ent != NULL)
+		entalpha = ENTALPHA_DECODE(ent->alpha);
+	else
+		entalpha = 1;
+
+	R_UploadLightmaps ();
+
+	if (r_drawflat_cheatsafe)
+	{
+		glDisable (GL_TEXTURE_2D);
+		R_DrawTextureChains_Drawflat (model, chain);
+		glEnable (GL_TEXTURE_2D);
+		return;
+	}
+
+	if (r_fullbright_cheatsafe)
+	{
+		R_BeginTransparentDrawing (entalpha);
+		R_DrawTextureChains_TextureOnly (model, ent, chain);
+		R_EndTransparentDrawing (entalpha);
+		goto fullbrights;
+	}
+
+	if (r_lightmap_cheatsafe)
+	{
+		if (r_world_program != 0)
+		{
+			R_DrawLightmapChains_GLSL(model, ent, chain);
+			return;
+		}
+
+		if (!gl_overbright.value)
+		{
+			glTexEnvf(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_MODULATE);
+			glColor3f(0.5, 0.5, 0.5);
+		}
+		R_DrawLightmapChains ();
+		if (!gl_overbright.value)
+		{
+			glColor3f(1,1,1);
+			glTexEnvf(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_REPLACE);
+		}
+		R_DrawTextureChains_White (model, chain);
+		return;
+	}
+
+	R_BeginTransparentDrawing (entalpha);
+
+	R_DrawTextureChains_NoTexture (model, chain);
+
+	// OpenGL 2 fast path
+	if (r_world_program != 0)
+	{
+		R_EndTransparentDrawing (entalpha);
+		
+		R_DrawTextureChains_GLSL (model, ent, chain);
+		if (chain != chain_world)
+			R_DrawGrassBlades(model, ent, chain);
+		return;
+	}
+
+	if (gl_overbright.value)
+	{
+		if (gl_texture_env_combine && gl_mtexable) //case 1: texture and lightmap in one pass, overbright using texture combiners
+		{
+			GL_EnableMultitexture ();
+			glTexEnvi(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_COMBINE_EXT);
+			glTexEnvi(GL_TEXTURE_ENV, GL_COMBINE_RGB_EXT, GL_MODULATE);
+			glTexEnvi(GL_TEXTURE_ENV, GL_SOURCE0_RGB_EXT, GL_PREVIOUS_EXT);
+			glTexEnvi(GL_TEXTURE_ENV, GL_SOURCE1_RGB_EXT, GL_TEXTURE);
+			glTexEnvf(GL_TEXTURE_ENV, GL_RGB_SCALE_EXT, 2.0f);
+			GL_DisableMultitexture ();
+			R_DrawTextureChains_Multitexture (model, ent, chain);
+			GL_EnableMultitexture ();
+			glTexEnvf(GL_TEXTURE_ENV, GL_RGB_SCALE_EXT, 1.0f);
+			glTexEnvf(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_MODULATE);
+			GL_DisableMultitexture ();
+			glTexEnvf(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_REPLACE);
+		}
+		else if (entalpha < 1) //case 2: can't do multipass if entity has alpha, so just draw the texture
+		{
+			R_DrawTextureChains_TextureOnly (model, ent, chain);
+		}
+		else //case 3: texture in one pass, lightmap in second pass using 2x modulation blend func, fog in third pass
+		{
+			//to make fog work with multipass lightmapping, need to do one pass
+			//with no fog, one modulate pass with black fog, and one additive
+			//pass with black geometry and normal fog
+			Fog_DisableGFog ();
+			R_DrawTextureChains_TextureOnly (model, ent, chain);
+			Fog_EnableGFog ();
+			glDepthMask (GL_FALSE);
+			glEnable (GL_BLEND);
+			glBlendFunc (GL_DST_COLOR, GL_SRC_COLOR); //2x modulate
+			Fog_StartAdditive ();
+			R_DrawLightmapChains ();
+			Fog_StopAdditive ();
+			if (Fog_GetDensity() > 0)
+			{
+				glBlendFunc(GL_ONE, GL_ONE); //add
+				glTexEnvf(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_MODULATE);
+				glColor3f(0,0,0);
+				R_DrawTextureChains_TextureOnly (model, ent, chain);
+				glColor3f(1,1,1);
+				glTexEnvf(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_REPLACE);
+			}
+			glBlendFunc (GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+			glDisable (GL_BLEND);
+			glDepthMask (GL_TRUE);
+		}
+	}
+	else
+	{
+		if (gl_mtexable) //case 4: texture and lightmap in one pass, regular modulation
+		{
+			GL_EnableMultitexture ();
+			glTexEnvf(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_MODULATE);
+			GL_DisableMultitexture ();
+			R_DrawTextureChains_Multitexture (model, ent, chain);
+			glTexEnvf(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_REPLACE);
+		}
+		else if (entalpha < 1) //case 5: can't do multipass if entity has alpha, so just draw the texture
+		{
+			R_DrawTextureChains_TextureOnly (model, ent, chain);
+		}
+		else //case 6: texture in one pass, lightmap in a second pass, fog in third pass
+		{
+			//to make fog work with multipass lightmapping, need to do one pass
+			//with no fog, one modulate pass with black fog, and one additive
+			//pass with black geometry and normal fog
+			Fog_DisableGFog ();
+			R_DrawTextureChains_TextureOnly (model, ent, chain);
+			Fog_EnableGFog ();
+			glDepthMask (GL_FALSE);
+			glEnable (GL_BLEND);
+			glBlendFunc(GL_ZERO, GL_SRC_COLOR); //modulate
+			Fog_StartAdditive ();
+			R_DrawLightmapChains ();
+			Fog_StopAdditive ();
+			if (Fog_GetDensity() > 0)
+			{
+				glBlendFunc(GL_ONE, GL_ONE); //add
+				glTexEnvf(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_MODULATE);
+				glColor3f(0,0,0);
+				R_DrawTextureChains_TextureOnly (model, ent, chain);
+				glColor3f(1,1,1);
+				glTexEnvf(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_REPLACE);
+			}
+			glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+			glDisable (GL_BLEND);
+			glDepthMask (GL_TRUE);
+		}
+	}
+
+	R_EndTransparentDrawing (entalpha);
+
+fullbrights:
+	if (gl_fullbrights.value)
+	{
+		glDepthMask (GL_FALSE);
+		glEnable (GL_BLEND);
+		glBlendFunc (GL_ONE, GL_ONE);
+		glTexEnvf (GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_MODULATE);
+		glColor3f (entalpha, entalpha, entalpha);
+		Fog_StartAdditive ();
+		R_DrawTextureChains_Glow (model, ent, chain);
+		Fog_StopAdditive ();
+		glColor3f (1, 1, 1);
+		glTexEnvf (GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_REPLACE);
+		glBlendFunc (GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+		glDisable (GL_BLEND);
+		glDepthMask (GL_TRUE);
+	}
+
+	if (chain != chain_world)
+		R_DrawGrassBlades(model, ent, chain);
+}
+
+/*
+=============
+R_DrawWorld -- ericw -- moved from R_DrawTextureChains, which is no longer specific to the world.
+=============
+*/
+void R_DrawWorld (void)
+{
+	if (!r_drawworld_cheatsafe)
+		return;
+
+	R_DrawTextureChains (cl.worldmodel, NULL, chain_world);
+#ifndef SDL_THREADS_DISABLED
+	if (gl_vbo_able && gl_bmodel_vbo)
+		RSceneCache_Draw(false);
+#endif
+	R_DrawGrassBlades(cl.worldmodel, NULL, chain_world);
+}
+
+/*
+=============
+R_DrawWorld_Water -- ericw -- moved from R_DrawTextureChains_Water, which is no longer specific to the world.
+=============
+*/
+void R_DrawWorld_Water (void)
+{
+	if (!r_drawworld_cheatsafe)
+		return;
+
+	R_DrawTextureChains_Water (cl.worldmodel, NULL, chain_world);
+#ifndef SDL_THREADS_DISABLED
+	if (gl_vbo_able && gl_bmodel_vbo)
+		RSceneCache_Draw(true);
+#endif
+}
+
+/*
+=============
+R_DrawWorld_ShowTris -- ericw -- moved from R_DrawTextureChains_ShowTris, which is no longer specific to the world.
+=============
+*/
+void R_DrawWorld_ShowTris (void)
+{
+	if (!r_drawworld_cheatsafe)
+		return;
+
+	R_DrawTextureChains_ShowTris (cl.worldmodel, chain_world);
+}
+
+
+
+#ifndef SDL_THREADS_DISABLED
+/*
+================
+Scenecache stuff -- spike
+Uses a worker thread to build an index buffer that can be thrown at the gpu.
+Ignores frustum checks - the gpu can generally cull this faster than the main thread anyway.
+Forces fatpvs on, to invisible walls popin/stutter.
+Doesn't walk any leafs (per-frame), so can't use efrags. We instead just do a pvs check on each individually (should at least avoid poisoning the cache).
+
+woods -- added #caustics support
+
+================
+*/
+#define RSCENECACHE_TEX_WORLD	1
+#define RSCENECACHE_TEX_WATER	2
+#define RSCENECACHE_TEX_SKY		4
+
+enum rscenecachestatus_e
+{
+	SCS_BUILDING,
+	SCS_COMPUTED,
+	SCS_FINISHED,
+	SCS_DISCARDED,
+};
+
+static struct
+{	//I'm tagging things as commented-volatile to mark the things that we depend upon before the sdl lock/unlock/wait calls.
+	SDL_Thread *thread;
+	SDL_Mutex *mutex;
+	SDL_Condition *wt_cond;
+	SDL_Condition *rt_cond;
+
+	/*volatile*/ qboolean die;
+	/*volatile*/ struct rscenecache_s *processing;
+	SDL_AtomicInt processed;	//lightmaps need updating
+
+	// woods #scenecachedlights -- lightweight per-frame worker job that patches
+	// dlight lightmaps in place so active dlights don't force full cache rebuilds.
+	struct
+	{
+		/*volatile*/ struct rscenecache_s *cache;	//job target; non-NULL while queued/running. worker owns the fields below while set.
+		dlight_t dlights[countof(cl_dlights)];
+		double time;
+		int framecount;
+		//tb -- also refresh lightstyle-driven lightmaps in this job. A lightstyle
+		//tick used to invalidate the whole cache, so the worker regenerated every
+		//index batch and the main thread re-uploaded the entire EBO, ~10x a second,
+		//to produce byte-identical geometry. Geometry cannot depend on lightstyle
+		//brightness, so only the lightmap texels need refreshing.
+		qboolean styles;
+		//Which surfaces that sweep may touch: the union of every live cache's
+		//visited set, built on the main thread. Sweeping the whole world instead
+		//was correct but relit ~2x the surfaces the old rebuild did, saturating
+		//the worker; restricting it to the drawing cache alone would leave stale
+		//light when another cache or a skyroom draws from the shared lightmaps.
+		byte *surfs;
+		size_t surfbytes;
+	} dlightjob;
+	SDL_AtomicInt haslitsurfs;	//worker-maintained: lightmaps still contain dlight contributions needing cleanup
+
+	struct rscenecache_s *drawing;
+	struct rscenecache_s *teleportmain; // retained while the teleporter renders its extra views
+	qboolean doingskybox;
+
+	struct rscenecache_s
+	{
+		struct rscenecache_s *next;
+
+		vec3_t pos;
+		int hostframe;	//forget them if they get too old.
+		qmodel_t *worldmodel;
+		byte *pvs;
+
+		byte *cachedsubmodels;	//one bit for each.
+		unsigned int numcachedsubmodels;
+		byte *visitedsurfs;	//worker-private surface visitation bitmap
+
+		unsigned int brushpolys;
+		unsigned int lightmaps;
+		unsigned int numtextures;
+		unsigned int drawtexturecount;
+		unsigned int *drawtextures;
+		byte *drawtextureflags;
+		qboolean hassky;
+		msurface_t **teleports; // world faces and baked submodel faces, in world coordinates
+		size_t numteleports, maxteleports;
+		qboolean teleportscomplete;
+		qboolean teleportchains; // main thread: these faces draw through texture chains this view
+
+		SDL_AtomicInt status;
+		GLuint ebo;
+		dlight_t dlights[countof(cl_dlights)];	//added this here so the cache at least gets consistent lighting without having to fight the main thread.
+		double time;	//for killing old lights...
+		qboolean flashblend;
+		qboolean oldskyleaf;
+		qboolean dynamic;
+		int dlightframecount;
+		r_lightmap_buildstate_t lightmapstate;
+		msurface_t **litsurfs;	// woods #scenecachedlights -- surfs this build lit with dlights (worker-owned while building, merged into the main-thread list afterwards)
+		size_t numlitsurfs, maxlitsurfs;
+		struct rscenecachebath_s
+		{
+			unsigned int *idx;
+			unsigned int *eboidx;
+			size_t numidx;
+			size_t maxidx;
+		} batches[1];	//one per texturelm...
+	} *cache;	//remember a few, for skyrooms or multiple-csqc-renderscenes etc. we need at least two - previous and pending
+} rscenecache;
+static SDL_AtomicInt rscenecache_worker_warning;
+static qboolean RSceneCache_TextureIsSky(const texture_t *tex);
+byte *skipsubmodels;
+
+static qboolean RSceneCache_ReserveBatchIndices(struct rscenecachebath_s *batch, size_t addidx, const char *what)
+{
+	size_t needed, newmax;
+	void *new_idx;
+	(void)what;
+
+	if (addidx > (size_t)-1 - batch->numidx)
+	{
+		SDL_SetAtomicInt(&rscenecache_worker_warning, true);
+		return false;
+	}
+	needed = batch->numidx + addidx;
+	if (needed <= batch->maxidx)
+		return true;
+
+	newmax = (needed > (size_t)-1 - 4096) ? needed : needed + 4096;
+	if (newmax > (size_t)-1 / sizeof(*batch->idx))
+	{
+		SDL_SetAtomicInt(&rscenecache_worker_warning, true);
+		return false;
+	}
+	new_idx = realloc(batch->idx, sizeof(*batch->idx) * newmax);
+	if (!new_idx)
+	{
+		SDL_SetAtomicInt(&rscenecache_worker_warning, true);
+		return false;
+	}
+
+	batch->idx = new_idx;
+	batch->maxidx = newmax;
+	return true;
+}
+
+// woods #scenecachedlights -- surfaces whose lightmaps currently contain dynamic
+// light contributions, so a moving/dying dlight can be cleared incrementally
+// instead of forcing a full scenecache rebuild every frame. Owned by the worker
+// thread (dlight jobs and full builds both run there); the main thread only
+// touches it with the worker drained (RSceneCache_ResetDlightTracking).
+static msurface_t **rscenecache_litsurfs;
+static size_t rscenecache_numlitsurfs, rscenecache_maxlitsurfs;
+static qmodel_t *rscenecache_litsurfs_model;
+
+static qboolean RSceneCache_SurfaceListReserve (msurface_t ***surfs, size_t *max, size_t needed)
+{
+	msurface_t **grown;
+	size_t newmax;
+	if (needed <= *max)
+		return true;
+	newmax = *max ? ((*max > (size_t)-1 / 2) ? needed : *max * 2) : 256;
+	if (newmax < needed)
+		newmax = needed;
+	if (newmax > (size_t)-1 / sizeof(*grown))
+	{
+		SDL_SetAtomicInt(&rscenecache_worker_warning, true);
+		return false;
+	}
+	grown = realloc(*surfs, newmax * sizeof(*grown));
+	if (!grown)
+	{
+		SDL_SetAtomicInt(&rscenecache_worker_warning, true);
+		return false;
+	}
+	*surfs = grown;
+	*max = newmax;
+	return true;
+}
+
+static void RSceneCache_AddTeleportSurface(struct rscenecache_s *cache, msurface_t *surf)
+{
+	// Match cached-batch suppression: an unsupported normal map stays entirely
+	// in the ordinary water batch, even when other teleporters use the shader.
+	if (!(surf->flags & SURF_DRAWTELE) || !surf->texinfo->texture->tele_normal)
+		return;
+	if (RSceneCache_SurfaceListReserve(&cache->teleports, &cache->maxteleports, cache->numteleports + 1))
+		cache->teleports[cache->numteleports++] = surf;
+	else
+		cache->teleportscomplete = false; // keep the ordinary water batches as a fallback
+}
+
+static void RSceneCache_ResetDlightTracking (qmodel_t *mod)
+{	//main thread. surf pointers die with their model, so drop them before the
+	//model does - but only once the worker can't be touching the list.
+	if (rscenecache.thread)
+	{
+		SDL_LockMutex(rscenecache.mutex);
+		while (rscenecache.dlightjob.cache)
+			SDL_WaitCondition(rscenecache.rt_cond, rscenecache.mutex);
+		if (!mod || rscenecache_litsurfs_model == mod)
+		{
+			rscenecache_numlitsurfs = 0;
+			rscenecache_litsurfs_model = NULL;
+			SDL_SetAtomicInt(&rscenecache.haslitsurfs, false);
+		}
+		SDL_UnlockMutex(rscenecache.mutex);
+	}
+	else if (!mod || rscenecache_litsurfs_model == mod)
+	{
+		rscenecache_numlitsurfs = 0;
+		rscenecache_litsurfs_model = NULL;
+		SDL_SetAtomicInt(&rscenecache.haslitsurfs, false);
+	}
+}
+
+static void RSceneCache_MergeLitSurfs (struct rscenecache_s *cache)
+{	//worker thread: adopt the surfs this cache's build lit into the tracking
+	//list, so a later dlight job can clear them once the lights move or die.
+	if (cache->numlitsurfs)
+	{
+		if (rscenecache_litsurfs_model != cache->worldmodel)
+		{
+			rscenecache_numlitsurfs = 0;
+			rscenecache_litsurfs_model = cache->worldmodel;
+		}
+		if (RSceneCache_SurfaceListReserve(&rscenecache_litsurfs, &rscenecache_maxlitsurfs, rscenecache_numlitsurfs + cache->numlitsurfs))
+		{
+			memcpy(rscenecache_litsurfs + rscenecache_numlitsurfs, cache->litsurfs, cache->numlitsurfs * sizeof(*cache->litsurfs));
+			rscenecache_numlitsurfs += cache->numlitsurfs;
+			SDL_SetAtomicInt(&rscenecache.haslitsurfs, true);
+		}
+	}
+	cache->numlitsurfs = 0;
+}
+
+static void RSceneCache_RenderDynamicLightmaps (struct rscenecache_s *cache, msurface_t *fa, int dlightframecount, qboolean track)
+{
+	static entity_t r_worldentity;	//so the dlight stuff doesn't bug out.
+	byte		*base;
+	int			maps;
+	int smax, tmax;
+
+	if (fa->flags & SURF_DRAWTILED) //johnfitz -- not a lightmapped surface
+		return;
+
+	// check for lightmap modification
+	for (maps=0; maps < MAXLIGHTMAPS && fa->styles[maps] != INVALID_LIGHTSTYLE; maps++)
+		if (cache->lightmapstate.lightstyles[fa->styles[maps]] != fa->cached_light[maps])
+			goto dynamic;
+
+	if (fa->dlightframe == dlightframecount	// dynamic this frame
+		|| fa->cached_dlight)			// dynamic previously
+	{
+dynamic:
+		if (cache->dynamic)
+		{
+			struct lightmap_s *lm = &lightmaps[fa->lightmaptexturenum];
+			smax = fa->extents[0]+1;
+			tmax = fa->extents[1]+1;
+			base = lm->pbodata;
+			base += fa->light_t * LMBLOCK_WIDTH * lightmap_bytes + fa->light_s * lightmap_bytes;
+			R_BuildLightMapForState (cache->worldmodel, fa, base, LMBLOCK_WIDTH*lightmap_bytes, &r_worldentity, dlightframecount, cache->dlights, &cache->lightmapstate);
+			R_LightmapMarkDirtyRect (lm, fa->light_s, fa->light_t, smax, tmax); // woods #lmrect -- after the bytes, see its comment
+			// woods #scenecachedlights -- remember dlight-lit surfaces so they can be cleared later without another full rebuild
+			if (track && fa->cached_dlight &&
+				RSceneCache_SurfaceListReserve(&cache->litsurfs, &cache->maxlitsurfs, cache->numlitsurfs+1))
+				cache->litsurfs[cache->numlitsurfs++] = fa;
+		}
+	}
+}
+
+static unsigned short rscenecache_used_lightstyles[MAX_LIGHTSTYLES];
+static int rscenecache_num_used_lightstyles;
+static qmodel_t *rscenecache_lightstyle_model;
+
+static void RSceneCache_ResetLightstyleTracking(qmodel_t *mod)
+{
+	if (!mod || rscenecache_lightstyle_model == mod)
+	{
+		rscenecache_lightstyle_model = NULL;
+		rscenecache_num_used_lightstyles = 0;
+	}
+}
+
+static qboolean RSceneCache_UsedLightstylesChanged(const int *old_vals, const int *new_vals)
+{
+	msurface_t *surf;
+	int i, j;
+
+	// Compare only styles referenced by world surfaces, but preserve the
+	// force-rebuild sentinel used by RSceneCache_Queue.
+	if (old_vals[0] == INT_MIN)
+		return true;
+
+	if (rscenecache_lightstyle_model != cl.worldmodel)
+	{
+		byte seen[(MAX_LIGHTSTYLES + 7) / 8];
+
+		memset(seen, 0, sizeof(seen));
+		rscenecache_num_used_lightstyles = 0;
+		rscenecache_lightstyle_model = cl.worldmodel;
+
+		for (i = 0, surf = cl.worldmodel->surfaces; i < cl.worldmodel->numsurfaces; i++, surf++)
+		{
+			for (j = 0; j < MAXLIGHTMAPS && surf->styles[j] != INVALID_LIGHTSTYLE; j++)
+			{
+				unsigned short style = surf->styles[j];
+
+				if (style >= MAX_LIGHTSTYLES)
+					continue;
+				if (seen[style >> 3] & (1u << (style & 7)))
+					continue;
+
+				seen[style >> 3] |= (1u << (style & 7));
+				rscenecache_used_lightstyles[rscenecache_num_used_lightstyles++] = style;
+			}
+		}
+	}
+
+	for (i = 0; i < rscenecache_num_used_lightstyles; i++)
+		if (old_vals[rscenecache_used_lightstyles[i]] != new_vals[rscenecache_used_lightstyles[i]])
+			return true;
+
+	return false;
+}
+
+static void RSceneCache_CopyDlights(dlight_t *dst, const dlight_t *src, size_t count)
+{
+	size_t i;
+
+	memcpy(dst, src, sizeof(*dst) * count);
+	for (i = 0; i < count; i++)
+	{
+		float stylescale = R_DlightStyleScale(&dst[i]);
+
+		if (stylescale <= 0.0f)
+		{
+			dst[i].radius = 0;
+			dst[i].style = -1;
+			continue;
+		}
+
+		if (stylescale != 1.0f)
+			VectorScale(dst[i].color, stylescale, dst[i].color);
+		dst[i].style = -1;
+	}
+}
+
+// woods #scenecachedlights -- mirrors R_MarkLights (gl_rlight.c), but also
+// records each surface the first time it gets marked this frame so the
+// in-place dlight path knows exactly which lightmaps to rebuild (and later
+// clear). Worker thread only. Keep the traversal in sync with R_MarkLights.
+static void RSceneCache_MarkDlightSurfs (qmodel_t *model, dlight_t *light, vec3_t lightorg, int framecount, int num, mnode_t *node, qboolean track)
+{
+	mplane_t	*splitplane;
+	msurface_t	*surf;
+	vec3_t		impact;
+	float		dist, facedist, l, maxdist;
+	unsigned int i;
+	int			 j, s, t;
+
+start:
+
+	if (node->contents < 0)
+		return;
+
+	splitplane = node->plane;
+	if (splitplane->type < 3)
+		dist = lightorg[splitplane->type] - splitplane->dist;
+	else
+		dist = DotProduct (lightorg, splitplane->normal) - splitplane->dist;
+
+	if (dist > light->radius)
+	{
+		node = node->children[0];
+		goto start;
+	}
+	if (dist < -light->radius)
+	{
+		node = node->children[1];
+		goto start;
+	}
+
+	maxdist = light->radius*light->radius;
+
+	if (node->firstsurface >= 0 &&
+		node->firstsurface + node->numsurfaces <= (unsigned int)model->numsurfaces)
+	{
+		// mark the polygons
+		surf = model->surfaces + node->firstsurface;
+		for (i=0 ; i<node->numsurfaces ; i++, surf++)
+		{
+			if (!surf->plane
+				|| surf->plane < model->planes
+				|| surf->plane >= model->planes + model->numplanes)
+				continue;           /* skip this surface, process the rest */
+
+			facedist = DotProduct(lightorg, surf->plane->normal)
+				- surf->plane->dist;
+
+			for (j=0 ; j<3 ; j++)
+				impact[j] = lightorg[j] - surf->plane->normal[j]*facedist;
+			// clamp center of light to corner and check brightness
+			l = DotProduct (impact, surf->lmvecs[0]) + surf->lmvecs[0][3];
+			s = l;if (s < 0) s = 0;else if (s > surf->extents[0]) s = surf->extents[0];
+			s = l - s;
+			l = DotProduct (impact, surf->lmvecs[1]) + surf->lmvecs[1][3];
+			t = l;if (t < 0) t = 0;else if (t > surf->extents[1]) t = surf->extents[1];
+			t = l - t;
+			// compare to minimum light
+			if ((s*s+t*t+facedist*facedist) < maxdist)
+			{
+				if (surf->dlightframe != framecount) // not dynamic until now
+				{
+					memset (surf->dlightbits, 0, sizeof(surf->dlightbits)); // clear every word, not just this light's - stale bits in the other word kept expired lights baked in
+					surf->dlightframe = framecount;
+					if (track && !(surf->flags & SURF_DRAWTILED) &&
+						RSceneCache_SurfaceListReserve(&rscenecache_litsurfs, &rscenecache_maxlitsurfs, rscenecache_numlitsurfs+1))
+						rscenecache_litsurfs[rscenecache_numlitsurfs++] = surf;
+				}
+				surf->dlightbits[num >> 5] |= 1U << (num & 31);
+			}
+		}
+	}
+
+	if (node->children[0]->contents >= 0)
+		RSceneCache_MarkDlightSurfs (model, light, lightorg, framecount, num, node->children[0], track);
+	if (node->children[1]->contents >= 0)
+		RSceneCache_MarkDlightSurfs (model, light, lightorg, framecount, num, node->children[1], track);
+}
+
+/*
+================
+RSceneCache_RunDlightJob -- woods #scenecachedlights
+
+The scenecache used to be invalidated (and fully rebuilt by the worker thread,
+with a complete EBO re-upload) every frame that any dlight was active, which
+made powerup glows, rockets and muzzle flashes disproportionately expensive.
+The cache geometry doesn't change with dlights though - only the shared
+lightmap texels do - so patch just those, still on the worker thread (the
+per-surface R_BuildLightMap work is too heavy for the main thread), and leave
+the cache alone.
+
+Worker thread. The job fields and the litsurfs list are ours while
+rscenecache.dlightjob.cache is set.
+================
+*/
+static qboolean RSceneCache_RunDlightJob (struct rscenecache_s *cache)
+{
+	size_t s, prevcount, out;
+	unsigned int i, j;
+	dlight_t *l;
+	msurface_t *surf;
+	qboolean changed = false;
+	int framecount = rscenecache.dlightjob.framecount;
+
+	if (rscenecache_litsurfs_model != cache->worldmodel)
+	{
+		rscenecache_numlitsurfs = 0;
+		rscenecache_litsurfs_model = cache->worldmodel;
+	}
+
+	//refresh the cache's dlight snapshot so the lightmap rebuilds see current positions
+	memcpy (cache->dlights, rscenecache.dlightjob.dlights, sizeof(cache->dlights));
+	cache->time = rscenecache.dlightjob.time;
+
+	prevcount = rscenecache_numlitsurfs;
+
+	if (!cache->flashblend)
+	{
+		for (i = 0; i < countof(cache->dlights); i++)
+		{
+			l = &cache->dlights[i];
+			if (l->die < cache->time || !l->radius)
+				continue;
+			RSceneCache_MarkDlightSurfs (cache->worldmodel, l, l->origin, framecount, i, cache->worldmodel->nodes, true);
+			for (j = 0; j < cache->numcachedsubmodels; j++)
+				if (cache->cachedsubmodels[j>>3] & (1u<<(j&7)))
+					RSceneCache_MarkDlightSurfs (cache->worldmodel, l, l->origin, framecount, i, cache->worldmodel->nodes + cache->worldmodel->submodels[j].headnode[0], true);
+		}
+	}
+
+	//clear surfaces that were lit before but weren't re-marked this frame
+	for (s = 0; s < prevcount; s++)
+	{
+		surf = rscenecache_litsurfs[s];
+		if (surf->dlightframe == framecount)
+			continue;	//still lit; also present in the freshly-marked tail below.
+		if (!surf->cached_dlight)
+			continue;	//already clean.
+		if ((unsigned int)(surf->lightmaptexturenum+1) >= cache->lightmaps)
+			continue;
+		RSceneCache_RenderDynamicLightmaps (cache, surf, framecount, false);
+		changed = true;
+	}
+	//rebuild the surfaces the lights currently touch, compacting them to the list head
+	for (out = 0, s = prevcount; s < rscenecache_numlitsurfs; s++)
+	{
+		surf = rscenecache_litsurfs[s];
+		if ((unsigned int)(surf->lightmaptexturenum+1) >= cache->lightmaps)
+			continue;
+		RSceneCache_RenderDynamicLightmaps (cache, surf, framecount, false);
+		rscenecache_litsurfs[out++] = surf;
+		changed = true;
+	}
+	rscenecache_numlitsurfs = out;
+	SDL_SetAtomicInt(&rscenecache.haslitsurfs, out != 0);
+
+	//tb -- a lightstyle tick changed the light values in cache->lightmapstate.
+	//Sweep every world surface, not just the drawing cache's visible set:
+	//lightmap texels are shared, several caches (plus skyrooms) can be drawn from
+	//the same texels, and a surface skipped here would keep stale light until
+	//something else happened to rebuild it. RenderDynamicLightmaps already
+	//early-outs on surfaces whose cached_light still matches, so the sweep only
+	//pays for the surfaces that genuinely changed.
+	if (rscenecache.dlightjob.styles && rscenecache.dlightjob.surfs)
+	{
+		msurface_t *surfaces = cache->worldmodel->surfaces;
+		int numsurfaces = cache->worldmodel->numsurfaces;
+		const byte *want = rscenecache.dlightjob.surfs;
+		int i;
+
+		for (i = 0; i < numsurfaces; i++)
+		{
+			if (!(want[i>>3] & (1u<<(i&7))))
+				continue;	//not reachable from any live cache.
+			surf = &surfaces[i];
+			if (surf->numedges < 3)
+				continue;	//degenerate; visitedsurfs is set before the builder's own check.
+			if ((unsigned int)(surf->lightmaptexturenum+1) >= cache->lightmaps)
+				continue;
+			if (surf->dlightframe == framecount || surf->cached_dlight)
+				continue;	//the dlight passes above already rebuilt this one, and
+						//RenderDynamicLightmaps would redo it: once the style
+						//check passes, the dlight condition still fires.
+			RSceneCache_RenderDynamicLightmaps (cache, surf, framecount, false);
+		}
+		changed = true;
+	}
+
+	return changed;
+}
+
+// woods #scenecachedlights -- main thread: hand the worker a dlight-update job
+// for the cache we're about to draw. Caller ensures no full build is queued or
+// in flight, so the worker only ever touches the surf dlight fields and the
+// lightmap staging memory from one place at a time.
+static qboolean RSceneCache_QueueDlightUpdate (struct rscenecache_s *cache, qboolean stylechanged)
+{
+	qboolean queued = false;
+	static int lastframe = -1;
+	unsigned int i;
+	dlight_t *l;
+	struct rscenecache_s *c;
+	qboolean active = false;
+
+	if (!cache || cache->worldmodel != cl.worldmodel || !r_dynamic.value || !rscenecache.thread)
+		return false;
+	if (lastframe == host_framecount)
+		return false;	//skyrooms/splitscreen queue several scenes per frame; once is enough.
+	lastframe = host_framecount;
+
+	// don't spawn dlights before their time when rewinding demos (matches R_PushDlights)
+	for (i = 0, l = cl_dlights; i < countof(cl_dlights); i++, l++)
+		if (l->spawn > cl.mtime[0] && cls.demoplayback)
+			l->die = 0.f;
+
+	if (!gl_flashblend.value)
+	{
+		for (i = 0, l = cl_dlights; i < countof(cl_dlights); i++, l++)
+		{
+			if (l->die < cl.time || !l->radius || R_DlightStyleScale(l) <= 0.0f)
+				continue;
+			active = true;
+			break;
+		}
+	}
+
+	if (!active && !stylechanged && !SDL_GetAtomicInt(&rscenecache.haslitsurfs))
+		return false;	//nothing to light, nothing to clear.
+
+	SDL_LockMutex(rscenecache.mutex);
+	if (!rscenecache.processing && !rscenecache.dlightjob.cache)
+	{
+		if (stylechanged)
+		{	//Which surfaces the worker's sweep may touch. Built here, under the
+			//lock and only once we know no job is in flight: the worker reads
+			//this buffer for the whole sweep, so refreshing it while a job was
+			//running would rewrite data under it. The main thread owns the cache
+			//list, and the caller guarantees nothing is SCS_BUILDING, so no
+			//visitedsurfs is being written while we read it.
+			size_t need = ((size_t)cl.worldmodel->numsurfaces + 7) >> 3;
+
+			if (rscenecache.dlightjob.surfbytes != need)
+			{
+				byte *grown = realloc (rscenecache.dlightjob.surfs, need);
+				if (!grown)
+				{	//skip this tick; the next frame re-offers it.
+					SDL_UnlockMutex(rscenecache.mutex);
+					return false;
+				}
+				rscenecache.dlightjob.surfs = grown;
+				rscenecache.dlightjob.surfbytes = need;
+			}
+			memset (rscenecache.dlightjob.surfs, 0, need);
+			for (c = rscenecache.cache; c; c = c->next)
+			{
+				size_t b;
+				if (c->worldmodel != cl.worldmodel || !c->visitedsurfs)
+					continue;
+				if (SDL_GetAtomicInt(&c->status) == SCS_DISCARDED)
+					continue;
+				for (b = 0; b < need; b++)
+					rscenecache.dlightjob.surfs[b] |= c->visitedsurfs[b];
+			}
+		}
+
+		RSceneCache_CopyDlights (rscenecache.dlightjob.dlights, cl_dlights, countof(cl_dlights));
+		rscenecache.dlightjob.time = cl.time;
+		rscenecache.dlightjob.framecount = r_framecount;
+		rscenecache.dlightjob.styles = stylechanged;
+		cache->flashblend = !!gl_flashblend.value;
+		cache->dynamic = !!r_dynamic.value;
+		cache->dlightframecount = r_framecount;
+		//picks up the current d_lightstylevalue, which is what the worker's
+		//sweep compares each surface's cached_light against.
+		R_LightmapBuildState_Snapshot(&cache->lightmapstate);
+		rscenecache.dlightjob.cache = cache;
+		SDL_SignalCondition(rscenecache.wt_cond);
+		queued = true;
+	}
+	//tb -- if the worker is busy we simply do not queue. The style comparison in
+	//RSceneCache_Queue has not been advanced, so the next frame re-offers the job
+	//with the newest values: latest state wins, and ticks cannot pile up.
+	SDL_UnlockMutex(rscenecache.mutex);
+	return queued;
+}
+
+static int RSceneCache_Thread(void *ctx)
+{
+	unsigned int i, j, e;
+	mleaf_t *leaf;
+	msurface_t **mark, *surf;
+	struct rscenecache_s *cache;
+	byte *vis;
+	unsigned int bpolys;
+	unsigned int clusters;
+	unsigned int *idx;
+	size_t numidx;
+	struct rscenecachebath_s *batch;
+	mmodel_t *sub;
+
+	SDL_LockMutex(rscenecache.mutex);
+	SDL_SignalCondition(rscenecache.rt_cond);	//wake the parent thread. its waiting for us.
+	while (!rscenecache.die)
+	{
+		if (!rscenecache.processing && !rscenecache.dlightjob.cache)	//might have been posted+signaled to us while we were busy on the last one.
+			SDL_WaitCondition(rscenecache.wt_cond, rscenecache.mutex);
+		cache = rscenecache.processing;
+		rscenecache.processing = NULL;	//accepted!
+		if (!cache && rscenecache.dlightjob.cache)
+		{	// woods #scenecachedlights -- lightweight job: patch dlight lightmaps in place, no rebuild.
+			struct rscenecache_s *jobcache = rscenecache.dlightjob.cache;
+			qboolean changed;
+			SDL_UnlockMutex(rscenecache.mutex);
+			changed = RSceneCache_RunDlightJob(jobcache);
+			//tb -- counted as worker time alongside full builds, so the columns
+			//stay comparable between the rebuild and lightmap-only paths.
+			SDL_LockMutex(rscenecache.mutex);
+			if (changed)
+				SDL_SetAtomicInt(&rscenecache.processed, true);	//get RSceneCache_Finish to upload the dirty regions.
+			rscenecache.dlightjob.cache = NULL;
+			SDL_SignalCondition(rscenecache.rt_cond);
+			continue;
+		}
+		SDL_UnlockMutex(rscenecache.mutex);
+		if (cache)
+		{
+			int dlightframecount = cache->dlightframecount;
+			cache->numteleports = 0;
+			cache->teleportscomplete = true;
+
+			if (!cache->flashblend)
+				for (j = 0; j < countof(cache->dlights); j++)
+				{
+					if ((cache->dlights[j].die < cache->time) ||
+						(!cache->dlights[j].radius))
+						continue;
+					//FIXME: no model context passed
+					RSceneCache_MarkDlightSurfs (cache->worldmodel, &cache->dlights[j], cache->dlights[j].origin, dlightframecount, j, cache->worldmodel->nodes, false);
+				}
+
+			bpolys = 0;
+			vis = cache->pvs;
+			leaf = &cache->worldmodel->leafs[1];
+			clusters = cache->worldmodel->numleafs;
+			for (i=0 ; i<clusters ; i++, leaf++)
+			{
+				if (vis[i>>3] & (1<<(i&7)))
+				{
+					if (leaf->contents != CONTENTS_SKY || cache->oldskyleaf)
+						for (j=0, mark = leaf->firstmarksurface; j<(unsigned int)leaf->nummarksurfaces; j++, mark++)
+						{
+							size_t surfnum;
+							surf = *mark;
+							if (surf < cache->worldmodel->surfaces || surf >= cache->worldmodel->surfaces + cache->worldmodel->numsurfaces)
+								continue;
+							surfnum = (size_t)(surf - cache->worldmodel->surfaces);
+							if (!(cache->visitedsurfs[surfnum >> 3] & (1u << (surfnum & 7))))
+							{
+								cache->visitedsurfs[surfnum >> 3] |= 1u << (surfnum & 7);
+
+								bpolys++;
+								if (surf->numedges < 3)
+									continue;	//ignore any buggy degenerate ones.
+								if ((unsigned)(surf->lightmaptexturenum+1) >= cache->lightmaps)
+									continue;	//wtf
+								if (!surf->texinfo) { // material sanity – guard against NULL or out-of-range
+									SDL_SetAtomicInt(&rscenecache_worker_warning, true);
+									continue;
+								}
+								if ((unsigned int)surf->texinfo->materialidx >= cache->numtextures)
+									continue;	//should have been sanitised at load.
+								unsigned int vcount = (unsigned int)R_SurfaceVertCount (surf);	// woods #collinear
+								numidx = (vcount-2)*3;
+								int uw = (surf->flags & SURF_UNDERWATER) ? 1 : 0;
+								batch = &cache->batches[
+								        surf->texinfo->materialidx * cache->lightmaps * 2   /* texture bank  */
+								      + uw                    * cache->lightmaps            /* above / under */
+								      + (1 + surf->lightmaptexturenum)];                    /* lightmap slot */
+								if (!RSceneCache_ReserveBatchIndices(batch, numidx, "world"))
+									continue;
+								idx = &batch->idx[batch->numidx];
+								batch->numidx += numidx;
+								for (e = 2; e < vcount; e++)
+								{
+									*idx++ = surf->vbo_firstvert;
+									*idx++ = surf->vbo_firstvert + e-1;
+									*idx++ = surf->vbo_firstvert + e;
+								}
+
+								RSceneCache_AddTeleportSurface(cache, surf);
+								RSceneCache_RenderDynamicLightmaps(cache, surf, dlightframecount, true);
+							}
+						}
+				}
+			}
+
+			for (i = 0; i < cache->numcachedsubmodels; i++)
+			{
+				if (!(cache->cachedsubmodels[i>>3]&(1u<<(i&7))))
+					continue;	//not needed.
+				sub = &cache->worldmodel->submodels[i];
+
+				if (!cache->flashblend)
+					for (j = 0; j < countof(cache->dlights); j++)
+					{
+						if ((cache->dlights[j].die < cache->time) ||
+							(!cache->dlights[j].radius))
+							continue;
+						//FIXME: no model context passed
+						RSceneCache_MarkDlightSurfs (cache->worldmodel, &cache->dlights[j], cache->dlights[j].origin, dlightframecount, j, cache->worldmodel->nodes + sub->headnode[0], false);
+					}
+
+				//FIXME: these should really use MultiDrawIndirect, so we can add/remove them more cheaply.
+				for (j=0, surf = cache->worldmodel->surfaces+sub->firstface; j<(unsigned int)sub->numfaces; j++, surf++)
+				{	//don't bother with visframe checks here. a) we shouldn't be getting dupes anyway. b) we don't want to trip up the regular rendering if its rendering a moving copy while we're generating a new cache.
+					bpolys++;
+					if (surf->numedges < 3)
+						continue;	//ignore any buggy degenerate ones.
+					if ((unsigned)(surf->lightmaptexturenum+1) >= cache->lightmaps)
+						continue;	//wtf
+					if (!surf->texinfo) {
+						SDL_SetAtomicInt(&rscenecache_worker_warning, true);
+						continue;
+					}
+					if ((unsigned int)surf->texinfo->materialidx >= cache->numtextures)
+						continue;	//should have been sanitised at load.
+					unsigned int vcount = (unsigned int)R_SurfaceVertCount (surf);	// woods #collinear
+					numidx = (vcount-2)*3;
+					int uw = (surf->flags & SURF_UNDERWATER) ? 1 : 0;
+					batch = &cache->batches[
+					        surf->texinfo->materialidx * cache->lightmaps * 2   /* texture bank  */
+					      + uw                    * cache->lightmaps            /* above / under */
+					      + (1 + surf->lightmaptexturenum)];                    /* lightmap slot */
+					if (!RSceneCache_ReserveBatchIndices(batch, numidx, "submodel"))
+						continue;
+					idx = &batch->idx[batch->numidx];
+					batch->numidx += numidx;
+					for (e = 2; e < vcount; e++)
+					{
+						*idx++ = surf->vbo_firstvert;
+						*idx++ = surf->vbo_firstvert + e-1;
+						*idx++ = surf->vbo_firstvert + e;
+					}
+
+					RSceneCache_AddTeleportSurface(cache, surf);
+					RSceneCache_RenderDynamicLightmaps(cache, surf, dlightframecount, true);
+				}
+			}
+
+			cache->brushpolys = bpolys;
+
+			// woods #scenecachedlights -- keep tracking what this build lit so a
+			// later dlight job can clear it once the lights move or die.
+			RSceneCache_MergeLitSurfs(cache);
+
+
+			SDL_LockMutex(rscenecache.mutex);
+			SDL_SetAtomicInt(&rscenecache.processed, true);
+			SDL_SetAtomicInt(&cache->status, SCS_COMPUTED);
+			SDL_SignalCondition(rscenecache.rt_cond);
+		}
+		else
+			SDL_LockMutex(rscenecache.mutex);
+	}
+	SDL_UnlockMutex(rscenecache.mutex);
+	return 0;
+}
+
+static qboolean RSceneCache_InputsHaveSky(const struct rscenecache_s *cache)
+{
+	const qmodel_t *model;
+	const mleaf_t *leaf;
+	const msurface_t *surf;
+	unsigned int i, j;
+
+	if (!cache || !(model = cache->worldmodel) || model->numleafs < 0)
+		return false;
+
+	leaf = &model->leafs[1];
+	for (i = 0; i < (unsigned int)model->numleafs; i++, leaf++)
+	{
+		msurface_t **mark;
+
+		if (!(cache->pvs[i >> 3] & (1u << (i & 7))))
+			continue;
+		if (leaf->contents == CONTENTS_SKY && !cache->oldskyleaf)
+			continue;
+		if (leaf->nummarksurfaces < 0)
+			continue;
+
+		for (j = 0, mark = leaf->firstmarksurface; j < (unsigned int)leaf->nummarksurfaces; j++, mark++)
+		{
+			surf = *mark;
+			if (surf < model->surfaces || surf >= model->surfaces + model->numsurfaces ||
+				surf->numedges < 3 ||
+				(unsigned int)(surf->lightmaptexturenum + 1) >= cache->lightmaps ||
+				!surf->texinfo ||
+				(unsigned int)surf->texinfo->materialidx >= cache->numtextures)
+				continue;
+			if (RSceneCache_TextureIsSky(model->textures[surf->texinfo->materialidx]))
+				return true;
+		}
+	}
+
+	for (i = 0; i < cache->numcachedsubmodels; i++)
+	{
+		const mmodel_t *sub;
+
+		if (!(cache->cachedsubmodels[i >> 3] & (1u << (i & 7))))
+			continue;
+		sub = &model->submodels[i];
+		if (sub->firstface < 0 || sub->numfaces < 0 ||
+			sub->firstface > model->numsurfaces - sub->numfaces)
+			continue;
+		for (j = 0, surf = model->surfaces + sub->firstface; j < (unsigned int)sub->numfaces; j++, surf++)
+		{
+			if (surf->numedges < 3 ||
+				(unsigned int)(surf->lightmaptexturenum + 1) >= cache->lightmaps ||
+				!surf->texinfo ||
+				(unsigned int)surf->texinfo->materialidx >= cache->numtextures)
+				continue;
+			if (RSceneCache_TextureIsSky(model->textures[surf->texinfo->materialidx]))
+				return true;
+		}
+	}
+
+	return false;
+}
+
+/* Legacy subviews mark lights and write the same lightmap staging data as the
+ * worker. Drain every pending build/update before handing it to the main thread,
+ * keeping the caches and the sleeping worker available for the main view.
+ */
+static void RSceneCache_WaitForWorker(void)
+{
+	struct rscenecache_s *cache;
+	if (!rscenecache.thread)
+		return;
+	SDL_LockMutex(rscenecache.mutex);
+	for (;;)
+	{
+		for (cache = rscenecache.cache; cache; cache = cache->next)
+			if (SDL_GetAtomicInt(&cache->status) == SCS_BUILDING)
+				break;
+		if (!cache && !rscenecache.processing && !rscenecache.dlightjob.cache)
+			break;
+		SDL_WaitCondition(rscenecache.rt_cond, rscenecache.mutex);
+	}
+	SDL_UnlockMutex(rscenecache.mutex);
+}
+
+void RSceneCache_AbortTeleport(void)
+{
+	rscenecache.teleportmain = NULL;
+	rscenecache.drawing = NULL;
+	skipsubmodels = NULL;
+}
+
+static qboolean RSceneCache_CanDraw(void)
+{
+	// Cached batches use shader vertex attributes for both world and water.
+	// Fall back before replacing ordinary texture chains if either path failed.
+	return gl_vbo_able && gl_bmodel_vbo && gl_glsl_able &&
+		r_world_program && gl_glsl_water_able;
+}
+
+static qboolean RSceneCache_Queue(byte *vis)
+{
+//	int type = 0;
+	struct rscenecache_s *cache, *best = NULL, *building;
+	float bdist=FLT_MAX, d;	//bdist should match fatpvs size, so we don't have invisible walls.
+	vec3_t offset;
+	unsigned int rowbytes = (cl.worldmodel->numleafs+7)>>3;
+	size_t submodelbytes, surfacebytes;
+	int e;
+	qboolean grass_blades_active;
+	qboolean queuedbuild = false;	// woods #scenecachedlights
+	qboolean stylechanged = false;	//tb -- lightstyle tick needs a lightmap-only refresh
+	static int settingconflict;
+
+	static int old_lightstylevalue[countof(d_lightstylevalue)];
+	byte *bakesubmodels;
+
+	skipsubmodels = NULL;
+	// Cached indices address the shared brush VBO and require the shader paths.
+	if (!RSceneCache_CanDraw())
+	{
+		if (rscenecache.thread)
+			RSceneCache_Shutdown();
+		rscenecache.drawing = NULL;
+		rscenecache.teleportmain = NULL;
+		return false;
+	}
+
+	if (cl.worldmodel->numsubmodels < 0 || cl.worldmodel->numsurfaces < 0)
+		return false;
+	submodelbytes = ((size_t)cl.worldmodel->numsubmodels + 7) >> 3;
+	surfacebytes = ((size_t)cl.worldmodel->numsurfaces + 7) >> 3;
+
+	if (r_teleport_view)
+	{
+		if (rscenecache.drawing)
+			rscenecache.teleportmain = rscenecache.drawing;
+		rscenecache.drawing = NULL;
+		RSceneCache_WaitForWorker();
+		return false;
+	}
+	if (rscenecache.teleportmain)
+	{
+		// R_TeleportPrepare restores the main view and its entity list, then
+		// rebuilds its chains. Reuse its cache without emitting particles or
+		// queuing lighting/build work a second time in the same view.
+		rscenecache.drawing = rscenecache.teleportmain;
+		rscenecache.teleportmain = NULL;
+		return true;
+	}
+	rscenecache.drawing = NULL;	//still need to figure out which cache to use.
+	if (!*r_scenecache.string)
+		r_scenecache.value = 1;	//consistency with FTE's 'auto' seting.
+	if (!r_scenecache.value)
+	{
+		settingconflict = -1;
+
+		if (rscenecache.thread)
+			RSceneCache_Shutdown();
+		return false;
+	}
+	else if (r_fullbright_cheatsafe || r_lightmap_cheatsafe || r_drawflat_cheatsafe)
+	{	//r_drawflat cannot possibly work with this. we do not track how many tris there were per surface so you'd be colouring tris rather than surfs, but maybe that's whats actually important... anyway, debug features don't need to be fast. NOTE: QuakeWorld engines have a different interpretation of drawflat - showing block colours based on surface angles, which could be done via glsl, but its not really an nq/qs thing so just use the legacy path.
+		//r_fullbright could just use a white texture, or glsl, but its ugly and doesn't deserve to be fast!..
+		//r_lightmap would want to force the glsl, could be generic, but its a debug feature that we don't really care about.
+		if (settingconflict!=true)
+			settingconflict=true, Con_Printf("r_scenecache: Disabling due to conflicting settings\n");
+
+		if (rscenecache.thread)
+			RSceneCache_Shutdown();
+		return false;
+	}
+	//Note: r_dynamic is meant to work, but doesn't update as fast as you'd like (eg dlights).
+	else if (settingconflict!=false)
+		settingconflict=false, Con_DPrintf("r_scenecache: Enabled\n");
+
+	//we're not walking leafs here, so we need to handle static ents specially. and before the following loop...
+	for (e = 0; e < cl.num_statics; e++)
+	{
+		struct cl_static_entities_s *test = &cl.static_entities[e];
+		entity_t *pent = test->ent;
+
+		if (pent->is_client_candle && !r_drawcandle.value)
+			continue;
+
+		if (pent->model && cl_numvisedicts < cl_maxvisedicts)
+		{
+			if (CL_CTFPugSwapEntityModel(pent))
+				CL_LinkStaticEnt(test);
+
+			if (test->num_clusters<=MAX_ENT_LEAFS)
+			{
+				unsigned int i;
+				for (i=0 ; i < test->num_clusters ; i++)
+					if (vis[test->clusternums[i] >> 3] & (1 << (test->clusternums[i]&7) ))
+						break;
+				if (i == test->num_clusters)
+					continue;	//not visible.
+			}//else too many clusters, we were not tracking this ent properly. assume its visible and hope frustum checks later will stop it... they ARE frustum checked, right?
+
+			if (R_CullBox(test->absmin, test->absmax))
+				continue;
+
+#ifdef PSET_SCRIPT
+			if (pent->netstate.emiteffectnum > 0)
+			{
+				float t = cl.time-cl.oldtime;
+				vec3_t axis[3];
+				if (t < 0) t = 0; else if (t > 0.1) t= 0.1;
+				AngleVectors(pent->angles, axis[0], axis[1], axis[2]);
+				if (pent->model->type == mod_alias)
+					axis[0][2] *= -1;	//stupid vanilla bug
+				PScript_RunParticleEffectState(pent->origin, axis[0], t, cl.particle_precache[pent->netstate.emiteffectnum].index, &pent->emitstate);
+			}
+			else if (pent->model->emiteffect >= 0)
+			{
+				float t = cl.time-cl.oldtime;
+				vec3_t axis[3];
+				if (t < 0) t = 0; else if (t > 0.1) t= 0.1;
+				AngleVectors(pent->angles, axis[0], axis[1], axis[2]);
+				if (pent->model->flags & MOD_EMITFORWARDS)
+				{
+					if (pent->model->type == mod_alias)
+						axis[0][2] *= -1;	//stupid vanilla bug
+				}
+				else
+					VectorScale(axis[2], -1, axis[0]);
+				PScript_RunParticleEffectState(pent->origin, axis[0], t, pent->model->emiteffect, &pent->emitstate);
+				if (pent->model->flags & MOD_EMITREPLACE)
+					continue;
+			}
+#endif
+			cl_visedicts[cl_numvisedicts++] = pent;
+		}
+	}
+
+	//okay, now figure out which bmodels we can bake into the cache
+	bakesubmodels = alloca(submodelbytes);
+	memset(bakesubmodels, 0, submodelbytes);
+	grass_blades_active = R_GrassBladesActive();
+	if (r_scenecache.value != 2 && r_drawentities.value)
+	for (e = 0; e < cl_numvisedicts; e++)
+	{
+		entity_t *ent = cl_visedicts[e];
+		size_t m;
+		if (!ent->model || ent->model->submodelof != cl.worldmodel ||	//we only want submodels of the world here.
+			ent->origin[0]||ent->origin[1]||ent->origin[2] ||	//can only bake them if they're in the identity position. :(
+			ent->angles[0]||ent->angles[1]||ent->angles[2] ||	//and not rotated
+			(ent->eflags&EFLAGS_VIEWMODEL) ||	//viewmodel etc screws with origins.
+			ent->frame ||	//don't bother tracking toggled textures here.
+			ent->alpha!=0 ||	//transparent stuff would need extra batches, which gets awkward and misordered.
+			ent->effects)	//weird stuff like EF_ADDITIVE/EF_FULLBRIGHT. probably not used on submodels anyway.
+			continue;	//nope, can't bake it.
+		if (grass_blades_active && R_GrassEntityAllowsGrass(ent) &&
+			R_GrassPresenceCacheHasBladeSurfaces(R_GrassGetPresenceCache(ent->model, true)))
+			continue;	//keep grass-bearing bmodels in the normal entity path.
+		//okay, we want to bake this one.
+		m = ent->model->submodelidx;
+		bakesubmodels[m>>3] |= (1u<<(m&7));
+	}
+
+	for (building = NULL, cache = rscenecache.cache; cache; cache = cache->next)
+	{
+		if (cache->worldmodel != cl.worldmodel)
+		{	//this cache is completely unsuitable.
+			if (SDL_GetAtomicInt(&cache->status) == SCS_BUILDING)
+				building = cache;
+			continue;
+		}
+		if (SDL_GetAtomicInt(&cache->status) == SCS_DISCARDED)
+			continue;
+		if (cache->lightmaps != (unsigned int)(lightmap_count + 1) ||
+			cache->numtextures != (unsigned int)cl.worldmodel->numtextures)
+			continue;
+
+		if (!memcmp(cache->pvs, vis, rowbytes))
+		{	//pvs matches. yay. we *could* check leaf, but that wouldn't handle detail brushes properly.
+			VectorCopy(r_origin, cache->pos);	//might as well keep its origin updated, so we don't block needlessly, but only when its actually valid.
+			if (SDL_GetAtomicInt(&cache->status) == SCS_BUILDING)
+			{	//its perfect so there's no point building it, but we still can't use it yet, so keep looking for one we CAN use.
+				building = cache;
+				if (!best)
+					best = cache;
+				continue;
+			}
+			else
+			{	//we're in the right leaf, so yay?
+				if (!memcmp(cache->cachedsubmodels, bakesubmodels, submodelbytes))
+				{	//this one's perfect.
+					best = cache;
+					bdist = 0;
+					break;
+				}
+				else
+				{
+					if (bdist > 100)
+					{
+						best = cache;
+						bdist = 100;
+					}
+					continue;	//might have one with the correct submodels...
+				}
+			}
+		}
+
+		if (SDL_GetAtomicInt(&cache->status) == SCS_BUILDING)
+		{
+			building = cache;
+			continue;	//can't be better if we're not able to use it yet... we'll block building a new one though.
+		}
+
+		VectorSubtract(r_origin, cache->pos, offset);
+		d = DotProduct(offset,offset);
+		if (memcmp(cache->cachedsubmodels, bakesubmodels, submodelbytes))
+			d += 100;
+		if (d < bdist)
+			bdist = d, best = cache;
+	}
+
+	//check if there's one building already (don't want to queue too many)
+	if (!building && best)
+		for (building = best; building && SDL_GetAtomicInt(&building->status) != SCS_BUILDING; building = building->next)
+			;
+
+	if (!r_dynamic.value)
+		old_lightstylevalue[0] = INT_MIN;	//something that'll force a regen pretty soon...
+	else
+	{
+		if (!building)
+		{	//tb -- a lightstyle tick only changes lightmap texels, never geometry
+			//or indices, so it no longer invalidates the cache. The worker
+			//refreshes the affected lightmaps instead; see the job below.
+			if (RSceneCache_UsedLightstylesChanged(old_lightstylevalue, d_lightstylevalue))
+				stylechanged = true;
+			//woods #scenecachedlights -- dlights no longer invalidate the cache (which forced
+			//a full rebuild + EBO upload every frame while a quad/pent glow, rocket or muzzle
+			//flash was live); RSceneCache_QueueDlightUpdate below patches the lightmaps in place.
+		}
+	}
+
+	if (!best || (!cache && !building))
+	{	//no perfect matches. build a new one.
+		struct rscenecache_s *oldest = NULL;
+		unsigned int oldestage = 3, a;
+
+		queuedbuild = true;	// woods #scenecachedlights -- worker will own surf dlight state this frame
+		//tb -- a rebuild deliberately does NOT consume a pending lightstyle
+		//tick. It relights the surfaces *it* visits; another live cache -- a
+		//skyroom especially -- draws from the same shared lightmaps and would
+		//keep stale light. Leaving the tick pending makes the next quiet frame
+		//sweep the union of live caches; surfaces this build already relit
+		//early-out there on cached_light and cost almost nothing.
+
+		if (rscenecache.thread)
+		{	//we already had one queued? don't wait for TWO frames!
+			SDL_LockMutex(rscenecache.mutex);
+			if (rscenecache.processing)
+			{
+				SDL_SetAtomicInt(&rscenecache.processing->status, SCS_DISCARDED);
+				rscenecache.processing = NULL;
+			}
+			SDL_UnlockMutex(rscenecache.mutex);
+		}
+
+		for (cache = rscenecache.cache; cache; cache = cache->next)
+		{
+			if (SDL_GetAtomicInt(&cache->status) == SCS_BUILDING ||	//worker still has it.
+				cache == best)						//we're falling back on it...
+				continue;
+			if (cache->worldmodel != cl.worldmodel)
+				continue;
+
+			if (cache->lightmaps != (unsigned int)(lightmap_count + 1) ||
+				cache->numtextures != (unsigned int)cl.worldmodel->numtextures)
+				continue;	//allocation sizes changed...
+
+			if (SDL_GetAtomicInt(&cache->status) == SCS_DISCARDED)
+			{	//this one is fine.
+				oldest = cache;
+				break;
+			}
+
+			a = host_framecount-cache->hostframe;	//keep it current
+			if (a >= oldestage)
+				a = oldestage, oldest = cache;
+		}
+
+		if (oldest)
+		{	//we found an old one, yay us.
+			struct rscenecache_s **link;
+			cache = oldest;
+			for (link = &rscenecache.cache; *link; )
+			{
+				if (*link == cache)
+				{
+					*link = cache->next;	//unlink it...
+					cache->next = rscenecache.cache;	//and relink at head so its favoured.
+					rscenecache.cache = cache;
+					break;
+				}
+				link = &(*link)->next;
+			}
+
+			unsigned int e;
+			for (e = 0; e < cache->numtextures*cache->lightmaps*2; e++)
+				cache->batches[e].numidx = 0;
+			cache->drawtexturecount = 0;
+			cache->hassky = false;
+			if (cache->drawtextureflags)
+				memset(cache->drawtextureflags, 0, cache->numtextures * sizeof(*cache->drawtextureflags));
+		}
+		else
+		{	//allocate some new memory for it.
+			size_t batchcount, cachesize, numtextures, numlightmaps;
+
+			numtextures = (size_t)cl.worldmodel->numtextures;
+			numlightmaps = (size_t)(lightmap_count + 1);
+			if (numlightmaps && numtextures > ((size_t)-1) / numlightmaps / 2)
+				return false;
+			batchcount = numtextures * numlightmaps * 2;
+
+			cachesize = offsetof(struct rscenecache_s, batches);
+			if (batchcount > ((size_t)-1 - cachesize) / sizeof(*cache->batches))
+				return false;
+			cachesize += sizeof(*cache->batches) * batchcount;
+			if (numtextures > ((size_t)-1 - cachesize) / sizeof(*cache->drawtextures))
+				return false;
+			cachesize += sizeof(*cache->drawtextures) * numtextures;
+			if (numtextures > (size_t)-1 - cachesize)
+				return false;
+			cachesize += numtextures * sizeof(*cache->drawtextureflags);
+			if ((size_t)rowbytes > (size_t)-1 - cachesize)
+				return false;
+			cachesize += rowbytes;
+			if (submodelbytes > (size_t)-1 - cachesize)
+				return false;
+			cachesize += submodelbytes;
+			if (surfacebytes > (size_t)-1 - cachesize)
+				return false;
+			cachesize += surfacebytes;
+
+			cache = calloc(1, cachesize);
+			if (!cache)
+				return false;
+					//link it, cos we might as well.
+			cache->next = rscenecache.cache;
+			rscenecache.cache = cache;
+
+			cache->lightmaps = lightmap_count+1;	//FIXME use texture arrays for the lightmaps, keep this at 2.
+			cache->numtextures = cl.worldmodel->numtextures;	//FIXME: merge textures into same-dimensions arrays
+			cache->drawtextures = (unsigned int *)&cache->batches[batchcount];
+			cache->drawtextureflags = (byte *)(cache->drawtextures + cache->numtextures);
+			cache->pvs = cache->drawtextureflags + cache->numtextures;
+			cache->worldmodel = cl.worldmodel;
+			cache->cachedsubmodels = cache->pvs + rowbytes;
+			cache->visitedsurfs = cache->cachedsubmodels + submodelbytes;
+			cache->numcachedsubmodels = cl.worldmodel->numsubmodels;
+		}
+
+		SDL_SetAtomicInt(&cache->status, SCS_BUILDING);
+		VectorCopy(r_origin, cache->pos);	//might as well overwrite its origin
+		cache->hostframe = host_framecount;
+		memcpy(cache->pvs, vis, rowbytes);
+		memcpy(cache->cachedsubmodels, bakesubmodels, submodelbytes);
+		memset(cache->visitedsurfs, 0, surfacebytes);
+		RSceneCache_CopyDlights(cache->dlights, cl_dlights, countof(cache->dlights));
+		cache->time = cl.time;
+		cache->flashblend = !!gl_flashblend.value;
+		cache->oldskyleaf = !!r_oldskyleaf.value;
+		cache->dynamic = !!r_dynamic.value;
+		cache->dlightframecount = r_framecount;
+		R_LightmapBuildState_Snapshot(&cache->lightmapstate);
+		cache->hassky = RSceneCache_InputsHaveSky(cache);
+
+		//create the worker if it doesn't exist...
+		if (!rscenecache.thread)
+		{
+			rscenecache.die = false;	//just in case...
+			rscenecache.mutex = SDL_CreateMutex();
+			rscenecache.wt_cond = SDL_CreateCondition();
+			rscenecache.rt_cond = SDL_CreateCondition();
+			if (!rscenecache.mutex || !rscenecache.wt_cond || !rscenecache.rt_cond)
+			{
+				Con_DWarning("RSceneCache: failed to create worker synchronization: %s\n", SDL_GetError());
+				r_scenecache.value = 0;
+				RSceneCache_Shutdown();
+				return false;
+			}
+			SDL_LockMutex(rscenecache.mutex);
+			rscenecache.thread = SDL_CreateThread(RSceneCache_Thread, "scenecache", NULL);
+			if (!rscenecache.thread)
+			{
+				SDL_UnlockMutex(rscenecache.mutex);
+				Con_DWarning("RSceneCache: failed to create worker thread: %s\n", SDL_GetError());
+				r_scenecache.value = 0;	//force it off...
+				RSceneCache_Shutdown();
+				return false;
+			}
+			SDL_WaitCondition(rscenecache.rt_cond, rscenecache.mutex);
+			SDL_UnlockMutex(rscenecache.mutex);
+			//the thread is now at a known position.
+		}
+
+		//get the worker to start processing it
+		SDL_LockMutex(rscenecache.mutex);
+		//oh noes! its processing something else and we have no other queue!
+		while(rscenecache.processing)
+		{
+//			double t = Sys_DoubleTime();
+			SDL_WaitCondition(rscenecache.rt_cond, rscenecache.mutex);
+//			t = Sys_DoubleTime()-t;
+//			Con_Printf("Scenecache prewait (%f)\n", t*1000);
+		}
+		rscenecache.processing = cache;
+		SDL_SignalCondition(rscenecache.wt_cond);
+		SDL_UnlockMutex(rscenecache.mutex);
+	}
+	if (best)
+	{
+//		if (best->status == SCS_BUILDING)
+//			Con_Printf("Scenecache is gonna wait\n");
+		cache = best;
+	}
+	if (!cache)
+	{	//this should be unreachable...
+		if (rscenecache.thread)
+			RSceneCache_Shutdown();
+	}
+	else
+		cache->hostframe = host_framecount;	//keep it current
+
+	rscenecache.drawing = cache;
+	rscenecache.doingskybox = false;
+
+	//woods #scenecachedlights -- with no rebuild queued or in flight, have the
+	//worker patch active dlights into the shared lightmaps instead of rebuilding.
+	//tb -- and lightstyle ticks, for the same reason.
+	if (cache && !queuedbuild && !building && SDL_GetAtomicInt(&cache->status) != SCS_BUILDING)
+	{
+		if (RSceneCache_QueueDlightUpdate (cache, stylechanged) && stylechanged)
+		{	//only advance the reference values once the worker has actually taken
+			//the job, so a tick dropped while it was busy is re-offered next frame
+			//with the newest values rather than being lost.
+			memcpy(old_lightstylevalue, d_lightstylevalue, sizeof(old_lightstylevalue));
+		}
+	}
+	//tb -- deliberately no 'else': when a rebuild is in flight the tick stays
+	//pending. The rebuild only covers its own visited set, so the union sweep
+	//still has to run for the other live caches.
+
+	return !!cache;
+}
+static void RSceneCache_Uncache(struct rscenecache_s *cache)
+{
+	size_t i;
+	if (SDL_GetAtomicInt(&cache->status) == SCS_BUILDING && rscenecache.thread)
+	{
+		SDL_LockMutex(rscenecache.mutex);
+		while(SDL_GetAtomicInt(&cache->status) == SCS_BUILDING)	//thread still has it...
+			SDL_WaitCondition(rscenecache.rt_cond, rscenecache.mutex);
+		SDL_UnlockMutex(rscenecache.mutex);
+	}
+	if (rscenecache.drawing == cache)
+		rscenecache.drawing = NULL;
+	if (rscenecache.teleportmain == cache)
+		rscenecache.teleportmain = NULL;
+	// woods #scenecachedlights -- a dlight job may still be reading this cache
+	if (rscenecache.thread)
+	{
+		SDL_LockMutex(rscenecache.mutex);
+		while (rscenecache.dlightjob.cache == cache)
+			SDL_WaitCondition(rscenecache.rt_cond, rscenecache.mutex);
+		SDL_UnlockMutex(rscenecache.mutex);
+	}
+	if (cache->litsurfs)
+		free(cache->litsurfs);
+	if (cache->teleports)
+		free(cache->teleports);
+	for (i = 0; i < cache->numtextures*cache->lightmaps*2; i++)
+		if (cache->batches[i].idx)
+			free(cache->batches[i].idx);
+	GL_DeleteBuffersFunc(1, &cache->ebo);
+	free(cache);
+}
+
+static qboolean RSceneCache_TextureIsSky(const texture_t *tex)
+{
+	return tex && tex->name[0] == 's' && tex->name[1] == 'k' && tex->name[2] == 'y';
+}
+
+static void RSceneCache_UpdateDrawTextureList(struct rscenecache_s *cache)
+{
+	size_t i, batchcount;
+
+	if (!cache || !cache->drawtextures || !cache->drawtextureflags)
+		return;
+
+	cache->drawtexturecount = 0;
+	cache->hassky = false;
+	memset(cache->drawtextureflags, 0, cache->numtextures * sizeof(*cache->drawtextureflags));
+
+	batchcount = (size_t)cache->numtextures * cache->lightmaps * 2;
+	for (i = 0; i < batchcount; i++)
+	{
+		unsigned int texnum;
+		byte flags;
+		texture_t *tex;
+
+		if (!cache->batches[i].numidx)
+			continue;
+
+		texnum = (unsigned int)(i / (cache->lightmaps * 2));
+		tex = cache->worldmodel->textures[texnum];
+		if (!tex)
+			continue;
+		flags = (tex->name[0] == '*') ? RSCENECACHE_TEX_WATER : RSCENECACHE_TEX_WORLD;
+
+		if (RSceneCache_TextureIsSky(tex))
+		{
+			flags |= RSCENECACHE_TEX_SKY;
+			cache->hassky = true;
+		}
+
+		if (!cache->drawtextureflags[texnum])
+			cache->drawtextures[cache->drawtexturecount++] = texnum;
+		cache->drawtextureflags[texnum] |= flags;
+	}
+}
+
+void RSceneCache_Cleanup(qmodel_t *mod)
+{
+	struct rscenecache_s **link, *cache;
+
+	RSceneCache_ResetLightstyleTracking(mod);
+
+	for (link = &rscenecache.cache; (cache=*link); )
+	{
+		if (cache->worldmodel == mod)
+		{
+			*link = cache->next;
+			RSceneCache_Uncache(cache);
+		}
+		else
+			link = &cache->next;
+	}
+
+	RSceneCache_ResetDlightTracking(mod);	// woods #scenecachedlights -- the surf pointers die with the model
+}
+static void RSceneCache_Finish(struct rscenecache_s *cache)
+{
+#define USEMAPBUFFER
+	unsigned int i;
+	int status;
+	size_t numidx = 0;
+#ifdef USEMAPBUFFER
+	byte *ebomem = NULL;
+#endif
+	if (!gl_vbo_able || !gl_bmodel_vbo)
+		return;
+
+	if (SDL_SetAtomicInt(&rscenecache_worker_warning, false))
+		Con_DWarning("RSceneCache: worker skipped invalid or oversized surface data\n");
+
+	status = SDL_GetAtomicInt(&cache->status);
+	// Acquire the worker mutex before the first consumption of published cache
+	// fields. Finished and discarded caches are already owned by the main thread,
+	// so avoid paying for this lock on every subsequent frame.
+	if (rscenecache.thread &&
+		(status == SCS_BUILDING || status == SCS_COMPUTED))
+	{
+		qboolean blocked = false;
+
+		SDL_LockMutex(rscenecache.mutex);
+		while(SDL_GetAtomicInt(&cache->status) == SCS_BUILDING)
+		{
+			blocked = true;
+			SDL_WaitCondition(rscenecache.rt_cond, rscenecache.mutex);
+		}
+		status = SDL_GetAtomicInt(&cache->status);
+		SDL_UnlockMutex(rscenecache.mutex);
+
+		if (blocked)
+		{
+		}
+	}
+
+	switch(status)
+	{
+	case SCS_BUILDING:
+		break;
+	case SCS_COMPUTED:
+		//worker thread finished, but GL threading issues mean it didn't build our EBO (which can be a significant boost)
+		if (gl_vbo_able)
+		{
+			for (i = 0, numidx = 0; i < cache->numtextures*cache->lightmaps*2; i++)
+				numidx += cache->batches[i].numidx;
+
+			if (!cache->ebo)
+				GL_GenBuffersFunc(1, &cache->ebo);
+			GL_BindBuffer (GL_ELEMENT_ARRAY_BUFFER, cache->ebo); // indices come from client memory!
+			GL_BufferDataFunc(GL_ELEMENT_ARRAY_BUFFER, numidx*sizeof(unsigned int), NULL,  GL_STATIC_DRAW);
+#ifdef USEMAPBUFFER
+			if (GL_MapBufferFunc && GL_UnmapBufferFunc)
+				ebomem = GL_MapBufferFunc(GL_ELEMENT_ARRAY_BUFFER, GL_WRITE_ONLY);
+#endif
+		}
+		for (i = 0, numidx = 0; i < cache->numtextures*cache->lightmaps*2; i++)
+		{
+			if (gl_vbo_able)
+			{
+				cache->batches[i].eboidx = (unsigned int*)(numidx*sizeof(*cache->batches[i].idx));
+				if (cache->batches[i].numidx)
+				{
+#ifdef USEMAPBUFFER
+					if (ebomem)
+						memcpy(ebomem+(uintptr_t)cache->batches[i].eboidx, cache->batches[i].idx, cache->batches[i].numidx*sizeof(*cache->batches[i].idx));
+					else
+						GL_BufferSubDataFunc(GL_ELEMENT_ARRAY_BUFFER, numidx*sizeof(*cache->batches[i].idx), cache->batches[i].numidx*sizeof(*cache->batches[i].idx), cache->batches[i].idx);
+#else
+					GL_BufferSubDataFunc(GL_ELEMENT_ARRAY_BUFFER, numidx*sizeof(*cache->batches[i].idx), cache->batches[i].numidx*sizeof(*cache->batches[i].idx), cache->batches[i].idx);
+#endif
+				}
+				//leave the memory allocated to avoid all the reallocs if it gets reused. the cache will still need freeing later anyway.
+			}
+			else
+				cache->batches[i].eboidx = cache->batches[i].idx;	//lame
+			numidx += cache->batches[i].numidx;
+		}
+#ifdef USEMAPBUFFER
+		if (gl_vbo_able && ebomem)
+			GL_UnmapBufferFunc(GL_ELEMENT_ARRAY_BUFFER);
+#endif
+		RSceneCache_UpdateDrawTextureList(cache);
+		SDL_SetAtomicInt(&cache->status, SCS_FINISHED);
+
+
+		for (i=0, cache = rscenecache.cache; cache; cache = cache->next)
+			i++;
+		break;
+	case SCS_FINISHED:
+	case SCS_DISCARDED:	//shouldn't be here...
+		break;
+	}
+
+	if (SDL_SetAtomicInt(&rscenecache.processed, false))
+	{	//make sure lightmaps are updated when we can.
+		// woods #scenecachedlights -- safe to run every frame, even while a
+		// worker job is mid-flight: R_LightmapMarkDirtyRect only publishes a
+		// rect after its staging bytes are written, and R_UploadLightmap
+		// snapshots-and-clears the rect lists under the same lock, so a
+		// concurrent upload takes the finished surfaces and leaves the rest
+		// marked for the next frame. (An earlier fix deferred this upload until
+		// the worker went idle, but with a dlight near the view a job is in
+		// flight nearly every frame, so uploads starved and lighting visibly
+		// trailed the glow.) Clear processed before uploading - the worker sets
+		// it after marking, so a set we overlap with just means one redundant
+		// upload next frame rather than a lost one.
+		lightmaps_skipupdates = false;
+		R_UploadLightmaps();
+		lightmaps_skipupdates = true;
+	}
+}
+static void RSceneCache_MarkTeleportSurfaces(void)
+{
+	struct rscenecache_s *cache = rscenecache.drawing;
+	size_t i;
+	if (!cache || !gl_vbo_able || !gl_bmodel_vbo)
+		return;
+	cache->teleportchains = false;
+	if (!R_TeleportActive() || skyroom_drawing || r_drawflat_cheatsafe || r_lightmap_cheatsafe)
+		return;
+	RSceneCache_Finish(cache);
+	if (SDL_GetAtomicInt(&cache->status) != SCS_FINISHED || !cache->teleportscomplete)
+		return;
+	cache->teleportchains = true;
+	// Only the portal faces need per-view culling and planes. Everything else
+	// continues to use the cached index batches, including baked brush models.
+	for (i = 0; i < cache->numteleports; i++)
+	{
+		msurface_t *surf = cache->teleports[i];
+		if (surf->visframe == r_visframecount)
+			continue;
+		surf->visframe = r_visframecount;
+		if (!R_CullBox(surf->mins, surf->maxs) && !R_BackFaceCull(surf))
+			R_ChainSurface(surf, chain_world);
+	}
+}
+
+cvar_t bench_uniform_skip = {"bench_uniform_skip", "0", CVAR_NONE};
+static unsigned int bench_uniform_requested, bench_uniform_sent;
+void R_BenchUniformStats_f (void)
+{
+    Con_Printf("BENCH_UNIFORM requested=%u sent=%u\n", bench_uniform_requested, bench_uniform_sent);
+    bench_uniform_requested = bench_uniform_sent = 0;
+}
+static void R_BenchUniform1i (GLint location, GLint value, int *last)
+{
+    if (cls.timedemo) bench_uniform_requested++;
+    if (!bench_uniform_skip.value || *last != value)
+    {
+        GL_Uniform1iFunc(location, value);
+        *last = value;
+        if (cls.timedemo) bench_uniform_sent++;
+    }
+}
+
+static void RSceneCache_Draw(qboolean water)
+{
+	struct rscenecache_s *cache = rscenecache.drawing;
+	unsigned int i, j, ti;
+	texture_t *tex;
+	int b;
+	int mode;
+	int lastprog = -1;
+	int last_alpha = -1, last_grass = -1, last_fullbright = -1, last_caustics = -1;
+	float alpha = 0;
+	const int overbright = !!gl_overbright.value;
+	const int wide10bits = (gl_lightmap_format == GL_RGB10_A2);
+	const float lightmapscale = (overbright ? 2.0f : 1.0f) * (wide10bits ? 4.0f : 1.0f);
+	const byte wantedtexture = water ? RSCENECACHE_TEX_WATER : RSCENECACHE_TEX_WORLD;
+
+	if (!cache || !RSceneCache_CanDraw())
+	{
+		skipsubmodels = NULL;
+		return;
+	}
+	RSceneCache_Finish(cache);
+	if (SDL_GetAtomicInt(&cache->status) != SCS_FINISHED)
+	{
+		skipsubmodels = NULL;
+		return;
+	}
+	skipsubmodels = cache->cachedsubmodels;
+
+	glDepthMask(GL_TRUE);
+	glDisable (GL_BLEND);
+	if (skyroom_drawn)
+	{	//draw skies first, so we don't end up drawing overlapping non-skies behind
+		glColorMask(GL_FALSE,GL_FALSE,GL_FALSE,GL_FALSE);
+		RSceneCache_DrawSkySurfDepth();
+		glColorMask(GL_TRUE,GL_TRUE,GL_TRUE,GL_TRUE);
+	}
+
+	GL_BindBuffer (GL_ARRAY_BUFFER, gl_bmodel_vbo);
+	GL_BindBuffer (GL_ELEMENT_ARRAY_BUFFER, cache->ebo); // indices come from client memory!
+
+	GL_EnableVertexAttribArrayFunc (vertAttrIndex);
+	GL_EnableVertexAttribArrayFunc (texCoordsAttrIndex);
+	GL_EnableVertexAttribArrayFunc (LMCoordsAttrIndex);
+
+	GL_VertexAttribPointerFunc (vertAttrIndex,      3, GL_FLOAT, GL_FALSE, VERTEXSIZE * sizeof(float), ((float *)0));
+	GL_VertexAttribPointerFunc (texCoordsAttrIndex, 2, GL_FLOAT, GL_FALSE, VERTEXSIZE * sizeof(float), ((float *)0) + 3);
+	GL_VertexAttribPointerFunc (LMCoordsAttrIndex,  2, GL_FLOAT, GL_FALSE, VERTEXSIZE * sizeof(float), ((float *)0) + 5);
+	R_SetupLightmapBoundsAttrib ();
+
+	rs_brushpolys += cache->brushpolys; //for r_speeds.;
+
+	if (gl_caustics.value > 0 && underwatertexture) // Bind caustics texture once if enabled
+	{
+		GL_SelectTexture(GL_TEXTURE3);
+		GL_Bind(underwatertexture);
+		GL_SelectTexture(GL_TEXTURE0); // Switch back to default texture unit 0
+	}
+
+	for (ti = 0; ti < cache->drawtexturecount; ti++)
+	{
+		i = cache->drawtextures[ti];
+		if (!(cache->drawtextureflags[i] & wantedtexture))
+			continue;
+		if (!cache->worldmodel->textures[i])
+			continue;	//stupid buggy shite.
+		if (cache->teleportchains && cache->worldmodel->textures[i]->tele_normal)
+			continue; // already drawn by R_DrawTextureChains_Water, including any fallback faces
+		b = false;
+		for (j = 0; j < cache->lightmaps * 2; j++)
+		{
+			int uw      = (j >= cache->lightmaps);   // 0 = above, 1 = under
+			int lm_slot = j % cache->lightmaps;      // 0 = unlit, 1… = lightmap N
+
+			if (!cache->batches[i*cache->lightmaps*2 + j].numidx)
+				continue;	//don't waste time on it.
+
+			if (!b)
+			{
+				b = true;
+				tex = R_TextureAnimation (cache->worldmodel->textures[i], 0);
+				GL_SelectTexture (GL_TEXTURE0);
+				GL_Bind(tex->gltexture);
+
+				//its annoying how we don't know any surface flags here
+				if (*tex->name == '*')
+				{
+					if (lm_slot>0) // changed j to lm_slot
+					{	//lit
+						GL_EnableVertexAttribArrayFunc (LMCoordsAttrIndex);
+						R_EnableLightmapBoundsAttrib (true);
+						mode = 1;
+					}
+					else	//unlit
+					{
+						GL_DisableVertexAttribArrayFunc (LMCoordsAttrIndex);
+						R_EnableLightmapBoundsAttrib (false);
+						mode = 0;
+					}
+
+					// detect special liquid types. stoopid lack of surface flag info. :(
+					if (!strncmp (cache->worldmodel->textures[i]->name+1, "lava", 4))
+						alpha = map_lavaalpha > 0 ? map_lavaalpha : map_fallbackalpha;
+					else if (!strncmp (cache->worldmodel->textures[i]->name+1, "slime", 5))
+						alpha = map_slimealpha > 0 ? map_slimealpha : map_fallbackalpha;
+					else if (!strncmp (cache->worldmodel->textures[i]->name+1, "tele", 4))
+						alpha = map_telealpha > 0 ? map_telealpha : map_fallbackalpha;
+					else
+						alpha = map_wateralpha;// > 0 ? map_wateralpha : map_fallbackalpha;
+
+					if (alpha < 1.0f)
+					{
+						glDepthMask (GL_FALSE);
+						glEnable (GL_BLEND);
+					}
+					else
+					{
+						glDepthMask (GL_TRUE);
+						glDisable (GL_BLEND);
+					}
+
+					if (lastprog != r_water[mode].program)
+					{
+						lastprog = r_water[mode].program;
+						GL_UseProgramFunc (r_water[mode].program);
+						GL_Uniform1fFunc (r_water[mode].time, cl.time);
+						GL_Uniform1iFunc (r_water[mode].fogmode, Fog_GetMode());
+						if (r_water[mode].light_scale != -1)
+							GL_Uniform1fFunc (r_water[mode].light_scale, lightmapscale);
+					}
+					R_SetLightmapExtra4Uniforms (r_water[mode].use_extra4, r_water[mode].texel_size);
+					GL_Uniform1fFunc (r_water[mode].alpha_scale, alpha);
+				}
+				else if (tex->name[0]=='s'&&tex->name[1]=='k'&&tex->name[2]=='y')
+				{
+					//sky. because why not.
+					extern cvar_t r_skyalpha, r_skyfog, r_fastsky;
+					extern float skyflatcolor[3];
+					float skyfog = 0.0f;
+					float *fogcolor;
+					if (r_fastsky.value == 1)  // woods -- #fastsky2
+						mode = 3;
+					else if (r_fastsky.value == 2)
+						mode = (skybox_name[0] || externalskyloaded) ? 2 : 3;
+					else
+						mode = 2;
+
+					if (rscenecache.doingskybox)
+						break;	//we're doing skies weirdly. FIXME: replace with cubemap skies, where possible.
+
+					if (Fog_GetGlobalDensity() > 0.0f)
+						skyfog = CLAMP(0.0f, r_skyfog.value, 1.0f);
+					fogcolor = Fog_GetGlobalColor();
+
+					GL_SelectTexture (GL_TEXTURE2);
+					GL_Bind(tex->fullbright);
+
+					if (skyroom_drawn)
+						continue;	//already drew them
+					else if (lastprog != r_water[mode].program)
+					{
+						lastprog = r_water[mode].program;
+						GL_UseProgramFunc (r_water[mode].program);
+						GL_Uniform1fFunc (r_water[mode].time, Sky_GetTime()); // woods #skyspeed
+
+						GL_Uniform1fFunc (r_water[mode].alpha_scale, r_skyalpha.value);
+						GL_Uniform3fFunc (r_water[mode].eyepos, r_origin[0], r_origin[1], r_origin[2]);
+						GL_Uniform1fFunc (r_water[mode].fogalpha, skyfog);
+						if (r_water[mode].skyfogcolor != -1)
+							GL_Uniform3fFunc (r_water[mode].skyfogcolor, fogcolor[0], fogcolor[1], fogcolor[2]);
+						if (r_water[mode].colour != (GLuint)-1)
+							GL_Uniform3fFunc (r_water[mode].colour, skyflatcolor[0], skyflatcolor[1], skyflatcolor[2]);
+					}
+				}
+				else
+				{
+					R_EnableLightmapBoundsAttrib (true);
+					if (lastprog != r_world_program)
+					{
+						lastprog = r_world_program;
+						last_alpha = last_grass = last_fullbright = last_caustics = -1;
+						GL_UseProgramFunc (r_world_program);
+						GL_Uniform1iFunc (useOverbrightLoc, overbright);
+						GL_Uniform1iFunc (useLightmapWideLoc, wide10bits);
+						GL_Uniform1iFunc (useLightmapOnlyLoc, 0);
+						R_SetLightmapExtra4Uniforms (useLightmapExtra4Loc, lightmapTexelSizeLoc);
+						R_SetTexturelessDitherUniform (useTexturelessDitherLoc);
+						GL_Uniform1fFunc (alphaLoc, 1);			//worldmodel is never translucent.
+						GL_Uniform1fFunc (grassAmountLoc, R_GrassAmount()); // woods #grass
+						GL_Uniform1fFunc (grassTimeLoc, R_GrassAnimTime()); // woods #grass
+						GL_Uniform1fFunc (grassMovementLoc, R_GrassMovement()); // woods #grass
+						GL_Uniform1fFunc (grassGustScaleLoc, R_GrassGustScale()); // woods #grass
+						GL_Uniform1iFunc (fogModeLoc, Fog_GetMode());
+						R_SetGrassColorUniforms(NULL); // woods #grass
+
+						GL_Uniform1fFunc(clTimeLoc, cl.time);
+						if (gl_caustics.value > 0 && underwatertexture)
+						{
+						   GL_Uniform1iFunc(causticsTexLoc, 3); // Tell shader caustics are on unit 3
+						   GL_Uniform1fFunc(causticsOpacityLoc, gl_caustics.value);
+						} else {
+						   // Explicitly disable if necessary, though useCausticsTexLoc should handle it
+						   // GL_Uniform1iFunc(causticsTexLoc, 0); // Maybe set to a dummy texture/unit?
+						}
+					}
+					R_BenchUniform1i (useAlphaTestLoc, *tex->name == '{', &last_alpha);	//update alphatest. some future qbsps might actually support it properly on the worldmodel. plus there's lots of buggy bsps where it was used anyway.
+					if (R_TextureUsesSurfaceGrass(cache->worldmodel->textures[i]))
+					{
+						R_BenchUniform1i (useGrassLoc, 1, &last_grass); // woods #grass
+						R_SetGrassColorUniforms(tex); // woods #grass
+					}
+					else
+						R_BenchUniform1i (useGrassLoc, 0, &last_grass); // woods #grass
+
+					if (tex->fullbright && gl_fullbrights.value)
+					{
+						R_BenchUniform1i (useFullbrightTexLoc, 1, &last_fullbright);
+						GL_SelectTexture (GL_TEXTURE2);
+						GL_Bind(tex->fullbright);
+					}
+					else
+					{
+						R_BenchUniform1i (useFullbrightTexLoc, 0, &last_fullbright);
+						//don't bother unbinding. the glsl won't use it anyway.
+					}
+				}
+			}
+
+			if (lastprog == r_world_program)
+                R_BenchUniform1i(useCausticsTexLoc, gl_caustics.value > 0 && underwatertexture && uw, &last_caustics);
+            else
+                GL_Uniform1iFunc(useCausticsTexLoc, gl_caustics.value > 0 && underwatertexture && uw);
+
+			GL_SelectTexture (GL_TEXTURE1);
+			if (lm_slot)
+			    GL_Bind(lightmaps[lm_slot-1].texture);
+			else
+			    GL_Bind(NULL);   /* unlit */
+
+			glDrawElements(GL_TRIANGLES, cache->batches[i*cache->lightmaps*2 + j].numidx, GL_UNSIGNED_INT, cache->batches[i*cache->lightmaps*2 + j].eboidx);
+			rs_brushpasses++;
+		}
+	}
+
+	if (gl_caustics.value > 0 && underwatertexture) // Unbind caustics texture once after all batches if it was bound
+	{
+		GL_SelectTexture(GL_TEXTURE3);
+		GL_Bind(NULL);
+		GL_SelectTexture(GL_TEXTURE0); // Switch back to default texture unit 0
+	}
+
+	if (alpha < 1.0f)
+	{	//go back to a known state
+		glDepthMask (GL_TRUE);
+		glDisable (GL_BLEND);
+	}
+
+	GL_UseProgramFunc (0);
+
+	GL_DisableVertexAttribArrayFunc (vertAttrIndex);
+	GL_DisableVertexAttribArrayFunc (texCoordsAttrIndex);
+	GL_DisableVertexAttribArrayFunc (LMCoordsAttrIndex);
+	GL_DisableVertexAttribArrayFunc (LMBoundsAttrIndex);
+	GL_SelectTexture (GL_TEXTURE0);
+
+	GL_BindBuffer (GL_ARRAY_BUFFER, 0);
+	GL_BindBuffer (GL_ELEMENT_ARRAY_BUFFER, 0);
+}
+qboolean RSceneCache_HasSky(void)
+{
+	struct rscenecache_s *cache = rscenecache.drawing;
+	unsigned int i, j;
+	int status;
+	texture_t *tex;
+
+	if (cache)
+	{
+		status = SDL_GetAtomicInt(&cache->status);
+		if (status == SCS_DISCARDED)
+			return false;
+		if (status == SCS_BUILDING)
+			return cache->hassky;
+		if (status == SCS_FINISHED)
+			return cache->hassky;
+		if (rscenecache.thread)
+		{
+			SDL_LockMutex(rscenecache.mutex);
+			status = SDL_GetAtomicInt(&cache->status);
+			SDL_UnlockMutex(rscenecache.mutex);
+			if (status != SCS_COMPUTED)
+				return false;
+		}
+
+		for (i = 0; i < cache->numtextures; i++)
+		{
+			tex = cache->worldmodel->textures[i];
+			if (!RSceneCache_TextureIsSky(tex))
+				continue;	//we only want sky textures.
+			for (j = 0; j < cache->lightmaps * 2; j++)
+				if (cache->batches[i * cache->lightmaps * 2 + j].numidx)
+					return true;
+		}
+	}
+	return false;
+}
+
+static qboolean RSceneCache_WorldSkyVisible(void)
+{
+	struct rscenecache_s *cache = rscenecache.drawing;
+	qmodel_t *model;
+	msurface_t *surf;
+	int i, status;
+
+	if (!cache || !cache->visitedsurfs || cache->worldmodel != cl.worldmodel)
+		return false;
+
+	status = SDL_GetAtomicInt(&cache->status);
+	if (status != SCS_COMPUTED && status != SCS_FINISHED)
+		return false;
+
+	model = cache->worldmodel;
+	for (i = 0, surf = model->surfaces; i < model->numsurfaces; i++, surf++)
+	{
+		if (!(cache->visitedsurfs[i >> 3] & (1u << (i & 7))))
+			continue;
+		if (!(surf->flags & SURF_DRAWSKY) || !surf->plane)
+			continue;
+		if (!R_CullBox (surf->mins, surf->maxs) && !R_BackFaceCull (surf))
+			return true;
+	}
+
+	return false;
+}
+
+qboolean RSceneCache_DrawSkySurfDepth(void)
+{	//legacy skyboxes are a serious pain, but oh well...
+	//if we draw anything here then its JUST depth values. we don't need glsl nor even textures for this.
+	struct rscenecache_s *cache = rscenecache.drawing;
+
+	unsigned int i, j, ti;
+	texture_t *tex;
+	qboolean ret = false;
+
+	if (!cache || !gl_vbo_able || !gl_bmodel_vbo)
+		return false;
+	rscenecache.doingskybox = true;
+
+	RSceneCache_Finish(cache);
+	if (SDL_GetAtomicInt(&cache->status) != SCS_FINISHED)
+	{
+		rscenecache.doingskybox = false;
+		return false;
+	}
+
+	for (ti = 0; ti < cache->drawtexturecount; ti++)
+	{
+		i = cache->drawtextures[ti];
+		if (!(cache->drawtextureflags[i] & RSCENECACHE_TEX_SKY))
+			continue;
+		tex = cache->worldmodel->textures[i];
+		if (!RSceneCache_TextureIsSky(tex))
+			continue;	//we only want sky textures.
+		for (j = 0; j < cache->lightmaps * 2; j++) // Optional: Changed loop bound for robustness
+		{
+			if (!cache->batches[i*cache->lightmaps*2 + j].numidx)
+				continue;	//don't waste time on it.
+
+			if (!ret)
+			{	//first batch of sky, set up the vertex array stuff.
+				ret = true;
+				GL_BindBuffer (GL_ARRAY_BUFFER, gl_bmodel_vbo);
+				GL_BindBuffer (GL_ELEMENT_ARRAY_BUFFER, cache->ebo); // indices come from client memory!
+
+				glVertexPointer(3, GL_FLOAT, VERTEXSIZE * sizeof(float), ((float *)0));
+				glEnableClientState(GL_VERTEX_ARRAY);
+			}
+			//then draw it
+			glDrawElements(GL_TRIANGLES, cache->batches[i*cache->lightmaps*2 + j].numidx, GL_UNSIGNED_INT, cache->batches[i*cache->lightmaps*2 + j].eboidx);
+			rs_brushpasses++;
+		}
+	}
+
+	if (ret)
+	{
+		glDisableClientState(GL_VERTEX_ARRAY);
+		GL_BindBuffer (GL_ARRAY_BUFFER, 0);
+		GL_BindBuffer (GL_ELEMENT_ARRAY_BUFFER, 0);
+	}
+	return ret;
+}
+void RSceneCache_Shutdown(void)
+{	//clean up the scene cache stuff.
+	struct rscenecache_s *cache;
+
+	RSceneCache_ResetLightstyleTracking(NULL);
+
+	while ((cache=rscenecache.cache))
+	{
+		rscenecache.cache = cache->next;
+		RSceneCache_Uncache(cache);
+	}
+
+	if (rscenecache.thread)
+	{
+		SDL_LockMutex(rscenecache.mutex);
+		rscenecache.die = true;
+		SDL_SignalCondition(rscenecache.wt_cond);	//make sure it wakes up so it knows it needs to die.
+		SDL_UnlockMutex(rscenecache.mutex);
+
+		SDL_WaitThread(rscenecache.thread, NULL);
+		rscenecache.thread = NULL;
+	}
+	if (rscenecache.wt_cond)
+		SDL_DestroyCondition(rscenecache.wt_cond);
+	if (rscenecache.rt_cond)
+		SDL_DestroyCondition(rscenecache.rt_cond);
+	if (rscenecache.mutex)
+		SDL_DestroyMutex(rscenecache.mutex);
+	rscenecache.wt_cond = NULL;
+	rscenecache.rt_cond = NULL;
+	rscenecache.mutex = NULL;
+	rscenecache.processing = NULL;
+	rscenecache.dlightjob.cache = NULL;	// woods #scenecachedlights -- worker may have died with a job still queued
+	free(rscenecache.dlightjob.surfs);	//tb -- lightstyle sweep set
+	rscenecache.dlightjob.surfs = NULL;
+	rscenecache.dlightjob.surfbytes = 0;
+	rscenecache.dlightjob.styles = false;
+	SDL_SetAtomicInt(&rscenecache.processed, false);
+	SDL_SetAtomicInt(&rscenecache.haslitsurfs, false);
+	free(rscenecache_litsurfs);
+	rscenecache_litsurfs = NULL;
+	rscenecache_numlitsurfs = rscenecache_maxlitsurfs = 0;
+	rscenecache_litsurfs_model = NULL;
+	rscenecache.drawing = NULL;
+	rscenecache.teleportmain = NULL;
+	skipsubmodels = NULL;
+}
+#endif
+
+qboolean R_WorldSkyVisible(void)
+{
+	qmodel_t *model = cl.worldmodel;
+	texture_t *tex;
+	int i;
+
+	if (!model)
+		return false;
+
+#ifndef SDL_THREADS_DISABLED
+	if (rscenecache.drawing)
+		return RSceneCache_WorldSkyVisible ();
+#endif
+
+	for (i = 0; i < model->numtextures; i++)
+	{
+		tex = model->textures[i];
+		if (tex && tex->texturechains[chain_world] &&
+			(tex->texturechains[chain_world]->flags & SURF_DRAWSKY))
+			return true;
+	}
+
+	return false;
+}

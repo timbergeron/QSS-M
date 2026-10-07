@@ -1,0 +1,99 @@
+
+LOG started on: 10/06/2026 13:51:59 
+
+Console initialized.
+Exe: 13:51:38 Oct  6 2026
+384.0 megabyte heap
+
+Sound Initialization
+Video mode 800x600x24 144Hz 2x scale (24-bit z-buffer, 0x FSAA) initialized
+GL_VENDOR: NVIDIA Corporation
+GL_RENDERER: NVIDIA GeForce RTX 4070/PCIe/SSE2
+GL_VERSION: 4.6.0 NVIDIA 610.88
+FOUND: ARB_vertex_buffer_object
+FOUND: GL_ARB_buffer_storage
+FOUND: ARB_multitexture
+GL_MAX_TEXTURE_UNITS: 4
+FOUND: ARB_texture_env_combine
+FOUND: ARB_texture_env_add
+FOUND: SDL_GL_SetSwapInterval
+FOUND: EXT_texture_filter_anisotropic
+FOUND: ARB_texture_non_power_of_two
+FOUND: GLSL
+GL_MAX_TEXTURE_IMAGE_UNITS: 32
+FOUND: brush model instancing
+FOUND: Framebuffer Objects
+Enabled: GLSL gamma
+FOUND: glBlendFuncSeparate
+Enabled: GLSL alias model rendering
+Enabled: EXT_packed_pixels
+FOUND: glGenerateMipmap
+SDL audio spec  : 44100 Hz, 1024 samples, 2 mix channels (callback: 2 ch, surround: on)
+SDL audio device: 44100 Hz, 2 ch, SDL_AUDIO_F32LE, 441 sample frames
+SDL audio driver: wasapi - Speakers (Realtek(R) Audio), 65536 bytes buffer
+Audio: 16 bit, stereo, 44100 Hz
+
+Language initialization
+Couldn't load 'localization/loc_english.txt'
+from 'C:\Users\Tim Bergeron\source\repos\QSS-M\.codex-build\fps-expanded-20261006\runs\glsites'
+
+========= Quake Initialized =========
+
+execing quake.rc
+execing default.cfg
+execing fpsbench.cfg
+REPEAT_BEGIN 
+PASS_0 
+Playing demo from fps_aerowalk.dem.
+Using protocol 15
+
+<-------------------------------------->
+
+#Aerowalk
+TDSPIKE 0 7.6ms signon 4
+TDSPIKE 1 3.3ms signon 4
+TDSPIKE 2 3.1ms signon 4
+TDSPIKE 3 3.1ms signon 4
+TDSPIKE 4 2.5ms signon 4
+TDSPIKE 5 2.9ms signon 4
+TDSPIKE 6 3.0ms signon 4
+TDSPIKE 7 3.2ms signon 4
+TDSPIKE 8 3.1ms signon 4
+TDSPIKE 9 3.0ms signon 4
+TDSPIKE 10 2.9ms signon 4
+TDSPIKE 11 2.2ms signon 4
+TDSPIKE 1339 2.1ms signon 4
+TDPROBE stages us/frame read 24.1 screen 382.0 sound 3.4 particles 0.1 swap 304.2 pscript 0.5
+TDPROBE glcalls/frame 2701.6: glVertex2f 994.8 glTexCoord2f 978.9 glBegin 148.8 glEnd 148.8 glBindTexture 122.1 glDisable 50.9 glEnable 40.5 glDrawElements 32.0 glMatrixMode 26.0 glLoadIdentity 25.0 glColor4f 17.9 glTexEnvf 14.5 glViewport 13.0 glOrtho 12.0 glRotatef 11.8 glDepthMask 10.3
+TDPROBE glBegin C:\Users\Tim Bergeron\source\repos\QSS-M\Quake\gl_draw.c:2468 85.91/frame
+TDPROBE glBegin C:\Users\Tim Bergeron\source\repos\QSS-M\Quake\gl_draw.c:1304 3.00/frame
+TDPROBE glBegin C:\Users\Tim Bergeron\source\repos\QSS-M\Quake\gl_draw.c:1138 48.93/frame
+TDPROBE glBegin C:\Users\Tim Bergeron\source\repos\QSS-M\Quake\gl_draw.c:1283 2.98/frame
+TDPROBE glBegin C:\Users\Tim Bergeron\source\repos\QSS-M\Quake\gl_draw.c:1179 3.99/frame
+TDPROBE glBegin C:\Users\Tim Bergeron\source\repos\QSS-M\Quake\gl_draw.c:3152 1.98/frame
+TDPROBE glBegin C:\Users\Tim Bergeron\source\repos\QSS-M\Quake\gl_draw.c:3009 1.98/frame
+TDPROBE soundfilter 65268 samples
+TDPROBE frames 1445 total 636.0ms median 0.3859ms p99 1.281ms p999 3.274ms max 7.56ms >1ms 16 (45.6ms) >2ms 13 (41.9ms) >5ms 1 excess>3xmed 38.8ms
+TDPROBE spikes 0:7.6 1:3.3 2:3.1 3:3.1 4:2.5 5:2.9 6:3.0 7:3.2 8:3.1 9:3.0 10:2.9 11:2.2 595:1.3 893:1.5 1205:1.0 1339:2.1
+1445 frames   0.6 seconds 2272.2 fps
+PASS_1 
+Playing demo from fps_aerowalk.dem.
+Using protocol 15
+
+<-------------------------------------->
+
+#Aerowalk
+TDSPIKE 0 4.5ms signon 4
+TDSPIKE 1 73.1ms signon 4
+TDPROBE stages us/frame read 15.1 screen 337.9 sound 2.6 particles 0.1 swap 293.4 pscript 0.4
+TDPROBE glcalls/frame 952.7: glVertex2f 291.4 glTexCoord2f 275.4 glDisable 47.0 glBindTexture 45.1 glEnable 36.7 glDrawElements 32.0 glBegin 27.0 glEnd 27.0 glMatrixMode 24.0 glLoadIdentity 23.0 glColor4f 14.0 glViewport 12.0 glRotatef 11.8 glOrtho 11.0 glTexEnvf 10.6 glDepthMask 10.3
+TDPROBE glBegin C:\Users\Tim Bergeron\source\repos\QSS-M\Quake\gl_draw.c:2468 11.00/frame
+TDPROBE glBegin C:\Users\Tim Bergeron\source\repos\QSS-M\Quake\gl_draw.c:1138 8.00/frame
+TDPROBE glBegin C:\Users\Tim Bergeron\source\repos\QSS-M\Quake\gl_draw.c:3152 2.00/frame
+TDPROBE glBegin C:\Users\Tim Bergeron\source\repos\QSS-M\Quake\gl_draw.c:1283 2.00/frame
+TDPROBE glBegin C:\Users\Tim Bergeron\source\repos\QSS-M\Quake\gl_draw.c:3009 2.00/frame
+TDPROBE glBegin C:\Users\Tim Bergeron\source\repos\QSS-M\Quake\gl_draw.c:1179 2.00/frame
+TDPROBE soundfilter 141120 samples
+TDPROBE frames 1445 total 529.2ms median 0.3016ms p99 0.539ms p999 4.475ms max 73.06ms >1ms 2 (77.5ms) >2ms 2 (77.5ms) >5ms 1 excess>3xmed 76.9ms
+TDPROBE spikes 0:4.5 1:73.1
+1445 frames   0.5 seconds 2730.3 fps

@@ -1,0 +1,17 @@
+{
+  "normal_client_exits": 30,
+  "timing_observations": 55,
+  "checks": [
+    "6 metric selections",
+    "unit conversion",
+    "sorting",
+    "10 sample rows",
+    "CSV export",
+    "exact JSON export",
+    "light/dark themes",
+    "390px mobile overflow",
+    "keyboard tabs",
+    "reduced motion",
+    "no JavaScript errors"
+  ]
+}

@@ -1,0 +1,248 @@
+diff --git a/Quake/gl_model.c b/Quake/gl_model.c
+index 8c707e2f..ec7dead6 100644
+--- a/Quake/gl_model.c
++++ b/Quake/gl_model.c
+@@ -5235,6 +5235,7 @@ static void Mod_LoadBrushModel (qmodel_t *mod, void *buffer)
+ 				(double)(tp1.source_bytes-tp0.source_bytes)/(1024.0*1024.0),
+ 				(double)(tp1.prepared_bytes-tp0.prepared_bytes)/(1024.0*1024.0));
+ 	}
++	{ extern void GL_FinishProbe (const char *tag); GL_FinishProbe ("brush textures"); } /* PROBE */
+ 	Mod_LoadLighting (&header->lumps[LUMP_LIGHTING]);
+ 	if (profile)
+ 		t_light = Sys_DoubleTime ();
+diff --git a/Quake/gl_rmisc.c b/Quake/gl_rmisc.c
+index b5687c85..319373b1 100644
+--- a/Quake/gl_rmisc.c
++++ b/Quake/gl_rmisc.c
+@@ -848,7 +848,8 @@ void R_NewMap (void)
+ 	int		i;
+ 	double t0, tprev;
+ 	qboolean profile = developer.value != 0;
+-#define RNEWMAP_MARK(name) do { if (profile) { double tnow = Sys_DoubleTime(); Con_DPrintf("R_NewMap %s: %.1fms\n", name, (tnow-tprev)*1000.0); tprev = tnow; } } while (0)
++extern void GL_FinishProbe (const char *tag); /* PROBE */
++#define RNEWMAP_MARK(name) do { GL_FinishProbe (name); if (profile) { double tnow = Sys_DoubleTime(); Con_DPrintf("R_NewMap %s: %.1fms\n", name, (tnow-tprev)*1000.0); tprev = tnow; } } while (0)
+ 	t0 = tprev = Sys_DoubleTime();
+ 	GL_EnsureGameShaders ();
+ 	RNEWMAP_MARK("gameplay shaders");
+diff --git a/Quake/gl_screen.c b/Quake/gl_screen.c
+index 608dbeaa..44c6262b 100644
+--- a/Quake/gl_screen.c
++++ b/Quake/gl_screen.c
+@@ -7026,6 +7026,7 @@ SCR_BeginLoadingPlaque
+ void SCR_BeginLoadingPlaque (void)
+ {
+ 	S_StopAllSounds (true, false);
++	GL_SetLoadSync (true);
+ 
+ 	if (cls.state != ca_connected)
+ 		return;
+@@ -8428,6 +8429,9 @@ void SCR_UpdateScreen (void)
+ 	if (!scr_initialized || !con_initialized)
+ 		return;				// not initialized yet
+ 
++	if (GL_LoadSyncActive () && (cls.state != ca_connected || cls.signon == SIGNONS))
++		GL_SetLoadSync (false);
++
+ 	VID_Gamma_Frame (); // macOS clobbers the hw ramp asynchronously after focus/restore events
+ 
+ 	GL_BeginRendering (&glx, &gly, &glwidth, &glheight);
+@@ -8592,7 +8596,9 @@ void SCR_UpdateScreen (void)
+ 
+ 	GLSLGamma_GammaCorrect ();
+ 
++	{ extern void GL_FinishProbe (const char *tag); GL_FinishProbe ("frame"); } /* PROBE */
+ 	GL_EndRendering ();
++	{ extern void GL_WarmProbe (void); GL_WarmProbe (); } /* PROBE */
+ }
+ 
+ //============================================================================
+diff --git a/Quake/gl_vidsdl.c b/Quake/gl_vidsdl.c
+index 7205a051..3611b111 100644
+--- a/Quake/gl_vidsdl.c
++++ b/Quake/gl_vidsdl.c
+@@ -208,6 +208,7 @@ static cvar_t	vid_height = {"vid_height", "600", CVAR_ARCHIVE};	// QuakeSpasm, w
+ static cvar_t	vid_bpp = {"vid_bpp", "16", CVAR_ARCHIVE};
+ static cvar_t	vid_refreshrate = {"vid_refreshrate", "60", CVAR_ARCHIVE};
+ static cvar_t	vid_vsync = {"vid_vsync", "0", CVAR_ARCHIVE};
++static cvar_t	gl_loadsync = {"gl_loadsync", "1", CVAR_NONE};
+ cvar_t	vid_fsaa = {"vid_fsaa", "0", CVAR_ARCHIVE}; // QuakeSpasm -- woods remove static
+ cvar_t	vid_fxaa = {"vid_fxaa", "0", CVAR_ARCHIVE}; // // woods #fxaa anti-aliasing (0=off, 1=low, 2=medium, 3=high)
+ static cvar_t	vid_desktopfullscreen = {"vid_desktopfullscreen", "0", CVAR_ARCHIVE}; // QuakeSpasm
+@@ -2228,6 +2229,59 @@ static void GL_SetupState (void)
+ 	glDepthFunc (GL_LEQUAL); //johnfitz -- moved here becuase gl_ztrick is gone.
+ }
+ 
++/*
++===============
++GL_SetLoadSync
++
++NVIDIA's threaded driver spends ~40ms warming up on the first burst of texture
++uploads after context creation. Synchronous debug output keeps the driver
++single-threaded, which avoids that, so hold it for the first level load only.
++Later loads are as fast or faster threaded, and gameplay must stay threaded.
++===============
++*/
++#ifndef GL_DEBUG_OUTPUT
++#define GL_DEBUG_OUTPUT				0x92E0
++#endif
++#ifndef GL_DEBUG_OUTPUT_SYNCHRONOUS
++#define GL_DEBUG_OUTPUT_SYNCHRONOUS	0x8242
++#endif
++typedef void (APIENTRY *gl_debugproc_t) (GLenum source, GLenum type, GLuint id, GLenum severity, GLsizei length, const GLchar *message, const void *user);
++typedef void (APIENTRY *gl_debugmessagecallback_t) (gl_debugproc_t callback, const void *user);
++static gl_debugmessagecallback_t GL_DebugMessageCallbackFunc;
++static qboolean gl_loadsync_active, gl_loadsync_done;
++
++static void APIENTRY GL_LoadSyncMessage (GLenum source, GLenum type, GLuint id, GLenum severity, GLsizei length, const GLchar *message, const void *user)
++{
++}
++
++void GL_SetLoadSync (qboolean loading)
++{
++	loading = loading && gl_loadsync.value && !gl_loadsync_done;
++	if (!GL_DebugMessageCallbackFunc || loading == gl_loadsync_active)
++		return;
++	gl_loadsync_active = loading;
++	if (!loading && cls.signon == SIGNONS)
++		gl_loadsync_done = true;
++	Con_DPrintf ("GL load sync %s\n", loading ? "on" : "off");
++	if (loading)
++	{
++		GL_DebugMessageCallbackFunc (GL_LoadSyncMessage, NULL);
++		glEnable (GL_DEBUG_OUTPUT);
++		glEnable (GL_DEBUG_OUTPUT_SYNCHRONOUS);
++	}
++	else
++	{
++		glDisable (GL_DEBUG_OUTPUT_SYNCHRONOUS);
++		glDisable (GL_DEBUG_OUTPUT);
++		GL_DebugMessageCallbackFunc (NULL, NULL);
++	}
++}
++
++qboolean GL_LoadSyncActive (void)
++{
++	return gl_loadsync_active;
++}
++
+ /*
+ ===============
+ GL_EnsureGameShaders
+@@ -2267,6 +2321,13 @@ static void GL_Init (void)
+ 
+ 	GL_CheckExtensions (); //johnfitz
+ 
++	gl_loadsync_active = gl_loadsync_done = false;
++	GL_DebugMessageCallbackFunc = NULL;
++	if (!strncmp (gl_vendor, "NVIDIA", 6) &&
++		(gl_version_major > 4 || (gl_version_major == 4 && gl_version_minor >= 3) ||
++		GL_ParseExtensionList (gl_extensions, "GL_KHR_debug")))
++		GL_DebugMessageCallbackFunc = (gl_debugmessagecallback_t) SDL_GL_GetProcAddress ("glDebugMessageCallback");
++
+ #ifdef __APPLE__
+ 	// ericw -- enable multi-threaded OpenGL, gives a decent FPS boost.
+ 	// https://developer.apple.com/library/mac/technotes/tn2085/
+@@ -2296,7 +2357,43 @@ static void GL_Init (void)
+ 	if (cls.state == ca_connected)
+ 		GL_EnsureGameShaders ();
+ 	GL_ClearBufferBindings ();
+-	
++
++}
++
++void GL_FinishProbe (const char *tag) /* PROBE */
++{
++	double t;
++	if (!COM_CheckParm ("-finishprobe"))
++		return;
++	t = Sys_DoubleTime ();
++	glFinish ();
++	t = Sys_DoubleTime () - t;
++	if (t > 0.001)
++		Con_DPrintf ("FINISH %s %.1fms\n", tag, t * 1000.0);
++}
++
++void GL_WarmProbe (void) /* PROBE */
++{
++	static int frames;
++	int at = COM_CheckParm ("-warmtex");
++	if (!at || at + 1 >= com_argc || ++frames != atoi (com_argv[at + 1]))
++		return;
++	{
++		static byte pixels[128 * 128 * 4];
++		GLuint names[96];
++		int n, level, size;
++		double t = Sys_DoubleTime ();
++		glGenTextures (countof(names), names);
++		for (n = 0; n < (int)countof(names); n++)
++		{
++			glBindTexture (GL_TEXTURE_2D, names[n]);
++			for (level = 0, size = 128; size; level++, size >>= 1)
++				glTexImage2D (GL_TEXTURE_2D, level, GL_RGBA8, size, size, 0, GL_RGBA, GL_UNSIGNED_BYTE, pixels);
++		}
++		glDeleteTextures (countof(names), names);
++		glBindTexture (GL_TEXTURE_2D, 0);
++		Con_SafePrintf ("PROBE warmtex %.1fms\n", (Sys_DoubleTime () - t) * 1000.0);
++	}
+ }
+ 
+ /*
+@@ -2342,7 +2439,11 @@ void GL_EndRendering (void)
+ {
+ 	if (!scr_skipupdate)
+ 	{
++		double probe_t = Sys_DoubleTime (); /* PROBE */
+ 		SDL_GL_SwapWindow(draw_context);
++		probe_t = Sys_DoubleTime () - probe_t; /* PROBE */
++		if (probe_t > 0.008) /* PROBE */
++			Con_DPrintf ("SLOWSWAP %.1fms signon %d sync %d\n", probe_t * 1000.0, cls.signon, gl_loadsync_active); /* PROBE */
+ 	}
+ }
+ 
+@@ -2628,6 +2729,7 @@ void	VID_Init (void)
+ 	Cvar_RegisterVariable (&vid_refreshrate); //johnfitz
+ 	Cvar_RegisterVariable (&vid_bpp); //johnfitz
+ 	Cvar_RegisterVariable (&vid_vsync); //johnfitz
++	Cvar_RegisterVariable (&gl_loadsync);
+ 	Cvar_RegisterVariable (&vid_fsaa); //QuakeSpasm
+ 	Cvar_RegisterVariable (&vid_fxaa); // woods #fxaa
+ 	Cvar_RegisterVariable (&vid_desktopfullscreen); //QuakeSpasm
+diff --git a/Quake/glquake.h b/Quake/glquake.h
+index 06a7f9bf..1dd32b9d 100644
+--- a/Quake/glquake.h
++++ b/Quake/glquake.h
+@@ -630,6 +630,8 @@ void PolyBlend_DeleteVignetteTexture (void); // woods #polylblend2
+ 
+ void GLWorld_CreateShaders (void);
+ void GL_EnsureGameShaders (void);
++void GL_SetLoadSync (qboolean loading);
++qboolean GL_LoadSyncActive (void);
+ void GLAlias_CreateShaders (void);
+ void GLAlias_DeleteShaders (void);
+ void GLWorld_DeleteShaders (void);
+diff --git a/Quake/host.c b/Quake/host.c
+index 3b093234..0f2dc33e 100644
+--- a/Quake/host.c
++++ b/Quake/host.c
+@@ -1527,6 +1527,7 @@ void Host_ClearMemory (void)
+ 	SCR_ClearShowFieldsTracks();
+ 
+ 	Con_DPrintf ("Clearing memory\n");
++	GL_SetLoadSync (true);
+ 	D_FlushCaches ();
+ 	Mod_ClearAll ();
+ 	Sky_NewMapClear(); // keeps the loaded skybox for reuse; full purge happens on game change
+diff --git a/Quake/sv_main.c b/Quake/sv_main.c
+index e299d853..f75d29e2 100644
+--- a/Quake/sv_main.c
++++ b/Quake/sv_main.c
+@@ -4662,7 +4662,8 @@ void SV_SpawnServer (const char *server)
+ 	int			i, signonsize;
+ 	qcvm_t *vm = qcvm;
+ 	double		sp_t0 = Sys_DoubleTime(), sp_prev = sp_t0;
+-#define SPAWN_MARK(name) do { if (developer.value) { double tnow = Sys_DoubleTime(); Con_DPrintf("SV_SpawnServer %s: %.1fms\n", name, (tnow-sp_prev)*1000.0); sp_prev = tnow; } } while (0)
++extern void GL_FinishProbe (const char *tag); /* PROBE */
++#define SPAWN_MARK(name) do { GL_FinishProbe (name); if (developer.value) { double tnow = Sys_DoubleTime(); Con_DPrintf("SV_SpawnServer %s: %.1fms\n", name, (tnow-sp_prev)*1000.0); sp_prev = tnow; } } while (0)
+ 
+ 	// let's not have any servers with no name
+ 	if (hostname.string[0] == 0)

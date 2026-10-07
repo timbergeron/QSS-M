@@ -1,0 +1,286 @@
+
+LOG started on: 10/05/2026 21:03:12 
+
+Console initialized.
+Exe: 21:01:38 Oct  5 2026
+384.0 megabyte heap
+
+Sound Initialization
+Video mode 800x600x24 144Hz 2x scale (24-bit z-buffer, 0x FSAA) initialized
+GL_VENDOR: NVIDIA Corporation
+GL_RENDERER: NVIDIA GeForce RTX 4070/PCIe/SSE2
+GL_VERSION: 4.6.0 NVIDIA 591.86
+FOUND: ARB_vertex_buffer_object
+FOUND: GL_ARB_buffer_storage
+FOUND: ARB_multitexture
+GL_MAX_TEXTURE_UNITS: 4
+FOUND: ARB_texture_env_combine
+FOUND: ARB_texture_env_add
+FOUND: SDL_GL_SetSwapInterval
+FOUND: EXT_texture_filter_anisotropic
+FOUND: ARB_texture_non_power_of_two
+FOUND: GLSL
+GL_MAX_TEXTURE_IMAGE_UNITS: 32
+FOUND: brush model instancing
+FOUND: Framebuffer Objects
+Enabled: GLSL gamma
+FOUND: glBlendFuncSeparate
+Enabled: GLSL alias model rendering
+Enabled: EXT_packed_pixels
+FOUND: glGenerateMipmap
+SDL audio spec  : 44100 Hz, 1024 samples, 2 mix channels (callback: 2 ch, surround: on)
+SDL audio device: 44100 Hz, 2 ch, SDL_AUDIO_F32LE, 441 sample frames
+SDL audio driver: wasapi - Speakers (Realtek(R) Audio), 65536 bytes buffer
+Audio: 16 bit, stereo, 44100 Hz
+
+Language initialization
+Couldn't load 'localization/loc_english.txt'
+from 'C:\Users\Tim Bergeron\source\repos\QSS-M\.codex-build\engine-fps-optimization-20261005\uniform-probe\20261005-210312\800x600'
+
+========= Quake Initialized =========
+
+execing quake.rc
+execing default.cfg
+execing fpsbench.cfg
+UNIFORM_PROBE 
+BENCH_UNIFORM requested=0 sent=0
+UNIFORM_PASS_0_0_0 
+"bench_uniform_skip" is "0" (default)
+Playing demo from fps_aerowalk.dem.
+Using protocol 15
+
+<-------------------------------------->
+
+#Aerowalk
+1445 frames   0.8 seconds 1824.2 fps
+BENCH_UNIFORM requested=127072 sent=127072
+UNIFORM_PASS_0_0_1 
+"bench_uniform_skip" is "0" (default)
+Playing demo from fps_aerowalk.dem.
+Using protocol 15
+
+<-------------------------------------->
+
+#Aerowalk
+1445 frames   0.5 seconds 2864.3 fps
+BENCH_UNIFORM requested=127072 sent=127072
+UNIFORM_PASS_0_0_2 
+"bench_uniform_skip" is "0" (default)
+Playing demo from fps_aerowalk.dem.
+Using protocol 15
+
+<-------------------------------------->
+
+#Aerowalk
+1445 frames   0.5 seconds 2764.2 fps
+BENCH_UNIFORM requested=127072 sent=127072
+UNIFORM_PASS_0_0_3 
+"bench_uniform_skip" is "0" (default)
+Playing demo from fps_aerowalk.dem.
+Using protocol 15
+
+<-------------------------------------->
+
+#Aerowalk
+1445 frames   0.5 seconds 2729.6 fps
+BENCH_UNIFORM requested=127072 sent=127072
+UNIFORM_PASS_0_0_4 
+"bench_uniform_skip" is "0" (default)
+Playing demo from fps_aerowalk.dem.
+Using protocol 15
+
+<-------------------------------------->
+
+#Aerowalk
+1445 frames   0.5 seconds 2844.9 fps
+BENCH_UNIFORM requested=127072 sent=127072
+UNIFORM_PASS_0_0_5 
+"bench_uniform_skip" is "0" (default)
+Playing demo from fps_aerowalk.dem.
+Using protocol 15
+
+<-------------------------------------->
+
+#Aerowalk
+1445 frames   0.5 seconds 2860.2 fps
+BENCH_UNIFORM requested=127072 sent=127072
+UNIFORM_PASS_1_1_0 
+"bench_uniform_skip" is "1" (default: "0")
+Playing demo from fps_aerowalk.dem.
+Using protocol 15
+
+<-------------------------------------->
+
+#Aerowalk
+1445 frames   0.5 seconds 2717.6 fps
+BENCH_UNIFORM requested=127072 sent=20216
+UNIFORM_PASS_1_1_1 
+"bench_uniform_skip" is "1" (default: "0")
+Playing demo from fps_aerowalk.dem.
+Using protocol 15
+
+<-------------------------------------->
+
+#Aerowalk
+1445 frames   0.5 seconds 2861.3 fps
+BENCH_UNIFORM requested=127072 sent=20216
+UNIFORM_PASS_1_1_2 
+"bench_uniform_skip" is "1" (default: "0")
+Playing demo from fps_aerowalk.dem.
+Using protocol 15
+
+<-------------------------------------->
+
+#Aerowalk
+1445 frames   0.5 seconds 2787.8 fps
+BENCH_UNIFORM requested=127072 sent=20216
+UNIFORM_PASS_1_1_3 
+"bench_uniform_skip" is "1" (default: "0")
+Playing demo from fps_aerowalk.dem.
+Using protocol 15
+
+<-------------------------------------->
+
+#Aerowalk
+1445 frames   0.5 seconds 2717.4 fps
+BENCH_UNIFORM requested=127072 sent=20216
+UNIFORM_PASS_1_1_4 
+"bench_uniform_skip" is "1" (default: "0")
+Playing demo from fps_aerowalk.dem.
+Using protocol 15
+
+<-------------------------------------->
+
+#Aerowalk
+1445 frames   0.5 seconds 2759.4 fps
+BENCH_UNIFORM requested=127072 sent=20216
+UNIFORM_PASS_1_1_5 
+"bench_uniform_skip" is "1" (default: "0")
+Playing demo from fps_aerowalk.dem.
+Using protocol 15
+
+<-------------------------------------->
+
+#Aerowalk
+1445 frames   0.5 seconds 2678.1 fps
+BENCH_UNIFORM requested=127072 sent=20216
+UNIFORM_PASS_2_1_0 
+"bench_uniform_skip" is "1" (default: "0")
+Playing demo from fps_aerowalk.dem.
+Using protocol 15
+
+<-------------------------------------->
+
+#Aerowalk
+1445 frames   0.6 seconds 2519.8 fps
+BENCH_UNIFORM requested=127072 sent=20216
+UNIFORM_PASS_2_1_1 
+"bench_uniform_skip" is "1" (default: "0")
+Playing demo from fps_aerowalk.dem.
+Using protocol 15
+
+<-------------------------------------->
+
+#Aerowalk
+1445 frames   0.5 seconds 2830.4 fps
+BENCH_UNIFORM requested=127072 sent=20216
+UNIFORM_PASS_2_1_2 
+"bench_uniform_skip" is "1" (default: "0")
+Playing demo from fps_aerowalk.dem.
+Using protocol 15
+
+<-------------------------------------->
+
+#Aerowalk
+1445 frames   0.5 seconds 2786.0 fps
+BENCH_UNIFORM requested=127072 sent=20216
+UNIFORM_PASS_2_1_3 
+"bench_uniform_skip" is "1" (default: "0")
+Playing demo from fps_aerowalk.dem.
+Using protocol 15
+
+<-------------------------------------->
+
+#Aerowalk
+1445 frames   0.5 seconds 2707.7 fps
+BENCH_UNIFORM requested=127072 sent=20216
+UNIFORM_PASS_2_1_4 
+"bench_uniform_skip" is "1" (default: "0")
+Playing demo from fps_aerowalk.dem.
+Using protocol 15
+
+<-------------------------------------->
+
+#Aerowalk
+1445 frames   0.5 seconds 2809.7 fps
+BENCH_UNIFORM requested=127072 sent=20216
+UNIFORM_PASS_2_1_5 
+"bench_uniform_skip" is "1" (default: "0")
+Playing demo from fps_aerowalk.dem.
+Using protocol 15
+
+<-------------------------------------->
+
+#Aerowalk
+1445 frames   0.5 seconds 2745.8 fps
+BENCH_UNIFORM requested=127072 sent=20216
+UNIFORM_PASS_3_0_0 
+"bench_uniform_skip" is "0" (default)
+Playing demo from fps_aerowalk.dem.
+Using protocol 15
+
+<-------------------------------------->
+
+#Aerowalk
+1445 frames   0.5 seconds 2668.4 fps
+BENCH_UNIFORM requested=127072 sent=127072
+UNIFORM_PASS_3_0_1 
+"bench_uniform_skip" is "0" (default)
+Playing demo from fps_aerowalk.dem.
+Using protocol 15
+
+<-------------------------------------->
+
+#Aerowalk
+1445 frames   0.5 seconds 2644.0 fps
+BENCH_UNIFORM requested=127072 sent=127072
+UNIFORM_PASS_3_0_2 
+"bench_uniform_skip" is "0" (default)
+Playing demo from fps_aerowalk.dem.
+Using protocol 15
+
+<-------------------------------------->
+
+#Aerowalk
+1445 frames   0.5 seconds 2830.8 fps
+BENCH_UNIFORM requested=127072 sent=127072
+UNIFORM_PASS_3_0_3 
+"bench_uniform_skip" is "0" (default)
+Playing demo from fps_aerowalk.dem.
+Using protocol 15
+
+<-------------------------------------->
+
+#Aerowalk
+1445 frames   0.5 seconds 2845.2 fps
+BENCH_UNIFORM requested=127072 sent=127072
+UNIFORM_PASS_3_0_4 
+"bench_uniform_skip" is "0" (default)
+Playing demo from fps_aerowalk.dem.
+Using protocol 15
+
+<-------------------------------------->
+
+#Aerowalk
+1445 frames   0.5 seconds 2650.3 fps
+BENCH_UNIFORM requested=127072 sent=127072
+UNIFORM_PASS_3_0_5 
+"bench_uniform_skip" is "0" (default)
+Playing demo from fps_aerowalk.dem.
+Using protocol 15
+
+<-------------------------------------->
+
+#Aerowalk
+1445 frames   0.5 seconds 2740.9 fps
+BENCH_UNIFORM requested=127072 sent=127072

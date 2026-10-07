@@ -1,0 +1,17 @@
+{
+  "identical_map_uploads": true,
+  "maps": {
+    "start": {
+      "identical": true,
+      "texhash_lines": 721,
+      "sha256": "105286b55dede63cc7f50ceb3a65897f9f96feee7585ea07b6fee5bcc2c3e956"
+    },
+    "e1m1": {
+      "identical": true,
+      "texhash_lines": 979,
+      "sha256": "0db992260e352c650ccc1c6f6a8c94eae42abee90a6ec4b932e9dfcedfa7c10f"
+    }
+  },
+  "final_ui_atlas_identical": true,
+  "note": "1700 ordered map/model mip upload records and final UI atlas match. Startup intermediate UI atlas uploads differ in frequency because timing changed. CPU upload data/flags, not GPU readback. Diagnostic tex_verify 1 sessions excluded from timing statistics."
+}

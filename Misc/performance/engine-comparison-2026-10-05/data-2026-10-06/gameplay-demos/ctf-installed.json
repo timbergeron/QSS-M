@@ -1,0 +1,242 @@
+{
+  "bench": "ctf",
+  "title": "CTF match \u00b7 ctf3m2 \u00b7 16 players",
+  "game": "id1",
+  "demo": "ctfmatch",
+  "method": "One discarded warm-up then five fresh-process native timedemos per engine, rotating engine order; 800x600 window, VSync/MSAA off, uncapped, sound on; same settings as the nine-map FPS suite. QSS-M runs with scr_autoid 0.",
+  "files": {
+    "id1/ctfmatch.dem": "9e6d50481c2dbc2e2669502b474cbcefc0e62229c6d993b5a9327a7103a2dabb",
+    "id1/pak3.pak": "06ed548b5fa186afe46cffc221701a02452a1580fb60a70efaec7d939e73f608",
+    "id1/maps/ctf3m2.bsp": "c564fc3c31638913fe9ce2b734cce0741ed58ff6e91c8908e40d05222c2ccce8"
+  },
+  "engines": {
+    "qssm": {
+      "exe": "C:\\Users\\Tim Bergeron\\Desktop\\qssm\\QSS-M-w64.exe",
+      "sha256": "c8f2fbde0c9c2cba091ae58851c8e24e0174708b5bb9afb2f9220f94fc5a3175"
+    }
+  },
+  "samples": [
+    {
+      "engine": "qssm",
+      "bench": "ctf",
+      "run": 0,
+      "warmup": true,
+      "result": {
+        "frames": 51711,
+        "seconds": 26.2,
+        "fps": 1974.9,
+        "line": "51711 frames  26.2 seconds 1974.9 fps"
+      },
+      "window_pixels": {
+        "width": 800,
+        "height": 600
+      },
+      "elapsed_wall_seconds": 27.14100000000326,
+      "foreground": true,
+      "command": [
+        "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\fps-expanded-20261006\\demoruns\\ctf\\qssm\\QSS-M-w64.exe",
+        "-basedir",
+        "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\fps-expanded-20261006\\demoruns\\ctf\\qssm",
+        "-nohome",
+        "-condebug",
+        "-window",
+        "-width",
+        "800",
+        "-height",
+        "600",
+        "-nojoy",
+        "-noice",
+        "-listen",
+        "-noudp",
+        "-noquakeimport"
+      ],
+      "config": "vid_width 800\nvid_height 600\nvid_fullscreen 0\nvid_vsync 0\nfov 90\nviewsize 100\nhost_maxfps 0\nsys_throttle -1\ncl_demoreel 0\ncl_discord_presence 0\nr_scale 1\nvid_fsaa 0\nscr_autoid 0\necho FPS_BENCH_qssm_ctf_1791324662988361500\nvid_width\nvid_height\nvid_vsync\ntimedemo ctfmatch\n",
+      "log": "demoruns/logs/qssm-ctf-warmup.log"
+    },
+    {
+      "engine": "qssm",
+      "bench": "ctf",
+      "run": 1,
+      "warmup": false,
+      "result": {
+        "frames": 51711,
+        "seconds": 26.0,
+        "fps": 1988.6,
+        "line": "51711 frames  26.0 seconds 1988.6 fps"
+      },
+      "window_pixels": {
+        "width": 800,
+        "height": 600
+      },
+      "elapsed_wall_seconds": 26.6559999999954,
+      "foreground": true,
+      "command": [
+        "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\fps-expanded-20261006\\demoruns\\ctf\\qssm\\QSS-M-w64.exe",
+        "-basedir",
+        "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\fps-expanded-20261006\\demoruns\\ctf\\qssm",
+        "-nohome",
+        "-condebug",
+        "-window",
+        "-width",
+        "800",
+        "-height",
+        "600",
+        "-nojoy",
+        "-noice",
+        "-listen",
+        "-noudp",
+        "-noquakeimport"
+      ],
+      "config": "vid_width 800\nvid_height 600\nvid_fullscreen 0\nvid_vsync 0\nfov 90\nviewsize 100\nhost_maxfps 0\nsys_throttle -1\ncl_demoreel 0\ncl_discord_presence 0\nr_scale 1\nvid_fsaa 0\nscr_autoid 0\necho FPS_BENCH_qssm_ctf_1791324690135144400\nvid_width\nvid_height\nvid_vsync\ntimedemo ctfmatch\n",
+      "log": "demoruns/logs/qssm-ctf-01.log"
+    },
+    {
+      "engine": "qssm",
+      "bench": "ctf",
+      "run": 2,
+      "warmup": false,
+      "result": {
+        "frames": 51711,
+        "seconds": 27.1,
+        "fps": 1906.3,
+        "line": "51711 frames  27.1 seconds 1906.3 fps"
+      },
+      "window_pixels": {
+        "width": 800,
+        "height": 600
+      },
+      "elapsed_wall_seconds": 27.781000000002678,
+      "foreground": true,
+      "command": [
+        "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\fps-expanded-20261006\\demoruns\\ctf\\qssm\\QSS-M-w64.exe",
+        "-basedir",
+        "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\fps-expanded-20261006\\demoruns\\ctf\\qssm",
+        "-nohome",
+        "-condebug",
+        "-window",
+        "-width",
+        "800",
+        "-height",
+        "600",
+        "-nojoy",
+        "-noice",
+        "-listen",
+        "-noudp",
+        "-noquakeimport"
+      ],
+      "config": "vid_width 800\nvid_height 600\nvid_fullscreen 0\nvid_vsync 0\nfov 90\nviewsize 100\nhost_maxfps 0\nsys_throttle -1\ncl_demoreel 0\ncl_discord_presence 0\nr_scale 1\nvid_fsaa 0\nscr_autoid 0\necho FPS_BENCH_qssm_ctf_1791324716783820000\nvid_width\nvid_height\nvid_vsync\ntimedemo ctfmatch\n",
+      "log": "demoruns/logs/qssm-ctf-02.log"
+    },
+    {
+      "engine": "qssm",
+      "bench": "ctf",
+      "run": 3,
+      "warmup": false,
+      "result": {
+        "frames": 51711,
+        "seconds": 25.9,
+        "fps": 1996.6,
+        "line": "51711 frames  25.9 seconds 1996.6 fps"
+      },
+      "window_pixels": {
+        "width": 800,
+        "height": 600
+      },
+      "elapsed_wall_seconds": 26.5,
+      "foreground": true,
+      "command": [
+        "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\fps-expanded-20261006\\demoruns\\ctf\\qssm\\QSS-M-w64.exe",
+        "-basedir",
+        "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\fps-expanded-20261006\\demoruns\\ctf\\qssm",
+        "-nohome",
+        "-condebug",
+        "-window",
+        "-width",
+        "800",
+        "-height",
+        "600",
+        "-nojoy",
+        "-noice",
+        "-listen",
+        "-noudp",
+        "-noquakeimport"
+      ],
+      "config": "vid_width 800\nvid_height 600\nvid_fullscreen 0\nvid_vsync 0\nfov 90\nviewsize 100\nhost_maxfps 0\nsys_throttle -1\ncl_demoreel 0\ncl_discord_presence 0\nr_scale 1\nvid_fsaa 0\nscr_autoid 0\necho FPS_BENCH_qssm_ctf_1791324744574276500\nvid_width\nvid_height\nvid_vsync\ntimedemo ctfmatch\n",
+      "log": "demoruns/logs/qssm-ctf-03.log"
+    },
+    {
+      "engine": "qssm",
+      "bench": "ctf",
+      "run": 4,
+      "warmup": false,
+      "result": {
+        "frames": 51711,
+        "seconds": 26.1,
+        "fps": 1979.6,
+        "line": "51711 frames  26.1 seconds 1979.6 fps"
+      },
+      "window_pixels": {
+        "width": 800,
+        "height": 600
+      },
+      "elapsed_wall_seconds": 26.890999999995984,
+      "foreground": true,
+      "command": [
+        "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\fps-expanded-20261006\\demoruns\\ctf\\qssm\\QSS-M-w64.exe",
+        "-basedir",
+        "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\fps-expanded-20261006\\demoruns\\ctf\\qssm",
+        "-nohome",
+        "-condebug",
+        "-window",
+        "-width",
+        "800",
+        "-height",
+        "600",
+        "-nojoy",
+        "-noice",
+        "-listen",
+        "-noudp",
+        "-noquakeimport"
+      ],
+      "config": "vid_width 800\nvid_height 600\nvid_fullscreen 0\nvid_vsync 0\nfov 90\nviewsize 100\nhost_maxfps 0\nsys_throttle -1\ncl_demoreel 0\ncl_discord_presence 0\nr_scale 1\nvid_fsaa 0\nscr_autoid 0\necho FPS_BENCH_qssm_ctf_1791324771083387000\nvid_width\nvid_height\nvid_vsync\ntimedemo ctfmatch\n",
+      "log": "demoruns/logs/qssm-ctf-04.log"
+    },
+    {
+      "engine": "qssm",
+      "bench": "ctf",
+      "run": 5,
+      "warmup": false,
+      "result": {
+        "frames": 51711,
+        "seconds": 25.8,
+        "fps": 2000.8,
+        "line": "51711 frames  25.8 seconds 2000.8 fps"
+      },
+      "window_pixels": {
+        "width": 800,
+        "height": 600
+      },
+      "elapsed_wall_seconds": 26.5309999999954,
+      "foreground": true,
+      "command": [
+        "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\fps-expanded-20261006\\demoruns\\ctf\\qssm\\QSS-M-w64.exe",
+        "-basedir",
+        "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\fps-expanded-20261006\\demoruns\\ctf\\qssm",
+        "-nohome",
+        "-condebug",
+        "-window",
+        "-width",
+        "800",
+        "-height",
+        "600",
+        "-nojoy",
+        "-noice",
+        "-listen",
+        "-noudp",
+        "-noquakeimport"
+      ],
+      "config": "vid_width 800\nvid_height 600\nvid_fullscreen 0\nvid_vsync 0\nfov 90\nviewsize 100\nhost_maxfps 0\nsys_throttle -1\ncl_demoreel 0\ncl_discord_presence 0\nr_scale 1\nvid_fsaa 0\nscr_autoid 0\necho FPS_BENCH_qssm_ctf_1791324797988749600\nvid_width\nvid_height\nvid_vsync\ntimedemo ctfmatch\n",
+      "log": "demoruns/logs/qssm-ctf-05.log"
+    }
+  ]
+}

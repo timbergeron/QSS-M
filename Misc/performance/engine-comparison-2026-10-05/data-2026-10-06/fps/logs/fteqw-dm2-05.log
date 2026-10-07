@@ -1,0 +1,20 @@
+--- fte\qconsole.log ---
+FPS_BENCH_fteqw_dm2_1791325252807867300
+2026-10-06 15:20:52 "vid_width" is "800"
+2026-10-06 15:20:52 Default: "0"
+2026-10-06 15:20:52 "vid_height" is "600"
+2026-10-06 15:20:52 Default: "0"
+2026-10-06 15:20:52 "vid_vsync" is "0" (default)
+2026-10-06 15:20:52 Playing demo from fps_dm2.dem.
+2026-10-06 15:20:52 Setting windowed mode 800*600 OpenGL
+2026-10-06 15:20:53 GL_VENDOR: NVIDIA Corporation
+2026-10-06 15:20:53 GL_RENDERER: NVIDIA GeForce RTX 4070/PCIe/SSE2
+2026-10-06 15:20:53 GL_VERSION: 4.6.0 NVIDIA 610.88
+2026-10-06 15:20:53 OpenGL renderer initialized
+2026-10-06 15:20:53 ^Ue080^Ue081^Ue081^Ue081^Ue081^Ue081^Ue081 Quake Initialized ^Ue081^Ue081^Ue081^Ue081^Ue081^Ue081^Ue082
+2026-10-06 15:20:53 
+2026-10-06 15:20:53 
+2026-10-06 15:20:53 ^Ue01d^Ue01e^Ue01e^Ue01e^Ue01e^Ue01e^Ue01e^Ue01e^Ue01e^Ue01e^Ue01e^Ue01e^Ue01e^Ue01e^Ue01e^Ue01e^Ue01e^Ue01e^Ue01f
+2026-10-06 15:20:53 
+2026-10-06 15:20:53 Claustrophobopolis
+2026-10-06 15:20:54 1443 frames   0.4 seconds 3340.7 fps

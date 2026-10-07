@@ -1,0 +1,1689 @@
+{
+  "created_local": "2026-10-05 14:08:05",
+  "timezone": "America/Los_Angeles",
+  "platform": "Windows-11-10.0.26100-SP0",
+  "processor": "AMD64 Family 23 Model 113 Stepping 0, AuthenticAMD",
+  "logical_cpus": 12,
+  "poll_interval_ms": 1,
+  "server_command": [
+    "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\engine-comparison-20261005\\server\\QSS-M-w64.exe",
+    "-basedir",
+    "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\engine-comparison-20261005\\server",
+    "-dedicated",
+    "4",
+    "-nohome",
+    "-noquakeimport",
+    "-noice",
+    "-condebug",
+    "-ip",
+    "127.0.0.1",
+    "-port",
+    "26000",
+    "+rcon_password",
+    "benchmark-local-only"
+  ],
+  "engines": {
+    "qssm": {
+      "source": "C:\\Users\\Tim Bergeron\\Desktop\\qssm\\QSS-M-w64.exe",
+      "sha256": "5cacdcc77bef96b045fb6beca1ad80272f3cdef7315119774dd87a84f84a7ae4",
+      "size_bytes": 6379520,
+      "file_modified_epoch": 1791168055.9702358
+    },
+    "fteqw": {
+      "source": "C:\\Users\\Tim Bergeron\\Desktop\\Engines\\FTE Stuff\\FTE\\fteqw64.exe",
+      "sha256": "b4c42192534634c523b2d9d9a98153930d9d2cc7ff6d5d366b397359d8b47f2e",
+      "size_bytes": 7816744,
+      "file_modified_epoch": 1725253520.0
+    }
+  },
+  "pak_sha256": {
+    "pak0.pak": "35a9c55e5e5a284a159ad2a62e0e8def23d829561fe2f54eb402dbc0a9a946af",
+    "pak1.pak": "94e355836ec42bc464e4cbe794cfb7b5163c6efa1bcc575622bb36475bf1cf30"
+  },
+  "config": {
+    "qssm": "vid_width 800\nvid_height 600\nvid_fullscreen 0\nvid_vsync 0\ncl_demoreel 0\ndeveloper 1\nname BenchClient\nhost_maxfps 144\ncl_discord_presence 0\nsv_protocol Base-15\nr_scale 1\nvid_fsaa 0\n",
+    "fteqw": "vid_width 800\nvid_height 600\nvid_fullscreen 0\nvid_vsync 0\ncl_demoreel 0\ndeveloper 1\nname BenchClient\nvid_renderer gl\nnet_hybriddualstack 0\nnet_enabled 1\ncl_maxfps 144\ncl_idlefps 144\ncl_loopbackprotocol nqid\ncl_nopext 1\nsv_protocol_nq 15\nvid_multisample 0\nlog_developer 1\nlog_readable 1\n"
+  },
+  "results": [
+    {
+      "engine": "qssm",
+      "run": 1,
+      "mode": "lifecycle",
+      "metrics_ms": {
+        "startup": 561.7746000061743,
+        "initial": 612.3781999922357,
+        "change": 300.2091000089422,
+        "quit": 139.582599978894
+      },
+      "events": [
+        {
+          "elapsed_ms": 561.7746000061743,
+          "line": "BENCH_READY "
+        },
+        {
+          "elapsed_ms": 4967.247900029179,
+          "line": "BENCH_BEGIN_initial "
+        },
+        {
+          "elapsed_ms": 5579.6261000214145,
+          "line": "CL_SignonReply: 4"
+        },
+        {
+          "elapsed_ms": 9881.335499987472,
+          "line": "BENCH_BEGIN_change "
+        },
+        {
+          "elapsed_ms": 10181.544599996414,
+          "line": "CL_SignonReply: 4"
+        },
+        {
+          "elapsed_ms": 14482.682600035332,
+          "line": "BENCH_BEGIN_quit "
+        }
+      ],
+      "exit_code": 0,
+      "command": [
+        "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\engine-comparison-20261005\\qssm\\QSS-M-w64.exe",
+        "-basedir",
+        "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\engine-comparison-20261005\\qssm",
+        "-nohome",
+        "-condebug",
+        "-window",
+        "-width",
+        "800",
+        "-height",
+        "600",
+        "-nojoy",
+        "-noquakeimport",
+        "+exec",
+        "benchmark.cfg"
+      ],
+      "log": "logs\\01-qssm-lifecycle.log",
+      "script": "echo BENCH_READY\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\necho BENCH_BEGIN_initial\nmap start\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\necho BENCH_BEGIN_change\nmap e1m1\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\necho BENCH_BEGIN_quit\nquit\n"
+    },
+    {
+      "engine": "qssm",
+      "run": 1,
+      "mode": "launch_map",
+      "metrics_ms": {
+        "launch_map": 863.0187999806367
+      },
+      "events": [
+        {
+          "elapsed_ms": 285.73449997929856,
+          "line": "BENCH_LAUNCH_MAP "
+        },
+        {
+          "elapsed_ms": 863.0187999806367,
+          "line": "CL_SignonReply: 4"
+        },
+        {
+          "elapsed_ms": 5212.192100007087,
+          "line": "BENCH_QUIT "
+        }
+      ],
+      "exit_code": 0,
+      "command": [
+        "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\engine-comparison-20261005\\qssm\\QSS-M-w64.exe",
+        "-basedir",
+        "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\engine-comparison-20261005\\qssm",
+        "-nohome",
+        "-condebug",
+        "-window",
+        "-width",
+        "800",
+        "-height",
+        "600",
+        "-nojoy",
+        "-noquakeimport",
+        "+exec",
+        "benchmark.cfg"
+      ],
+      "log": "logs\\01-qssm-launch_map.log",
+      "script": "echo BENCH_LAUNCH_MAP\nmap start\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\necho BENCH_QUIT\nquit\n"
+    },
+    {
+      "engine": "qssm",
+      "run": 1,
+      "mode": "connect",
+      "metrics_ms": {
+        "connect": 949.8232000041753
+      },
+      "events": [
+        {
+          "elapsed_ms": 4703.46619997872,
+          "line": "BENCH_BEGIN_connect "
+        },
+        {
+          "elapsed_ms": 5653.289399982896,
+          "line": "CL_SignonReply: 4"
+        },
+        {
+          "elapsed_ms": 9636.243199987803,
+          "line": "BENCH_BEGIN_quit "
+        }
+      ],
+      "exit_code": 0,
+      "command": [
+        "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\engine-comparison-20261005\\qssm\\QSS-M-w64.exe",
+        "-basedir",
+        "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\engine-comparison-20261005\\qssm",
+        "-nohome",
+        "-condebug",
+        "-window",
+        "-width",
+        "800",
+        "-height",
+        "600",
+        "-nojoy",
+        "-noquakeimport",
+        "+exec",
+        "benchmark.cfg"
+      ],
+      "log": "logs\\01-qssm-connect.log",
+      "script": "wait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\necho BENCH_BEGIN_connect\nconnect 127.0.0.1:26000\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\necho BENCH_BEGIN_quit\nquit\n",
+      "connect_status": "signon_observed",
+      "connect_observation_window_ms": 4932.777000009082
+    },
+    {
+      "engine": "fteqw",
+      "run": 1,
+      "mode": "lifecycle",
+      "metrics_ms": {
+        "startup": 1671.8000000109896,
+        "initial": 1267.1389000024647,
+        "change": 903.7710999837145,
+        "quit": 740.0965999695472
+      },
+      "events": [
+        {
+          "elapsed_ms": 1664.8926999769174,
+          "line": "2026-10-05 14:04:15 ^1echo BENCH_READY;in 2 bench_initial;in 5 bench_change;in 8 bench_quit"
+        },
+        {
+          "elapsed_ms": 1664.8926999769174,
+          "line": "2026-10-05 14:04:15 ^2echo BENCH_READY;in 2 bench_initial;in 5 bench_change;in 8 bench_quit"
+        },
+        {
+          "elapsed_ms": 1671.8000000109896,
+          "line": "2026-10-05 14:04:15 BENCH_READY"
+        },
+        {
+          "elapsed_ms": 2536.563000001479,
+          "line": "2026-10-05 14:04:15 ^1echo BENCH_BEGIN_initial;map start"
+        },
+        {
+          "elapsed_ms": 2536.563000001479,
+          "line": "2026-10-05 14:04:15 ^2echo BENCH_BEGIN_initial;map start"
+        },
+        {
+          "elapsed_ms": 2536.563000001479,
+          "line": "2026-10-05 14:04:15 BENCH_BEGIN_initial"
+        },
+        {
+          "elapsed_ms": 3803.7019000039436,
+          "line": "2026-10-05 14:04:17 CL_SignonReply: 4"
+        },
+        {
+          "elapsed_ms": 5348.758400010411,
+          "line": "2026-10-05 14:04:18 ^1echo BENCH_BEGIN_change;map e1m1"
+        },
+        {
+          "elapsed_ms": 5348.758400010411,
+          "line": "2026-10-05 14:04:18 ^2echo BENCH_BEGIN_change;map e1m1"
+        },
+        {
+          "elapsed_ms": 5348.758400010411,
+          "line": "2026-10-05 14:04:18 BENCH_BEGIN_change"
+        },
+        {
+          "elapsed_ms": 6252.529499994125,
+          "line": "2026-10-05 14:04:19 CL_SignonReply: 4"
+        },
+        {
+          "elapsed_ms": 8136.55789999757,
+          "line": "2026-10-05 14:04:21 ^1echo BENCH_BEGIN_quit;quit"
+        },
+        {
+          "elapsed_ms": 8136.55789999757,
+          "line": "2026-10-05 14:04:21 ^2echo BENCH_BEGIN_quit;quit"
+        },
+        {
+          "elapsed_ms": 8136.55789999757,
+          "line": "2026-10-05 14:04:21 BENCH_BEGIN_quit"
+        }
+      ],
+      "exit_code": 0,
+      "command": [
+        "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\engine-comparison-20261005\\fteqw\\fteqw64.exe",
+        "-basedir",
+        "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\engine-comparison-20261005\\fteqw",
+        "-nohome",
+        "-condebug",
+        "-window",
+        "-width",
+        "800",
+        "-height",
+        "600",
+        "-nojoy",
+        "+exec",
+        "benchmark.cfg"
+      ],
+      "log": "logs\\01-fteqw-lifecycle.log",
+      "script": "alias bench_initial \"echo BENCH_BEGIN_initial;map start\"\nalias bench_change \"echo BENCH_BEGIN_change;map e1m1\"\nalias bench_quit \"echo BENCH_BEGIN_quit;quit\"\nalias bench_schedule \"echo BENCH_READY;in 2 bench_initial;in 5 bench_change;in 8 bench_quit\"\nin 0 bench_schedule\n"
+    },
+    {
+      "engine": "fteqw",
+      "run": 1,
+      "mode": "launch_map",
+      "metrics_ms": {
+        "launch_map": 2479.587900044862
+      },
+      "events": [
+        {
+          "elapsed_ms": 1197.830300021451,
+          "line": "2026-10-05 14:04:23 BENCH_LAUNCH_MAP"
+        },
+        {
+          "elapsed_ms": 2479.587900044862,
+          "line": "2026-10-05 14:04:24 CL_SignonReply: 4"
+        },
+        {
+          "elapsed_ms": 2882.4590000440367,
+          "line": "2026-10-05 14:04:25 ^1echo BENCH_QUIT;quit"
+        },
+        {
+          "elapsed_ms": 2882.4590000440367,
+          "line": "2026-10-05 14:04:25 ^2echo BENCH_QUIT;quit"
+        },
+        {
+          "elapsed_ms": 2882.4590000440367,
+          "line": "2026-10-05 14:04:25 BENCH_QUIT"
+        }
+      ],
+      "exit_code": 0,
+      "command": [
+        "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\engine-comparison-20261005\\fteqw\\fteqw64.exe",
+        "-basedir",
+        "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\engine-comparison-20261005\\fteqw",
+        "-nohome",
+        "-condebug",
+        "-window",
+        "-width",
+        "800",
+        "-height",
+        "600",
+        "-nojoy",
+        "+exec",
+        "benchmark.cfg"
+      ],
+      "log": "logs\\01-fteqw-launch_map.log",
+      "script": "alias bench_quit \"echo BENCH_QUIT;quit\"\nin 4 bench_quit\necho BENCH_LAUNCH_MAP\nmap start\n"
+    },
+    {
+      "engine": "fteqw",
+      "run": 1,
+      "mode": "connect",
+      "metrics_ms": {},
+      "events": [
+        {
+          "elapsed_ms": 2080.909999960568,
+          "line": "2026-10-05 14:04:27 ^1echo BENCH_BEGIN_connect;connectnq 127.0.0.1:26000"
+        },
+        {
+          "elapsed_ms": 2080.909999960568,
+          "line": "2026-10-05 14:04:27 ^2echo BENCH_BEGIN_connect;connectnq 127.0.0.1:26000"
+        },
+        {
+          "elapsed_ms": 2080.909999960568,
+          "line": "2026-10-05 14:04:27 BENCH_BEGIN_connect"
+        },
+        {
+          "elapsed_ms": 10080.476799979806,
+          "line": "2026-10-05 14:04:35 ^1echo BENCH_BEGIN_quit;quit"
+        },
+        {
+          "elapsed_ms": 10080.476799979806,
+          "line": "2026-10-05 14:04:35 ^2echo BENCH_BEGIN_quit;quit"
+        },
+        {
+          "elapsed_ms": 10080.476799979806,
+          "line": "2026-10-05 14:04:35 BENCH_BEGIN_quit"
+        }
+      ],
+      "exit_code": 0,
+      "command": [
+        "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\engine-comparison-20261005\\fteqw\\fteqw64.exe",
+        "-basedir",
+        "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\engine-comparison-20261005\\fteqw",
+        "-nohome",
+        "-condebug",
+        "-window",
+        "-width",
+        "800",
+        "-height",
+        "600",
+        "-nojoy",
+        "+exec",
+        "benchmark.cfg"
+      ],
+      "log": "logs\\01-fteqw-connect.log",
+      "script": "alias bench_connect \"echo BENCH_BEGIN_connect;connectnq 127.0.0.1:26000\"\nalias bench_quit \"echo BENCH_BEGIN_quit;quit\"\nalias bench_schedule \"in 2 bench_connect;in 10 bench_quit\"\nin 0 bench_schedule\n",
+      "connect_status": "signon_not_observed",
+      "connect_observation_window_ms": 7999.566800019238
+    },
+    {
+      "engine": "fteqw",
+      "run": 2,
+      "mode": "lifecycle",
+      "metrics_ms": {
+        "startup": 1228.5985000198707,
+        "initial": 1267.3789999680594,
+        "change": 905.6979999877512,
+        "quit": 756.2357000424527
+      },
+      "events": [
+        {
+          "elapsed_ms": 1223.0434999801219,
+          "line": "2026-10-05 14:04:37 ^1echo BENCH_READY;in 2 bench_initial;in 5 bench_change;in 8 bench_quit"
+        },
+        {
+          "elapsed_ms": 1223.0434999801219,
+          "line": "2026-10-05 14:04:37 ^2echo BENCH_READY;in 2 bench_initial;in 5 bench_change;in 8 bench_quit"
+        },
+        {
+          "elapsed_ms": 1228.5985000198707,
+          "line": "2026-10-05 14:04:37 BENCH_READY"
+        },
+        {
+          "elapsed_ms": 2079.792400007136,
+          "line": "2026-10-05 14:04:38 ^1echo BENCH_BEGIN_initial;map start"
+        },
+        {
+          "elapsed_ms": 2079.792400007136,
+          "line": "2026-10-05 14:04:38 ^2echo BENCH_BEGIN_initial;map start"
+        },
+        {
+          "elapsed_ms": 2079.792400007136,
+          "line": "2026-10-05 14:04:38 BENCH_BEGIN_initial"
+        },
+        {
+          "elapsed_ms": 3347.1713999751955,
+          "line": "2026-10-05 14:04:39 CL_SignonReply: 4"
+        },
+        {
+          "elapsed_ms": 4879.403900005855,
+          "line": "2026-10-05 14:04:41 ^1echo BENCH_BEGIN_change;map e1m1"
+        },
+        {
+          "elapsed_ms": 4879.403900005855,
+          "line": "2026-10-05 14:04:41 ^2echo BENCH_BEGIN_change;map e1m1"
+        },
+        {
+          "elapsed_ms": 4879.403900005855,
+          "line": "2026-10-05 14:04:41 BENCH_BEGIN_change"
+        },
+        {
+          "elapsed_ms": 5785.101899993606,
+          "line": "2026-10-05 14:04:42 CL_SignonReply: 4"
+        },
+        {
+          "elapsed_ms": 7681.479999970179,
+          "line": "2026-10-05 14:04:43 ^1echo BENCH_BEGIN_quit;quit"
+        },
+        {
+          "elapsed_ms": 7681.479999970179,
+          "line": "2026-10-05 14:04:43 ^2echo BENCH_BEGIN_quit;quit"
+        },
+        {
+          "elapsed_ms": 7681.479999970179,
+          "line": "2026-10-05 14:04:43 BENCH_BEGIN_quit"
+        }
+      ],
+      "exit_code": 0,
+      "command": [
+        "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\engine-comparison-20261005\\fteqw\\fteqw64.exe",
+        "-basedir",
+        "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\engine-comparison-20261005\\fteqw",
+        "-nohome",
+        "-condebug",
+        "-window",
+        "-width",
+        "800",
+        "-height",
+        "600",
+        "-nojoy",
+        "+exec",
+        "benchmark.cfg"
+      ],
+      "log": "logs\\02-fteqw-lifecycle.log",
+      "script": "alias bench_initial \"echo BENCH_BEGIN_initial;map start\"\nalias bench_change \"echo BENCH_BEGIN_change;map e1m1\"\nalias bench_quit \"echo BENCH_BEGIN_quit;quit\"\nalias bench_schedule \"echo BENCH_READY;in 2 bench_initial;in 5 bench_change;in 8 bench_quit\"\nin 0 bench_schedule\n"
+    },
+    {
+      "engine": "fteqw",
+      "run": 2,
+      "mode": "launch_map",
+      "metrics_ms": {
+        "launch_map": 2497.379899956286
+      },
+      "events": [
+        {
+          "elapsed_ms": 1222.0393999596126,
+          "line": "2026-10-05 14:04:45 BENCH_LAUNCH_MAP"
+        },
+        {
+          "elapsed_ms": 2497.379899956286,
+          "line": "2026-10-05 14:04:47 CL_SignonReply: 4"
+        },
+        {
+          "elapsed_ms": 2882.887899992056,
+          "line": "2026-10-05 14:04:47 ^1echo BENCH_QUIT;quit"
+        },
+        {
+          "elapsed_ms": 2882.887899992056,
+          "line": "2026-10-05 14:04:47 ^2echo BENCH_QUIT;quit"
+        },
+        {
+          "elapsed_ms": 2889.962099958211,
+          "line": "2026-10-05 14:04:47 BENCH_QUIT"
+        }
+      ],
+      "exit_code": 0,
+      "command": [
+        "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\engine-comparison-20261005\\fteqw\\fteqw64.exe",
+        "-basedir",
+        "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\engine-comparison-20261005\\fteqw",
+        "-nohome",
+        "-condebug",
+        "-window",
+        "-width",
+        "800",
+        "-height",
+        "600",
+        "-nojoy",
+        "+exec",
+        "benchmark.cfg"
+      ],
+      "log": "logs\\02-fteqw-launch_map.log",
+      "script": "alias bench_quit \"echo BENCH_QUIT;quit\"\nin 4 bench_quit\necho BENCH_LAUNCH_MAP\nmap start\n"
+    },
+    {
+      "engine": "fteqw",
+      "run": 2,
+      "mode": "connect",
+      "metrics_ms": {},
+      "events": [
+        {
+          "elapsed_ms": 2081.2354999943636,
+          "line": "2026-10-05 14:04:50 ^1echo BENCH_BEGIN_connect;connectnq 127.0.0.1:26000"
+        },
+        {
+          "elapsed_ms": 2081.2354999943636,
+          "line": "2026-10-05 14:04:50 ^2echo BENCH_BEGIN_connect;connectnq 127.0.0.1:26000"
+        },
+        {
+          "elapsed_ms": 2081.2354999943636,
+          "line": "2026-10-05 14:04:50 BENCH_BEGIN_connect"
+        },
+        {
+          "elapsed_ms": 10074.6736000292,
+          "line": "2026-10-05 14:04:58 ^1echo BENCH_BEGIN_quit;quit"
+        },
+        {
+          "elapsed_ms": 10074.6736000292,
+          "line": "2026-10-05 14:04:58 ^2echo BENCH_BEGIN_quit;quit"
+        },
+        {
+          "elapsed_ms": 10074.6736000292,
+          "line": "2026-10-05 14:04:58 BENCH_BEGIN_quit"
+        }
+      ],
+      "exit_code": 0,
+      "command": [
+        "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\engine-comparison-20261005\\fteqw\\fteqw64.exe",
+        "-basedir",
+        "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\engine-comparison-20261005\\fteqw",
+        "-nohome",
+        "-condebug",
+        "-window",
+        "-width",
+        "800",
+        "-height",
+        "600",
+        "-nojoy",
+        "+exec",
+        "benchmark.cfg"
+      ],
+      "log": "logs\\02-fteqw-connect.log",
+      "script": "alias bench_connect \"echo BENCH_BEGIN_connect;connectnq 127.0.0.1:26000\"\nalias bench_quit \"echo BENCH_BEGIN_quit;quit\"\nalias bench_schedule \"in 2 bench_connect;in 10 bench_quit\"\nin 0 bench_schedule\n",
+      "connect_status": "signon_not_observed",
+      "connect_observation_window_ms": 7993.438100034837
+    },
+    {
+      "engine": "qssm",
+      "run": 2,
+      "mode": "lifecycle",
+      "metrics_ms": {
+        "startup": 295.4947000253014,
+        "initial": 613.0917999544181,
+        "change": 281.78489999845624,
+        "quit": 138.94999999320135
+      },
+      "events": [
+        {
+          "elapsed_ms": 295.4947000253014,
+          "line": "BENCH_READY "
+        },
+        {
+          "elapsed_ms": 4706.131900020409,
+          "line": "BENCH_BEGIN_initial "
+        },
+        {
+          "elapsed_ms": 5319.2236999748275,
+          "line": "CL_SignonReply: 4"
+        },
+        {
+          "elapsed_ms": 9620.87949999841,
+          "line": "BENCH_BEGIN_change "
+        },
+        {
+          "elapsed_ms": 9902.664399996866,
+          "line": "CL_SignonReply: 4"
+        },
+        {
+          "elapsed_ms": 14204.112500010524,
+          "line": "BENCH_BEGIN_quit "
+        }
+      ],
+      "exit_code": 0,
+      "command": [
+        "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\engine-comparison-20261005\\qssm\\QSS-M-w64.exe",
+        "-basedir",
+        "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\engine-comparison-20261005\\qssm",
+        "-nohome",
+        "-condebug",
+        "-window",
+        "-width",
+        "800",
+        "-height",
+        "600",
+        "-nojoy",
+        "-noquakeimport",
+        "+exec",
+        "benchmark.cfg"
+      ],
+      "log": "logs\\02-qssm-lifecycle.log",
+      "script": "echo BENCH_READY\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\necho BENCH_BEGIN_initial\nmap start\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\necho BENCH_BEGIN_change\nmap e1m1\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\necho BENCH_BEGIN_quit\nquit\n"
+    },
+    {
+      "engine": "qssm",
+      "run": 2,
+      "mode": "launch_map",
+      "metrics_ms": {
+        "launch_map": 848.8593999645673
+      },
+      "events": [
+        {
+          "elapsed_ms": 282.29910001391545,
+          "line": "BENCH_LAUNCH_MAP "
+        },
+        {
+          "elapsed_ms": 848.8593999645673,
+          "line": "CL_SignonReply: 4"
+        },
+        {
+          "elapsed_ms": 5207.8066999674775,
+          "line": "BENCH_QUIT "
+        }
+      ],
+      "exit_code": 0,
+      "command": [
+        "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\engine-comparison-20261005\\qssm\\QSS-M-w64.exe",
+        "-basedir",
+        "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\engine-comparison-20261005\\qssm",
+        "-nohome",
+        "-condebug",
+        "-window",
+        "-width",
+        "800",
+        "-height",
+        "600",
+        "-nojoy",
+        "-noquakeimport",
+        "+exec",
+        "benchmark.cfg"
+      ],
+      "log": "logs\\02-qssm-launch_map.log",
+      "script": "echo BENCH_LAUNCH_MAP\nmap start\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\necho BENCH_QUIT\nquit\n"
+    },
+    {
+      "engine": "qssm",
+      "run": 2,
+      "mode": "connect",
+      "metrics_ms": {
+        "connect": 988.8892999733798
+      },
+      "events": [
+        {
+          "elapsed_ms": 4720.383900043089,
+          "line": "BENCH_BEGIN_connect "
+        },
+        {
+          "elapsed_ms": 5709.273200016469,
+          "line": "CL_SignonReply: 4"
+        },
+        {
+          "elapsed_ms": 9681.437499995809,
+          "line": "BENCH_BEGIN_quit "
+        }
+      ],
+      "exit_code": 0,
+      "command": [
+        "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\engine-comparison-20261005\\qssm\\QSS-M-w64.exe",
+        "-basedir",
+        "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\engine-comparison-20261005\\qssm",
+        "-nohome",
+        "-condebug",
+        "-window",
+        "-width",
+        "800",
+        "-height",
+        "600",
+        "-nojoy",
+        "-noquakeimport",
+        "+exec",
+        "benchmark.cfg"
+      ],
+      "log": "logs\\02-qssm-connect.log",
+      "script": "wait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\necho BENCH_BEGIN_connect\nconnect 127.0.0.1:26000\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\necho BENCH_BEGIN_quit\nquit\n",
+      "connect_status": "signon_observed",
+      "connect_observation_window_ms": 4961.05359995272
+    },
+    {
+      "engine": "qssm",
+      "run": 3,
+      "mode": "lifecycle",
+      "metrics_ms": {
+        "startup": 275.29459999641404,
+        "initial": 615.1098000118509,
+        "change": 294.38760003540665,
+        "quit": 147.8239000425674
+      },
+      "events": [
+        {
+          "elapsed_ms": 275.29459999641404,
+          "line": "BENCH_READY "
+        },
+        {
+          "elapsed_ms": 4688.1384999724105,
+          "line": "BENCH_BEGIN_initial "
+        },
+        {
+          "elapsed_ms": 5303.248299984261,
+          "line": "CL_SignonReply: 4"
+        },
+        {
+          "elapsed_ms": 9606.38899996411,
+          "line": "BENCH_BEGIN_change "
+        },
+        {
+          "elapsed_ms": 9900.776599999517,
+          "line": "CL_SignonReply: 4"
+        },
+        {
+          "elapsed_ms": 14190.040399960708,
+          "line": "BENCH_BEGIN_quit "
+        }
+      ],
+      "exit_code": 0,
+      "command": [
+        "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\engine-comparison-20261005\\qssm\\QSS-M-w64.exe",
+        "-basedir",
+        "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\engine-comparison-20261005\\qssm",
+        "-nohome",
+        "-condebug",
+        "-window",
+        "-width",
+        "800",
+        "-height",
+        "600",
+        "-nojoy",
+        "-noquakeimport",
+        "+exec",
+        "benchmark.cfg"
+      ],
+      "log": "logs\\03-qssm-lifecycle.log",
+      "script": "echo BENCH_READY\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\necho BENCH_BEGIN_initial\nmap start\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\necho BENCH_BEGIN_change\nmap e1m1\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\necho BENCH_BEGIN_quit\nquit\n"
+    },
+    {
+      "engine": "qssm",
+      "run": 3,
+      "mode": "launch_map",
+      "metrics_ms": {
+        "launch_map": 852.2129000048153
+      },
+      "events": [
+        {
+          "elapsed_ms": 289.706900017336,
+          "line": "BENCH_LAUNCH_MAP "
+        },
+        {
+          "elapsed_ms": 852.2129000048153,
+          "line": "CL_SignonReply: 4"
+        },
+        {
+          "elapsed_ms": 5195.205700001679,
+          "line": "BENCH_QUIT "
+        }
+      ],
+      "exit_code": 0,
+      "command": [
+        "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\engine-comparison-20261005\\qssm\\QSS-M-w64.exe",
+        "-basedir",
+        "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\engine-comparison-20261005\\qssm",
+        "-nohome",
+        "-condebug",
+        "-window",
+        "-width",
+        "800",
+        "-height",
+        "600",
+        "-nojoy",
+        "-noquakeimport",
+        "+exec",
+        "benchmark.cfg"
+      ],
+      "log": "logs\\03-qssm-launch_map.log",
+      "script": "echo BENCH_LAUNCH_MAP\nmap start\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\necho BENCH_QUIT\nquit\n"
+    },
+    {
+      "engine": "qssm",
+      "run": 3,
+      "mode": "connect",
+      "metrics_ms": {
+        "connect": 932.1952000027522
+      },
+      "events": [
+        {
+          "elapsed_ms": 4693.4224999859,
+          "line": "BENCH_BEGIN_connect "
+        },
+        {
+          "elapsed_ms": 5625.617699988652,
+          "line": "CL_SignonReply: 4"
+        },
+        {
+          "elapsed_ms": 9647.388999990653,
+          "line": "BENCH_BEGIN_quit "
+        }
+      ],
+      "exit_code": 0,
+      "command": [
+        "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\engine-comparison-20261005\\qssm\\QSS-M-w64.exe",
+        "-basedir",
+        "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\engine-comparison-20261005\\qssm",
+        "-nohome",
+        "-condebug",
+        "-window",
+        "-width",
+        "800",
+        "-height",
+        "600",
+        "-nojoy",
+        "-noquakeimport",
+        "+exec",
+        "benchmark.cfg"
+      ],
+      "log": "logs\\03-qssm-connect.log",
+      "script": "wait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\necho BENCH_BEGIN_connect\nconnect 127.0.0.1:26000\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\necho BENCH_BEGIN_quit\nquit\n",
+      "connect_status": "signon_observed",
+      "connect_observation_window_ms": 4953.9665000047535
+    },
+    {
+      "engine": "fteqw",
+      "run": 3,
+      "mode": "lifecycle",
+      "metrics_ms": {
+        "startup": 1213.8913000235334,
+        "initial": 1274.2672999738716,
+        "change": 938.6691999970935,
+        "quit": 746.4518999913707
+      },
+      "events": [
+        {
+          "elapsed_ms": 1207.3610000079498,
+          "line": "2026-10-05 14:05:59 ^1echo BENCH_READY;in 2 bench_initial;in 5 bench_change;in 8 bench_quit"
+        },
+        {
+          "elapsed_ms": 1207.3610000079498,
+          "line": "2026-10-05 14:05:59 ^2echo BENCH_READY;in 2 bench_initial;in 5 bench_change;in 8 bench_quit"
+        },
+        {
+          "elapsed_ms": 1213.8913000235334,
+          "line": "2026-10-05 14:05:59 BENCH_READY"
+        },
+        {
+          "elapsed_ms": 2083.16979999654,
+          "line": "2026-10-05 14:06:00 ^1echo BENCH_BEGIN_initial;map start"
+        },
+        {
+          "elapsed_ms": 2083.16979999654,
+          "line": "2026-10-05 14:06:00 ^2echo BENCH_BEGIN_initial;map start"
+        },
+        {
+          "elapsed_ms": 2083.16979999654,
+          "line": "2026-10-05 14:06:00 BENCH_BEGIN_initial"
+        },
+        {
+          "elapsed_ms": 3357.4370999704115,
+          "line": "2026-10-05 14:06:01 CL_SignonReply: 4"
+        },
+        {
+          "elapsed_ms": 4888.731100014411,
+          "line": "2026-10-05 14:06:03 ^1echo BENCH_BEGIN_change;map e1m1"
+        },
+        {
+          "elapsed_ms": 4888.731100014411,
+          "line": "2026-10-05 14:06:03 ^2echo BENCH_BEGIN_change;map e1m1"
+        },
+        {
+          "elapsed_ms": 4888.731100014411,
+          "line": "2026-10-05 14:06:03 BENCH_BEGIN_change"
+        },
+        {
+          "elapsed_ms": 5827.400300011504,
+          "line": "2026-10-05 14:06:04 CL_SignonReply: 4"
+        },
+        {
+          "elapsed_ms": 7682.514299987815,
+          "line": "2026-10-05 14:06:05 ^1echo BENCH_BEGIN_quit;quit"
+        },
+        {
+          "elapsed_ms": 7682.514299987815,
+          "line": "2026-10-05 14:06:05 ^2echo BENCH_BEGIN_quit;quit"
+        },
+        {
+          "elapsed_ms": 7682.514299987815,
+          "line": "2026-10-05 14:06:05 BENCH_BEGIN_quit"
+        }
+      ],
+      "exit_code": 0,
+      "command": [
+        "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\engine-comparison-20261005\\fteqw\\fteqw64.exe",
+        "-basedir",
+        "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\engine-comparison-20261005\\fteqw",
+        "-nohome",
+        "-condebug",
+        "-window",
+        "-width",
+        "800",
+        "-height",
+        "600",
+        "-nojoy",
+        "+exec",
+        "benchmark.cfg"
+      ],
+      "log": "logs\\03-fteqw-lifecycle.log",
+      "script": "alias bench_initial \"echo BENCH_BEGIN_initial;map start\"\nalias bench_change \"echo BENCH_BEGIN_change;map e1m1\"\nalias bench_quit \"echo BENCH_BEGIN_quit;quit\"\nalias bench_schedule \"echo BENCH_READY;in 2 bench_initial;in 5 bench_change;in 8 bench_quit\"\nin 0 bench_schedule\n"
+    },
+    {
+      "engine": "fteqw",
+      "run": 3,
+      "mode": "launch_map",
+      "metrics_ms": {
+        "launch_map": 2480.2059000357985
+      },
+      "events": [
+        {
+          "elapsed_ms": 1203.9152000215836,
+          "line": "2026-10-05 14:06:07 BENCH_LAUNCH_MAP"
+        },
+        {
+          "elapsed_ms": 2480.2059000357985,
+          "line": "2026-10-05 14:06:09 CL_SignonReply: 4"
+        },
+        {
+          "elapsed_ms": 2888.3718000142835,
+          "line": "2026-10-05 14:06:09 ^1echo BENCH_QUIT;quit"
+        },
+        {
+          "elapsed_ms": 2888.3718000142835,
+          "line": "2026-10-05 14:06:09 ^2echo BENCH_QUIT;quit"
+        },
+        {
+          "elapsed_ms": 2888.3718000142835,
+          "line": "2026-10-05 14:06:09 BENCH_QUIT"
+        }
+      ],
+      "exit_code": 0,
+      "command": [
+        "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\engine-comparison-20261005\\fteqw\\fteqw64.exe",
+        "-basedir",
+        "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\engine-comparison-20261005\\fteqw",
+        "-nohome",
+        "-condebug",
+        "-window",
+        "-width",
+        "800",
+        "-height",
+        "600",
+        "-nojoy",
+        "+exec",
+        "benchmark.cfg"
+      ],
+      "log": "logs\\03-fteqw-launch_map.log",
+      "script": "alias bench_quit \"echo BENCH_QUIT;quit\"\nin 4 bench_quit\necho BENCH_LAUNCH_MAP\nmap start\n"
+    },
+    {
+      "engine": "fteqw",
+      "run": 3,
+      "mode": "connect",
+      "metrics_ms": {},
+      "events": [
+        {
+          "elapsed_ms": 2077.521400002297,
+          "line": "2026-10-05 14:06:12 ^1echo BENCH_BEGIN_connect;connectnq 127.0.0.1:26000"
+        },
+        {
+          "elapsed_ms": 2077.521400002297,
+          "line": "2026-10-05 14:06:12 ^2echo BENCH_BEGIN_connect;connectnq 127.0.0.1:26000"
+        },
+        {
+          "elapsed_ms": 2077.521400002297,
+          "line": "2026-10-05 14:06:12 BENCH_BEGIN_connect"
+        },
+        {
+          "elapsed_ms": 10077.315800008364,
+          "line": "2026-10-05 14:06:20 ^1echo BENCH_BEGIN_quit;quit"
+        },
+        {
+          "elapsed_ms": 10077.315800008364,
+          "line": "2026-10-05 14:06:20 ^2echo BENCH_BEGIN_quit;quit"
+        },
+        {
+          "elapsed_ms": 10077.315800008364,
+          "line": "2026-10-05 14:06:20 BENCH_BEGIN_quit"
+        }
+      ],
+      "exit_code": 0,
+      "command": [
+        "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\engine-comparison-20261005\\fteqw\\fteqw64.exe",
+        "-basedir",
+        "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\engine-comparison-20261005\\fteqw",
+        "-nohome",
+        "-condebug",
+        "-window",
+        "-width",
+        "800",
+        "-height",
+        "600",
+        "-nojoy",
+        "+exec",
+        "benchmark.cfg"
+      ],
+      "log": "logs\\03-fteqw-connect.log",
+      "script": "alias bench_connect \"echo BENCH_BEGIN_connect;connectnq 127.0.0.1:26000\"\nalias bench_quit \"echo BENCH_BEGIN_quit;quit\"\nalias bench_schedule \"in 2 bench_connect;in 10 bench_quit\"\nin 0 bench_schedule\n",
+      "connect_status": "signon_not_observed",
+      "connect_observation_window_ms": 7999.794400006067
+    },
+    {
+      "engine": "fteqw",
+      "run": 4,
+      "mode": "lifecycle",
+      "metrics_ms": {
+        "startup": 1206.0745999915525,
+        "initial": 1343.8946999958716,
+        "change": 989.8183000041172,
+        "quit": 745.4529000096954
+      },
+      "events": [
+        {
+          "elapsed_ms": 1200.0544999609701,
+          "line": "2026-10-05 14:06:21 ^1echo BENCH_READY;in 2 bench_initial;in 5 bench_change;in 8 bench_quit"
+        },
+        {
+          "elapsed_ms": 1200.0544999609701,
+          "line": "2026-10-05 14:06:21 ^2echo BENCH_READY;in 2 bench_initial;in 5 bench_change;in 8 bench_quit"
+        },
+        {
+          "elapsed_ms": 1206.0745999915525,
+          "line": "2026-10-05 14:06:21 BENCH_READY"
+        },
+        {
+          "elapsed_ms": 2086.401999986265,
+          "line": "2026-10-05 14:06:22 ^1echo BENCH_BEGIN_initial;map start"
+        },
+        {
+          "elapsed_ms": 2086.401999986265,
+          "line": "2026-10-05 14:06:22 ^2echo BENCH_BEGIN_initial;map start"
+        },
+        {
+          "elapsed_ms": 2086.401999986265,
+          "line": "2026-10-05 14:06:22 BENCH_BEGIN_initial"
+        },
+        {
+          "elapsed_ms": 3430.2966999821365,
+          "line": "2026-10-05 14:06:24 CL_SignonReply: 4"
+        },
+        {
+          "elapsed_ms": 4886.284399952274,
+          "line": "2026-10-05 14:06:25 ^1echo BENCH_BEGIN_change;map e1m1"
+        },
+        {
+          "elapsed_ms": 4886.284399952274,
+          "line": "2026-10-05 14:06:25 ^2echo BENCH_BEGIN_change;map e1m1"
+        },
+        {
+          "elapsed_ms": 4886.284399952274,
+          "line": "2026-10-05 14:06:25 BENCH_BEGIN_change"
+        },
+        {
+          "elapsed_ms": 5876.102699956391,
+          "line": "2026-10-05 14:06:26 CL_SignonReply: 4"
+        },
+        {
+          "elapsed_ms": 7681.9265999947675,
+          "line": "2026-10-05 14:06:28 ^1echo BENCH_BEGIN_quit;quit"
+        },
+        {
+          "elapsed_ms": 7681.9265999947675,
+          "line": "2026-10-05 14:06:28 ^2echo BENCH_BEGIN_quit;quit"
+        },
+        {
+          "elapsed_ms": 7681.9265999947675,
+          "line": "2026-10-05 14:06:28 BENCH_BEGIN_quit"
+        }
+      ],
+      "exit_code": 0,
+      "command": [
+        "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\engine-comparison-20261005\\fteqw\\fteqw64.exe",
+        "-basedir",
+        "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\engine-comparison-20261005\\fteqw",
+        "-nohome",
+        "-condebug",
+        "-window",
+        "-width",
+        "800",
+        "-height",
+        "600",
+        "-nojoy",
+        "+exec",
+        "benchmark.cfg"
+      ],
+      "log": "logs\\04-fteqw-lifecycle.log",
+      "script": "alias bench_initial \"echo BENCH_BEGIN_initial;map start\"\nalias bench_change \"echo BENCH_BEGIN_change;map e1m1\"\nalias bench_quit \"echo BENCH_BEGIN_quit;quit\"\nalias bench_schedule \"echo BENCH_READY;in 2 bench_initial;in 5 bench_change;in 8 bench_quit\"\nin 0 bench_schedule\n"
+    },
+    {
+      "engine": "fteqw",
+      "run": 4,
+      "mode": "launch_map",
+      "metrics_ms": {
+        "launch_map": 2518.1822000304237
+      },
+      "events": [
+        {
+          "elapsed_ms": 1210.9495000331663,
+          "line": "2026-10-05 14:06:30 BENCH_LAUNCH_MAP"
+        },
+        {
+          "elapsed_ms": 2518.1822000304237,
+          "line": "2026-10-05 14:06:31 CL_SignonReply: 4"
+        },
+        {
+          "elapsed_ms": 2878.3473999937996,
+          "line": "2026-10-05 14:06:31 ^1echo BENCH_QUIT;quit"
+        },
+        {
+          "elapsed_ms": 2878.3473999937996,
+          "line": "2026-10-05 14:06:31 ^2echo BENCH_QUIT;quit"
+        },
+        {
+          "elapsed_ms": 2878.3473999937996,
+          "line": "2026-10-05 14:06:31 BENCH_QUIT"
+        }
+      ],
+      "exit_code": 0,
+      "command": [
+        "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\engine-comparison-20261005\\fteqw\\fteqw64.exe",
+        "-basedir",
+        "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\engine-comparison-20261005\\fteqw",
+        "-nohome",
+        "-condebug",
+        "-window",
+        "-width",
+        "800",
+        "-height",
+        "600",
+        "-nojoy",
+        "+exec",
+        "benchmark.cfg"
+      ],
+      "log": "logs\\04-fteqw-launch_map.log",
+      "script": "alias bench_quit \"echo BENCH_QUIT;quit\"\nin 4 bench_quit\necho BENCH_LAUNCH_MAP\nmap start\n"
+    },
+    {
+      "engine": "fteqw",
+      "run": 4,
+      "mode": "connect",
+      "metrics_ms": {},
+      "events": [
+        {
+          "elapsed_ms": 2081.827100017108,
+          "line": "2026-10-05 14:06:34 ^1echo BENCH_BEGIN_connect;connectnq 127.0.0.1:26000"
+        },
+        {
+          "elapsed_ms": 2081.827100017108,
+          "line": "2026-10-05 14:06:34 ^2echo BENCH_BEGIN_connect;connectnq 127.0.0.1:26000"
+        },
+        {
+          "elapsed_ms": 2081.827100017108,
+          "line": "2026-10-05 14:06:34 BENCH_BEGIN_connect"
+        },
+        {
+          "elapsed_ms": 10074.816300009843,
+          "line": "2026-10-05 14:06:42 ^1echo BENCH_BEGIN_quit;quit"
+        },
+        {
+          "elapsed_ms": 10074.816300009843,
+          "line": "2026-10-05 14:06:42 ^2echo BENCH_BEGIN_quit;quit"
+        },
+        {
+          "elapsed_ms": 10074.816300009843,
+          "line": "2026-10-05 14:06:42 BENCH_BEGIN_quit"
+        }
+      ],
+      "exit_code": 0,
+      "command": [
+        "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\engine-comparison-20261005\\fteqw\\fteqw64.exe",
+        "-basedir",
+        "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\engine-comparison-20261005\\fteqw",
+        "-nohome",
+        "-condebug",
+        "-window",
+        "-width",
+        "800",
+        "-height",
+        "600",
+        "-nojoy",
+        "+exec",
+        "benchmark.cfg"
+      ],
+      "log": "logs\\04-fteqw-connect.log",
+      "script": "alias bench_connect \"echo BENCH_BEGIN_connect;connectnq 127.0.0.1:26000\"\nalias bench_quit \"echo BENCH_BEGIN_quit;quit\"\nalias bench_schedule \"in 2 bench_connect;in 10 bench_quit\"\nin 0 bench_schedule\n",
+      "connect_status": "signon_not_observed",
+      "connect_observation_window_ms": 7992.989199992735
+    },
+    {
+      "engine": "qssm",
+      "run": 4,
+      "mode": "lifecycle",
+      "metrics_ms": {
+        "startup": 305.80899998312816,
+        "initial": 660.9478999744169,
+        "change": 290.91630002949387,
+        "quit": 139.69129999168217
+      },
+      "events": [
+        {
+          "elapsed_ms": 305.80899998312816,
+          "line": "BENCH_READY "
+        },
+        {
+          "elapsed_ms": 4720.632600015961,
+          "line": "BENCH_BEGIN_initial "
+        },
+        {
+          "elapsed_ms": 5381.580499990378,
+          "line": "CL_SignonReply: 4"
+        },
+        {
+          "elapsed_ms": 9687.02489999123,
+          "line": "BENCH_BEGIN_change "
+        },
+        {
+          "elapsed_ms": 9977.941200020723,
+          "line": "CL_SignonReply: 4"
+        },
+        {
+          "elapsed_ms": 14296.516800008249,
+          "line": "BENCH_BEGIN_quit "
+        }
+      ],
+      "exit_code": 0,
+      "command": [
+        "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\engine-comparison-20261005\\qssm\\QSS-M-w64.exe",
+        "-basedir",
+        "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\engine-comparison-20261005\\qssm",
+        "-nohome",
+        "-condebug",
+        "-window",
+        "-width",
+        "800",
+        "-height",
+        "600",
+        "-nojoy",
+        "-noquakeimport",
+        "+exec",
+        "benchmark.cfg"
+      ],
+      "log": "logs\\04-qssm-lifecycle.log",
+      "script": "echo BENCH_READY\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\necho BENCH_BEGIN_initial\nmap start\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\necho BENCH_BEGIN_change\nmap e1m1\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\necho BENCH_BEGIN_quit\nquit\n"
+    },
+    {
+      "engine": "qssm",
+      "run": 4,
+      "mode": "launch_map",
+      "metrics_ms": {
+        "launch_map": 869.3162000272423
+      },
+      "events": [
+        {
+          "elapsed_ms": 286.84910002630204,
+          "line": "BENCH_LAUNCH_MAP "
+        },
+        {
+          "elapsed_ms": 869.3162000272423,
+          "line": "CL_SignonReply: 4"
+        },
+        {
+          "elapsed_ms": 5217.569800035562,
+          "line": "BENCH_QUIT "
+        }
+      ],
+      "exit_code": 0,
+      "command": [
+        "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\engine-comparison-20261005\\qssm\\QSS-M-w64.exe",
+        "-basedir",
+        "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\engine-comparison-20261005\\qssm",
+        "-nohome",
+        "-condebug",
+        "-window",
+        "-width",
+        "800",
+        "-height",
+        "600",
+        "-nojoy",
+        "-noquakeimport",
+        "+exec",
+        "benchmark.cfg"
+      ],
+      "log": "logs\\04-qssm-launch_map.log",
+      "script": "echo BENCH_LAUNCH_MAP\nmap start\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\necho BENCH_QUIT\nquit\n"
+    },
+    {
+      "engine": "qssm",
+      "run": 4,
+      "mode": "connect",
+      "metrics_ms": {
+        "connect": 958.0441000289284
+      },
+      "events": [
+        {
+          "elapsed_ms": 4710.907300002873,
+          "line": "BENCH_BEGIN_connect "
+        },
+        {
+          "elapsed_ms": 5668.951400031801,
+          "line": "CL_SignonReply: 4"
+        },
+        {
+          "elapsed_ms": 9654.01749999728,
+          "line": "BENCH_BEGIN_quit "
+        }
+      ],
+      "exit_code": 0,
+      "command": [
+        "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\engine-comparison-20261005\\qssm\\QSS-M-w64.exe",
+        "-basedir",
+        "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\engine-comparison-20261005\\qssm",
+        "-nohome",
+        "-condebug",
+        "-window",
+        "-width",
+        "800",
+        "-height",
+        "600",
+        "-nojoy",
+        "-noquakeimport",
+        "+exec",
+        "benchmark.cfg"
+      ],
+      "log": "logs\\04-qssm-connect.log",
+      "script": "wait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\necho BENCH_BEGIN_connect\nconnect 127.0.0.1:26000\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\necho BENCH_BEGIN_quit\nquit\n",
+      "connect_status": "signon_observed",
+      "connect_observation_window_ms": 4943.110199994408
+    },
+    {
+      "engine": "qssm",
+      "run": 5,
+      "mode": "lifecycle",
+      "metrics_ms": {
+        "startup": 289.4246999640018,
+        "initial": 596.3285999605432,
+        "change": 272.42540003499016,
+        "quit": 133.75769997946918
+      },
+      "events": [
+        {
+          "elapsed_ms": 289.4246999640018,
+          "line": "BENCH_READY "
+        },
+        {
+          "elapsed_ms": 4696.468300011475,
+          "line": "BENCH_BEGIN_initial "
+        },
+        {
+          "elapsed_ms": 5292.796899972018,
+          "line": "CL_SignonReply: 4"
+        },
+        {
+          "elapsed_ms": 9603.347699972801,
+          "line": "BENCH_BEGIN_change "
+        },
+        {
+          "elapsed_ms": 9875.773100007791,
+          "line": "CL_SignonReply: 4"
+        },
+        {
+          "elapsed_ms": 14173.845699988306,
+          "line": "BENCH_BEGIN_quit "
+        }
+      ],
+      "exit_code": 0,
+      "command": [
+        "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\engine-comparison-20261005\\qssm\\QSS-M-w64.exe",
+        "-basedir",
+        "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\engine-comparison-20261005\\qssm",
+        "-nohome",
+        "-condebug",
+        "-window",
+        "-width",
+        "800",
+        "-height",
+        "600",
+        "-nojoy",
+        "-noquakeimport",
+        "+exec",
+        "benchmark.cfg"
+      ],
+      "log": "logs\\05-qssm-lifecycle.log",
+      "script": "echo BENCH_READY\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\necho BENCH_BEGIN_initial\nmap start\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\necho BENCH_BEGIN_change\nmap e1m1\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\necho BENCH_BEGIN_quit\nquit\n"
+    },
+    {
+      "engine": "qssm",
+      "run": 5,
+      "mode": "launch_map",
+      "metrics_ms": {
+        "launch_map": 848.7981999642216
+      },
+      "events": [
+        {
+          "elapsed_ms": 283.9342000079341,
+          "line": "BENCH_LAUNCH_MAP "
+        },
+        {
+          "elapsed_ms": 848.7981999642216,
+          "line": "CL_SignonReply: 4"
+        },
+        {
+          "elapsed_ms": 5182.842599984724,
+          "line": "BENCH_QUIT "
+        }
+      ],
+      "exit_code": 0,
+      "command": [
+        "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\engine-comparison-20261005\\qssm\\QSS-M-w64.exe",
+        "-basedir",
+        "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\engine-comparison-20261005\\qssm",
+        "-nohome",
+        "-condebug",
+        "-window",
+        "-width",
+        "800",
+        "-height",
+        "600",
+        "-nojoy",
+        "-noquakeimport",
+        "+exec",
+        "benchmark.cfg"
+      ],
+      "log": "logs\\05-qssm-launch_map.log",
+      "script": "echo BENCH_LAUNCH_MAP\nmap start\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\necho BENCH_QUIT\nquit\n"
+    },
+    {
+      "engine": "qssm",
+      "run": 5,
+      "mode": "connect",
+      "metrics_ms": {
+        "connect": 942.6497999811545
+      },
+      "events": [
+        {
+          "elapsed_ms": 4676.750699989498,
+          "line": "BENCH_BEGIN_connect "
+        },
+        {
+          "elapsed_ms": 5619.400499970652,
+          "line": "CL_SignonReply: 4"
+        },
+        {
+          "elapsed_ms": 9621.68300000485,
+          "line": "BENCH_BEGIN_quit "
+        }
+      ],
+      "exit_code": 0,
+      "command": [
+        "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\engine-comparison-20261005\\qssm\\QSS-M-w64.exe",
+        "-basedir",
+        "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\engine-comparison-20261005\\qssm",
+        "-nohome",
+        "-condebug",
+        "-window",
+        "-width",
+        "800",
+        "-height",
+        "600",
+        "-nojoy",
+        "-noquakeimport",
+        "+exec",
+        "benchmark.cfg"
+      ],
+      "log": "logs\\05-qssm-connect.log",
+      "script": "wait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\necho BENCH_BEGIN_connect\nconnect 127.0.0.1:26000\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\nwait\necho BENCH_BEGIN_quit\nquit\n",
+      "connect_status": "signon_observed",
+      "connect_observation_window_ms": 4944.932300015353
+    },
+    {
+      "engine": "fteqw",
+      "run": 5,
+      "mode": "lifecycle",
+      "metrics_ms": {
+        "startup": 1282.1934999665245,
+        "initial": 1287.8885999671184,
+        "change": 939.7435000282712,
+        "quit": 759.392999985721
+      },
+      "events": [
+        {
+          "elapsed_ms": 1275.9117999812588,
+          "line": "2026-10-05 14:07:43 ^1echo BENCH_READY;in 2 bench_initial;in 5 bench_change;in 8 bench_quit"
+        },
+        {
+          "elapsed_ms": 1275.9117999812588,
+          "line": "2026-10-05 14:07:43 ^2echo BENCH_READY;in 2 bench_initial;in 5 bench_change;in 8 bench_quit"
+        },
+        {
+          "elapsed_ms": 1282.1934999665245,
+          "line": "2026-10-05 14:07:43 BENCH_READY"
+        },
+        {
+          "elapsed_ms": 2084.8586999927647,
+          "line": "2026-10-05 14:07:44 ^1echo BENCH_BEGIN_initial;map start"
+        },
+        {
+          "elapsed_ms": 2084.8586999927647,
+          "line": "2026-10-05 14:07:44 ^2echo BENCH_BEGIN_initial;map start"
+        },
+        {
+          "elapsed_ms": 2084.8586999927647,
+          "line": "2026-10-05 14:07:44 BENCH_BEGIN_initial"
+        },
+        {
+          "elapsed_ms": 3372.747299959883,
+          "line": "2026-10-05 14:07:45 CL_SignonReply: 4"
+        },
+        {
+          "elapsed_ms": 4875.0255999621,
+          "line": "2026-10-05 14:07:47 ^1echo BENCH_BEGIN_change;map e1m1"
+        },
+        {
+          "elapsed_ms": 4875.0255999621,
+          "line": "2026-10-05 14:07:47 ^2echo BENCH_BEGIN_change;map e1m1"
+        },
+        {
+          "elapsed_ms": 4875.0255999621,
+          "line": "2026-10-05 14:07:47 BENCH_BEGIN_change"
+        },
+        {
+          "elapsed_ms": 5814.769099990372,
+          "line": "2026-10-05 14:07:48 CL_SignonReply: 4"
+        },
+        {
+          "elapsed_ms": 7680.68889999995,
+          "line": "2026-10-05 14:07:50 ^1echo BENCH_BEGIN_quit;quit"
+        },
+        {
+          "elapsed_ms": 7680.68889999995,
+          "line": "2026-10-05 14:07:50 ^2echo BENCH_BEGIN_quit;quit"
+        },
+        {
+          "elapsed_ms": 7680.68889999995,
+          "line": "2026-10-05 14:07:50 BENCH_BEGIN_quit"
+        }
+      ],
+      "exit_code": 0,
+      "command": [
+        "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\engine-comparison-20261005\\fteqw\\fteqw64.exe",
+        "-basedir",
+        "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\engine-comparison-20261005\\fteqw",
+        "-nohome",
+        "-condebug",
+        "-window",
+        "-width",
+        "800",
+        "-height",
+        "600",
+        "-nojoy",
+        "+exec",
+        "benchmark.cfg"
+      ],
+      "log": "logs\\05-fteqw-lifecycle.log",
+      "script": "alias bench_initial \"echo BENCH_BEGIN_initial;map start\"\nalias bench_change \"echo BENCH_BEGIN_change;map e1m1\"\nalias bench_quit \"echo BENCH_BEGIN_quit;quit\"\nalias bench_schedule \"echo BENCH_READY;in 2 bench_initial;in 5 bench_change;in 8 bench_quit\"\nin 0 bench_schedule\n"
+    },
+    {
+      "engine": "fteqw",
+      "run": 5,
+      "mode": "launch_map",
+      "metrics_ms": {
+        "launch_map": 2489.726100000553
+      },
+      "events": [
+        {
+          "elapsed_ms": 1203.736299998127,
+          "line": "2026-10-05 14:07:52 BENCH_LAUNCH_MAP"
+        },
+        {
+          "elapsed_ms": 2489.726100000553,
+          "line": "2026-10-05 14:07:53 CL_SignonReply: 4"
+        },
+        {
+          "elapsed_ms": 2878.5544999991544,
+          "line": "2026-10-05 14:07:53 ^1echo BENCH_QUIT;quit"
+        },
+        {
+          "elapsed_ms": 2878.5544999991544,
+          "line": "2026-10-05 14:07:53 ^2echo BENCH_QUIT;quit"
+        },
+        {
+          "elapsed_ms": 2878.5544999991544,
+          "line": "2026-10-05 14:07:53 BENCH_QUIT"
+        }
+      ],
+      "exit_code": 0,
+      "command": [
+        "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\engine-comparison-20261005\\fteqw\\fteqw64.exe",
+        "-basedir",
+        "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\engine-comparison-20261005\\fteqw",
+        "-nohome",
+        "-condebug",
+        "-window",
+        "-width",
+        "800",
+        "-height",
+        "600",
+        "-nojoy",
+        "+exec",
+        "benchmark.cfg"
+      ],
+      "log": "logs\\05-fteqw-launch_map.log",
+      "script": "alias bench_quit \"echo BENCH_QUIT;quit\"\nin 4 bench_quit\necho BENCH_LAUNCH_MAP\nmap start\n"
+    },
+    {
+      "engine": "fteqw",
+      "run": 5,
+      "mode": "connect",
+      "metrics_ms": {},
+      "events": [
+        {
+          "elapsed_ms": 2082.8615999780595,
+          "line": "2026-10-05 14:07:56 ^1echo BENCH_BEGIN_connect;connectnq 127.0.0.1:26000"
+        },
+        {
+          "elapsed_ms": 2082.8615999780595,
+          "line": "2026-10-05 14:07:56 ^2echo BENCH_BEGIN_connect;connectnq 127.0.0.1:26000"
+        },
+        {
+          "elapsed_ms": 2082.8615999780595,
+          "line": "2026-10-05 14:07:56 BENCH_BEGIN_connect"
+        },
+        {
+          "elapsed_ms": 10077.15799997095,
+          "line": "2026-10-05 14:08:04 ^1echo BENCH_BEGIN_quit;quit"
+        },
+        {
+          "elapsed_ms": 10077.15799997095,
+          "line": "2026-10-05 14:08:04 ^2echo BENCH_BEGIN_quit;quit"
+        },
+        {
+          "elapsed_ms": 10077.15799997095,
+          "line": "2026-10-05 14:08:04 BENCH_BEGIN_quit"
+        }
+      ],
+      "exit_code": 0,
+      "command": [
+        "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\engine-comparison-20261005\\fteqw\\fteqw64.exe",
+        "-basedir",
+        "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\engine-comparison-20261005\\fteqw",
+        "-nohome",
+        "-condebug",
+        "-window",
+        "-width",
+        "800",
+        "-height",
+        "600",
+        "-nojoy",
+        "+exec",
+        "benchmark.cfg"
+      ],
+      "log": "logs\\05-fteqw-connect.log",
+      "script": "alias bench_connect \"echo BENCH_BEGIN_connect;connectnq 127.0.0.1:26000\"\nalias bench_quit \"echo BENCH_BEGIN_quit;quit\"\nalias bench_schedule \"in 2 bench_connect;in 10 bench_quit\"\nin 0 bench_schedule\n",
+      "connect_status": "signon_not_observed",
+      "connect_observation_window_ms": 7994.296399992891
+    }
+  ],
+  "verified": {
+    "measured_launches": 30,
+    "normal_exits": 30,
+    "timing_observations": 55
+  }
+}

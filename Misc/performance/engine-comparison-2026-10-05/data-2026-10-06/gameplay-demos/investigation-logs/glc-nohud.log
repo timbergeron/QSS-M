@@ -1,0 +1,99 @@
+
+LOG started on: 10/06/2026 13:50:18 
+
+Console initialized.
+Exe: 13:48:45 Oct  6 2026
+384.0 megabyte heap
+
+Sound Initialization
+Video mode 800x600x24 144Hz 2x scale (24-bit z-buffer, 0x FSAA) initialized
+GL_VENDOR: NVIDIA Corporation
+GL_RENDERER: NVIDIA GeForce RTX 4070/PCIe/SSE2
+GL_VERSION: 4.6.0 NVIDIA 610.88
+FOUND: ARB_vertex_buffer_object
+FOUND: GL_ARB_buffer_storage
+FOUND: ARB_multitexture
+GL_MAX_TEXTURE_UNITS: 4
+FOUND: ARB_texture_env_combine
+FOUND: ARB_texture_env_add
+FOUND: SDL_GL_SetSwapInterval
+FOUND: EXT_texture_filter_anisotropic
+FOUND: ARB_texture_non_power_of_two
+FOUND: GLSL
+GL_MAX_TEXTURE_IMAGE_UNITS: 32
+FOUND: brush model instancing
+FOUND: Framebuffer Objects
+Enabled: GLSL gamma
+FOUND: glBlendFuncSeparate
+Enabled: GLSL alias model rendering
+Enabled: EXT_packed_pixels
+FOUND: glGenerateMipmap
+SDL audio spec  : 44100 Hz, 1024 samples, 2 mix channels (callback: 2 ch, surround: on)
+SDL audio device: 44100 Hz, 2 ch, SDL_AUDIO_F32LE, 441 sample frames
+SDL audio driver: wasapi - Speakers (Realtek(R) Audio), 65536 bytes buffer
+Audio: 16 bit, stereo, 44100 Hz
+
+Language initialization
+Couldn't load 'localization/loc_english.txt'
+from 'C:\Users\Tim Bergeron\source\repos\QSS-M\.codex-build\fps-expanded-20261006\runs\glc-nohud'
+
+========= Quake Initialized =========
+
+execing quake.rc
+execing default.cfg
+execing fpsbench.cfg
+REPEAT_BEGIN 
+PASS_0 
+Playing demo from fps_aerowalk.dem.
+Using protocol 15
+
+<-------------------------------------->
+
+#Aerowalk
+TDSPIKE 0 6.6ms signon 4
+TDSPIKE 1 3.4ms signon 4
+TDSPIKE 2 3.4ms signon 4
+TDSPIKE 3 3.0ms signon 4
+TDSPIKE 4 2.3ms signon 4
+TDSPIKE 5 3.1ms signon 4
+TDSPIKE 6 3.0ms signon 4
+TDSPIKE 7 2.8ms signon 4
+TDSPIKE 8 2.9ms signon 4
+TDSPIKE 9 3.0ms signon 4
+TDSPIKE 10 2.7ms signon 4
+TDSPIKE 1339 2.0ms signon 4
+TDPROBE stages us/frame read 23.8 screen 315.2 sound 2.9 particles 0.1 swap 250.6 pscript 0.4
+TDPROBE glcalls/frame 2339.8: glVertex2f 863.6 glTexCoord2f 863.6 glBegin 124.0 glEnd 124.0 glBindTexture 116.2 glDisable 35.0 glDrawElements 32.0 glEnable 24.7 glMatrixMode 22.0 glLoadIdentity 21.0 glRotatef 11.8 glViewport 11.0 glTexEnvf 10.5 glDepthMask 10.3 glOrtho 10.0 glColor4f 10.0
+TDPROBE soundfilter 56448 samples
+TDPROBE frames 1445 total 534.8ms median 0.3340ms p99 0.881ms p999 3.378ms max 6.62ms >1ms 13 (39.5ms) >2ms 12 (38.2ms) >5ms 1 excess>3xmed 35.2ms
+TDPROBE spikes 0:6.6 1:3.4 2:3.4 3:3.0 4:2.3 5:3.1 6:3.0 7:2.8 8:2.9 9:3.0 10:2.7 893:1.3 1339:2.0
+1445 frames   0.5 seconds 2701.9 fps
+PASS_1 
+Playing demo from fps_aerowalk.dem.
+Using protocol 15
+
+<-------------------------------------->
+
+#Aerowalk
+TDSPIKE 0 4.6ms signon 4
+TDSPIKE 1 61.7ms signon 4
+TDPROBE stages us/frame read 17.3 screen 310.6 sound 2.7 particles 0.1 swap 272.1 pscript 0.3
+TDPROBE glcalls/frame 598.4: glVertex2f 163.8 glTexCoord2f 163.8 glBindTexture 40.1 glDrawElements 32.0 glDisable 31.0 glEnable 20.7 glMatrixMode 20.0 glLoadIdentity 19.0 glRotatef 11.8 glDepthMask 10.3 glViewport 10.0 glOrtho 9.0 glTexEnvf 6.6 glColor4f 6.0 glTranslatef 5.8 glShadeModel 5.5
+TDPROBE soundfilter 147294 samples
+TDPROBE frames 1445 total 493.5ms median 0.2892ms p99 0.455ms p999 4.643ms max 61.66ms >1ms 2 (66.3ms) >2ms 2 (66.3ms) >5ms 1 excess>3xmed 65.7ms
+TDPROBE spikes 0:4.6 1:61.7
+1445 frames   0.5 seconds 2928.0 fps
+PASS_2 
+Playing demo from fps_aerowalk.dem.
+Using protocol 15
+
+<-------------------------------------->
+
+#Aerowalk
+TDSPIKE 0 3.9ms signon 4
+TDPROBE stages us/frame read 16.9 screen 265.2 sound 2.5 particles 0.1 swap 228.2 pscript 0.3
+TDPROBE glcalls/frame 420.7: glVertex2f 79.9 glTexCoord2f 79.9 glBindTexture 40.1 glDrawElements 32.0 glDisable 29.0 glMatrixMode 20.0 glLoadIdentity 19.0 glEnable 18.7 glRotatef 11.8 glDepthMask 10.3 glViewport 10.0 glOrtho 9.0 glTranslatef 5.8 glShadeModel 5.5 glDepthFunc 4.6 glHint 4.6
+TDPROBE soundfilter 148176 samples
+TDPROBE frames 1445 total 426.1ms median 0.2833ms p99 0.441ms p999 0.641ms max 3.95ms >1ms 1 (3.9ms) >2ms 1 (3.9ms) >5ms 0 excess>3xmed 3.7ms
+TDPROBE spikes 0:3.9
+1445 frames   0.4 seconds 3390.9 fps

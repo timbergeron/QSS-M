@@ -1,0 +1,33 @@
+{
+  "passes": 324,
+  "measured_passes": 270,
+  "warmups": 54,
+  "maps": [
+    "aerowalk",
+    "ztndm3",
+    "dm3",
+    "bravado",
+    "ctf3m2",
+    "schloss",
+    "e1m2",
+    "dm2",
+    "ctf2m8"
+  ],
+  "engines": [
+    "qssm",
+    "fteqw",
+    "ezquake",
+    "ironwail",
+    "vkquake",
+    "qss"
+  ],
+  "frames_match_within": 1,
+  "geometric_mean_fps": {
+    "qssm": 1822.4758243101107,
+    "fteqw": 2435.6348717968476,
+    "ezquake": 2859.194761870392,
+    "ironwail": 2991.2004942160793,
+    "vkquake": 2490.451947491261,
+    "qss": 2280.9337308516597
+  }
+}

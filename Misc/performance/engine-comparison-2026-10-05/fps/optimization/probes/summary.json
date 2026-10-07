@@ -1,0 +1,158 @@
+[
+  {
+    "title": "Forced GPU synchronization",
+    "group": "finish-probe",
+    "condition": "Default off \u2192 glFinish on",
+    "conclusion": "Slower at both resolutions; leave off.",
+    "values": [
+      {
+        "resolution": [
+          800,
+          600
+        ],
+        "before": 2732.45,
+        "after": 2057.55,
+        "gain_percent": -24.69944555252611
+      },
+      {
+        "resolution": [
+          3840,
+          2160
+        ],
+        "before": 2004.15,
+        "after": 1407.5,
+        "gain_percent": -29.77072574408104
+      }
+    ]
+  },
+  {
+    "title": "Hide demo controls",
+    "group": "bar-probe",
+    "condition": "Default timeout \u2192 hidden",
+    "conclusion": "No improvement established. Default controls may already be hidden; no production UI change.",
+    "values": [
+      {
+        "resolution": [
+          800,
+          600
+        ],
+        "before": 2763.0,
+        "after": 2695.55,
+        "gain_percent": -2.441187115454213
+      },
+      {
+        "resolution": [
+          3840,
+          2160
+        ],
+        "before": 2113.8,
+        "after": 1990.25,
+        "gain_percent": -5.844923833853732
+      }
+    ]
+  },
+  {
+    "title": "Submit before presentation",
+    "group": "flush-probe",
+    "condition": "No extra flush \u2192 glFlush before swap",
+    "conclusion": "Less than 1% change; no meaningful win established.",
+    "values": [
+      {
+        "resolution": [
+          800,
+          600
+        ],
+        "before": 2765.55,
+        "after": 2788.3,
+        "gain_percent": 0.8226211784274406
+      },
+      {
+        "resolution": [
+          3840,
+          2160
+        ],
+        "before": 2003.65,
+        "after": 2015.15,
+        "gain_percent": 0.5739525366206699
+      }
+    ]
+  },
+  {
+    "title": "Submit after 3D",
+    "group": "flush-probe",
+    "condition": "No extra flush \u2192 glFlush before HUD",
+    "conclusion": "No consistent win established; no production change.",
+    "values": [
+      {
+        "resolution": [
+          800,
+          600
+        ],
+        "before": 2765.55,
+        "after": 2688.35,
+        "gain_percent": -2.7914881307515738
+      },
+      {
+        "resolution": [
+          3840,
+          2160
+        ],
+        "before": 2003.65,
+        "after": 1998.6,
+        "gain_percent": -0.2520400269508283
+      }
+    ]
+  },
+  {
+    "title": "Offscreen gamma path",
+    "group": "gamma-path-probe",
+    "condition": "Gamma 1 \u2192 1.0001 to trigger FBO path",
+    "conclusion": "Slower. Gamma changes slightly; this diagnostic is not a visual-equivalence comparison.",
+    "values": [
+      {
+        "resolution": [
+          800,
+          600
+        ],
+        "before": 2791.15,
+        "after": 2633.65,
+        "gain_percent": -5.642835390430467
+      },
+      {
+        "resolution": [
+          3840,
+          2160
+        ],
+        "before": 2007.0500000000002,
+        "after": 1956.9,
+        "gain_percent": -2.4986921103111626
+      }
+    ]
+  },
+  {
+    "title": "Skip duplicate world shader flags",
+    "group": "uniform-probe",
+    "condition": "Uncached \u2192 cached per draw pass",
+    "conclusion": "No consistent win: lower at 800\u00d7600, higher at 4K, with overlapping ranges. No production renderer change.",
+    "values": [
+      {
+        "resolution": [
+          800,
+          600
+        ],
+        "before": 2797.5,
+        "after": 2752.6000000000004,
+        "gain_percent": -1.6050044682752285
+      },
+      {
+        "resolution": [
+          3840,
+          2160
+        ],
+        "before": 2007.5500000000002,
+        "after": 2050.55,
+        "gain_percent": 2.141914273617096
+      }
+    ]
+  }
+]

@@ -1,0 +1,425 @@
+
+LOG started on: 10/05/2026 20:28:40 
+
+Console initialized.
+Exe: 19:38:42 Oct  5 2026
+384.0 megabyte heap
+
+Sound Initialization
+Video mode 800x600x24 144Hz 2x scale (24-bit z-buffer, 0x FSAA) initialized
+GL_VENDOR: NVIDIA Corporation
+GL_RENDERER: NVIDIA GeForce RTX 4070/PCIe/SSE2
+GL_VERSION: 4.6.0 NVIDIA 591.86
+FOUND: ARB_vertex_buffer_object
+FOUND: GL_ARB_buffer_storage
+FOUND: ARB_multitexture
+GL_MAX_TEXTURE_UNITS: 4
+FOUND: ARB_texture_env_combine
+FOUND: ARB_texture_env_add
+FOUND: SDL_GL_SetSwapInterval
+FOUND: EXT_texture_filter_anisotropic
+FOUND: ARB_texture_non_power_of_two
+FOUND: GLSL
+GL_MAX_TEXTURE_IMAGE_UNITS: 32
+FOUND: brush model instancing
+FOUND: Framebuffer Objects
+Enabled: GLSL gamma
+FOUND: glBlendFuncSeparate
+Enabled: GLSL alias model rendering
+Enabled: EXT_packed_pixels
+FOUND: glGenerateMipmap
+SDL audio spec  : 44100 Hz, 1024 samples, 2 mix channels (callback: 2 ch, surround: on)
+SDL audio device: 44100 Hz, 2 ch, SDL_AUDIO_F32LE, 441 sample frames
+SDL audio driver: wasapi - Speakers (Realtek(R) Audio), 65536 bytes buffer
+Audio: 16 bit, stereo, 44100 Hz
+
+Language initialization
+Couldn't load 'localization/loc_english.txt'
+from 'C:\Users\Tim Bergeron\source\repos\QSS-M\.codex-build\engine-fps-optimization-20261005\patch-comparison\20261005-202214\800x600-3-before'
+
+========= Quake Initialized =========
+
+execing quake.rc
+execing default.cfg
+execing fpsbench.cfg
+PATCH_BENCH_before 
+PATCH_PASS_ctf2m8_0 
+Playing demo from fps_ctf2m8.dem.
+Using protocol 15
+
+<-------------------------------------->
+
+#Capturephobopolis
+1442 frames   0.8 seconds 1778.4 fps
+PATCH_PASS_ctf2m8_1 
+Playing demo from fps_ctf2m8.dem.
+Using protocol 15
+
+<-------------------------------------->
+
+#Capturephobopolis
+1442 frames   0.5 seconds 2725.2 fps
+PATCH_PASS_ctf2m8_2 
+Playing demo from fps_ctf2m8.dem.
+Using protocol 15
+
+<-------------------------------------->
+
+#Capturephobopolis
+1442 frames   0.5 seconds 2633.7 fps
+PATCH_PASS_ctf2m8_3 
+Playing demo from fps_ctf2m8.dem.
+Using protocol 15
+
+<-------------------------------------->
+
+#Capturephobopolis
+1442 frames   0.5 seconds 2635.2 fps
+PATCH_PASS_ctf2m8_4 
+Playing demo from fps_ctf2m8.dem.
+Using protocol 15
+
+<-------------------------------------->
+
+#Capturephobopolis
+1442 frames   0.5 seconds 2688.2 fps
+PATCH_PASS_dm2_0 
+Playing demo from fps_dm2.dem.
+Using protocol 15
+
+<-------------------------------------->
+
+#Claustrophobopolis
+1442 frames   0.5 seconds 2726.2 fps
+PATCH_PASS_dm2_1 
+Playing demo from fps_dm2.dem.
+Using protocol 15
+
+<-------------------------------------->
+
+#Claustrophobopolis
+1442 frames   0.5 seconds 2918.3 fps
+PATCH_PASS_dm2_2 
+Playing demo from fps_dm2.dem.
+Using protocol 15
+
+<-------------------------------------->
+
+#Claustrophobopolis
+1442 frames   0.5 seconds 2776.2 fps
+PATCH_PASS_dm2_3 
+Playing demo from fps_dm2.dem.
+Using protocol 15
+
+<-------------------------------------->
+
+#Claustrophobopolis
+1442 frames   0.5 seconds 2694.1 fps
+PATCH_PASS_dm2_4 
+Playing demo from fps_dm2.dem.
+Using protocol 15
+
+<-------------------------------------->
+
+#Claustrophobopolis
+1442 frames   0.5 seconds 2822.9 fps
+PATCH_PASS_e1m2_0 
+Playing demo from fps_e1m2.dem.
+Using protocol 15
+
+<-------------------------------------->
+
+#Castle of the Damned
+Mod_LoadTexinfo: 1 texture(s) missing from BSP file
+1442 frames   0.6 seconds 2512.1 fps
+PATCH_PASS_e1m2_1 
+Playing demo from fps_e1m2.dem.
+Using protocol 15
+
+<-------------------------------------->
+
+#Castle of the Damned
+Mod_LoadTexinfo: 1 texture(s) missing from BSP file
+1442 frames   0.6 seconds 2568.4 fps
+PATCH_PASS_e1m2_2 
+Playing demo from fps_e1m2.dem.
+Using protocol 15
+
+<-------------------------------------->
+
+#Castle of the Damned
+Mod_LoadTexinfo: 1 texture(s) missing from BSP file
+1442 frames   0.6 seconds 2578.1 fps
+PATCH_PASS_e1m2_3 
+Playing demo from fps_e1m2.dem.
+Using protocol 15
+
+<-------------------------------------->
+
+#Castle of the Damned
+Mod_LoadTexinfo: 1 texture(s) missing from BSP file
+1442 frames   0.6 seconds 2621.8 fps
+PATCH_PASS_e1m2_4 
+Playing demo from fps_e1m2.dem.
+Using protocol 15
+
+<-------------------------------------->
+
+#Castle of the Damned
+Mod_LoadTexinfo: 1 texture(s) missing from BSP file
+1442 frames   0.6 seconds 2493.4 fps
+PATCH_PASS_schloss_0 
+Playing demo from fps_schloss.dem.
+Using protocol 15
+
+<-------------------------------------->
+
+#Schloss Adler 
+
+by Zaka
+
+1442 frames   0.7 seconds 2191.4 fps
+PATCH_PASS_schloss_1 
+Playing demo from fps_schloss.dem.
+Using protocol 15
+
+<-------------------------------------->
+
+#Schloss Adler 
+
+by Zaka
+
+1442 frames   0.7 seconds 1997.6 fps
+PATCH_PASS_schloss_2 
+Playing demo from fps_schloss.dem.
+Using protocol 15
+
+<-------------------------------------->
+
+#Schloss Adler 
+
+by Zaka
+
+1442 frames   0.6 seconds 2230.4 fps
+PATCH_PASS_schloss_3 
+Playing demo from fps_schloss.dem.
+Using protocol 15
+
+<-------------------------------------->
+
+#Schloss Adler 
+
+by Zaka
+
+1442 frames   0.6 seconds 2240.6 fps
+PATCH_PASS_schloss_4 
+Playing demo from fps_schloss.dem.
+Using protocol 15
+
+<-------------------------------------->
+
+#Schloss Adler 
+
+by Zaka
+
+1442 frames   0.6 seconds 2341.9 fps
+PATCH_PASS_ctf3m2_0 
+Playing demo from fps_ctf3m2.dem.
+Using protocol 15
+
+<-------------------------------------->
+
+#Red Alert - By EG
+1442 frames   0.6 seconds 2453.1 fps
+PATCH_PASS_ctf3m2_1 
+Playing demo from fps_ctf3m2.dem.
+Using protocol 15
+
+<-------------------------------------->
+
+#Red Alert - By EG
+1442 frames   0.6 seconds 2432.8 fps
+PATCH_PASS_ctf3m2_2 
+Playing demo from fps_ctf3m2.dem.
+Using protocol 15
+
+<-------------------------------------->
+
+#Red Alert - By EG
+1442 frames   0.6 seconds 2555.4 fps
+PATCH_PASS_ctf3m2_3 
+Playing demo from fps_ctf3m2.dem.
+Using protocol 15
+
+<-------------------------------------->
+
+#Red Alert - By EG
+1442 frames   0.6 seconds 2529.3 fps
+PATCH_PASS_ctf3m2_4 
+Playing demo from fps_ctf3m2.dem.
+Using protocol 15
+
+<-------------------------------------->
+
+#Red Alert - By EG
+1442 frames   0.6 seconds 2365.2 fps
+PATCH_PASS_bravado_0 
+Playing demo from fps_bravado.dem.
+Using protocol 15
+
+<-------------------------------------->
+
+#Bravado - by foogs [remake]
+1442 frames   0.6 seconds 2513.4 fps
+PATCH_PASS_bravado_1 
+Playing demo from fps_bravado.dem.
+Using protocol 15
+
+<-------------------------------------->
+
+#Bravado - by foogs [remake]
+1442 frames   0.5 seconds 2665.2 fps
+PATCH_PASS_bravado_2 
+Playing demo from fps_bravado.dem.
+Using protocol 15
+
+<-------------------------------------->
+
+#Bravado - by foogs [remake]
+1442 frames   0.6 seconds 2587.5 fps
+PATCH_PASS_bravado_3 
+Playing demo from fps_bravado.dem.
+Using protocol 15
+
+<-------------------------------------->
+
+#Bravado - by foogs [remake]
+1442 frames   0.5 seconds 2648.0 fps
+PATCH_PASS_bravado_4 
+Playing demo from fps_bravado.dem.
+Using protocol 15
+
+<-------------------------------------->
+
+#Bravado - by foogs [remake]
+1442 frames   0.5 seconds 2623.8 fps
+PATCH_PASS_dm3_0 
+Playing demo from fps_dm3.dem.
+Using protocol 15
+
+<-------------------------------------->
+
+#The Abandoned Base
+1442 frames   0.6 seconds 2434.9 fps
+PATCH_PASS_dm3_1 
+Playing demo from fps_dm3.dem.
+Using protocol 15
+
+<-------------------------------------->
+
+#The Abandoned Base
+1442 frames   0.5 seconds 2686.8 fps
+PATCH_PASS_dm3_2 
+Playing demo from fps_dm3.dem.
+Using protocol 15
+
+<-------------------------------------->
+
+#The Abandoned Base
+1442 frames   0.5 seconds 2657.9 fps
+PATCH_PASS_dm3_3 
+Playing demo from fps_dm3.dem.
+Using protocol 15
+
+<-------------------------------------->
+
+#The Abandoned Base
+1442 frames   0.5 seconds 2683.8 fps
+PATCH_PASS_dm3_4 
+Playing demo from fps_dm3.dem.
+Using protocol 15
+
+<-------------------------------------->
+
+#The Abandoned Base
+1442 frames   0.6 seconds 2532.4 fps
+PATCH_PASS_ztndm3_0 
+Playing demo from fps_ztndm3.dem.
+Using protocol 15
+
+<-------------------------------------->
+
+#Blood Run
+1442 frames   0.5 seconds 2799.6 fps
+PATCH_PASS_ztndm3_1 
+Playing demo from fps_ztndm3.dem.
+Using protocol 15
+
+<-------------------------------------->
+
+#Blood Run
+1442 frames   0.5 seconds 2769.7 fps
+PATCH_PASS_ztndm3_2 
+Playing demo from fps_ztndm3.dem.
+Using protocol 15
+
+<-------------------------------------->
+
+#Blood Run
+1442 frames   0.5 seconds 2931.2 fps
+PATCH_PASS_ztndm3_3 
+Playing demo from fps_ztndm3.dem.
+Using protocol 15
+
+<-------------------------------------->
+
+#Blood Run
+1442 frames   0.5 seconds 2799.9 fps
+PATCH_PASS_ztndm3_4 
+Playing demo from fps_ztndm3.dem.
+Using protocol 15
+
+<-------------------------------------->
+
+#Blood Run
+1442 frames   0.5 seconds 2673.5 fps
+PATCH_PASS_aerowalk_0 
+Playing demo from fps_aerowalk.dem.
+Using protocol 15
+
+<-------------------------------------->
+
+#Aerowalk
+1445 frames   0.5 seconds 2764.6 fps
+PATCH_PASS_aerowalk_1 
+Playing demo from fps_aerowalk.dem.
+Using protocol 15
+
+<-------------------------------------->
+
+#Aerowalk
+1445 frames   0.5 seconds 2690.0 fps
+PATCH_PASS_aerowalk_2 
+Playing demo from fps_aerowalk.dem.
+Using protocol 15
+
+<-------------------------------------->
+
+#Aerowalk
+1445 frames   0.5 seconds 2827.7 fps
+PATCH_PASS_aerowalk_3 
+Playing demo from fps_aerowalk.dem.
+Using protocol 15
+
+<-------------------------------------->
+
+#Aerowalk
+1445 frames   0.5 seconds 2763.8 fps
+PATCH_PASS_aerowalk_4 
+Playing demo from fps_aerowalk.dem.
+Using protocol 15
+
+<-------------------------------------->
+
+#Aerowalk
+1445 frames   0.5 seconds 2683.1 fps

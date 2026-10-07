@@ -1,0 +1,264 @@
+
+LOG started on: 10/06/2026 13:34:45 
+
+Console initialized.
+Exe: 13:33:24 Oct  6 2026
+384.0 megabyte heap
+
+Sound Initialization
+Video mode 800x600x24 144Hz 2x scale (24-bit z-buffer, 0x FSAA) initialized
+GL_VENDOR: NVIDIA Corporation
+GL_RENDERER: NVIDIA GeForce RTX 4070/PCIe/SSE2
+GL_VERSION: 4.6.0 NVIDIA 610.88
+FOUND: ARB_vertex_buffer_object
+FOUND: GL_ARB_buffer_storage
+FOUND: ARB_multitexture
+GL_MAX_TEXTURE_UNITS: 4
+FOUND: ARB_texture_env_combine
+FOUND: ARB_texture_env_add
+FOUND: SDL_GL_SetSwapInterval
+FOUND: EXT_texture_filter_anisotropic
+FOUND: ARB_texture_non_power_of_two
+FOUND: GLSL
+GL_MAX_TEXTURE_IMAGE_UNITS: 32
+FOUND: brush model instancing
+FOUND: Framebuffer Objects
+Enabled: GLSL gamma
+FOUND: glBlendFuncSeparate
+Enabled: GLSL alias model rendering
+Enabled: EXT_packed_pixels
+FOUND: glGenerateMipmap
+SDL audio spec  : 44100 Hz, 1024 samples, 2 mix channels (callback: 2 ch, surround: on)
+SDL audio device: 44100 Hz, 2 ch, SDL_AUDIO_F32LE, 441 sample frames
+SDL audio driver: wasapi - Speakers (Realtek(R) Audio), 65536 bytes buffer
+Audio: 16 bit, stereo, 44100 Hz
+
+Language initialization
+Couldn't load 'localization/loc_english.txt'
+from 'C:\Users\Tim Bergeron\source\repos\QSS-M\.codex-build\fps-expanded-20261006\runs\qssm-probe-dev'
+
+========= Quake Initialized =========
+
+execing quake.rc
+execing default.cfg
+execing fpsbench.cfg
+REPEAT_BEGIN 
+PASS_0 
+FindFile: can't find demos/fps_aerowalk.dem
+Playing demo from fps_aerowalk.dem.
+Serverinfo packet received.
+Clearing memory
+Using protocol 15(vanilla)
+FindFile: can't find progs/ctfmodel.mdl
+FindFile: can't find progs/flag2.mdl
+FindFile: can't find progs/flag3.mdl
+FindFile: can't find progs/flag.mdl
+FindFile: can't find progs/star.mdl
+FindFile: can't find progs/bit.mdl
+FindFile: can't find progs/v_star.mdl
+
+<-------------------------------------->
+
+#Aerowalk
+CL_SignonReply: 1
+CL_SignonReply: 2
+CL_SignonReply: 3
+0.2 MiB data cache used (0.2 MiB peak, 64.0 MiB budget, 0 evictions)
+CL_SignonReply: 4
+FindFile: can't find connect.cfg
+FindFile: can't find configs/connect.cfg
+TDSPIKE 0 35.4ms signon 4
+unnamed texture in maps/aerowalk.bsp, renaming to unnamed17
+unnamed texture in maps/aerowalk.bsp, renaming to unnamed16
+unnamed texture in maps/aerowalk.bsp, renaming to unnamed10
+Mod_LoadTextures maps/aerowalk.bsp: findfile 8.6ms (1140 calls) texmgr 2.3ms (34 calls) imageload 8.9ms (60 calls)
+TexMgr prepare maps/aerowalk.bsp: wall 1.7ms cpu 4.4ms commit 0.3ms, 30 jobs/3 batches (1 parallel), 0.2/1.3 MiB source/prepared
+Mod_LoadBrushModel maps/aerowalk.bsp: geom 0.0ms tex 12.0ms light 0.2ms faces 0.7ms
+trying to open external vis file
+maps/aerowalk.vis not found, trying id1.vis
+external vis not found
+Mod_LoadBrushModel maps/aerowalk.bsp: nodes 0.0ms watervis 0.0ms
+Mod_LoadModel maps/aerowalk.bsp: read 0.4ms parse 14.3ms (632028 bytes)
+Mod_LoadTextures maps/b_bh100.bsp: findfile 1.4ms (190 calls) texmgr 0.1ms (9 calls) imageload 1.4ms (10 calls)
+TexMgr prepare maps/b_bh100.bsp: wall 0.1ms cpu 0.1ms commit 0.0ms, 9 jobs/1 batches (0 parallel), 0.0/0.0 MiB source/prepared
+Mod_LoadBrushModel maps/b_bh100.bsp: geom 0.0ms tex 1.6ms light 0.1ms faces 0.1ms
+trying to open external vis file
+maps/b_bh100.vis not found, trying id1.vis
+external vis not found
+Mod_DecompressVis: leaf VIS offset out of range on model "maps/b_bh100.bsp"
+Mod_LoadBrushModel maps/b_bh100.bsp: nodes 0.0ms watervis 0.0ms
+Mod_LoadTextures maps/b_batt0.bsp: findfile 0.9ms (114 calls) texmgr 0.0ms (3 calls) imageload 0.9ms (6 calls)
+TexMgr prepare maps/b_batt0.bsp: wall 0.0ms cpu 0.0ms commit 0.0ms, 3 jobs/1 batches (0 parallel), 0.0/0.0 MiB source/prepared
+Mod_LoadBrushModel maps/b_batt0.bsp: geom 0.0ms tex 0.9ms light 0.1ms faces 0.0ms
+trying to open external vis file
+maps/b_batt0.vis not found, trying id1.vis
+external vis not found
+Mod_DecompressVis: leaf VIS offset out of range on model "maps/b_batt0.bsp"
+Mod_LoadBrushModel maps/b_batt0.bsp: nodes 0.0ms watervis 0.0ms
+Mod_LoadTextures maps/b_bh25.bsp: findfile 1.6ms (228 calls) texmgr 0.1ms (12 calls) imageload 1.7ms (12 calls)
+TexMgr prepare maps/b_bh25.bsp: wall 0.1ms cpu 0.1ms commit 0.0ms, 12 jobs/1 batches (0 parallel), 0.0/0.1 MiB source/prepared
+Mod_LoadBrushModel maps/b_bh25.bsp: geom 0.0ms tex 1.8ms light 0.2ms faces 0.1ms
+trying to open external vis file
+maps/b_bh25.vis not found, trying id1.vis
+external vis not found
+Mod_DecompressVis: leaf VIS offset out of range on model "maps/b_bh25.bsp"
+Mod_LoadBrushModel maps/b_bh25.bsp: nodes 0.0ms watervis 0.0ms
+Mod_LoadTextures maps/b_rock0.bsp: findfile 0.6ms (76 calls) texmgr 0.0ms (2 calls) imageload 0.6ms (4 calls)
+TexMgr prepare maps/b_rock0.bsp: wall 0.0ms cpu 0.0ms commit 0.0ms, 2 jobs/1 batches (0 parallel), 0.0/0.0 MiB source/prepared
+Mod_LoadBrushModel maps/b_rock0.bsp: geom 0.0ms tex 0.6ms light 0.0ms faces 0.1ms
+trying to open external vis file
+maps/b_rock0.vis not found, trying id1.vis
+external vis not found
+Mod_DecompressVis: leaf VIS offset out of range on model "maps/b_rock0.bsp"
+Mod_LoadBrushModel maps/b_rock0.bsp: nodes 0.0ms watervis 0.0ms
+Mod_LoadTextures maps/b_nail0.bsp: findfile 0.9ms (114 calls) texmgr 0.0ms (3 calls) imageload 0.9ms (6 calls)
+TexMgr prepare maps/b_nail0.bsp: wall 0.0ms cpu 0.0ms commit 0.0ms, 3 jobs/1 batches (0 parallel), 0.0/0.0 MiB source/prepared
+Mod_LoadBrushModel maps/b_nail0.bsp: geom 0.0ms tex 0.9ms light 0.1ms faces 0.1ms
+trying to open external vis file
+maps/b_nail0.vis not found, trying id1.vis
+external vis not found
+Mod_DecompressVis: leaf VIS offset out of range on model "maps/b_nail0.bsp"
+Mod_LoadBrushModel maps/b_nail0.bsp: nodes 0.0ms watervis 0.0ms
+model precache: 41.5ms (findfile 26.4ms/2695 texmgr 6.7ms/116)
+sound precache: 10.4ms (findfile 4.4ms/151)
+R_NewMap gameplay shaders: 6.0ms
+R_NewMap classic particles: 0.1ms
+FindFile: can't find particles/map_aerowalk.cfg
+FindFile: can't find map_aerowalk.cfg
+R_NewMap pscript clear: 2.5ms
+GL_BuildLightmaps: surfaces 0.7ms
+GL_BuildLightmaps: fill 1.3ms
+GL_BuildLightmaps: occupied 0.3/32.0 MiB, transferred 0.3 MiB (1/1 partial)
+GL_BuildLightmaps: build 2.0ms upload 0.0ms (1 lightmaps)
+R_NewMap lightmaps: 2.2ms
+GL_BuildBModelVertexBuffer: 0.3ms (6233 verts)
+R_NewMap vbo+decals: 0.4ms
+R_NewMap teleporter shader: 0.0ms
+R_NewMap sky: 0.0ms
+R_NewMap worldspawn: 0.1ms
+R_NewMap locs: 0.2ms
+R_NewMap total: 11.6ms
+R_NewMap: 11.6ms (findfile 0.3ms/3 texmgr 0.0ms/1)
+FindFile: can't find csprogs.dat
+progs.dat occupies 403K.
+Patch for incorrect ogre smash state applied
+TDSPIKE 1 101.9ms signon 4
+TDSPIKE 2 3.7ms signon 4
+TDSPIKE 3 77.3ms signon 4
+TDSPIKE 4 3.1ms signon 4
+TDSPIKE 5 2.8ms signon 4
+TDSPIKE 6 2.9ms signon 4
+TDSPIKE 7 2.7ms signon 4
+TDSPIKE 8 3.1ms signon 4
+TDSPIKE 9 3.1ms signon 4
+TDSPIKE 10 2.8ms signon 4
+Host_EndGame: Server disconnected
+
+TDPROBE frames 1445 total 815.4ms median 0.3775ms p99 0.932ms p999 77.318ms max 101.87ms >1ms 14 (243.6ms) >2ms 11 (239.0ms) >5ms 3 excess>3xmed 237.6ms
+TDPROBE spikes 0:35.4 1:101.9 2:3.7 3:77.3 4:3.1 5:2.8 6:2.9 7:2.7 8:3.1 9:3.1 10:2.8 595:1.1 893:1.6 1339:1.9
+1445 frames   0.8 seconds 1772.1 fps
+PASS_1 
+FindFile: can't find demos/fps_aerowalk.dem
+Playing demo from fps_aerowalk.dem.
+Serverinfo packet received.
+Clearing memory
+Using protocol 15(vanilla)
+FindFile: can't find progs/ctfmodel.mdl
+FindFile: can't find progs/flag2.mdl
+FindFile: can't find progs/flag3.mdl
+FindFile: can't find progs/flag.mdl
+FindFile: can't find progs/star.mdl
+FindFile: can't find progs/bit.mdl
+FindFile: can't find progs/v_star.mdl
+
+<-------------------------------------->
+
+#Aerowalk
+CL_SignonReply: 1
+CL_SignonReply: 2
+CL_SignonReply: 3
+5.2 MiB data cache used (5.2 MiB peak, 64.0 MiB budget, 0 evictions)
+CL_SignonReply: 4
+FindFile: can't find connect.cfg
+FindFile: can't find configs/connect.cfg
+TDSPIKE 0 2.2ms signon 4
+unnamed texture in maps/aerowalk.bsp, renaming to unnamed17
+unnamed texture in maps/aerowalk.bsp, renaming to unnamed16
+unnamed texture in maps/aerowalk.bsp, renaming to unnamed10
+Mod_LoadTextures maps/aerowalk.bsp: findfile 8.3ms (1140 calls) texmgr 1.4ms (34 calls) imageload 8.6ms (60 calls)
+TexMgr prepare maps/aerowalk.bsp: wall 1.0ms cpu 3.6ms commit 0.2ms, 30 jobs/3 batches (1 parallel), 0.2/1.3 MiB source/prepared
+Mod_LoadBrushModel maps/aerowalk.bsp: geom 0.0ms tex 10.9ms light 0.2ms faces 0.5ms
+trying to open external vis file
+maps/aerowalk.vis not found, trying id1.vis
+external vis not found
+Mod_LoadBrushModel maps/aerowalk.bsp: nodes 0.0ms watervis 0.0ms
+Mod_LoadModel maps/aerowalk.bsp: read 0.3ms parse 13.0ms (632028 bytes)
+Mod_LoadTextures maps/b_bh100.bsp: findfile 1.4ms (190 calls) texmgr 0.1ms (9 calls) imageload 1.4ms (10 calls)
+TexMgr prepare maps/b_bh100.bsp: wall 0.1ms cpu 0.1ms commit 0.0ms, 9 jobs/1 batches (0 parallel), 0.0/0.0 MiB source/prepared
+Mod_LoadBrushModel maps/b_bh100.bsp: geom 0.0ms tex 1.6ms light 0.1ms faces 0.1ms
+trying to open external vis file
+maps/b_bh100.vis not found, trying id1.vis
+external vis not found
+Mod_DecompressVis: leaf VIS offset out of range on model "maps/b_bh100.bsp"
+Mod_LoadBrushModel maps/b_bh100.bsp: nodes 0.0ms watervis 0.0ms
+Mod_LoadTextures maps/b_batt0.bsp: findfile 0.8ms (114 calls) texmgr 0.0ms (3 calls) imageload 0.9ms (6 calls)
+TexMgr prepare maps/b_batt0.bsp: wall 0.0ms cpu 0.0ms commit 0.0ms, 3 jobs/1 batches (0 parallel), 0.0/0.0 MiB source/prepared
+Mod_LoadBrushModel maps/b_batt0.bsp: geom 0.0ms tex 0.9ms light 0.0ms faces 0.1ms
+trying to open external vis file
+maps/b_batt0.vis not found, trying id1.vis
+external vis not found
+Mod_DecompressVis: leaf VIS offset out of range on model "maps/b_batt0.bsp"
+Mod_LoadBrushModel maps/b_batt0.bsp: nodes 0.0ms watervis 0.0ms
+Mod_LoadTextures maps/b_bh25.bsp: findfile 1.7ms (228 calls) texmgr 0.1ms (12 calls) imageload 1.7ms (12 calls)
+TexMgr prepare maps/b_bh25.bsp: wall 0.1ms cpu 0.1ms commit 0.0ms, 12 jobs/1 batches (0 parallel), 0.0/0.1 MiB source/prepared
+Mod_LoadBrushModel maps/b_bh25.bsp: geom 0.0ms tex 1.9ms light 0.1ms faces 0.1ms
+trying to open external vis file
+maps/b_bh25.vis not found, trying id1.vis
+external vis not found
+Mod_DecompressVis: leaf VIS offset out of range on model "maps/b_bh25.bsp"
+Mod_LoadBrushModel maps/b_bh25.bsp: nodes 0.0ms watervis 0.0ms
+Mod_LoadTextures maps/b_rock0.bsp: findfile 0.5ms (76 calls) texmgr 0.0ms (2 calls) imageload 0.6ms (4 calls)
+TexMgr prepare maps/b_rock0.bsp: wall 0.0ms cpu 0.0ms commit 0.0ms, 2 jobs/1 batches (0 parallel), 0.0/0.0 MiB source/prepared
+Mod_LoadBrushModel maps/b_rock0.bsp: geom 0.0ms tex 0.6ms light 0.0ms faces 0.0ms
+trying to open external vis file
+maps/b_rock0.vis not found, trying id1.vis
+external vis not found
+Mod_DecompressVis: leaf VIS offset out of range on model "maps/b_rock0.bsp"
+Mod_LoadBrushModel maps/b_rock0.bsp: nodes 0.0ms watervis 0.0ms
+Mod_LoadTextures maps/b_nail0.bsp: findfile 0.8ms (114 calls) texmgr 0.0ms (3 calls) imageload 0.9ms (6 calls)
+TexMgr prepare maps/b_nail0.bsp: wall 0.0ms cpu 0.0ms commit 0.0ms, 3 jobs/1 batches (0 parallel), 0.0/0.0 MiB source/prepared
+Mod_LoadBrushModel maps/b_nail0.bsp: geom 0.0ms tex 0.9ms light 0.1ms faces 0.0ms
+trying to open external vis file
+maps/b_nail0.vis not found, trying id1.vis
+external vis not found
+Mod_DecompressVis: leaf VIS offset out of range on model "maps/b_nail0.bsp"
+Mod_LoadBrushModel maps/b_nail0.bsp: nodes 0.0ms watervis 0.0ms
+model precache: 23.3ms (findfile 17.2ms/2095 texmgr 2.0ms/71)
+sound precache: 2.2ms (findfile 2.1ms/78)
+R_NewMap gameplay shaders: 0.0ms
+R_NewMap classic particles: 0.1ms
+FindFile: can't find particles/map_aerowalk.cfg
+FindFile: can't find map_aerowalk.cfg
+R_NewMap pscript clear: 0.9ms
+GL_BuildLightmaps: surfaces 3.3ms
+GL_BuildLightmaps: fill 1.1ms
+GL_BuildLightmaps: occupied 0.3/32.0 MiB, transferred 0.3 MiB (1/1 partial)
+GL_BuildLightmaps: build 4.4ms upload 0.0ms (1 lightmaps)
+R_NewMap lightmaps: 4.5ms
+GL_BuildBModelVertexBuffer: 0.1ms (6233 verts)
+R_NewMap vbo+decals: 0.3ms
+R_NewMap teleporter shader: 0.0ms
+R_NewMap sky: 0.0ms
+R_NewMap worldspawn: 0.0ms
+R_NewMap locs: 0.1ms
+R_NewMap total: 5.9ms
+R_NewMap: 5.9ms (findfile 0.3ms/3 texmgr 0.0ms/1)
+FindFile: can't find csprogs.dat
+progs.dat occupies 403K.
+Patch for incorrect ogre smash state applied
+TDSPIKE 1 47.0ms signon 4
+Host_EndGame: Server disconnected
+
+TDPROBE frames 1445 total 500.8ms median 0.3052ms p99 0.529ms p999 2.154ms max 47.03ms >1ms 2 (49.2ms) >2ms 2 (49.2ms) >5ms 1 excess>3xmed 48.6ms
+TDPROBE spikes 0:2.2 1:47.0
+1445 frames   0.5 seconds 2885.6 fps

@@ -1,0 +1,18 @@
+{
+  "client_launches": 115,
+  "local_normal_exits": 90,
+  "denver_launches": 25,
+  "reconstructed_positive_timings": 205,
+  "unavailable_connect_attempts": 0,
+  "inapplicable_denver_engine": "ezQuake (QuakeWorld only)",
+  "native_logs_verified": 115,
+  "excluded_attempts_verified": 26,
+  "denver_map": "aerowalk",
+  "denver_empty_before_every_attempt": true,
+  "identical_custom_resources": 35,
+  "physical_client_area": "800x600 in every session",
+  "csv_rows": 30,
+  "fps_passes_preserved": 324,
+  "fps_results_sha256": "a5bea4425c94aafb44d64d7448d4d653a2fa1c882c686c32f8a9a87fcf5a15e4",
+  "result": "passed"
+}

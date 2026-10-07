@@ -1,0 +1,100 @@
+LOG started on: 10/05/2026 15:59:09 
+
+Using add-on server "https://kexquake.s3.amazonaws.com"
+Playing registered version.
+Using renderer/network isolation.
+Console initialized.
+UDP Initialized
+WIPX_OpenSocket: Address family not supported by protocol family
+WIPX_Init: Unable to open control socket, IPX disabled
+Server using protocol 999 (RMQ)
+Exe: 10:28:01 Aug 11 2026 (Windows 64-bit)
+384.0 megabyte heap
+
+Video initialization
+Video mode: 800 x 600 24bit Z24 S8 144Hz
+GL_VENDOR:   NVIDIA Corporation
+GL_RENDERER: NVIDIA GeForce RTX 4070/PCIe/SSE2
+GL_VERSION:  4.3.0 NVIDIA 591.86
+FOUND: EXT_texture_filter_anisotropic
+FOUND: ARB_buffer_storage
+FOUND: ARB_multi_bind
+FOUND: ARB_bindless_texture
+FOUND: ARB_shader_draw_parameters
+FOUND: ARB_clip_control
+
+Sound Initialization
+SDL audio spec  : 44100 Hz, 1024 samples, 2 channels
+SDL audio driver: wasapi - Speakers (Logitech G432 Gaming Headset), 65536 bytes buffer
+Audio: 16 bit, stereo, 44100 Hz
+
+Language initialization
+Loaded 1 strings from 'localization/loc_english.txt'
+
+========= Quake Initialized =========
+
+
+Add-on server status:
+ 29 add-ons available for download
+  0 add-ons already installed
+
+execing quake.rc
+execing default.cfg
+execing benchmark.cfg
+BENCH_SESSION_1791241149544533000 
+BENCH_BEGIN_connect 
+Port set to 26000
+trying...
+Connection accepted
+CL_EstablishConnection: connected to denver.quakeone.com:26000
+----------------------------------------
+                    
+                    
+                    
+                    
+         ------ CRMod 7 ------
+                    
+                    
+      ClanRing Multiplayer Server
+                    
+                    
+           original works by 
+   J.P. Grossman & Dave 'Zoid' Kirsch
+                    
+                    
+              ------------
+                    
+                    
+                    
+                    
+                    
+                    
+                    
+----------------------------------------
+
+QSS-M 1.6.9-1aa5a7d Server (37005 CRC)
+Serverinfo packet received.
+Clearing memory
+
+----------------------------------------
+
+Aerowalk
+Using protocol 666
+Warning: unnamed texture in maps/aerowalk.bsp, renaming to unnamed10
+Warning: unnamed texture in maps/aerowalk.bsp, renaming to unnamed16
+Warning: unnamed texture in maps/aerowalk.bsp, renaming to unnamed17
+--> client to server keepalive
+Lightmap size:   256 x 256 (1/1 blocks)
+Lightmap memory: 0.2 MB (78.0% efficiency)
+Server sent unknown command fullserverinfo
+FindFile: can't find music/track00.mp3
+Couldn't find a cdrip for track 0
+CL_SignonReply: 1
+no cvars/commands contain 'cl_serverextension_download'
+FindFile: can't find csprogs.dat
+Programs occupy 403K.
+CL_SignonReply: 2
+CRMod: q_version
+CL_SignonReply: 3
+369.5 megabyte data cache
+CL_SignonReply: 4

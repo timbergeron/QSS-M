@@ -1,0 +1,13 @@
+--- qconsole.log ---
+FPS_BENCH_qssm_e1m2_1791331973952968400 
+"vid_width" is "800" (default: "3840")
+"vid_height" is "600" (default: "2160")
+"vid_vsync" is "0" (default)
+Playing demo from fps_e1m2.dem.
+Using protocol 15
+
+<-------------------------------------->
+
+#Castle of the Damned
+Mod_LoadTexinfo: 1 texture(s) missing from BSP file
+1442 frames   0.5 seconds 2659.6 fps

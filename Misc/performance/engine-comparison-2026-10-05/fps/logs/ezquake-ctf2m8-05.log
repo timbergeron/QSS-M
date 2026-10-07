@@ -1,0 +1,296 @@
+--- qw\qconsole.log ---
+FPS_BENCH_ezquake_ctf2m8_1791237297186210100
+Determines width of screen resolution when in fullscreen mode.
+
+remarks
+This value is ignored if vid_usedesktopres is set.
+vid_width : default value is "0"
+            current value is "800"
+Determines width of screen resolution when in fullscreen mode.
+
+remarks
+This value is ignored if vid_usedesktopres is set.
+vid_height : default value is "0"
+             current value is "600"
+Syncs your FPS with your monitor's vertical refresh rate. This will override cl_maxfps.
+
+values
+0 - Disable vsync.
+1 - Enable vsync.
+vid_vsync : default value is "0"
+            current value is "0"
+Playing demo from fps_ctf2m8.dem
+Couldn't load charset "povo5"
+Can't register variable scr_damage_proportional, already defined
+Can't register variable scr_damage_floating, already defined
+Can't register variable scr_damage_hitbeep, already defined
+Can't register variable scr_damage_scale, already defined
+Can't register variable scr_damage_offset_spectator, already defined
+Can't register variable scr_damage_offset_ingame, already defined
+Cmd_AddCommand: loadsky already defined
+Cmd_AddCommand: skywind already defined
+Cmd_AddCommand: skywind_save already defined
+Cmd_AddCommand: skywind_load already defined
+Cmd_AddCommand: skywind_lookdir already defined
+Cmd_AddCommand: skywind_rotate already defined
+Cmd_AddCommand: timerefresh already defined
+Cmd_AddCommand: dev_pointfile already defined
+Can't register variable r_bloom, already defined
+Can't register variable r_bloom_darken, already defined
+Can't register variable r_bloom_alpha, already defined
+Can't register variable r_bloom_diamond_size, already defined
+Can't register variable r_bloom_intensity, already defined
+Can't register variable r_bloom_sample_size, already defined
+Can't register variable r_bloom_fast_sample, already defined
+Can't register variable r_drawentities, already defined
+Can't register variable r_drawworld, already defined
+Can't register variable r_lerpframes, already defined
+Can't register variable r_drawflame, already defined
+Can't register variable r_drawdisc, already defined
+Can't register variable gl_detail, already defined
+Can't register variable gl_powerupshells, already defined
+Can't register variable gl_simpleitems, already defined
+Can't register variable gl_simpleitems_size, already defined
+Can't register variable gl_simpleitems_orientation, already defined
+Can't register variable gl_part_explosions, already defined
+Can't register variable gl_part_bloodtrails, already defined
+Can't register variable gl_part_trails, already defined
+Can't register variable gl_part_tracer1_color, already defined
+Can't register variable gl_part_tracer1_size, already defined
+Can't register variable gl_part_tracer1_time, already defined
+Can't register variable gl_part_tracer2_color, already defined
+Can't register variable gl_part_tracer2_size, already defined
+Can't register variable gl_part_tracer2_time, already defined
+Can't register variable gl_part_spikes, already defined
+Can't register variable gl_part_gunshots, already defined
+Can't register variable gl_part_blood, already defined
+Can't register variable gl_part_telesplash, already defined
+Can't register variable gl_part_blobs, already defined
+Can't register variable gl_part_lavasplash, already defined
+Can't register variable gl_part_inferno, already defined
+Can't register variable gl_part_bubble, already defined
+Can't register variable gl_squareparticles, already defined
+Can't register variable gl_part_detpackexplosion_fire_color, already defined
+Can't register variable gl_part_detpackexplosion_ray_color, already defined
+Can't register variable r_skyname, already defined
+Can't register variable r_skywind, already defined
+Can't register variable r_fastsky, already defined
+Can't register variable r_skycolor, already defined
+Can't register variable r_fastturb, already defined
+Can't register variable r_telecolor, already defined
+Can't register variable r_lavacolor, already defined
+Can't register variable r_slimecolor, already defined
+Can't register variable r_watercolor, already defined
+Can't register variable r_novis, already defined
+Can't register variable gl_turbalpha, already defined
+Can't register variable gl_caustics, already defined
+Can't register variable r_fx_fog, already defined
+Can't register variable r_fx_fog_model, already defined
+Can't register variable r_fx_fog_usemap, already defined
+Can't register variable r_fx_fog_density, already defined
+Can't register variable r_fx_fog_start, already defined
+Can't register variable r_fx_fog_end, already defined
+Can't register variable r_fx_fog_sky, already defined
+Can't register variable r_fx_fog_color_air, already defined
+Can't register variable r_fx_fog_color_water, already defined
+Can't register variable r_fx_fog_color_lava, already defined
+Can't register variable r_fx_fog_color_slime, already defined
+Can't register variable gl_polyblend, already defined
+Can't register variable gl_custom_lg_color, already defined
+Can't register variable gl_custom_lg_fullbright, already defined
+Can't register variable gl_custom_rocket_color, already defined
+Can't register variable gl_custom_rocket_fullbright, already defined
+Can't register variable gl_custom_grenade_color, already defined
+Can't register variable gl_custom_grenade_fullbright, already defined
+Can't register variable gl_custom_spike_color, already defined
+Can't register variable gl_custom_spike_fullbright, already defined
+Can't register variable gl_custom_rlpack_color, already defined
+Can't register variable gl_custom_lgpack_color, already defined
+Can't register variable r_lerpmuzzlehack, already defined
+Can't register variable gl_shaftlight, already defined
+Can't register variable gl_powerupshells_base1level, already defined
+Can't register variable gl_powerupshells_effect1level, already defined
+Can't register variable gl_powerupshells_base2level, already defined
+Can't register variable gl_powerupshells_effect2level, already defined
+Can't register variable gl_custom_grenade_tf, already defined
+Can't register variable r_dynamic, already defined
+Can't register variable gl_fb_bmodels, already defined
+Can't register variable gl_fb_models, already defined
+Can't register variable gl_lightmode, already defined
+Can't register variable gl_flashblend, already defined
+Can't register variable gl_rl_globe, already defined
+Can't register variable r_shadows, already defined
+Can't register variable r_fullbright, already defined
+Can't register variable gl_loadlitfiles, already defined
+Can't register variable gl_oldlitscaling, already defined
+Can't register variable gl_colorlights, already defined
+Can't register variable gl_playermip, already defined
+Can't register variable gl_subdivide_size, already defined
+Can't register variable gl_lumatextures, already defined
+Can't register variable r_drawflat, already defined
+Can't register variable r_drawflat_mode, already defined
+Can't register variable r_wallcolor, already defined
+Can't register variable r_floorcolor, already defined
+Can't register variable gl_textureless, already defined
+Can't register variable r_farclip, already defined
+Can't register variable gl_clear, already defined
+Can't register variable gl_clearColor, already defined
+Can't register variable gl_brush_polygonoffset, already defined
+Can't register variable gl_brush_polygonoffset_factor, already defined
+Can't register variable gl_nocolors, already defined
+Can't register variable gl_finish, already defined
+Can't register variable gl_modulate, already defined
+Can't register variable gl_outline, already defined
+Can't register variable gl_outline_color_world, already defined
+Can't register variable gl_outline_color_model, already defined
+Can't register variable gl_outline_scale_model, already defined
+Can't register variable gl_outline_world_depth_threshold, already defined
+Can't register variable gl_outline_world_normal_threshold, already defined
+Can't register variable gl_outline_use_player_color, already defined
+Can't register variable gl_spec_xray, already defined
+Can't register variable gl_spec_xray_distance, already defined
+Can't register variable gl_outline_color_team, already defined
+Can't register variable gl_outline_color_enemy, already defined
+Can't register variable gl_smoothmodels, already defined
+Can't register variable r_netgraph, already defined
+Can't register variable r_netstats, already defined
+Can't register variable cl_multiview, already defined
+Can't register variable cl_mvdisplayhud, already defined
+Can't register variable cl_mvhudvertical, already defined
+Can't register variable cl_mvhudflip, already defined
+Can't register variable cl_mvhudpos, already defined
+Can't register variable cl_mvinset, already defined
+Can't register variable cl_mvinsetcrosshair, already defined
+Can't register variable cl_mvinsethud, already defined
+Can't register variable cl_mvinset_offset_x, already defined
+Can't register variable cl_mvinset_offset_y, already defined
+Can't register variable cl_mvinset_size_x, already defined
+Can't register variable cl_mvinset_size_y, already defined
+Can't register variable cl_mvinset_top, already defined
+Can't register variable cl_mvinset_right, already defined
+Can't register variable r_remove_collinear_vertices, already defined
+fail Couldn't load particlefont image
+fail Couldn't load chaticons image
+Can't register variable r_tracker, already defined
+Can't register variable r_tracker_frags, already defined
+Can't register variable r_tracker_flags, already defined
+Can't register variable r_tracker_streaks, already defined
+Can't register variable r_tracker_messages, already defined
+Can't register variable r_tracker_colorfix, already defined
+Can't register variable r_tracker_inconsole, already defined
+Can't register variable r_tracker_inconsole_colored_weapon, already defined
+Can't register variable r_tracker_time, already defined
+Can't register variable r_tracker_align_right, already defined
+Can't register variable r_tracker_x, already defined
+Can't register variable r_tracker_y, already defined
+Can't register variable r_tracker_frame_color, already defined
+Can't register variable r_tracker_scale, already defined
+Can't register variable r_tracker_images_scale, already defined
+Can't register variable r_tracker_pickups, already defined
+Can't register variable r_tracker_color_good, already defined
+Can't register variable r_tracker_color_bad, already defined
+Can't register variable r_tracker_color_tkgood, already defined
+Can't register variable r_tracker_color_tkbad, already defined
+Can't register variable r_tracker_color_myfrag, already defined
+Can't register variable r_tracker_color_fragonme, already defined
+Can't register variable r_tracker_color_suicide, already defined
+Can't register variable r_tracker_string_suicides, already defined
+Can't register variable r_tracker_string_died, already defined
+Can't register variable r_tracker_string_teammate, already defined
+Can't register variable r_tracker_string_enemy, already defined
+Can't register variable r_tracker_string_inconsole_prefix, already defined
+Can't register variable r_tracker_name_width, already defined
+Can't register variable r_tracker_own_frag_prefix, already defined
+Can't register variable r_tracker_positive_enemy_suicide, already defined
+Can't register variable r_tracker_positive_enemy_vs_enemy, already defined
+Can't register variable r_tracker_proportional, already defined
+Can't register variable r_tracker_weapon_first, already defined
+Can't register variable r_tracker_row_spacing, already defined
+fail Couldn't load shellmap image
+Can't register variable scr_centerSbar, already defined
+Can't register variable scr_compactHud, already defined
+Can't register variable scr_compactHudAlign, already defined
+Can't register variable scr_sbar_drawfaceicon, already defined
+Can't register variable scr_sbar_drawammoicon, already defined
+Can't register variable scr_sbar_drawarmoricon, already defined
+Can't register variable scr_sbar_drawguns, already defined
+Can't register variable scr_sbar_drawammocounts, already defined
+Can't register variable scr_sbar_drawitems, already defined
+Can't register variable scr_sbar_drawsigils, already defined
+Can't register variable scr_sbar_drawhealth, already defined
+Can't register variable scr_sbar_drawarmor, already defined
+Can't register variable scr_sbar_drawarmor666, already defined
+Can't register variable scr_sbar_drawammo, already defined
+Can't register variable scr_sbar_lowammo, already defined
+Can't register variable scr_scoreboard_centered, already defined
+Can't register variable scr_scoreboard_posy, already defined
+Can't register variable scr_scoreboard_posx, already defined
+Can't register variable scr_scoreboard_fadescreen, already defined
+Can't register variable scr_scoreboard_login_names, already defined
+Can't register variable scr_scoreboard_login_indicator, already defined
+Can't register variable scr_scoreboard_login_color, already defined
+Can't register variable scr_scoreboard_login_flagfile, already defined
+Can't register variable scr_scoreboard_afk, already defined
+Can't register variable scr_scoreboard_afk_style, already defined
+Can't register variable scr_drawHFrags, already defined
+Can't register variable scr_drawVFrags, already defined
+Can't register variable scr_scoreboard_teamsort, already defined
+Can't register variable scr_scoreboard_forcecolors, already defined
+Can't register variable scr_scoreboard_showfrags, already defined
+Can't register variable scr_scoreboard_showflagstats, already defined
+Can't register variable scr_scoreboard_drawtitle, already defined
+Can't register variable scr_scoreboard_borderless, already defined
+Can't register variable scr_scoreboard_spectator_name, already defined
+Can't register variable scr_scoreboard_fillalpha, already defined
+Can't register variable scr_scoreboard_fillcolored, already defined
+Can't register variable scr_scoreboard_proportional, already defined
+Can't register variable scr_scoreboard_wipeout, already defined
+Can't register variable scr_scoreboard_classic, already defined
+Can't register variable scr_scoreboard_highlightself, already defined
+Can't register variable scr_scoreboard_showclock, already defined
+Can't register variable scr_scoreboard_showmapname, already defined
+Can't register variable scr_scoreboard_showqtvusers, already defined
+Can't register variable scr_scoreboard_qtv_name, already defined
+Cmd_AddCommand: +showscores already defined
+Cmd_AddCommand: -showscores already defined
+Cmd_AddCommand: +showteamscores already defined
+Cmd_AddCommand: -showteamscores already defined
+Unable to load textures/scoreboard/flags.json
+Cmd_AddCommand: hud_editor already defined
+Can't register variable hud_editor_allowresize, already defined
+Can't register variable hud_editor_allowmove, already defined
+Can't register variable hud_editor_allowplace, already defined
+Can't register variable hud_editor_allowalign, already defined
+
+
+
+
+Capturephobopolis
+Client ping times:
+   0 player
+Client ping times:
+   0 player
+Client ping times:
+   0 player
+Client ping times:
+   0 player
+
+======== End of demo ========
+
+1442 frames   0.5 seconds 2882.2 fps
+Worst frametime 634ms @ frame 2
+... avg frametime 0.347ms, std dev 1.662ms
+... 1442 frames vs 1442
+...   0.5s vs   0.5s
+... non-rendering time   0.0s
+... worst frametime 63.400ms, 15.8fps (1 frames)
+   0.360:  0.2ms
+   0.680:  0.2ms
+   0.840:  0.2ms
+   0.920:  0.3ms
+   0.960:  0.3ms
+   0.980:  0.4ms
+   0.990:  0.4ms
+   0.995:  0.4ms
+   0.998:  0.5ms
+   1.000: 63.4ms

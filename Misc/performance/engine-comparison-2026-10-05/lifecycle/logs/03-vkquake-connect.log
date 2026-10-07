@@ -1,0 +1,85 @@
+LOG started on: 10/05/2026 15:28:09 
+Playing registered version.
+Console initialized.
+IPv4 UDP Initialized
+WIPX_OpenSocket: Address family not supported by protocol family
+WIPX_Init: Unable to open control socket, IPX disabled
+Exe: 00:59:09 Aug 29 2026 
+
+Vulkan Initialization
+Using Vulkan 1.1
+Instance extensions:
+ VK_KHR_surface
+ VK_KHR_win32_surface
+ VK_KHR_get_surface_capabilities2
+ VK_KHR_get_physical_device_properties2
+
+Vendor: NVIDIA
+Device: NVIDIA GeForce RTX 4070
+Driver: NVIDIA 591.86
+Using subgroup operations
+Using ray queries
+Using present wait
+Device extensions:
+ VK_KHR_swapchain
+ VK_KHR_get_memory_requirements2
+ VK_KHR_dedicated_allocation
+ VK_EXT_subgroup_size_control
+ VK_EXT_full_screen_exclusive
+ VK_KHR_present_id2
+ VK_KHR_present_wait2
+ VK_KHR_acceleration_structure
+ VK_KHR_push_descriptor
+ VK_EXT_descriptor_indexing
+ VK_KHR_buffer_device_address
+ VK_KHR_deferred_host_operations
+ VK_KHR_shader_float_controls
+ VK_KHR_spirv_1_4
+ VK_KHR_acceleration_structure
+ VK_KHR_ray_query
+Using A2B10G10R10 color buffer format
+Using D32_S8 depth buffer format
+
+Creating command buffers
+Initializing staging
+
+Sound Initialization
+SDL audio spec  : 44100 Hz, 2 channels
+SDL audio driver: wasapi - Speakers (Realtek(R) Audio), 32768 bytes buffer
+SDL audio initialized: samples=16384, samplebits=16, channels=2
+Audio: 16 bit, stereo, 44100 Hz
+
+Language initialization
+Couldn't load 'localization/loc_english.txt'
+from 'C:\Users\Tim Bergeron\source\repos\QSS-M\.codex-build\engine-lifecycle-six-20261005\vkquake'
+
+========= Quake Initialized =========
+
+execing quake.rc
+execing default.cfg
+execing benchmark.cfg
+BENCH_SESSION_1791239289573263900 
+BENCH_BEGIN_connect 
+Port set to 26001
+trying...
+Connection accepted
+CL_EstablishConnection: connected to 127.0.0.1:26001
+
+QSS-M 1.6.9-7da539b Server (24778 CRC)
+Serverinfo packet received.
+Clearing memory
+
+
+
+the Slipgate Complex
+Using protocol 15
+Loaded external entity file maps/e1m1@c49d.ent
+Couldn't find a cdrip for track 6
+CL_SignonReply: 1
+progs.dat occupies 403K.
+CL_SignonReply: 2
+CL_SignonReply: 3
+CL_SignonReply: 4
+BENCH_QUIT 
+Sending clc_disconnect
+Shutting down SDL sound

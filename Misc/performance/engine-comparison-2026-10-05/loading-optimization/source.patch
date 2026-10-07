@@ -1,0 +1,242 @@
+diff --git a/Quake/common.c b/Quake/common.c
+index fd331851..9e02f34e 100644
+--- a/Quake/common.c
++++ b/Quake/common.c
+@@ -3272,27 +3272,88 @@ static int COM_FindPackFileIndex (pack_t *pak, const char *filename)
+ 	return -1;
+ }
+ 
++typedef struct com_file_search_cache_s
++{
++	unsigned int count;
++	struct
++	{
++		char path[MAX_OSPATH];
++		qboolean exists;
++	} dirs[16];
++} com_file_search_cache_t;
++
++// Cache only parent directory availability for one candidate search. PACK
++// entries and files in existing directories still get their normal lookup.
++static int COM_FileTypeForSearch (const char *path, com_file_search_cache_t *cache)
++{
++	char parent[MAX_OSPATH];
++	const char *slash;
++#ifdef _WIN32
++	const char *backslash;
++#endif
++	size_t len;
++	unsigned int i;
++	int type;
++
++	if (!cache)
++		return Sys_FileType (path);
++
++	slash = strrchr (path, '/');
++#ifdef _WIN32
++	backslash = strrchr (path, '\\');
++	if (!slash || (backslash && backslash > slash))
++		slash = backslash;
++#endif
++	if (!slash || slash == path)
++		return Sys_FileType (path);
++
++	len = slash - path;
++	memcpy (parent, path, len);
++	parent[len] = '\0';
++	for (i = 0; i < cache->count; i++)
++		if (!strcmp (cache->dirs[i].path, parent))
++			return cache->dirs[i].exists ? Sys_FileType (path) : FS_ENT_NONE;
++
++	type = Sys_FileType (path);
++	if (type != FS_ENT_NONE || cache->count == countof(cache->dirs))
++		return type;
++
++	q_strlcpy (cache->dirs[cache->count].path, parent, sizeof(cache->dirs[0].path));
++	cache->dirs[cache->count].exists = (Sys_FileType (parent) & FS_ENT_DIRECTORY) != 0;
++	cache->count++;
++	return type;
++}
++
+ static int COM_FindFile_impl (const char *filename, int *handle, FILE **file,
+-							unsigned int *path_id, const searchpath_t **source);
++							unsigned int *path_id, const searchpath_t **source,
++							com_file_search_cache_t *cache);
+ 
+-static int COM_FindFile (const char *filename, int *handle, FILE **file,
+-							unsigned int *path_id, const searchpath_t **source)
++static int COM_FindFileCached (const char *filename, int *handle, FILE **file,
++							unsigned int *path_id, const searchpath_t **source,
++							com_file_search_cache_t *cache)
+ {
+ 	double t;
+ 	int ret;
+ 
+ 	if (!developer.value)
+-		return COM_FindFile_impl (filename, handle, file, path_id, source);
++		return COM_FindFile_impl (filename, handle, file, path_id, source, cache);
+ 
+ 	t = Sys_DoubleTime ();
+-	ret = COM_FindFile_impl (filename, handle, file, path_id, source);
++	ret = COM_FindFile_impl (filename, handle, file, path_id, source, cache);
+ 	com_findfile_time += Sys_DoubleTime () - t;
+ 	com_findfile_calls++;
+ 	return ret;
+ }
+ 
+-static int COM_FindFile_impl (const char *filename, int *handle, FILE **file,
++static int COM_FindFile (const char *filename, int *handle, FILE **file,
+ 							unsigned int *path_id, const searchpath_t **source)
++{
++	return COM_FindFileCached (filename, handle, file, path_id, source, NULL);
++}
++
++static int COM_FindFile_impl (const char *filename, int *handle, FILE **file,
++							unsigned int *path_id, const searchpath_t **source,
++							com_file_search_cache_t *cache)
+ {
+ 	searchpath_t	*search;
+ 	char		netpath[MAX_OSPATH];
+@@ -3384,7 +3445,7 @@ static int COM_FindFile_impl (const char *filename, int *handle, FILE **file,
+ 			}
+ 
+ 			q_snprintf (netpath, sizeof(netpath), "%s/%s",search->filename, filename);
+-			if (! (Sys_FileType(netpath) & FS_ENT_FILE))
++			if (! (COM_FileTypeForSearch(netpath, cache) & FS_ENT_FILE))
+ 				continue;
+ 
+ 			if (path_id)
+@@ -3563,6 +3624,23 @@ int COM_FOpenFile (const char *filename, FILE **file, unsigned int *path_id)
+ 	return COM_FindFile (filename, NULL, file, path_id, NULL);
+ }
+ 
++// Return the first candidate index with an open file, preserving filename-first
++// precedence. The directory cache expires before this function returns.
++int COM_FOpenFileCandidates (const char *const *filenames, int count, FILE **file, unsigned int *path_id)
++{
++	com_file_search_cache_t cache = {0};
++	int i;
++
++	*file = NULL;
++	for (i = 0; i < count; i++)
++	{
++		COM_FindFileCached (filenames[i], NULL, file, path_id, NULL, &cache);
++		if (*file)
++			return i;
++	}
++	return -1;
++}
++
+ /*
+ ============
+ COM_CloseFile
+diff --git a/Quake/common.h b/Quake/common.h
+index 2a08da3f..0af49fc3 100644
+--- a/Quake/common.h
++++ b/Quake/common.h
+@@ -507,6 +507,7 @@ FILE *FSZIP_Deflate(FILE *src, qofs_t srcsize, qofs_t outsize, const char *entry
+ void COM_WriteFile (const char *filename, const void *data, int len);
+ int COM_OpenFile (const char *filename, int *handle, unsigned int *path_id);
+ int COM_FOpenFile (const char *filename, FILE **file, unsigned int *path_id);
++int COM_FOpenFileCandidates (const char *const *filenames, int count, FILE **file, unsigned int *path_id);
+ qboolean COM_FileExists (const char *filename, unsigned int *path_id);
+ const searchpath_t *COM_FileSearchPath (const char *filename); // valid until the search paths change
+ qboolean COM_ConfigFileUsesConfigsDir (const char *filename);
+diff --git a/Quake/image.c b/Quake/image.c
+index ada77044..47b9cd73 100644
+--- a/Quake/image.c
++++ b/Quake/image.c
+@@ -617,9 +617,13 @@ returns its format with the file open.  loadfilename is left set to the hit.
+ */
+ static enum imgkind Image_Locate (const char *name, FILE **out)
+ {
+-	FILE	*f;
+-	char *prefixes[3] = {"", "textures/", "textures/"};
+-	int i;
++	static const char *const prefixes[] = {"", "textures/", "textures/"};
++	static const char *const extensions[] = {"dds", "tga", "png", "jpeg", "jpg", "pcx"};
++	static const enum imgkind kinds[] = {IMG_DDS, IMG_TGA, IMG_PNG, IMG_JPEG, IMG_JPEG, IMG_PCX};
++	char paths[19][MAX_OSPATH];
++	const char *candidates[19];
++	enum imgkind formats[19];
++	int i, j, count = 0, hit;
+ 
+ 	const char *origname = name;
+ 
+@@ -635,66 +639,20 @@ static enum imgkind Image_Locate (const char *name, FILE **out)
+ 		if (strstr(name, "progs/player.mdl_") && !gl_load24bit_skins.value) // woods #loadskins
+ 			break;
+ 
+-		q_snprintf (loadfilename, sizeof(loadfilename), "%s%s.dds", prefixes[i], name);
+-		COM_FOpenFile (loadfilename, &f, NULL);
+-		if (f)
+-		{
+-			*out = f;
+-			return IMG_DDS;
+-		}
+-
+-		q_snprintf (loadfilename, sizeof(loadfilename), "%s%s.tga", prefixes[i], name);
+-		COM_FOpenFile (loadfilename, &f, NULL);
+-		if (f)
+-		{
+-			*out = f;
+-			return IMG_TGA;
+-		}
+-
+-		q_snprintf (loadfilename, sizeof(loadfilename), "%s%s.png", prefixes[i], name);
+-		COM_FOpenFile (loadfilename, &f, NULL);
+-		if (f)
+-		{
+-			*out = f;
+-			return IMG_PNG;
+-		}
+-
+-		q_snprintf (loadfilename, sizeof(loadfilename), "%s%s.jpeg", prefixes[i], name);
+-		COM_FOpenFile (loadfilename, &f, NULL);
+-		if (f)
++		for (j = 0; j < countof(extensions); j++)
+ 		{
+-			*out = f;
+-			return IMG_JPEG;
++			q_snprintf (paths[count], sizeof(paths[count]), "%s%s.%s", prefixes[i], name, extensions[j]);
++			candidates[count] = paths[count];
++			formats[count++] = kinds[j];
+ 		}
+-
+-		q_snprintf (loadfilename, sizeof(loadfilename), "%s%s.jpg", prefixes[i], name);
+-		COM_FOpenFile (loadfilename, &f, NULL);
+-		if (f)
+-		{
+-			*out = f;
+-			return IMG_JPEG;
+-		}
+-
+-		q_snprintf (loadfilename, sizeof(loadfilename), "%s%s.pcx", prefixes[i], name);
+-		COM_FOpenFile (loadfilename, &f, NULL);
+-		if (f)
+-		{
+-			*out = f;
+-			return IMG_PCX;
+-		}
+-	}
+-
+-	name = origname;
+-	q_snprintf (loadfilename, sizeof(loadfilename), "%s%s.lmp", "", name);
+-	COM_FOpenFile (loadfilename, &f, NULL);
+-	if (f)
+-	{
+-		*out = f;
+-		return IMG_LMP;
+ 	}
+ 
+-	*out = NULL;
+-	return IMG_NONE;
++	q_snprintf (paths[count], sizeof(paths[count]), "%s.lmp", origname);
++	candidates[count] = paths[count];
++	formats[count++] = IMG_LMP;
++	hit = COM_FOpenFileCandidates (candidates, count, out, NULL);
++	q_strlcpy (loadfilename, paths[hit >= 0 ? hit : count - 1], sizeof(loadfilename));
++	return hit >= 0 ? formats[hit] : IMG_NONE;
+ }
+ 
+ static qboolean Image_PrefetchTake (const char *name, byte **data, int *width, int *height, qboolean *malloced);

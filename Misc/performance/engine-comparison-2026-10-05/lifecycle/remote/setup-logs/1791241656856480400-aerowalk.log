@@ -1,0 +1,576 @@
+2026-10-05 16:06:32 Playing registered version.
+2026-10-05 16:06:32 473 unique files, 24 duplicates
+2026-10-05 16:06:32 
+2026-10-05 16:06:32 Engine Version: FTE git-30-f2576ed
+2026-10-05 16:06:32 This program is free software; you can redistribute it and/or modify it under the terms of the GNU General Public License as published by the Free Software Foundation; either version 2 of the License, or (at your option) any later version.
+2026-10-05 16:06:32 This program is distributed in the hope that it will be useful, but WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. 
+2026-10-05 16:06:32 See the GNU General Public License for more details.
+2026-10-05 16:06:32 execing ^[benchmark.cfg\tip\from C:\Users\Tim Bergeron\source\repos\QSS-M\.codex-build\engine-lifecycle-six-20261005\remote\fteqw/qw/benchmark.cfg]
+2026-10-05 16:06:32 BENCH_SESSION_1791241591647152500
+2026-10-05 16:06:32 video shutdown took 0.000498 seconds
+2026-10-05 16:06:32 video startup took 0.000000 seconds
+2026-10-05 16:06:32 Setting windowed mode 800*600 OpenGL
+2026-10-05 16:06:32 Loading renderer dll "C:\WINDOWS\system32\opengl32.dll" Success
+2026-10-05 16:06:32 Loaded renderer dll C:\WINDOWS\system32\opengl32.dll
+2026-10-05 16:06:32 WGL_EXTENSIONS: WGL_ARB_buffer_region WGL_ARB_create_context WGL_ARB_create_context_no_error WGL_ARB_create_context_profile WGL_ARB_create_context_robustness WGL_ARB_context_flush_control WGL_ARB_extensions_string WGL_ARB_make_current_read WGL_ARB_multisample WGL_ARB_pbuffer WGL_ARB_pixel_format WGL_ARB_pixel_format_float WGL_ARB_render_texture WGL_ATI_pixel_format_float WGL_EXT_colorspace WGL_EXT_create_context_es_profile WGL_EXT_create_context_es2_profile WGL_EXT_extensions_string WGL_EXT_framebuffer_sRGB WGL_EXT_pixel_format_packed_float WGL_EXT_swap_control WGL_EXT_swap_control_tear WGL_NVX_DX_interop WGL_NV_DX_interop WGL_NV_DX_interop2 WGL_NV_copy_image WGL_NV_delay_before_swap WGL_NV_float_buffer WGL_NV_multisample_coverage WGL_NV_multigpu_context WGL_NV_render_depth_texture WGL_NV_render_texture_rectangle 
+2026-10-05 16:06:32 GL_VENDOR: NVIDIA Corporation
+2026-10-05 16:06:32 GL_RENDERER: NVIDIA GeForce RTX 4070/PCIe/SSE2
+2026-10-05 16:06:32 GL_VERSION: 4.6.0 NVIDIA 591.86
+2026-10-05 16:06:32 GL_EXTENSIONS: 404 extensions
+2026-10-05 16:06:32 Driver reports invalid profile, assuming compatibility support
+2026-10-05 16:06:32 GL: Found GL_EXT_packed_depth_stencil
+2026-10-05 16:06:32 GL: Found GL_EXT_texture_filter_anisotropic
+2026-10-05 16:06:32 Anisotropic filtering supported (16x max).
+2026-10-05 16:06:32 GL: Found GL_ARB_multitexture
+2026-10-05 16:06:32 ARB Multitexture extensions found. Use -noamtex to disable.
+2026-10-05 16:06:32 GL: Found GL_EXT_stencil_wrap
+2026-10-05 16:06:32 GL: Found GL_EXT_stencil_two_side
+2026-10-05 16:06:32 GL: Found GL_ARB_depth_clamp
+2026-10-05 16:06:32 GL: Found GL_EXT_texture_object
+2026-10-05 16:06:32 GL: Found GL_EXT_compiled_vertex_array
+2026-10-05 16:06:33 GL: Found GL_EXT_texture_env_combine
+2026-10-05 16:06:33 GL: Found GL_EXT_texture_env_add
+2026-10-05 16:06:33 GL: Found GL_NV_texture_env_combine4
+2026-10-05 16:06:33 GL: Found GL_ARB_texture_env_combine
+2026-10-05 16:06:33 GL: Found GL_ARB_texture_env_dot3
+2026-10-05 16:06:33 GLSL available
+2026-10-05 16:06:33 GL: Found GL_ARB_seamless_cube_map
+2026-10-05 16:06:33 GL: Found GL_ARB_framebuffer_sRGB
+2026-10-05 16:06:33 Colour buffer: GL_R8G8B8A0
+2026-10-05 16:06:33 Depth buffer: GL_DEPTH24_STENCIL8
+2026-10-05 16:06:33 CDAudio: MCI_PLAY failed (257)
+2026-10-05 16:06:33 Hardware gamma appears to work
+2026-10-05 16:06:33 GL: Found GL_EXT_texture_compression_s3tc
+2026-10-05 16:06:33 GL: Found GL_EXT_texture_compression_dxt1
+2026-10-05 16:06:33 GL: Found GL_EXT_packed_depth_stencil
+2026-10-05 16:06:33 GL: Found GL_ARB_ES3_2_compatibility
+2026-10-05 16:06:33 Rescanning shaders
+2026-10-05 16:06:33 XInput is enabled (4 controllers found)
+2026-10-05 16:06:33 OpenAL library is not installed
+2026-10-05 16:06:33 OpenGL renderer initialized
+2026-10-05 16:06:33 video restart took 1.030744 seconds
+2026-10-05 16:06:33 main thread video restart took 1.048331 secs
+2026-10-05 16:06:33    2 channel(s)
+2026-10-05 16:06:33    16 bits/sample
+2026-10-05 16:06:33    48000 bytes/sec
+2026-10-05 16:06:33 ^Ue080^Ue081^Ue081^Ue081^Ue081^Ue081^Ue081 Quake Initialized ^Ue081^Ue081^Ue081^Ue081^Ue081^Ue081^Ue082
+2026-10-05 16:06:33 Initializing menu.dat
+2026-10-05 16:06:33 Execing alias bench_connect ^3:
+2026-10-05 16:06:33 ^1echo BENCH_BEGIN_connect;connectnq denver.quakeone.com:26000
+2026-10-05 16:06:33 ^2echo BENCH_BEGIN_connect;connectnq denver.quakeone.com:26000
+2026-10-05 16:06:33 BENCH_BEGIN_connect
+2026-10-05 16:06:33 Clearing memory
+2026-10-05 16:06:33 Resolving address: DESKTOP-50QJJG9
+2026-10-05 16:06:33 Resolving address: denver.quakeone.com:26000
+2026-10-05 16:06:33 Connecting to denver.quakeone.com:26000...
+2026-10-05 16:06:33 ProQuake server 3.0
+2026-10-05 16:06:33 Connected to ^[denver.quakeone.com:26000\type\connect denver.quakeone.com:26000] (^[plain-text\tip\Do not type passwords as they can potentially be seen by network sniffers]).
+2026-10-05 16:06:33 stufftext0: cmd pext
+2026-10-05 16:06:33 Sending stringcmd pext
+2026-10-05 16:06:34 
+2026-10-05 16:06:34 QSS-M 1.6.9-1aa5a7d Server (37005 CRC)
+2026-10-05 16:06:34 stufftext0: cl_serverextension_download 1
+2026-10-05 16:06:34 Serverdata packet received.
+2026-10-05 16:06:34 Cmd_AddCommand: +weaponwheel already defined
+2026-10-05 16:06:34 Cmd_AddCommand: -weaponwheel already defined
+2026-10-05 16:06:34 Clearing memory
+2026-10-05 16:06:34 Couldn't load fragfile.dat
+2026-10-05 16:06:34 FitzQuake 666 protocol
+2026-10-05 16:06:34 
+2026-10-05 16:06:34 
+2026-10-05 16:06:34 ^Ue01d^Ue01e^Ue01e^Ue01e^Ue01e^Ue01e^Ue01e^Ue01e^Ue01e^Ue01e^Ue01e^Ue01e^Ue01e^Ue01e^Ue01e^Ue01e^Ue01e^Ue01e^Ue01f
+2026-10-05 16:06:34 
+2026-10-05 16:06:34 Sanctuary of the Silent Scribes  by infiniti (2 Min Quad Spawns)
+2026-10-05 16:06:34 stufftext0: //fullserverinfo "\teamplay\0\skill\1\coop\0\sv_modvote\0\pm_bunnyfriction\1\pm_slidefix\1\sv_gravity\800\sv_friction\4\sv_maxspeed\320\sv_nqplayerphysics\1\sv_antilag\0\sv_antilag_frac\1\sv_antilag_maxrewind\0.25\sv_mapcrc\0\mod\nqCRx (v1.26.10)\modname\CRMod 7 (v1.26.10)\gametype\dm\mode\dm\playmode\ffa\matchpaused\off\hostname\CRMod 7 - denver.quakeone.com\sv_fullpitch\0\noexit\1\sys_ticrate\0.02500000037252902984619140625\samelevel\942985\timelimit\10\deathmatch\3\intermission\off\*version\QSS-M 1.6.9-1aa5a7d\*gamedir\id1\fraglimit\40 : ClanRing Classic"
+2026-10-05 16:06:34 CL_SignonReply: 1
+2026-10-05 16:06:34 skipping csaddon.dat due to cheat restrictions
+2026-10-05 16:06:34 progs.dat is not suitable for SimpleCSQC - no CSQC_DrawHud
+2026-10-05 16:06:34 maps/b_bh10.bsp: Using lightmap format BGRX8
+2026-10-05 16:06:34 maps/b_bh100.bsp: Using lightmap format BGRX8
+2026-10-05 16:06:34 maps/b_bh25.bsp: Using lightmap format BGRX8
+2026-10-05 16:06:34 maps/b_shell1.bsp: Using lightmap format BGRX8
+2026-10-05 16:06:34 maps/b_shell0.bsp: Using lightmap format BGRX8
+2026-10-05 16:06:34 maps/b_nail1.bsp: Using lightmap format BGRX8
+2026-10-05 16:06:34 maps/b_rock1.bsp: Using lightmap format BGRX8
+2026-10-05 16:06:34 maps/b_nail0.bsp: Using lightmap format BGRX8
+2026-10-05 16:06:34 maps/b_rock0.bsp: Using lightmap format BGRX8
+2026-10-05 16:06:34 maps/b_batt1.bsp: Using lightmap format BGRX8
+2026-10-05 16:06:34 maps/b_batt0.bsp: Using lightmap format BGRX8
+2026-10-05 16:06:34 maps/sanctum.bsp: Using lightmap format A2BGR10
+2026-10-05 16:06:34 Server taking control of cvar r_wateralpha (0.86)
+2026-10-05 16:06:34 Server taking control of cvar r_waterstyle (1)
+2026-10-05 16:06:34 Server taking control of cvar r_telealpha (0.92)
+2026-10-05 16:06:34 Server taking control of cvar r_telestyle (1)
+2026-10-05 16:06:34 Server taking control of cvar r_lavaalpha (0.92)
+2026-10-05 16:06:34 Server taking control of cvar r_lavastyle (1)
+2026-10-05 16:06:34 Server taking control of cvar r_skyfog (0.5)
+2026-10-05 16:06:34 Sky "skybox_nightmtns_" missing texture: gfx/env/nightmtns__rt
+2026-10-05 16:06:34 Sky "skybox_nightmtns_" missing texture: gfx/env/nightmtns__bk
+2026-10-05 16:06:34 Sky "skybox_nightmtns_" missing texture: gfx/env/nightmtns__lf
+2026-10-05 16:06:34 Sky "skybox_nightmtns_" missing texture: gfx/env/nightmtns__ft
+2026-10-05 16:06:34 Sky "skybox_nightmtns_" missing texture: gfx/env/nightmtns__up
+2026-10-05 16:06:34 Sky "skybox_nightmtns_" missing texture: gfx/env/nightmtns__dn
+2026-10-05 16:06:34 maps/sanctum.bsp: Using lightmap format A2BGR10
+2026-10-05 16:06:34 maps/b_bh10.bsp: Using lightmap format BGRX8
+2026-10-05 16:06:34 maps/b_bh100.bsp: Using lightmap format BGRX8
+2026-10-05 16:06:34 maps/b_bh25.bsp: Using lightmap format BGRX8
+2026-10-05 16:06:34 maps/b_shell1.bsp: Using lightmap format BGRX8
+2026-10-05 16:06:34 maps/b_shell0.bsp: Using lightmap format BGRX8
+2026-10-05 16:06:34 maps/b_nail1.bsp: Using lightmap format BGRX8
+2026-10-05 16:06:34 maps/b_nail0.bsp: Using lightmap format BGRX8
+2026-10-05 16:06:34 maps/b_rock1.bsp: Using lightmap format BGRX8
+2026-10-05 16:06:34 maps/b_rock0.bsp: Using lightmap format BGRX8
+2026-10-05 16:06:34 maps/b_batt1.bsp: Using lightmap format BGRX8
+2026-10-05 16:06:34 maps/b_batt0.bsp: Using lightmap format BGRX8
+2026-10-05 16:06:34 Sending stringcmd prespawn
+2026-10-05 16:06:35 CL_SignonReply: 2
+2026-10-05 16:06:35 Sending stringcmd name "BenchClient"
+2026-10-05 16:06:35 
+2026-10-05 16:06:35 Sending stringcmd color 13 12
+2026-10-05 16:06:35 
+2026-10-05 16:06:35 Sending stringcmd spawn 
+2026-10-05 16:06:35 CL_SignonReply: 3
+2026-10-05 16:06:35 4123 additional FS searches
+2026-10-05 16:06:35 Reloading shaders
+2026-10-05 16:06:35 Sky "skybox_nightmtns_" missing texture: gfx/env/nightmtns__rt
+2026-10-05 16:06:35 Sky "skybox_nightmtns_" missing texture: gfx/env/nightmtns__bk
+2026-10-05 16:06:35 Sky "skybox_nightmtns_" missing texture: gfx/env/nightmtns__lf
+2026-10-05 16:06:35 Sky "skybox_nightmtns_" missing texture: gfx/env/nightmtns__ft
+2026-10-05 16:06:35 Sky "skybox_nightmtns_" missing texture: gfx/env/nightmtns__up
+2026-10-05 16:06:35 Sky "skybox_nightmtns_" missing texture: gfx/env/nightmtns__dn
+2026-10-05 16:06:35 Sending stringcmd begin
+2026-10-05 16:06:35 CL_SignonReply: 4
+2026-10-05 16:06:35 Blocking for scenecache generation (distance = 735.755)
+2026-10-05 16:06:35 Execing alias bench_remote_quit ^3:
+2026-10-05 16:06:35 ^1echo BENCH_QUIT;disconnect;quit
+2026-10-05 16:06:35 ^2echo BENCH_QUIT;disconnect;quit
+2026-10-05 16:06:35 BENCH_QUIT
+2026-10-05 16:06:35 Clearing memory
+2026-10-05 16:06:35 Clearing memory
+2026-10-05 16:06:35 model "maps/sanctum.bsp" no longer needed
+2026-10-05 16:06:35 model "progs/player.mdl" no longer needed
+2026-10-05 16:06:35 model "progs/eyes.mdl" no longer needed
+2026-10-05 16:06:35 model "progs/h_player.mdl" no longer needed
+2026-10-05 16:06:35 model "progs/gib1.mdl" no longer needed
+2026-10-05 16:06:35 model "progs/gib2.mdl" no longer needed
+2026-10-05 16:06:35 model "progs/gib3.mdl" no longer needed
+2026-10-05 16:06:35 model "progs/s_bubble.spr" no longer needed
+2026-10-05 16:06:35 model "progs/s_explod.spr" no longer needed
+2026-10-05 16:06:35 model "progs/v_axe.mdl" no longer needed
+2026-10-05 16:06:35 model "progs/v_shot.mdl" no longer needed
+2026-10-05 16:06:35 model "progs/v_nail.mdl" no longer needed
+2026-10-05 16:06:35 model "progs/v_rock.mdl" no longer needed
+2026-10-05 16:06:35 model "progs/v_shot2.mdl" no longer needed
+2026-10-05 16:06:35 model "progs/v_nail2.mdl" no longer needed
+2026-10-05 16:06:35 model "progs/v_rock2.mdl" no longer needed
+2026-10-05 16:06:35 model "progs/bolt.mdl" no longer needed
+2026-10-05 16:06:35 model "progs/bolt2.mdl" no longer needed
+2026-10-05 16:06:35 model "progs/bolt3.mdl" no longer needed
+2026-10-05 16:06:35 model "progs/lavaball.mdl" no longer needed
+2026-10-05 16:06:35 model "progs/missile.mdl" no longer needed
+2026-10-05 16:06:35 model "progs/grenade.mdl" no longer needed
+2026-10-05 16:06:35 model "progs/spike.mdl" no longer needed
+2026-10-05 16:06:35 model "progs/s_spike.mdl" no longer needed
+2026-10-05 16:06:35 model "progs/backpack.mdl" no longer needed
+2026-10-05 16:06:35 model "progs/zom_gib.mdl" no longer needed
+2026-10-05 16:06:35 model "progs/v_light.mdl" no longer needed
+2026-10-05 16:06:35 model "maps/b_bh10.bsp" no longer needed
+2026-10-05 16:06:35 model "maps/b_bh100.bsp" no longer needed
+2026-10-05 16:06:35 model "maps/b_bh25.bsp" no longer needed
+2026-10-05 16:06:35 model "progs/armor.mdl" no longer needed
+2026-10-05 16:06:35 model "progs/g_shot.mdl" no longer needed
+2026-10-05 16:06:35 model "progs/g_nail.mdl" no longer needed
+2026-10-05 16:06:35 model "progs/g_nail2.mdl" no longer needed
+2026-10-05 16:06:35 model "progs/g_rock.mdl" no longer needed
+2026-10-05 16:06:35 model "progs/g_rock2.mdl" no longer needed
+2026-10-05 16:06:35 model "progs/g_light.mdl" no longer needed
+2026-10-05 16:06:35 model "maps/b_shell1.bsp" no longer needed
+2026-10-05 16:06:35 model "maps/b_shell0.bsp" no longer needed
+2026-10-05 16:06:35 model "maps/b_nail1.bsp" no longer needed
+2026-10-05 16:06:35 model "maps/b_nail0.bsp" no longer needed
+2026-10-05 16:06:35 model "maps/b_rock1.bsp" no longer needed
+2026-10-05 16:06:35 model "maps/b_rock0.bsp" no longer needed
+2026-10-05 16:06:35 model "maps/b_batt1.bsp" no longer needed
+2026-10-05 16:06:35 model "maps/b_batt0.bsp" no longer needed
+2026-10-05 16:06:35 model "progs/invulner.mdl" no longer needed
+2026-10-05 16:06:35 model "progs/v_spike.mdl" no longer needed
+2026-10-05 16:06:35 model "progs/suit.mdl" no longer needed
+2026-10-05 16:06:35 model "progs/invisibl.mdl" no longer needed
+2026-10-05 16:06:35 model "progs/quaddama.mdl" no longer needed
+2026-10-05 16:06:35 model "progs/end1.mdl" no longer needed
+2026-10-05 16:06:35 model "progs/end2.mdl" no longer needed
+2026-10-05 16:06:35 model "progs/end3.mdl" no longer needed
+2026-10-05 16:06:35 model "progs/end4.mdl" no longer needed
+2026-10-05 16:06:35 model "progs/flame2.mdl" no longer needed
+2026-10-05 16:06:35 model "*1:maps/sanctum.bsp" no longer needed
+2026-10-05 16:06:35 model "*2:maps/sanctum.bsp" no longer needed
+2026-10-05 16:06:35 model "*3:maps/sanctum.bsp" no longer needed
+2026-10-05 16:06:35 model "*4:maps/sanctum.bsp" no longer needed
+2026-10-05 16:06:35 model "*5:maps/sanctum.bsp" no longer needed
+2026-10-05 16:06:35 model "*6:maps/sanctum.bsp" no longer needed
+2026-10-05 16:06:35 model "*7:maps/sanctum.bsp" no longer needed
+2026-10-05 16:06:35 model "*8:maps/sanctum.bsp" no longer needed
+2026-10-05 16:06:35 model "*9:maps/sanctum.bsp" no longer needed
+2026-10-05 16:06:35 model "*10:maps/sanctum.bsp" no longer needed
+2026-10-05 16:06:35 model "*11:maps/sanctum.bsp" no longer needed
+2026-10-05 16:06:35 model "*12:maps/sanctum.bsp" no longer needed
+2026-10-05 16:06:35 model "*13:maps/sanctum.bsp" no longer needed
+2026-10-05 16:06:35 model "*14:maps/sanctum.bsp" no longer needed
+2026-10-05 16:06:35 model "*15:maps/sanctum.bsp" no longer needed
+2026-10-05 16:06:35 model "*16:maps/sanctum.bsp" no longer needed
+2026-10-05 16:06:35 model "*17:maps/sanctum.bsp" no longer needed
+2026-10-05 16:06:35 model "*18:maps/sanctum.bsp" no longer needed
+2026-10-05 16:06:36 model "*19:maps/sanctum.bsp" no longer needed
+2026-10-05 16:06:36 model "*20:maps/sanctum.bsp" no longer needed
+2026-10-05 16:06:36 model "*21:maps/sanctum.bsp" no longer needed
+2026-10-05 16:06:36 model "*22:maps/sanctum.bsp" no longer needed
+2026-10-05 16:06:36 model "*23:maps/sanctum.bsp" no longer needed
+2026-10-05 16:06:36 model "*24:maps/sanctum.bsp" no longer needed
+2026-10-05 16:06:36 model "*25:maps/sanctum.bsp" no longer needed
+2026-10-05 16:06:36 model "*26:maps/sanctum.bsp" no longer needed
+2026-10-05 16:06:36 model "*27:maps/sanctum.bsp" no longer needed
+2026-10-05 16:06:36 model "*28:maps/sanctum.bsp" no longer needed
+2026-10-05 16:06:36 model "*29:maps/sanctum.bsp" no longer needed
+2026-10-05 16:06:36 model "*30:maps/sanctum.bsp" no longer needed
+2026-10-05 16:06:36 model "*31:maps/sanctum.bsp" no longer needed
+2026-10-05 16:06:36 model "*32:maps/sanctum.bsp" no longer needed
+2026-10-05 16:06:36 model "*33:maps/sanctum.bsp" no longer needed
+2026-10-05 16:06:36 model "*34:maps/sanctum.bsp" no longer needed
+2026-10-05 16:06:36 model "*35:maps/sanctum.bsp" no longer needed
+2026-10-05 16:06:36 model "*36:maps/sanctum.bsp" no longer needed
+2026-10-05 16:06:36 model "*37:maps/sanctum.bsp" no longer needed
+2026-10-05 16:06:36 model "*38:maps/sanctum.bsp" no longer needed
+2026-10-05 16:06:36 model "" no longer needed
+2026-10-05 16:06:36 Destroyed 317/734 images
+2026-10-05 16:07:31 Playing registered version.
+2026-10-05 16:07:31 473 unique files, 22 duplicates
+2026-10-05 16:07:31 
+2026-10-05 16:07:31 Engine Version: FTE git-30-f2576ed
+2026-10-05 16:07:31 This program is free software; you can redistribute it and/or modify it under the terms of the GNU General Public License as published by the Free Software Foundation; either version 2 of the License, or (at your option) any later version.
+2026-10-05 16:07:31 This program is distributed in the hope that it will be useful, but WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. 
+2026-10-05 16:07:31 See the GNU General Public License for more details.
+2026-10-05 16:07:31 execing ^[benchmark.cfg\tip\from C:\Users\Tim Bergeron\source\repos\QSS-M\.codex-build\engine-lifecycle-six-20261005\remote\fteqw/qw/benchmark.cfg]
+2026-10-05 16:07:31 video shutdown took 0.000478 seconds
+2026-10-05 16:07:31 video startup took 0.000000 seconds
+2026-10-05 16:07:31 Setting windowed mode 800*600 OpenGL
+2026-10-05 16:07:31 Loading renderer dll "C:\WINDOWS\system32\opengl32.dll" Success
+2026-10-05 16:07:31 Loaded renderer dll C:\WINDOWS\system32\opengl32.dll
+2026-10-05 16:07:32 WGL_EXTENSIONS: WGL_ARB_buffer_region WGL_ARB_create_context WGL_ARB_create_context_no_error WGL_ARB_create_context_profile WGL_ARB_create_context_robustness WGL_ARB_context_flush_control WGL_ARB_extensions_string WGL_ARB_make_current_read WGL_ARB_multisample WGL_ARB_pbuffer WGL_ARB_pixel_format WGL_ARB_pixel_format_float WGL_ARB_render_texture WGL_ATI_pixel_format_float WGL_EXT_colorspace WGL_EXT_create_context_es_profile WGL_EXT_create_context_es2_profile WGL_EXT_extensions_string WGL_EXT_framebuffer_sRGB WGL_EXT_pixel_format_packed_float WGL_EXT_swap_control WGL_EXT_swap_control_tear WGL_NVX_DX_interop WGL_NV_DX_interop WGL_NV_DX_interop2 WGL_NV_copy_image WGL_NV_delay_before_swap WGL_NV_float_buffer WGL_NV_multisample_coverage WGL_NV_multigpu_context WGL_NV_render_depth_texture WGL_NV_render_texture_rectangle 
+2026-10-05 16:07:32 GL_VENDOR: NVIDIA Corporation
+2026-10-05 16:07:32 GL_RENDERER: NVIDIA GeForce RTX 4070/PCIe/SSE2
+2026-10-05 16:07:32 GL_VERSION: 4.6.0 NVIDIA 591.86
+2026-10-05 16:07:32 GL_EXTENSIONS: 404 extensions
+2026-10-05 16:07:32 Driver reports invalid profile, assuming compatibility support
+2026-10-05 16:07:32 GL: Found GL_EXT_packed_depth_stencil
+2026-10-05 16:07:32 GL: Found GL_EXT_texture_filter_anisotropic
+2026-10-05 16:07:32 Anisotropic filtering supported (16x max).
+2026-10-05 16:07:32 GL: Found GL_ARB_multitexture
+2026-10-05 16:07:32 ARB Multitexture extensions found. Use -noamtex to disable.
+2026-10-05 16:07:32 GL: Found GL_EXT_stencil_wrap
+2026-10-05 16:07:32 GL: Found GL_EXT_stencil_two_side
+2026-10-05 16:07:32 GL: Found GL_ARB_depth_clamp
+2026-10-05 16:07:32 GL: Found GL_EXT_texture_object
+2026-10-05 16:07:32 GL: Found GL_EXT_compiled_vertex_array
+2026-10-05 16:07:32 GL: Found GL_EXT_texture_env_combine
+2026-10-05 16:07:32 GL: Found GL_EXT_texture_env_add
+2026-10-05 16:07:32 GL: Found GL_NV_texture_env_combine4
+2026-10-05 16:07:32 GL: Found GL_ARB_texture_env_combine
+2026-10-05 16:07:32 GL: Found GL_ARB_texture_env_dot3
+2026-10-05 16:07:32 GLSL available
+2026-10-05 16:07:32 GL: Found GL_ARB_seamless_cube_map
+2026-10-05 16:07:32 GL: Found GL_ARB_framebuffer_sRGB
+2026-10-05 16:07:32 Colour buffer: GL_R8G8B8A0
+2026-10-05 16:07:32 Depth buffer: GL_DEPTH24_STENCIL8
+2026-10-05 16:07:32 CDAudio: MCI_PLAY failed (257)
+2026-10-05 16:07:32 Hardware gamma appears to work
+2026-10-05 16:07:32 GL: Found GL_EXT_texture_compression_s3tc
+2026-10-05 16:07:32 GL: Found GL_EXT_texture_compression_dxt1
+2026-10-05 16:07:32 GL: Found GL_EXT_packed_depth_stencil
+2026-10-05 16:07:32 GL: Found GL_ARB_ES3_2_compatibility
+2026-10-05 16:07:32 Rescanning shaders
+2026-10-05 16:07:32 XInput is enabled (4 controllers found)
+2026-10-05 16:07:32 OpenAL library is not installed
+2026-10-05 16:07:32 OpenGL renderer initialized
+2026-10-05 16:07:32 video restart took 1.063933 seconds
+2026-10-05 16:07:32 main thread video restart took 1.085907 secs
+2026-10-05 16:07:32    2 channel(s)
+2026-10-05 16:07:32    16 bits/sample
+2026-10-05 16:07:32    48000 bytes/sec
+2026-10-05 16:07:32 ^Ue080^Ue081^Ue081^Ue081^Ue081^Ue081^Ue081 Quake Initialized ^Ue081^Ue081^Ue081^Ue081^Ue081^Ue081^Ue082
+2026-10-05 16:07:32 Initializing menu.dat
+2026-10-05 16:07:32 Execing alias setup_connect ^3:
+2026-10-05 16:07:32 ^1connectnq denver.quakeone.com:26000
+2026-10-05 16:07:32 ^2connectnq denver.quakeone.com:26000
+2026-10-05 16:07:32 Clearing memory
+2026-10-05 16:07:32 Resolving address: DESKTOP-50QJJG9
+2026-10-05 16:07:32 Resolving address: denver.quakeone.com:26000
+2026-10-05 16:07:32 Connecting to denver.quakeone.com:26000...
+2026-10-05 16:07:33 ProQuake server 3.0
+2026-10-05 16:07:33 Connected to ^[denver.quakeone.com:26000\type\connect denver.quakeone.com:26000] (^[plain-text\tip\Do not type passwords as they can potentially be seen by network sniffers]).
+2026-10-05 16:07:33 stufftext0: cmd pext
+2026-10-05 16:07:33 Sending stringcmd pext
+2026-10-05 16:07:33 
+2026-10-05 16:07:33 QSS-M 1.6.9-1aa5a7d Server (37005 CRC)
+2026-10-05 16:07:33 stufftext0: cl_serverextension_download 1
+2026-10-05 16:07:33 Serverdata packet received.
+2026-10-05 16:07:33 Cmd_AddCommand: +weaponwheel already defined
+2026-10-05 16:07:33 Cmd_AddCommand: -weaponwheel already defined
+2026-10-05 16:07:33 Clearing memory
+2026-10-05 16:07:33 Couldn't load fragfile.dat
+2026-10-05 16:07:33 FitzQuake 666 protocol
+2026-10-05 16:07:33 
+2026-10-05 16:07:33 
+2026-10-05 16:07:33 ^Ue01d^Ue01e^Ue01e^Ue01e^Ue01e^Ue01e^Ue01e^Ue01e^Ue01e^Ue01e^Ue01e^Ue01e^Ue01e^Ue01e^Ue01e^Ue01e^Ue01e^Ue01e^Ue01f
+2026-10-05 16:07:33 
+2026-10-05 16:07:33 Sanctuary of the Silent Scribes  by infiniti (2 Min Quad Spawns)
+2026-10-05 16:07:33 stufftext0: //fullserverinfo "\teamplay\0\skill\1\coop\0\sv_modvote\0\pm_bunnyfriction\1\pm_slidefix\1\sv_gravity\800\sv_friction\4\sv_maxspeed\320\sv_nqplayerphysics\1\sv_antilag\0\sv_antilag_frac\1\sv_antilag_maxrewind\0.25\sv_mapcrc\0\mod\nqCRx (v1.26.10)\modname\CRMod 7 (v1.26.10)\gametype\dm\mode\dm\playmode\ffa\matchpaused\off\hostname\CRMod 7 - denver.quakeone.com\sv_fullpitch\0\noexit\1\sys_ticrate\0.02500000037252902984619140625\samelevel\942985\timelimit\10\deathmatch\3\intermission\off\*version\QSS-M 1.6.9-1aa5a7d\*gamedir\id1\fraglimit\40 : ClanRing Classic"
+2026-10-05 16:07:33 CL_SignonReply: 1
+2026-10-05 16:07:33 skipping csaddon.dat due to cheat restrictions
+2026-10-05 16:07:33 progs.dat is not suitable for SimpleCSQC - no CSQC_DrawHud
+2026-10-05 16:07:33 maps/b_bh10.bsp: Using lightmap format BGRX8
+2026-10-05 16:07:33 maps/b_bh100.bsp: Using lightmap format BGRX8
+2026-10-05 16:07:33 maps/b_bh25.bsp: Using lightmap format BGRX8
+2026-10-05 16:07:33 maps/b_shell1.bsp: Using lightmap format BGRX8
+2026-10-05 16:07:33 maps/b_shell0.bsp: Using lightmap format BGRX8
+2026-10-05 16:07:33 maps/b_nail1.bsp: Using lightmap format BGRX8
+2026-10-05 16:07:33 maps/b_nail0.bsp: Using lightmap format BGRX8
+2026-10-05 16:07:33 maps/b_rock1.bsp: Using lightmap format BGRX8
+2026-10-05 16:07:33 maps/b_rock0.bsp: Using lightmap format BGRX8
+2026-10-05 16:07:33 maps/b_batt1.bsp: Using lightmap format BGRX8
+2026-10-05 16:07:33 maps/b_batt0.bsp: Using lightmap format BGRX8
+2026-10-05 16:07:33 maps/sanctum.bsp: Using lightmap format A2BGR10
+2026-10-05 16:07:33 Server taking control of cvar r_wateralpha (0.86)
+2026-10-05 16:07:33 Server taking control of cvar r_waterstyle (1)
+2026-10-05 16:07:33 Server taking control of cvar r_telealpha (0.92)
+2026-10-05 16:07:33 Server taking control of cvar r_telestyle (1)
+2026-10-05 16:07:33 Server taking control of cvar r_lavaalpha (0.92)
+2026-10-05 16:07:33 Server taking control of cvar r_lavastyle (1)
+2026-10-05 16:07:33 Server taking control of cvar r_skyfog (0.5)
+2026-10-05 16:07:33 Sky "skybox_nightmtns_" missing texture: gfx/env/nightmtns__rt
+2026-10-05 16:07:33 Sky "skybox_nightmtns_" missing texture: gfx/env/nightmtns__bk
+2026-10-05 16:07:33 Sky "skybox_nightmtns_" missing texture: gfx/env/nightmtns__lf
+2026-10-05 16:07:33 Sky "skybox_nightmtns_" missing texture: gfx/env/nightmtns__ft
+2026-10-05 16:07:33 Sky "skybox_nightmtns_" missing texture: gfx/env/nightmtns__up
+2026-10-05 16:07:33 Sky "skybox_nightmtns_" missing texture: gfx/env/nightmtns__dn
+2026-10-05 16:07:33 maps/sanctum.bsp: Using lightmap format A2BGR10
+2026-10-05 16:07:33 maps/b_bh10.bsp: Using lightmap format BGRX8
+2026-10-05 16:07:33 maps/b_bh100.bsp: Using lightmap format BGRX8
+2026-10-05 16:07:33 maps/b_bh25.bsp: Using lightmap format BGRX8
+2026-10-05 16:07:33 maps/b_shell1.bsp: Using lightmap format BGRX8
+2026-10-05 16:07:33 maps/b_shell0.bsp: Using lightmap format BGRX8
+2026-10-05 16:07:33 maps/b_nail1.bsp: Using lightmap format BGRX8
+2026-10-05 16:07:33 maps/b_nail0.bsp: Using lightmap format BGRX8
+2026-10-05 16:07:33 maps/b_rock1.bsp: Using lightmap format BGRX8
+2026-10-05 16:07:33 maps/b_rock0.bsp: Using lightmap format BGRX8
+2026-10-05 16:07:33 maps/b_batt1.bsp: Using lightmap format BGRX8
+2026-10-05 16:07:33 maps/b_batt0.bsp: Using lightmap format BGRX8
+2026-10-05 16:07:33 Sending stringcmd prespawn
+2026-10-05 16:07:34 CL_SignonReply: 2
+2026-10-05 16:07:34 Sending stringcmd name "BenchClient"
+2026-10-05 16:07:34 
+2026-10-05 16:07:34 Sending stringcmd color 13 12
+2026-10-05 16:07:34 
+2026-10-05 16:07:34 Sending stringcmd spawn 
+2026-10-05 16:07:34 CL_SignonReply: 3
+2026-10-05 16:07:34 4125 additional FS searches
+2026-10-05 16:07:34 Reloading shaders
+2026-10-05 16:07:34 Sky "skybox_nightmtns_" missing texture: gfx/env/nightmtns__rt
+2026-10-05 16:07:34 Sky "skybox_nightmtns_" missing texture: gfx/env/nightmtns__bk
+2026-10-05 16:07:34 Sky "skybox_nightmtns_" missing texture: gfx/env/nightmtns__lf
+2026-10-05 16:07:34 Sky "skybox_nightmtns_" missing texture: gfx/env/nightmtns__ft
+2026-10-05 16:07:34 Sky "skybox_nightmtns_" missing texture: gfx/env/nightmtns__up
+2026-10-05 16:07:34 Sky "skybox_nightmtns_" missing texture: gfx/env/nightmtns__dn
+2026-10-05 16:07:34 Sending stringcmd begin
+2026-10-05 16:07:34 Sending stringcmd dm normal aerowalk
+2026-10-05 16:07:34 CL_SignonReply: 4
+2026-10-05 16:07:34 stufftext0: reconnect
+2026-10-05 16:07:34 
+2026-10-05 16:07:34 Changing map...
+2026-10-05 16:07:34 ^[BenchClient\player\0] voted yes. 
+2026-10-05 16:07:34 
+2026-10-05 16:07:34 Vote passed to Change Gametype/Mode/Map to Free For All  on aerowalk (Aerowalk).
+2026-10-05 16:07:34 
+2026-10-05 16:07:34 "timelimit" changed to "0"
+2026-10-05 16:07:34 stufftext0: //svi "timelimit" "0"
+2026-10-05 16:07:34 SERVERINFO: timelimit=0
+2026-10-05 16:07:34 stufftext0: //svi "deathmatch" "1"
+2026-10-05 16:07:34 SERVERINFO: deathmatch=1
+2026-10-05 16:07:34 gametype set to Deathmatch
+2026-10-05 16:07:34 "timelimit" changed to "20"
+2026-10-05 16:07:34 stufftext0: //svi "timelimit" "20"
+2026-10-05 16:07:34 SERVERINFO: timelimit=20
+2026-10-05 16:07:34 playmode set to 'Normal/FFA'
+2026-10-05 16:07:34 
+2026-10-05 16:07:34 QSS-M 1.6.9-1aa5a7d Server (37005 CRC)
+2026-10-05 16:07:34 stufftext0: cl_serverextension_download 1
+2026-10-05 16:07:34 Serverdata packet received.
+2026-10-05 16:07:34 Clearing memory
+2026-10-05 16:07:34 Couldn't load fragfile.dat
+2026-10-05 16:07:34 FitzQuake 666 protocol
+2026-10-05 16:07:34 
+2026-10-05 16:07:34 
+2026-10-05 16:07:34 ^Ue01d^Ue01e^Ue01e^Ue01e^Ue01e^Ue01e^Ue01e^Ue01e^Ue01e^Ue01e^Ue01e^Ue01e^Ue01e^Ue01e^Ue01e^Ue01e^Ue01e^Ue01e^Ue01f
+2026-10-05 16:07:34 
+2026-10-05 16:07:34 Aerowalk
+2026-10-05 16:07:34 stufftext0: //fullserverinfo "\teamplay\0\skill\1\coop\0\sv_modvote\0\pm_bunnyfriction\1\pm_slidefix\1\sv_gravity\800\sv_friction\4\sv_maxspeed\320\sv_nqplayerphysics\1\sv_antilag\0\sv_antilag_frac\1\sv_antilag_maxrewind\0.25\sv_mapcrc\0\mod\nqCRx (v1.26.10)\modname\CRMod 7 (v1.26.10)\gametype\dm\mode\dm\playmode\ffa\matchpaused\off\hostname\CRMod 7 - denver.quakeone.com\sv_fullpitch\0\noexit\1\sys_ticrate\0.02500000037252902984619140625\samelevel\942985\intermission\off\fraglimit\40 : ClanRing Classic\deathmatch\1\timelimit\20\*version\QSS-M 1.6.9-1aa5a7d\*gamedir\id1"
+2026-10-05 16:07:34 CL_SignonReply: 1
+2026-10-05 16:07:34 skipping csaddon.dat due to cheat restrictions
+2026-10-05 16:07:34 progs.dat is not suitable for SimpleCSQC - no CSQC_DrawHud
+2026-10-05 16:07:34 ^&E0warning: unnamed texture in maps/aerowalk.bsp, renaming to unnamed17
+2026-10-05 16:07:34 ^&E0warning: unnamed texture in maps/aerowalk.bsp, renaming to unnamed16
+2026-10-05 16:07:34 ^&E0warning: unnamed texture in maps/aerowalk.bsp, renaming to unnamed10
+2026-10-05 16:07:34 maps/aerowalk.bsp: Using lightmap format BGRX8
+2026-10-05 16:07:34 maps/sanctum.bsp: Using lightmap format A2BGR10
+2026-10-05 16:07:34 maps/b_bh10.bsp: Using lightmap format BGRX8
+2026-10-05 16:07:34 maps/b_bh100.bsp: Using lightmap format BGRX8
+2026-10-05 16:07:34 maps/b_bh25.bsp: Using lightmap format BGRX8
+2026-10-05 16:07:34 maps/b_shell1.bsp: Using lightmap format BGRX8
+2026-10-05 16:07:34 maps/b_shell0.bsp: Using lightmap format BGRX8
+2026-10-05 16:07:34 maps/b_nail1.bsp: Using lightmap format BGRX8
+2026-10-05 16:07:34 maps/b_nail0.bsp: Using lightmap format BGRX8
+2026-10-05 16:07:34 maps/b_rock1.bsp: Using lightmap format BGRX8
+2026-10-05 16:07:34 maps/b_rock0.bsp: Using lightmap format BGRX8
+2026-10-05 16:07:35 maps/b_batt1.bsp: Using lightmap format BGRX8
+2026-10-05 16:07:35 maps/b_batt0.bsp: Using lightmap format BGRX8
+2026-10-05 16:07:35 maps/aerowalk.bsp: Using lightmap format BGRX8
+2026-10-05 16:07:35 Sending stringcmd prespawn
+2026-10-05 16:07:35 CL_SignonReply: 2
+2026-10-05 16:07:35 Sending stringcmd name "BenchClient"
+2026-10-05 16:07:35 
+2026-10-05 16:07:35 Sending stringcmd color 13 12
+2026-10-05 16:07:35 
+2026-10-05 16:07:35 Sending stringcmd spawn 
+2026-10-05 16:07:35 stufftext0: //svi "fraglimit" "40"
+2026-10-05 16:07:35 SERVERINFO: fraglimit=40
+2026-10-05 16:07:35 stufftext0: //svi "timelimit" "10"
+2026-10-05 16:07:35 SERVERINFO: timelimit=10
+2026-10-05 16:07:35 stufftext0: //svi "deathmatch" "3"
+2026-10-05 16:07:35 SERVERINFO: deathmatch=3
+2026-10-05 16:07:35 stufftext0: //svi "fraglimit" "40 : ClanRing Classic"
+2026-10-05 16:07:35 SERVERINFO: fraglimit=40 : ClanRing Classic
+2026-10-05 16:07:35 CL_SignonReply: 3
+2026-10-05 16:07:35 Sending stringcmd begin
+2026-10-05 16:07:35 1256 additional FS searches
+2026-10-05 16:07:35 model "maps/sanctum.bsp" no longer needed
+2026-10-05 16:07:35 model "progs/flame2.mdl" no longer needed
+2026-10-05 16:07:35 model "*1:maps/sanctum.bsp" no longer needed
+2026-10-05 16:07:35 model "*2:maps/sanctum.bsp" no longer needed
+2026-10-05 16:07:35 model "*3:maps/sanctum.bsp" no longer needed
+2026-10-05 16:07:35 model "*4:maps/sanctum.bsp" no longer needed
+2026-10-05 16:07:35 model "*5:maps/sanctum.bsp" no longer needed
+2026-10-05 16:07:35 model "*6:maps/sanctum.bsp" no longer needed
+2026-10-05 16:07:35 model "*7:maps/sanctum.bsp" no longer needed
+2026-10-05 16:07:35 model "*8:maps/sanctum.bsp" no longer needed
+2026-10-05 16:07:35 model "*9:maps/sanctum.bsp" no longer needed
+2026-10-05 16:07:35 model "*10:maps/sanctum.bsp" no longer needed
+2026-10-05 16:07:35 model "*11:maps/sanctum.bsp" no longer needed
+2026-10-05 16:07:35 model "*12:maps/sanctum.bsp" no longer needed
+2026-10-05 16:07:35 model "*13:maps/sanctum.bsp" no longer needed
+2026-10-05 16:07:35 model "*14:maps/sanctum.bsp" no longer needed
+2026-10-05 16:07:35 model "*15:maps/sanctum.bsp" no longer needed
+2026-10-05 16:07:35 model "*16:maps/sanctum.bsp" no longer needed
+2026-10-05 16:07:35 model "*17:maps/sanctum.bsp" no longer needed
+2026-10-05 16:07:35 model "*18:maps/sanctum.bsp" no longer needed
+2026-10-05 16:07:35 model "*19:maps/sanctum.bsp" no longer needed
+2026-10-05 16:07:35 model "*20:maps/sanctum.bsp" no longer needed
+2026-10-05 16:07:35 model "*21:maps/sanctum.bsp" no longer needed
+2026-10-05 16:07:35 model "*22:maps/sanctum.bsp" no longer needed
+2026-10-05 16:07:35 model "*23:maps/sanctum.bsp" no longer needed
+2026-10-05 16:07:35 model "*24:maps/sanctum.bsp" no longer needed
+2026-10-05 16:07:35 model "*25:maps/sanctum.bsp" no longer needed
+2026-10-05 16:07:35 model "*26:maps/sanctum.bsp" no longer needed
+2026-10-05 16:07:35 model "*27:maps/sanctum.bsp" no longer needed
+2026-10-05 16:07:35 model "*28:maps/sanctum.bsp" no longer needed
+2026-10-05 16:07:35 model "*29:maps/sanctum.bsp" no longer needed
+2026-10-05 16:07:35 model "*30:maps/sanctum.bsp" no longer needed
+2026-10-05 16:07:35 model "*31:maps/sanctum.bsp" no longer needed
+2026-10-05 16:07:35 model "*32:maps/sanctum.bsp" no longer needed
+2026-10-05 16:07:35 model "*33:maps/sanctum.bsp" no longer needed
+2026-10-05 16:07:35 model "*34:maps/sanctum.bsp" no longer needed
+2026-10-05 16:07:35 model "*35:maps/sanctum.bsp" no longer needed
+2026-10-05 16:07:35 model "*36:maps/sanctum.bsp" no longer needed
+2026-10-05 16:07:35 model "*37:maps/sanctum.bsp" no longer needed
+2026-10-05 16:07:35 model "*38:maps/sanctum.bsp" no longer needed
+2026-10-05 16:07:35 Reloading shaders
+2026-10-05 16:07:35 Sky "skybox_nightmtns_" missing texture: gfx/env/nightmtns__rt
+2026-10-05 16:07:35 Sky "skybox_nightmtns_" missing texture: gfx/env/nightmtns__bk
+2026-10-05 16:07:35 Sky "skybox_nightmtns_" missing texture: gfx/env/nightmtns__lf
+2026-10-05 16:07:35 Sky "skybox_nightmtns_" missing texture: gfx/env/nightmtns__ft
+2026-10-05 16:07:35 Sky "skybox_nightmtns_" missing texture: gfx/env/nightmtns__up
+2026-10-05 16:07:35 Sky "skybox_nightmtns_" missing texture: gfx/env/nightmtns__dn
+2026-10-05 16:07:35 Unknown command "noop"
+2026-10-05 16:07:35 stufftext0: bf
+2026-10-05 16:07:35 CL_SignonReply: 4
+2026-10-05 16:07:35 ClanRing
+2026-10-05 16:07:35 (v1.26.10)
+2026-10-05 16:07:35 normal ffa deathmatch mode
+2026-10-05 16:07:36 stufftext0: crx_ignorethis
+2026-10-05 16:07:36 Unknown command "crx_ignorethis"
+2026-10-05 16:07:36 Execing alias setup_done ^3:
+2026-10-05 16:07:36 ^1disconnect;quit
+2026-10-05 16:07:36 ^2disconnect;quit
+2026-10-05 16:07:36 Clearing memory
+2026-10-05 16:07:36 Clearing memory
+2026-10-05 16:07:36 model "progs/player.mdl" no longer needed
+2026-10-05 16:07:36 model "progs/eyes.mdl" no longer needed
+2026-10-05 16:07:36 model "progs/h_player.mdl" no longer needed
+2026-10-05 16:07:36 model "progs/gib1.mdl" no longer needed
+2026-10-05 16:07:36 model "progs/gib2.mdl" no longer needed
+2026-10-05 16:07:36 model "progs/gib3.mdl" no longer needed
+2026-10-05 16:07:36 model "progs/s_bubble.spr" no longer needed
+2026-10-05 16:07:36 model "progs/s_explod.spr" no longer needed
+2026-10-05 16:07:36 model "progs/v_axe.mdl" no longer needed
+2026-10-05 16:07:36 model "progs/v_shot.mdl" no longer needed
+2026-10-05 16:07:36 model "progs/v_nail.mdl" no longer needed
+2026-10-05 16:07:36 model "progs/v_rock.mdl" no longer needed
+2026-10-05 16:07:36 model "progs/v_shot2.mdl" no longer needed
+2026-10-05 16:07:36 model "progs/v_nail2.mdl" no longer needed
+2026-10-05 16:07:36 model "progs/v_rock2.mdl" no longer needed
+2026-10-05 16:07:36 model "progs/bolt.mdl" no longer needed
+2026-10-05 16:07:36 model "progs/bolt2.mdl" no longer needed
+2026-10-05 16:07:36 model "progs/bolt3.mdl" no longer needed
+2026-10-05 16:07:36 model "progs/lavaball.mdl" no longer needed
+2026-10-05 16:07:36 model "progs/missile.mdl" no longer needed
+2026-10-05 16:07:36 model "progs/grenade.mdl" no longer needed
+2026-10-05 16:07:36 model "progs/spike.mdl" no longer needed
+2026-10-05 16:07:36 model "progs/s_spike.mdl" no longer needed
+2026-10-05 16:07:36 model "progs/backpack.mdl" no longer needed
+2026-10-05 16:07:36 model "progs/zom_gib.mdl" no longer needed
+2026-10-05 16:07:36 model "progs/v_light.mdl" no longer needed
+2026-10-05 16:07:36 model "maps/b_bh10.bsp" no longer needed
+2026-10-05 16:07:36 model "maps/b_bh100.bsp" no longer needed
+2026-10-05 16:07:36 model "maps/b_bh25.bsp" no longer needed
+2026-10-05 16:07:36 model "progs/armor.mdl" no longer needed
+2026-10-05 16:07:36 model "progs/g_shot.mdl" no longer needed
+2026-10-05 16:07:36 model "progs/g_nail.mdl" no longer needed
+2026-10-05 16:07:36 model "progs/g_nail2.mdl" no longer needed
+2026-10-05 16:07:36 model "progs/g_rock.mdl" no longer needed
+2026-10-05 16:07:36 model "progs/g_rock2.mdl" no longer needed
+2026-10-05 16:07:36 model "progs/g_light.mdl" no longer needed
+2026-10-05 16:07:36 model "maps/b_shell1.bsp" no longer needed
+2026-10-05 16:07:36 model "maps/b_shell0.bsp" no longer needed
+2026-10-05 16:07:36 model "maps/b_nail1.bsp" no longer needed
+2026-10-05 16:07:36 model "maps/b_nail0.bsp" no longer needed
+2026-10-05 16:07:36 model "maps/b_rock1.bsp" no longer needed
+2026-10-05 16:07:36 model "maps/b_rock0.bsp" no longer needed
+2026-10-05 16:07:36 model "maps/b_batt1.bsp" no longer needed
+2026-10-05 16:07:36 model "maps/b_batt0.bsp" no longer needed
+2026-10-05 16:07:36 model "progs/invulner.mdl" no longer needed
+2026-10-05 16:07:36 model "progs/v_spike.mdl" no longer needed
+2026-10-05 16:07:36 model "progs/suit.mdl" no longer needed
+2026-10-05 16:07:36 model "progs/invisibl.mdl" no longer needed
+2026-10-05 16:07:36 model "progs/quaddama.mdl" no longer needed
+2026-10-05 16:07:36 model "progs/end1.mdl" no longer needed
+2026-10-05 16:07:36 model "progs/end2.mdl" no longer needed
+2026-10-05 16:07:36 model "progs/end3.mdl" no longer needed
+2026-10-05 16:07:36 model "progs/end4.mdl" no longer needed
+2026-10-05 16:07:36 model "" no longer needed
+2026-10-05 16:07:36 model "maps/aerowalk.bsp" no longer needed
+2026-10-05 16:07:36 model "*1:maps/aerowalk.bsp" no longer needed
+2026-10-05 16:07:36 model "*2:maps/aerowalk.bsp" no longer needed
+2026-10-05 16:07:36 model "*3:maps/aerowalk.bsp" no longer needed
+2026-10-05 16:07:36 model "*4:maps/aerowalk.bsp" no longer needed
+2026-10-05 16:07:36 model "*5:maps/aerowalk.bsp" no longer needed
+2026-10-05 16:07:36 model "*6:maps/aerowalk.bsp" no longer needed
+2026-10-05 16:07:36 model "*7:maps/aerowalk.bsp" no longer needed
+2026-10-05 16:07:36 Destroyed 295/816 images

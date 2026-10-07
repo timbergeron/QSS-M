@@ -1,0 +1,101 @@
+{
+  "aerowalk": {
+    "origin": [
+      -224.0,
+      -720.0,
+      257.0
+    ],
+    "yaw_rate": 18,
+    "duration_seconds": 20,
+    "bytes": 186349,
+    "sha256": "1bfd328b7f229515b9a50345cb5d26ef900d050c00f3d247f4a4af5b190acdb3"
+  },
+  "ztndm3": {
+    "origin": [
+      -432.0,
+      128.0,
+      33.0
+    ],
+    "yaw_rate": 18,
+    "duration_seconds": 20,
+    "bytes": 123605,
+    "sha256": "9f2f3c64e5c1a36ff063e5becaf4d0989f9533014dcbf966a5560c645dac2732"
+  },
+  "dm3": {
+    "origin": [
+      -880.0,
+      -232.0,
+      -15.0
+    ],
+    "yaw_rate": 18,
+    "duration_seconds": 20,
+    "bytes": 92521,
+    "sha256": "44215b556ac9fe0e05c98e4b04f184bc05e42645118fac38d7df39938ed6d7f1"
+  },
+  "bravado": {
+    "origin": [
+      -640.0,
+      480.0,
+      301.0
+    ],
+    "yaw_rate": 18,
+    "duration_seconds": 20,
+    "bytes": 238580,
+    "sha256": "9a06924db6a6061174444f0b6c7b70b148d38d8af08537e48df34f278d891c20"
+  },
+  "ctf3m2": {
+    "origin": [
+      1760.0,
+      -544.0,
+      -183.0
+    ],
+    "yaw_rate": 18,
+    "duration_seconds": 20,
+    "bytes": 205266,
+    "sha256": "fb6f954d2192464eadbdade6d66a25d2c62598a8fd9dcfad2ff41c25379f1404"
+  },
+  "schloss": {
+    "origin": [
+      424.0,
+      -3240.0,
+      617.0
+    ],
+    "yaw_rate": 18,
+    "duration_seconds": 20,
+    "bytes": 188408,
+    "sha256": "4534d85245242c032276107f268dcccb94cf401496acbabecd95dd417beb0645"
+  },
+  "e1m2": {
+    "origin": [
+      -416.0,
+      -144.0,
+      321.0
+    ],
+    "yaw_rate": 18,
+    "duration_seconds": 20,
+    "bytes": 145745,
+    "sha256": "973090b55a24a98124e1617a93b0592fb10a1d7568cc20863473e4ea49fa1662"
+  },
+  "dm2": {
+    "origin": [
+      2560.0,
+      -192.0,
+      33.0
+    ],
+    "yaw_rate": 18,
+    "duration_seconds": 20,
+    "bytes": 90036,
+    "sha256": "7bf80235302818f91719eee78757b8d7b6b881ae2ae9d1b21c94cf1ec12d296d"
+  },
+  "ctf2m8": {
+    "origin": [
+      -760.0,
+      560.0,
+      -935.0
+    ],
+    "yaw_rate": 18,
+    "duration_seconds": 20,
+    "bytes": 99752,
+    "sha256": "60b198f1e77ec7084b4c0c45878f2e546d4e48ed99e9cb39b14fce0edf83f38a"
+  }
+}

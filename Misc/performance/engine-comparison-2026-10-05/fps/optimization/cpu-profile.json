@@ -1,0 +1,28 @@
+{
+  "exe_sha256": "51acfe43b8155dc50fcd1012d14206b3bab47473d47fbfa8271ac8a9077a3f30",
+  "command": [
+    "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\engine-fps-optimization-20261005\\live_profile\\quakespasm.exe",
+    "-basedir",
+    "C:\\Users\\Tim Bergeron\\source\\repos\\QSS-M\\.codex-build\\engine-fps-optimization-20261005\\live_profile",
+    "-nohome",
+    "-noquakeimport",
+    "-listen",
+    "-noudp",
+    "-noice",
+    "-nojoy",
+    "-condebug",
+    "-window",
+    "-width",
+    "800",
+    "-height",
+    "600"
+  ],
+  "config": "vid_width 800\nvid_height 600\nvid_fullscreen 0\nvid_vsync 0\nfov 90\nviewsize 100\nhost_maxfps 0\nsys_throttle -1\ncl_demoreel 0\ncl_discord_presence 0\nr_scale 1\nvid_fsaa 0\necho PROFILE_LIVE\nplaydemo fps_aerowalk\n",
+  "geometry": {
+    "width": 800,
+    "height": 600
+  },
+  "thread": 18992,
+  "utilization": 0.5,
+  "samples": 4000
+}

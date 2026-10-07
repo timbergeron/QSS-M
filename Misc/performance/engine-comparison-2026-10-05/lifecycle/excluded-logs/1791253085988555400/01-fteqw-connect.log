@@ -1,0 +1,71 @@
+2026-10-05 15:22:58 Playing registered version.
+2026-10-05 15:22:58 432 unique files, 17 duplicates
+2026-10-05 15:22:58 
+2026-10-05 15:22:58 Engine Version: FTE git-30-f2576ed
+2026-10-05 15:22:58 This program is free software; you can redistribute it and/or modify it under the terms of the GNU General Public License as published by the Free Software Foundation; either version 2 of the License, or (at your option) any later version.
+2026-10-05 15:22:58 This program is distributed in the hope that it will be useful, but WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. 
+2026-10-05 15:22:58 See the GNU General Public License for more details.
+2026-10-05 15:22:58 video shutdown took 0.000503 seconds
+2026-10-05 15:22:58 video startup took 0.000000 seconds
+2026-10-05 15:22:58 Setting windowed mode 800*600 OpenGL
+2026-10-05 15:22:59 Loading renderer dll "C:\WINDOWS\system32\opengl32.dll" Success
+2026-10-05 15:22:59 Loaded renderer dll C:\WINDOWS\system32\opengl32.dll
+2026-10-05 15:22:59 WGL_EXTENSIONS: WGL_ARB_buffer_region WGL_ARB_create_context WGL_ARB_create_context_no_error WGL_ARB_create_context_profile WGL_ARB_create_context_robustness WGL_ARB_context_flush_control WGL_ARB_extensions_string WGL_ARB_make_current_read WGL_ARB_multisample WGL_ARB_pbuffer WGL_ARB_pixel_format WGL_ARB_pixel_format_float WGL_ARB_render_texture WGL_ATI_pixel_format_float WGL_EXT_colorspace WGL_EXT_create_context_es_profile WGL_EXT_create_context_es2_profile WGL_EXT_extensions_string WGL_EXT_framebuffer_sRGB WGL_EXT_pixel_format_packed_float WGL_EXT_swap_control WGL_EXT_swap_control_tear WGL_NVX_DX_interop WGL_NV_DX_interop WGL_NV_DX_interop2 WGL_NV_copy_image WGL_NV_delay_before_swap WGL_NV_float_buffer WGL_NV_multisample_coverage WGL_NV_multigpu_context WGL_NV_render_depth_texture WGL_NV_render_texture_rectangle 
+2026-10-05 15:22:59 GL_VENDOR: NVIDIA Corporation
+2026-10-05 15:22:59 GL_RENDERER: NVIDIA GeForce RTX 4070/PCIe/SSE2
+2026-10-05 15:22:59 GL_VERSION: 4.6.0 NVIDIA 591.86
+2026-10-05 15:22:59 GL_EXTENSIONS: 404 extensions
+2026-10-05 15:22:59 Driver reports invalid profile, assuming compatibility support
+2026-10-05 15:22:59 GL: Found GL_EXT_packed_depth_stencil
+2026-10-05 15:22:59 GL: Found GL_EXT_texture_filter_anisotropic
+2026-10-05 15:22:59 Anisotropic filtering supported (16x max).
+2026-10-05 15:22:59 GL: Found GL_ARB_multitexture
+2026-10-05 15:22:59 ARB Multitexture extensions found. Use -noamtex to disable.
+2026-10-05 15:22:59 GL: Found GL_EXT_stencil_wrap
+2026-10-05 15:22:59 GL: Found GL_EXT_stencil_two_side
+2026-10-05 15:22:59 GL: Found GL_ARB_depth_clamp
+2026-10-05 15:22:59 GL: Found GL_EXT_texture_object
+2026-10-05 15:22:59 GL: Found GL_EXT_compiled_vertex_array
+2026-10-05 15:22:59 GL: Found GL_EXT_texture_env_combine
+2026-10-05 15:22:59 GL: Found GL_EXT_texture_env_add
+2026-10-05 15:22:59 GL: Found GL_NV_texture_env_combine4
+2026-10-05 15:22:59 GL: Found GL_ARB_texture_env_combine
+2026-10-05 15:22:59 GL: Found GL_ARB_texture_env_dot3
+2026-10-05 15:22:59 GLSL available
+2026-10-05 15:22:59 GL: Found GL_ARB_seamless_cube_map
+2026-10-05 15:22:59 GL: Found GL_ARB_framebuffer_sRGB
+2026-10-05 15:22:59 Colour buffer: GL_R8G8B8A0
+2026-10-05 15:22:59 Depth buffer: GL_DEPTH24_STENCIL8
+2026-10-05 15:22:59 CDAudio: MCI_PLAY failed (257)
+2026-10-05 15:22:59 Hardware gamma appears to work
+2026-10-05 15:22:59 GL: Found GL_EXT_texture_compression_s3tc
+2026-10-05 15:22:59 GL: Found GL_EXT_texture_compression_dxt1
+2026-10-05 15:22:59 GL: Found GL_EXT_packed_depth_stencil
+2026-10-05 15:22:59 GL: Found GL_ARB_ES3_2_compatibility
+2026-10-05 15:22:59 Rescanning shaders
+2026-10-05 15:22:59 XInput is enabled (4 controllers found)
+2026-10-05 15:22:59 OpenAL library is not installed
+2026-10-05 15:22:59 OpenGL renderer initialized
+2026-10-05 15:22:59 video restart took 0.817119 seconds
+2026-10-05 15:22:59 main thread video restart took 0.835353 secs
+2026-10-05 15:22:59    2 channel(s)
+2026-10-05 15:22:59    16 bits/sample
+2026-10-05 15:22:59    48000 bytes/sec
+2026-10-05 15:22:59 execing ^[benchmark.cfg\tip\from C:\Users\Tim Bergeron\source\repos\QSS-M\.codex-build\engine-lifecycle-six-20261005\fteqw/qw/benchmark.cfg]
+2026-10-05 15:22:59 BENCH_SESSION_1791238978725749500
+2026-10-05 15:22:59 ^Ue080^Ue081^Ue081^Ue081^Ue081^Ue081^Ue081 Quake Initialized ^Ue081^Ue081^Ue081^Ue081^Ue081^Ue081^Ue082
+2026-10-05 15:22:59 Initializing menu.dat
+2026-10-05 15:22:59 Execing alias bench_schedule ^3:
+2026-10-05 15:22:59 ^1in 2 bench_connect;in 10 bench_quit
+2026-10-05 15:22:59 ^2in 2 bench_connect;in 10 bench_quit
+2026-10-05 15:23:00 Execing alias bench_connect ^3:
+2026-10-05 15:23:00 ^1echo BENCH_BEGIN_connect;connectnq 127.0.0.1:26001
+2026-10-05 15:23:00 ^2echo BENCH_BEGIN_connect;connectnq 127.0.0.1:26001
+2026-10-05 15:23:00 BENCH_BEGIN_connect
+2026-10-05 15:23:00 Clearing memory
+2026-10-05 15:23:08 Execing alias bench_quit ^3:
+2026-10-05 15:23:08 ^1echo BENCH_QUIT;quit
+2026-10-05 15:23:08 ^2echo BENCH_QUIT;quit
+2026-10-05 15:23:08 BENCH_QUIT
+2026-10-05 15:23:08 Clearing memory
+2026-10-05 15:23:08 Destroyed 140/144 images

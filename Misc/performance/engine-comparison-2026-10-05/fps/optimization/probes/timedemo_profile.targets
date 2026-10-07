@@ -1,0 +1,1 @@
+<Project xmlns="http://schemas.microsoft.com/developer/msbuild/2003"><ItemGroup><ClCompile Remove="..\..\Quake\cl_demo.c"/><ClCompile Remove="..\..\Quake\host.c"/><ClCompile Include="$(MSBuildThisFileDirectory)cl_demo_profile.c"/><ClCompile Include="$(MSBuildThisFileDirectory)host_td_profile.c"/></ItemGroup></Project>

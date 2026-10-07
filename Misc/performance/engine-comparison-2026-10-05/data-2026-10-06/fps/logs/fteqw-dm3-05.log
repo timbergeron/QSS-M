@@ -1,0 +1,20 @@
+--- fte\qconsole.log ---
+FPS_BENCH_fteqw_dm3_1791324994099202100
+2026-10-06 15:16:34 "vid_width" is "800"
+2026-10-06 15:16:34 Default: "0"
+2026-10-06 15:16:34 "vid_height" is "600"
+2026-10-06 15:16:34 Default: "0"
+2026-10-06 15:16:34 "vid_vsync" is "0" (default)
+2026-10-06 15:16:34 Playing demo from fps_dm3.dem.
+2026-10-06 15:16:34 Setting windowed mode 800*600 OpenGL
+2026-10-06 15:16:34 GL_VENDOR: NVIDIA Corporation
+2026-10-06 15:16:34 GL_RENDERER: NVIDIA GeForce RTX 4070/PCIe/SSE2
+2026-10-06 15:16:34 GL_VERSION: 4.6.0 NVIDIA 610.88
+2026-10-06 15:16:34 OpenGL renderer initialized
+2026-10-06 15:16:34 ^Ue080^Ue081^Ue081^Ue081^Ue081^Ue081^Ue081 Quake Initialized ^Ue081^Ue081^Ue081^Ue081^Ue081^Ue081^Ue082
+2026-10-06 15:16:34 
+2026-10-06 15:16:34 
+2026-10-06 15:16:34 ^Ue01d^Ue01e^Ue01e^Ue01e^Ue01e^Ue01e^Ue01e^Ue01e^Ue01e^Ue01e^Ue01e^Ue01e^Ue01e^Ue01e^Ue01e^Ue01e^Ue01e^Ue01e^Ue01f
+2026-10-06 15:16:34 
+2026-10-06 15:16:35 The Abandoned Base
+2026-10-06 15:16:35 1443 frames   0.4 seconds 3264.2 fps

@@ -1,0 +1,20 @@
+--- fte\qconsole.log ---
+FPS_BENCH_fteqw_e1m2_1791325196710714000
+2026-10-06 15:19:56 "vid_width" is "800"
+2026-10-06 15:19:56 Default: "0"
+2026-10-06 15:19:56 "vid_height" is "600"
+2026-10-06 15:19:56 Default: "0"
+2026-10-06 15:19:57 "vid_vsync" is "0" (default)
+2026-10-06 15:19:57 Playing demo from fps_e1m2.dem.
+2026-10-06 15:19:57 Setting windowed mode 800*600 OpenGL
+2026-10-06 15:19:57 GL_VENDOR: NVIDIA Corporation
+2026-10-06 15:19:57 GL_RENDERER: NVIDIA GeForce RTX 4070/PCIe/SSE2
+2026-10-06 15:19:57 GL_VERSION: 4.6.0 NVIDIA 610.88
+2026-10-06 15:19:57 OpenGL renderer initialized
+2026-10-06 15:19:57 ^Ue080^Ue081^Ue081^Ue081^Ue081^Ue081^Ue081 Quake Initialized ^Ue081^Ue081^Ue081^Ue081^Ue081^Ue081^Ue082
+2026-10-06 15:19:57 
+2026-10-06 15:19:57 
+2026-10-06 15:19:57 ^Ue01d^Ue01e^Ue01e^Ue01e^Ue01e^Ue01e^Ue01e^Ue01e^Ue01e^Ue01e^Ue01e^Ue01e^Ue01e^Ue01e^Ue01e^Ue01e^Ue01e^Ue01e^Ue01f
+2026-10-06 15:19:57 
+2026-10-06 15:19:57 Castle of the Damned
+2026-10-06 15:19:58 1443 frames   0.5 seconds 3125.5 fps

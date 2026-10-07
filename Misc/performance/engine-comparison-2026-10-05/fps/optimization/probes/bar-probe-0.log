@@ -1,0 +1,261 @@
+
+LOG started on: 10/05/2026 20:48:49 
+
+Console initialized.
+Exe: 20:18:02 Oct  5 2026
+384.0 megabyte heap
+
+Sound Initialization
+Video mode 800x600x24 144Hz 2x scale (24-bit z-buffer, 0x FSAA) initialized
+GL_VENDOR: NVIDIA Corporation
+GL_RENDERER: NVIDIA GeForce RTX 4070/PCIe/SSE2
+GL_VERSION: 4.6.0 NVIDIA 591.86
+FOUND: ARB_vertex_buffer_object
+FOUND: GL_ARB_buffer_storage
+FOUND: ARB_multitexture
+GL_MAX_TEXTURE_UNITS: 4
+FOUND: ARB_texture_env_combine
+FOUND: ARB_texture_env_add
+FOUND: SDL_GL_SetSwapInterval
+FOUND: EXT_texture_filter_anisotropic
+FOUND: ARB_texture_non_power_of_two
+FOUND: GLSL
+GL_MAX_TEXTURE_IMAGE_UNITS: 32
+FOUND: brush model instancing
+FOUND: Framebuffer Objects
+Enabled: GLSL gamma
+FOUND: glBlendFuncSeparate
+Enabled: GLSL alias model rendering
+Enabled: EXT_packed_pixels
+FOUND: glGenerateMipmap
+SDL audio spec  : 44100 Hz, 1024 samples, 2 mix channels (callback: 2 ch, surround: on)
+SDL audio device: 44100 Hz, 2 ch, SDL_AUDIO_F32LE, 441 sample frames
+SDL audio driver: wasapi - Speakers (Realtek(R) Audio), 65536 bytes buffer
+Audio: 16 bit, stereo, 44100 Hz
+
+Language initialization
+Couldn't load 'localization/loc_english.txt'
+from 'C:\Users\Tim Bergeron\source\repos\QSS-M\.codex-build\engine-fps-optimization-20261005\bar-probe\20261005-204848\800x600'
+
+========= Quake Initialized =========
+
+execing quake.rc
+execing default.cfg
+execing fpsbench.cfg
+BAR_PROBE 
+BAR_PASS_0_0_0 
+"scr_demobar_timeout" is "1" (default)
+Playing demo from fps_aerowalk.dem.
+Using protocol 15
+
+<-------------------------------------->
+
+#Aerowalk
+1445 frames   0.8 seconds 1752.9 fps
+BAR_PASS_0_0_1 
+"scr_demobar_timeout" is "1" (default)
+Playing demo from fps_aerowalk.dem.
+Using protocol 15
+
+<-------------------------------------->
+
+#Aerowalk
+1445 frames   0.5 seconds 2792.9 fps
+BAR_PASS_0_0_2 
+"scr_demobar_timeout" is "1" (default)
+Playing demo from fps_aerowalk.dem.
+Using protocol 15
+
+<-------------------------------------->
+
+#Aerowalk
+1445 frames   0.5 seconds 2730.6 fps
+BAR_PASS_0_0_3 
+"scr_demobar_timeout" is "1" (default)
+Playing demo from fps_aerowalk.dem.
+Using protocol 15
+
+<-------------------------------------->
+
+#Aerowalk
+1445 frames   0.5 seconds 2658.1 fps
+BAR_PASS_0_0_4 
+"scr_demobar_timeout" is "1" (default)
+Playing demo from fps_aerowalk.dem.
+Using protocol 15
+
+<-------------------------------------->
+
+#Aerowalk
+1445 frames   0.6 seconds 2627.1 fps
+BAR_PASS_0_0_5 
+"scr_demobar_timeout" is "1" (default)
+Playing demo from fps_aerowalk.dem.
+Using protocol 15
+
+<-------------------------------------->
+
+#Aerowalk
+1445 frames   0.5 seconds 2795.4 fps
+BAR_PASS_1_1_0 
+"scr_demobar_timeout" is "-1" (default: "1")
+Playing demo from fps_aerowalk.dem.
+Using protocol 15
+
+<-------------------------------------->
+
+#Aerowalk
+1445 frames   0.5 seconds 2769.4 fps
+BAR_PASS_1_1_1 
+"scr_demobar_timeout" is "-1" (default: "1")
+Playing demo from fps_aerowalk.dem.
+Using protocol 15
+
+<-------------------------------------->
+
+#Aerowalk
+1445 frames   0.6 seconds 2587.5 fps
+BAR_PASS_1_1_2 
+"scr_demobar_timeout" is "-1" (default: "1")
+Playing demo from fps_aerowalk.dem.
+Using protocol 15
+
+<-------------------------------------->
+
+#Aerowalk
+1445 frames   0.5 seconds 2829.1 fps
+BAR_PASS_1_1_3 
+"scr_demobar_timeout" is "-1" (default: "1")
+Playing demo from fps_aerowalk.dem.
+Using protocol 15
+
+<-------------------------------------->
+
+#Aerowalk
+1445 frames   0.5 seconds 2860.2 fps
+BAR_PASS_1_1_4 
+"scr_demobar_timeout" is "-1" (default: "1")
+Playing demo from fps_aerowalk.dem.
+Using protocol 15
+
+<-------------------------------------->
+
+#Aerowalk
+1445 frames   0.6 seconds 2325.9 fps
+BAR_PASS_1_1_5 
+"scr_demobar_timeout" is "-1" (default: "1")
+Playing demo from fps_aerowalk.dem.
+Using protocol 15
+
+<-------------------------------------->
+
+#Aerowalk
+1445 frames   0.5 seconds 2826.0 fps
+BAR_PASS_2_1_0 
+"scr_demobar_timeout" is "-1" (default: "1")
+Playing demo from fps_aerowalk.dem.
+Using protocol 15
+
+<-------------------------------------->
+
+#Aerowalk
+1445 frames   0.5 seconds 2804.2 fps
+BAR_PASS_2_1_1 
+"scr_demobar_timeout" is "-1" (default: "1")
+Playing demo from fps_aerowalk.dem.
+Using protocol 15
+
+<-------------------------------------->
+
+#Aerowalk
+1445 frames   0.6 seconds 2386.4 fps
+BAR_PASS_2_1_2 
+"scr_demobar_timeout" is "-1" (default: "1")
+Playing demo from fps_aerowalk.dem.
+Using protocol 15
+
+<-------------------------------------->
+
+#Aerowalk
+1445 frames   0.5 seconds 2703.0 fps
+BAR_PASS_2_1_3 
+"scr_demobar_timeout" is "-1" (default: "1")
+Playing demo from fps_aerowalk.dem.
+Using protocol 15
+
+<-------------------------------------->
+
+#Aerowalk
+1445 frames   0.5 seconds 2627.4 fps
+BAR_PASS_2_1_4 
+"scr_demobar_timeout" is "-1" (default: "1")
+Playing demo from fps_aerowalk.dem.
+Using protocol 15
+
+<-------------------------------------->
+
+#Aerowalk
+1445 frames   0.5 seconds 2688.1 fps
+BAR_PASS_2_1_5 
+"scr_demobar_timeout" is "-1" (default: "1")
+Playing demo from fps_aerowalk.dem.
+Using protocol 15
+
+<-------------------------------------->
+
+#Aerowalk
+1445 frames   0.6 seconds 2615.8 fps
+BAR_PASS_3_0_0 
+"scr_demobar_timeout" is "1" (default)
+Playing demo from fps_aerowalk.dem.
+Using protocol 15
+
+<-------------------------------------->
+
+#Aerowalk
+1445 frames   0.5 seconds 2896.5 fps
+BAR_PASS_3_0_1 
+"scr_demobar_timeout" is "1" (default)
+Playing demo from fps_aerowalk.dem.
+Using protocol 15
+
+<-------------------------------------->
+
+#Aerowalk
+1445 frames   0.5 seconds 2675.6 fps
+BAR_PASS_3_0_2 
+"scr_demobar_timeout" is "1" (default)
+Playing demo from fps_aerowalk.dem.
+Using protocol 15
+
+<-------------------------------------->
+
+#Aerowalk
+1445 frames   0.5 seconds 2883.7 fps
+BAR_PASS_3_0_3 
+"scr_demobar_timeout" is "1" (default)
+Playing demo from fps_aerowalk.dem.
+Using protocol 15
+
+<-------------------------------------->
+
+#Aerowalk
+1445 frames   0.5 seconds 2902.5 fps
+BAR_PASS_3_0_4 
+"scr_demobar_timeout" is "1" (default)
+Playing demo from fps_aerowalk.dem.
+Using protocol 15
+
+<-------------------------------------->
+
+#Aerowalk
+1445 frames   0.5 seconds 2710.2 fps
+BAR_PASS_3_0_5 
+"scr_demobar_timeout" is "1" (default)
+Playing demo from fps_aerowalk.dem.
+Using protocol 15
+
+<-------------------------------------->
+
+#Aerowalk
+1445 frames   0.5 seconds 2796.9 fps

@@ -1,0 +1,4479 @@
+/*
+Copyright (C) 1996-2001 Id Software, Inc.
+Copyright (C) 2002-2009 John Fitzgibbons and others
+Copyright (C) 2007-2008 Kristian Duske
+Copyright (C) 2010-2014 QuakeSpasm developers
+
+This program is free software; you can redistribute it and/or
+modify it under the terms of the GNU General Public License
+as published by the Free Software Foundation; either version 2
+of the License, or (at your option) any later version.
+
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
+
+See the GNU General Public License for more details.
+
+You should have received a copy of the GNU General Public License
+along with this program; if not, write to the Free Software
+Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
+
+*/
+// gl_vidsdl.c -- SDL GL vid component
+
+#include "quakedef.h"
+#include "q_ctype.h"
+#include "cfgfile.h"
+#include "bgmusic.h"
+#include "resource.h"
+#include <SDL3/SDL.h>
+
+//ericw -- for putting the driver into multithreaded mode
+#ifdef __APPLE__
+#include <CoreGraphics/CoreGraphics.h>
+#include <OpenGL/OpenGL.h>
+#endif
+
+#ifdef _WIN32
+#include <windows.h>
+#endif
+
+#define MAX_MODE_LIST	600 //johnfitz -- was 30
+#define MAX_BPPS_LIST	5
+#define MAX_RATES_LIST	MAX_MODE_LIST // retain every refresh rate in modelist
+#define WARP_WIDTH		320
+#define WARP_HEIGHT		200
+#define MAXWIDTH		10000
+#define MAXHEIGHT		10000
+
+#define DEFAULT_SDL_FLAGS	SDL_OPENGL
+
+#define DEFAULT_REFRESHRATE	60
+
+typedef struct {
+	int			width;
+	int			height;
+	int			refreshrate;
+	int			bpp;
+} vmode_t;
+
+static const char *gl_vendor;
+static const char *gl_renderer;
+static const char *gl_version;
+static int gl_version_major;
+static int gl_version_minor;
+static const char *gl_extensions;
+
+qboolean gl_texture_s3tc, gl_texture_rgtc, gl_texture_bptc, gl_texture_etc2, gl_texture_astc, gl_texture_e5bgr9;
+
+char	videosetg[50];	// woods #q_sysinfo (qrack)
+char	videoc[40];		// woods #q_sysinfo (qrack)
+
+static vmode_t	modelist[MAX_MODE_LIST];
+static int		nummodes;
+
+static qboolean	vid_initialized = false;
+
+static SDL_Cursor	*vid_cursor;
+static SDL_Cursor	*custom_cursor; // woods #customcursor
+static SDL_Cursor	*menu_text_cursor;
+static qboolean		menu_text_cursor_custom = false;
+static SDL_Window	*draw_context;
+static SDL_GLContext	gl_context;
+
+static qboolean	vid_locked = false; //johnfitz
+static qboolean	vid_changed = false;
+static qboolean	game_shaders_pending;
+
+static void VID_Menu_Init (void); //johnfitz
+static void VID_EnsureModelist (void);
+static void VID_Menu_f (void); //johnfitz
+static void VID_MenuDraw (void);
+static void VID_MenuKey (int key);
+static void VID_MenuMouse(int cx, int cy); // woods #mousemenu
+
+static void ClearAllStates (void);
+static void GL_Init (void);
+static void GL_SetupState (void); //johnfitz
+
+void FXAA_Shutdown(void); // woods #fxaa
+
+#if defined(_WIN32)
+static void EnableDarkModeForSDLWindow(SDL_Window *window); // woods #darkmode
+#endif
+
+viddef_t	vid;				// global video state
+modestate_t	modestate = MS_UNINIT;
+qboolean	scr_skipupdate;
+
+qboolean gl_mtexable = false;
+qboolean gl_packed_pixels = false;
+qboolean gl_texture_env_combine = false; //johnfitz
+qboolean gl_texture_env_add = false; //johnfitz
+qboolean gl_swap_control = false; //johnfitz
+qboolean gl_anisotropy_able = false; //johnfitz
+float gl_max_anisotropy; //johnfitz
+qboolean gl_texture_NPOT = false; //ericw
+qboolean gl_vbo_able = false; //ericw
+qboolean gl_glsl_able = false; //ericw
+GLint gl_max_texture_units = 0; //ericw
+GLint gl_max_texture_image_units = 0;
+qboolean gl_glsl_gamma_able = false; //ericw
+qboolean gl_glsl_alias_able = false; //ericw
+qboolean gl_glsl_water_able = false; //Spoike
+qboolean gl_bmodel_instancing_able = false;
+qboolean gl_occlusion_able = false; // teleporter views skip hidden planes
+qboolean gl_fbo_able = false; // woods #fxaa FXAA framebuffer support
+int gl_stencilbits;
+GLint gl_hardware_maxsize;
+
+PFNGLMULTITEXCOORD2FARBPROC GL_MTexCoord2fFunc = NULL; //johnfitz
+PFNGLACTIVETEXTUREARBPROC GL_SelectTextureFunc = NULL; //johnfitz
+PFNGLCLIENTACTIVETEXTUREARBPROC GL_ClientActiveTextureFunc = NULL; //ericw
+PFNGLBINDBUFFERARBPROC GL_BindBufferFunc = NULL; //ericw
+PFNGLBUFFERDATAARBPROC GL_BufferDataFunc = NULL; //ericw
+PFNGLBUFFERSUBDATAARBPROC GL_BufferSubDataFunc = NULL; //ericw
+PFNGLDELETEBUFFERSARBPROC GL_DeleteBuffersFunc = NULL; //ericw
+PFNGLGENBUFFERSARBPROC GL_GenBuffersFunc = NULL; //ericw
+PFNGLMAPBUFFERARBPROC	GL_MapBufferFunc		= NULL; //spike
+PFNGLUNMAPBUFFERARBPROC	GL_UnmapBufferFunc		= NULL; //spike
+PFNGLMAPBUFFERRANGEPROC	GL_MapBufferRangeFunc	= NULL;	//spike
+PFNGLBUFFERSTORAGEPROC	GL_BufferStorageFunc	= NULL;	//spike
+
+QS_PFNGLCREATESHADERPROC GL_CreateShaderFunc = NULL; //ericw
+QS_PFNGLDELETESHADERPROC GL_DeleteShaderFunc = NULL; //ericw
+QS_PFNGLDELETEPROGRAMPROC GL_DeleteProgramFunc = NULL; //ericw
+QS_PFNGLSHADERSOURCEPROC GL_ShaderSourceFunc = NULL; //ericw
+QS_PFNGLCOMPILESHADERPROC GL_CompileShaderFunc = NULL; //ericw
+QS_PFNGLGETSHADERIVPROC GL_GetShaderivFunc = NULL; //ericw
+QS_PFNGLGETSHADERINFOLOGPROC GL_GetShaderInfoLogFunc = NULL; //ericw
+QS_PFNGLGETPROGRAMIVPROC GL_GetProgramivFunc = NULL; //ericw
+QS_PFNGLGETPROGRAMINFOLOGPROC GL_GetProgramInfoLogFunc = NULL; //ericw
+QS_PFNGLCREATEPROGRAMPROC GL_CreateProgramFunc = NULL; //ericw
+QS_PFNGLATTACHSHADERPROC GL_AttachShaderFunc = NULL; //ericw
+QS_PFNGLLINKPROGRAMPROC GL_LinkProgramFunc = NULL; //ericw
+QS_PFNGLBINDATTRIBLOCATIONFUNC GL_BindAttribLocationFunc = NULL; //ericw
+QS_PFNGLUSEPROGRAMPROC GL_UseProgramFunc = NULL; //ericw
+QS_PFNGLGETATTRIBLOCATIONPROC GL_GetAttribLocationFunc = NULL; //ericw
+QS_PFNGLVERTEXATTRIBPOINTERPROC GL_VertexAttribPointerFunc = NULL; //ericw
+QS_PFNGLENABLEVERTEXATTRIBARRAYPROC GL_EnableVertexAttribArrayFunc = NULL; //ericw
+QS_PFNGLDISABLEVERTEXATTRIBARRAYPROC GL_DisableVertexAttribArrayFunc = NULL; //ericw
+QS_PFNGLVERTEXATTRIBDIVISORPROC GL_VertexAttribDivisorFunc = NULL; // brush instancing
+QS_PFNGLGETUNIFORMLOCATIONPROC GL_GetUniformLocationFunc = NULL; //ericw
+QS_PFNGLUNIFORM1IPROC GL_Uniform1iFunc = NULL; //ericw
+QS_PFNGLUNIFORM1FPROC GL_Uniform1fFunc = NULL; //ericw
+QS_PFNGLUNIFORM2FPROC GL_Uniform2fFunc = NULL; // woods #fxaa
+QS_PFNGLUNIFORM3FPROC GL_Uniform3fFunc = NULL; //ericw
+QS_PFNGLUNIFORM4FPROC GL_Uniform4fFunc = NULL; //ericw
+QS_PFNGLUNIFORM4FVPROC GL_Uniform4fvFunc = NULL; //spike (for iqms)
+QS_PFNGLUNIFORM1IVPROC GL_Uniform1ivFunc = NULL; // woods #caustics
+QS_PFNGLDRAWELEMENTSINSTANCEDPROC GL_DrawElementsInstancedFunc = NULL; // brush instancing
+QS_PFNGLGENQUERIESPROC GL_GenQueriesFunc = NULL; // occlusion queries
+QS_PFNGLDELETEQUERIESPROC GL_DeleteQueriesFunc = NULL;
+QS_PFNGLBEGINQUERYPROC GL_BeginQueryFunc = NULL;
+QS_PFNGLENDQUERYPROC GL_EndQueryFunc = NULL;
+QS_PFNGLGETQUERYOBJECTUIVPROC GL_GetQueryObjectuivFunc = NULL;
+
+// woods #fxaa Framebuffer functions for FXAA
+PFNGLGENFRAMEBUFFERSPROC GL_GenFramebuffersFunc = NULL;
+PFNGLBINDFRAMEBUFFERPROC GL_BindFramebufferFunc = NULL;
+PFNGLFRAMEBUFFERTEXTURE2DPROC GL_FramebufferTexture2DFunc = NULL;
+PFNGLCHECKFRAMEBUFFERSTATUSPROC GL_CheckFramebufferStatusFunc = NULL;
+PFNGLDELETEFRAMEBUFFERSPROC GL_DeleteFramebuffersFunc = NULL;
+PFNGLGENRENDERBUFFERSPROC GL_GenRenderbuffersFunc = NULL;
+PFNGLBINDRENDERBUFFERPROC GL_BindRenderbufferFunc = NULL;
+PFNGLRENDERBUFFERSTORAGEPROC GL_RenderbufferStorageFunc = NULL;
+PFNGLFRAMEBUFFERRENDERBUFFERPROC GL_FramebufferRenderbufferFunc = NULL;
+PFNGLDELETERENDERBUFFERSPROC GL_DeleteRenderbuffersFunc = NULL;
+
+PFNGLBLENDFUNCSEPARATEPROC GL_BlendFuncSeparateFunc = NULL; // woods #fxaa Blend function pointer for FXAA transparency fix  
+
+// // woods #fxaa quality presets
+typedef struct {
+    float subpix;
+    float edge;
+} fxaa_quality_t;
+
+QS_PFNGLCOMPRESSEDTEXIMAGE2DPROC GL_CompressedTexImage2D = NULL;	//spike
+
+QS_PFNGENERATEMIPMAP GL_GenerateMipmap = NULL;
+
+//====================================
+
+//johnfitz -- new cvars
+static cvar_t	vid_fullscreen = {"vid_fullscreen", "0", CVAR_ARCHIVE};	// QuakeSpasm, was "1"
+static cvar_t	vid_width = {"vid_width", "800", CVAR_ARCHIVE};		// QuakeSpasm, was 640
+static cvar_t	vid_height = {"vid_height", "600", CVAR_ARCHIVE};	// QuakeSpasm, was 480
+static cvar_t	vid_bpp = {"vid_bpp", "16", CVAR_ARCHIVE};
+static cvar_t	vid_refreshrate = {"vid_refreshrate", "60", CVAR_ARCHIVE};
+static cvar_t	vid_vsync = {"vid_vsync", "0", CVAR_ARCHIVE};
+cvar_t	vid_fsaa = {"vid_fsaa", "0", CVAR_ARCHIVE}; // QuakeSpasm -- woods remove static
+cvar_t	vid_fxaa = {"vid_fxaa", "0", CVAR_ARCHIVE}; // // woods #fxaa anti-aliasing (0=off, 1=low, 2=medium, 3=high)
+static cvar_t	vid_desktopfullscreen = {"vid_desktopfullscreen", "0", CVAR_ARCHIVE}; // QuakeSpasm
+static cvar_t	vid_borderless = {"vid_borderless", "0", CVAR_ARCHIVE}; // QuakeSpasm
+cvar_t		vid_saveresize = {"vid_saveresize", "1", CVAR_ARCHIVE}; // github.com/andrei-drexler/ironwail (Enable resizing)
+extern cvar_t	scr_customcursor; // woods #customcursor (defined in gl_screen.c)
+//johnfitz
+
+cvar_t		vid_gamma = {"gamma", "1", CVAR_ARCHIVE}; //johnfitz -- moved here from view.c
+cvar_t		vid_contrast = {"contrast", "1", CVAR_ARCHIVE}; //QuakeSpasm, MarkV
+
+//==========================================================================
+//
+//  HARDWARE GAMMA -- johnfitz
+//
+//==========================================================================
+
+#if defined(__APPLE__)
+#define	USE_GAMMA_RAMPS			1
+#define	VID_PREFER_HARDWARE_GAMMA	1
+#else
+#define	USE_GAMMA_RAMPS			0
+#define	VID_PREFER_HARDWARE_GAMMA	0
+#endif
+
+#if USE_GAMMA_RAMPS
+static unsigned short vid_gamma_red[256];
+static unsigned short vid_gamma_green[256];
+static unsigned short vid_gamma_blue[256];
+
+static qboolean VID_Gamma_ProbeNative (void);
+static qboolean VID_Gamma_SetNative (void);
+static void VID_Gamma_RestoreNative (void);
+#endif
+
+static qboolean	gammaworks = false;	// whether hw-gamma works
+static int fsaa;
+static int fsaa_obtained;	// samples the context actually got (VID_SetMode)
+
+static qboolean VID_GLSLGammaAllowed (void)
+{
+	return gl_glsl_able && !COM_CheckParm("-noglslgamma");
+}
+
+static qboolean VID_PreferHardwareGamma (void)
+{
+#if VID_PREFER_HARDWARE_GAMMA
+	// Without an FBO the GLSL gamma pass must copy the default framebuffer,
+	// which stalls Apple's GL and costs a large chunk of the frame.  With one
+	// the pass is effectively free, so only fall back to hardware ramps when
+	// the scene FBO is unavailable (or would silently drop MSAA the context
+	// actually obtained -- a failed MSAA request doesn't count).
+	if (COM_CheckParm("-glslgamma"))
+		return false;
+	if (COM_CheckParm("-hwgamma"))
+		return true;
+	return !gl_fbo_able || !gl_texture_NPOT || fsaa_obtained > 0;
+#else
+	return false;
+#endif
+}
+
+static void VID_Gamma_Apply (void);
+
+/*
+================
+VID_Gamma_SetGamma -- apply gamma correction
+================
+*/
+static void VID_Gamma_SetGamma (void)
+{
+	if (gl_glsl_gamma_able)
+		return;
+
+	if (draw_context && gammaworks)
+	{
+# if USE_GAMMA_RAMPS
+		// As SDL2 did, only the focused window owns the display's ramp;
+		// VID_Gamma_Reapply sets it again when focus returns.
+		if (!(SDL_GetWindowFlags (draw_context) & SDL_WINDOW_INPUT_FOCUS))
+			return;
+		if (!VID_Gamma_SetNative ())
+			Con_Printf ("VID_Gamma_SetGamma: could not set the display transfer table\n");
+# endif
+	}
+}
+
+/*
+================
+VID_Gamma_Restore -- restore system gamma
+================
+*/
+static void VID_Gamma_Restore (void)
+{
+# if USE_GAMMA_RAMPS
+	// needs no window: the saved table belongs to a display
+	VID_Gamma_RestoreNative ();
+# endif
+}
+
+/*
+================
+VID_Gamma_Shutdown -- called on exit
+================
+*/
+static void VID_Gamma_Shutdown (void)
+{
+	VID_Gamma_Restore ();
+}
+
+/*
+================
+VID_Gamma_f -- callback when the cvar changes
+================
+*/
+static void VID_Gamma_f (cvar_t *var)
+{
+	if (gl_glsl_gamma_able)
+		return;
+
+#if USE_GAMMA_RAMPS
+	int i;
+
+	for (i = 0; i < 256; i++)
+	{
+		vid_gamma_red[i] =
+			CLAMP(0, (int) ((255 * pow((i + 0.5)/255.5, vid_gamma.value) + 0.5) * vid_contrast.value), 255) << 8;
+		vid_gamma_green[i] = vid_gamma_red[i];
+		vid_gamma_blue[i] = vid_gamma_red[i];
+	}
+#endif
+	VID_Gamma_SetGamma ();
+}
+
+static double vid_gamma_burst_deadline;	// monitor rapidly until this time
+static double vid_gamma_burst_next;
+
+#if defined(__APPLE__) && USE_GAMMA_RAMPS
+#define VID_GAMMA_BURST_INTERVAL	0.05
+#define VID_GAMMA_IDLE_INTERVAL		0.25
+
+static CGDirectDisplayID vid_gamma_display = kCGNullDirectDisplay;
+static SDL_DisplayID vid_gamma_display_id = 0;
+static int vid_gamma_mismatch_streak;
+static double vid_gamma_last_mismatch;
+
+/* SDL's Cocoa backend exposes these same CoreGraphics bounds publicly. */
+static qboolean VID_Gamma_DisplayBoundsMatch (CGDirectDisplayID display, const SDL_Rect *bounds)
+{
+	CGRect display_bounds = CGDisplayBounds (display);
+
+	return (int)display_bounds.origin.x == bounds->x &&
+		(int)display_bounds.origin.y == bounds->y &&
+		(int)display_bounds.size.width == bounds->w &&
+		(int)display_bounds.size.height == bounds->h;
+}
+
+/*
+================
+VID_Gamma_GetDisplay
+
+Gamma ramps go straight to the CoreGraphics transfer table of the window's
+display, which is also where macOS can replace them behind our back.  Resolve
+SDL's display by its CoreGraphics bounds so
+the lookup does not depend on the ordering or filtering of either display
+list.  The cached ID is revalidated to handle window moves and hot-plugging.
+================
+*/
+static qboolean VID_Gamma_GetDisplay (CGDirectDisplayID *display)
+{
+	CGDirectDisplayID *displays;
+	CGDisplayCount count, i;
+	CGError error;
+	SDL_Rect bounds;
+	const char *driver;
+	SDL_DisplayID display_id;
+
+	if (!display || !draw_context)
+		return false;
+
+	driver = SDL_GetCurrentVideoDriver ();
+	if (!driver || strcmp (driver, "cocoa"))
+		return false;
+
+	display_id = SDL_GetDisplayForWindow (draw_context);
+	if (!display_id || !SDL_GetDisplayBounds (display_id, &bounds))
+		return false;
+
+	if (display_id == vid_gamma_display_id &&
+		vid_gamma_display != kCGNullDirectDisplay &&
+		CGDisplayIsOnline (vid_gamma_display) &&
+		VID_Gamma_DisplayBoundsMatch (vid_gamma_display, &bounds))
+	{
+		*display = vid_gamma_display;
+		return true;
+	}
+
+	vid_gamma_display = kCGNullDirectDisplay;
+	vid_gamma_display_id = 0;
+
+	error = CGGetOnlineDisplayList (0, NULL, &count);
+	if (error != kCGErrorSuccess || !count)
+		return false;
+
+	displays = (CGDirectDisplayID *)SDL_malloc ((size_t)count * sizeof(*displays));
+	if (!displays)
+		return false;
+
+	error = CGGetOnlineDisplayList (count, displays, &count);
+	if (error == kCGErrorSuccess)
+	{
+		for (i = 0; i < count; i++)
+		{
+			// SDL omits the secondary members of a mirrored display set.
+			if (CGDisplayMirrorsDisplay (displays[i]) != kCGNullDirectDisplay)
+				continue;
+			if (VID_Gamma_DisplayBoundsMatch (displays[i], &bounds))
+			{
+				vid_gamma_display = displays[i];
+				vid_gamma_display_id = display_id;
+				*display = displays[i];
+				break;
+			}
+		}
+	}
+	SDL_free (displays);
+
+	return vid_gamma_display != kCGNullDirectDisplay;
+}
+
+static CGGammaValue VID_Gamma_ExpectedSample (const unsigned short *ramp,
+	uint32_t sample, uint32_t sample_count)
+{
+	CGGammaValue position, fraction;
+	uint32_t lower, upper;
+
+	position = sample * 255.0f / (sample_count - 1);
+	lower = (uint32_t)position;
+	upper = lower < 255 ? lower + 1 : lower;
+	fraction = position - lower;
+
+	return ((1.0f - fraction) * ramp[lower] + fraction * ramp[upper]) / 65535.0f;
+}
+
+/*
+================
+VID_Gamma_RampMatches
+================
+*/
+static qboolean VID_Gamma_RampMatches (void)
+{
+	CGGammaValue red[256], green[256], blue[256];
+	CGGammaValue expected_red, expected_green, expected_blue;
+	CGDirectDisplayID display;
+	uint32_t count, i;
+	const CGGammaValue tolerance = 1.5f / 65535.0f;
+
+	if (!VID_Gamma_GetDisplay (&display) ||
+		CGGetDisplayTransferByTable (display, (uint32_t)countof(red),
+		red, green, blue, &count) != kCGErrorSuccess || count < 2)
+		return true; // do not hammer the setter when the state cannot be queried
+
+	for (i = 0; i < count; i++)
+	{
+		expected_red = VID_Gamma_ExpectedSample (vid_gamma_red, i, count);
+		expected_green = VID_Gamma_ExpectedSample (vid_gamma_green, i, count);
+		expected_blue = VID_Gamma_ExpectedSample (vid_gamma_blue, i, count);
+		if (fabsf (red[i] - expected_red) > tolerance ||
+			fabsf (green[i] - expected_green) > tolerance ||
+			fabsf (blue[i] - expected_blue) > tolerance)
+			return false;
+	}
+	return true;
+}
+
+/*
+================
+VID_Gamma_SetNative / VID_Gamma_RestoreNative
+
+The table found on a display before our first ramp is kept so focus loss, a
+move to another display, vid_restart and shutdown hand back exactly what was
+there.  Only one display carries our ramp at a time: moving restores the old
+one first.  Quartz also restores every display when the process exits.
+================
+*/
+#define VID_GAMMA_TABLE_SIZE	1024
+
+static struct
+{
+	CGDirectDisplayID	display;
+	uint32_t			count;
+	CGGammaValue		red[VID_GAMMA_TABLE_SIZE];
+	CGGammaValue		green[VID_GAMMA_TABLE_SIZE];
+	CGGammaValue		blue[VID_GAMMA_TABLE_SIZE];
+} vid_gamma_original = { kCGNullDirectDisplay };
+
+static void VID_Gamma_RestoreNative (void)
+{
+	CGDirectDisplayID display = vid_gamma_original.display;
+
+	if (display == kCGNullDirectDisplay)
+		return;
+	vid_gamma_original.display = kCGNullDirectDisplay;
+	// an unplugged display has nothing left to restore
+	if (CGDisplayIsOnline (display) &&
+		CGSetDisplayTransferByTable (display, vid_gamma_original.count, vid_gamma_original.red,
+			vid_gamma_original.green, vid_gamma_original.blue) != kCGErrorSuccess)
+		Con_Printf ("VID_Gamma_Restore: failed on CGSetDisplayTransferByTable\n");
+}
+
+static qboolean VID_Gamma_SaveOriginal (CGDirectDisplayID display)
+{
+	uint32_t capacity = CGDisplayGammaTableCapacity (display);
+
+	if (capacity > VID_GAMMA_TABLE_SIZE)
+		capacity = VID_GAMMA_TABLE_SIZE;
+	if (!capacity ||
+		CGGetDisplayTransferByTable (display, capacity, vid_gamma_original.red, vid_gamma_original.green,
+			vid_gamma_original.blue, &vid_gamma_original.count) != kCGErrorSuccess ||
+		!vid_gamma_original.count)
+		return false;
+	vid_gamma_original.display = display;
+	return true;
+}
+
+static qboolean VID_Gamma_ProbeNative (void)
+{
+	CGDirectDisplayID display;
+
+	return VID_Gamma_GetDisplay (&display) && CGDisplayGammaTableCapacity (display) > 0;
+}
+
+static qboolean VID_Gamma_SetNative (void)
+{
+	CGGammaValue red[256], green[256], blue[256];
+	CGDirectDisplayID display;
+	int i;
+
+	if (!VID_Gamma_GetDisplay (&display))
+	{
+		VID_Gamma_RestoreNative ();
+		return false;
+	}
+	if (vid_gamma_original.display != display)
+	{
+		VID_Gamma_RestoreNative ();
+		if (!VID_Gamma_SaveOriginal (display))
+			return false;
+	}
+
+	// the same 256-entry conversion SDL2's Cocoa backend used
+	for (i = 0; i < 256; i++)
+	{
+		red[i] = vid_gamma_red[i] / 65535.0f;
+		green[i] = vid_gamma_green[i] / 65535.0f;
+		blue[i] = vid_gamma_blue[i] / 65535.0f;
+	}
+	return CGSetDisplayTransferByTable (display, 256, red, green, blue) == kCGErrorSuccess;
+}
+#endif
+
+void VID_Gamma_Reapply (void)
+{
+	// macOS can restore the window ramp during focus/display transitions.
+	if (!vid_initialized)
+		return;
+	VID_Gamma_f (NULL);
+	// macOS restores the transfer table asynchronously (the unminimize/focus
+	// animation finishes after the SDL event), which can clobber the ramp we
+	// just set -- monitor it closely for a short time via VID_Gamma_Frame.
+	vid_gamma_burst_deadline = realtime + 3.0;
+#if defined(__APPLE__) && USE_GAMMA_RAMPS
+	vid_gamma_mismatch_streak = 0;	// a real transition deserves a fresh burst
+	vid_gamma_burst_next = realtime + VID_GAMMA_BURST_INTERVAL;
+#else
+	vid_gamma_burst_next = realtime + 0.25;
+#endif
+}
+
+void VID_Gamma_FocusLost (void)
+{
+#if USE_GAMMA_RAMPS
+	// SDL2 handed its own ramp back on focus loss; the native table is ours
+	VID_Gamma_RestoreNative ();
+#endif
+}
+
+void VID_Gamma_Frame (void)
+{
+	if (!vid_initialized)
+		return;
+
+#if defined(__APPLE__) && USE_GAMMA_RAMPS
+	if (!draw_context || !gammaworks || gl_glsl_gamma_able ||
+		!(SDL_GetWindowFlags (draw_context) & SDL_WINDOW_INPUT_FOCUS))
+		return;
+
+	// Poll quickly while Cocoa transitions settle, then retain a cheap periodic
+	// check so a late or unannounced reset cannot leave the game dark.
+	if (realtime < vid_gamma_burst_next)
+		return;
+	vid_gamma_burst_next = realtime +
+		(realtime < vid_gamma_burst_deadline ? VID_GAMMA_BURST_INTERVAL : VID_GAMMA_IDLE_INTERVAL);
+
+	if (!VID_Gamma_RampMatches ())
+	{
+		VID_Gamma_SetGamma ();
+		// Repeated mismatches mean another gamma owner (f.lux, calibration
+		// loaders) keeps rewriting the table, or the OS resamples it beyond
+		// our tolerance -- back off instead of fighting at burst rate.
+		vid_gamma_last_mismatch = realtime;
+		if (++vid_gamma_mismatch_streak <= 8)
+		{
+			vid_gamma_burst_deadline = realtime + 3.0;
+			vid_gamma_burst_next = realtime + VID_GAMMA_BURST_INTERVAL;
+		}
+		else
+			vid_gamma_burst_next = realtime + 2.0;
+	}
+	// an alternating conflict (we set, they set) produces matching polls in
+	// between -- only forgive the streak after a sustained quiet period
+	else if (vid_gamma_mismatch_streak && realtime - vid_gamma_last_mismatch > 10.0)
+		vid_gamma_mismatch_streak = 0;
+	return;
+#else
+	if (vid_gamma_burst_deadline <= 0.0)
+		return;
+	if (realtime >= vid_gamma_burst_deadline)
+	{
+		vid_gamma_burst_deadline = 0.0;
+		return;
+	}
+	if (realtime >= vid_gamma_burst_next)
+	{
+		vid_gamma_burst_next = realtime + 0.25;
+		VID_Gamma_f (NULL);
+	}
+#endif
+}
+
+void VID_Gamma_ApplyToBuffer (byte *buffer, size_t pixel_count, int bytes_per_pixel)
+{
+#if USE_GAMMA_RAMPS
+	size_t i;
+
+	if (!buffer || pixel_count == 0 || bytes_per_pixel < 3)
+		return;
+	if (!draw_context || !gammaworks || gl_glsl_gamma_able)
+		return;
+	if (vid_gamma.value == 1.0f && vid_contrast.value == 1.0f)
+		return;
+
+	for (i = 0; i < pixel_count; i++, buffer += bytes_per_pixel)
+	{
+		buffer[0] = (byte)(vid_gamma_red[buffer[0]] >> 8);
+		buffer[1] = (byte)(vid_gamma_green[buffer[1]] >> 8);
+		buffer[2] = (byte)(vid_gamma_blue[buffer[2]] >> 8);
+	}
+#else
+	(void)buffer;
+	(void)pixel_count;
+	(void)bytes_per_pixel;
+#endif
+}
+
+/*
+================
+VID_Gamma_Apply -- probe and apply gamma correction
+================
+*/
+static void VID_Gamma_Apply (void)
+{
+	if (gl_glsl_gamma_able)
+		return;
+
+# if USE_GAMMA_RAMPS
+	gammaworks	= VID_Gamma_ProbeNative ();
+# else
+	// SDL3 has no window gamma API; elsewhere gamma is adjusted with GLSL
+	gammaworks	= false;
+# endif
+
+	if (!gammaworks)
+	{
+		if (VID_GLSLGammaAllowed ())
+		{
+			gl_glsl_gamma_able = true;
+			if (cls.state == ca_disconnected) // woods #supressvidmsgs
+				Con_SafePrintf("hardware gamma not available, using GLSL gamma\n");
+		}
+		else
+			Con_SafePrintf("gamma adjustment not available\n");
+	}
+	else
+		VID_Gamma_f (NULL);
+}
+
+/*
+================
+VID_Gamma_Init -- call on init
+================
+*/
+static void VID_Gamma_Init (void)
+{
+	Cvar_RegisterVariable (&vid_gamma);
+	Cvar_RegisterVariable (&vid_contrast);
+	Cvar_SetCallback (&vid_gamma, VID_Gamma_f);
+	Cvar_SetCallback (&vid_contrast, VID_Gamma_f);
+
+	VID_Gamma_Apply ();
+}
+
+/*
+======================
+VID_GetCurrentWidth
+======================
+*/
+static int VID_GetCurrentWidth (void)
+{
+	int w = 0, h = 0;
+	SDL_GetWindowSize(draw_context, &w, &h);
+	return w;
+}
+
+/*
+=======================
+VID_GetCurrentHeight
+=======================
+*/
+static int VID_GetCurrentHeight (void)
+{
+	int w = 0, h = 0;
+	SDL_GetWindowSize(draw_context, &w, &h);
+	return h;
+}
+
+/* SDL3 reports fractional refresh rates; the vid_refreshrate cvar holds whole Hz. */
+static int VID_RefreshRateHz (const SDL_DisplayMode *mode)
+{
+	return (int)(mode->refresh_rate + 0.5f);
+}
+
+/* Use the window's monitor once it exists, including for fullscreen validation. */
+static SDL_DisplayID VID_GetDisplay (void)
+{
+	SDL_DisplayID display = draw_context ? SDL_GetDisplayForWindow(draw_context) : 0;
+
+	return display ? display : SDL_GetPrimaryDisplay();
+}
+
+/*
+====================
+VID_GetCurrentRefreshRate
+====================
+*/
+static int VID_GetCurrentRefreshRate (void)
+{
+	const SDL_DisplayMode *mode = SDL_GetCurrentDisplayMode(VID_GetDisplay());
+
+	if (!mode || mode->refresh_rate <= 0)
+		return DEFAULT_REFRESHRATE;
+
+	return VID_RefreshRateHz(mode);
+}
+
+
+/*
+====================
+VID_GetCurrentBPP
+====================
+*/
+static int VID_GetCurrentBPP (void)
+{
+	const Uint32 pixelFormat = SDL_GetWindowPixelFormat(draw_context);
+	return SDL_BITSPERPIXEL(pixelFormat);
+}
+
+/*
+====================
+VID_GetCurrentDisplayScale -- woods #q_sysinfo
+
+The content scale of the window's display (2 on a Retina panel), not its
+physical pixel density.
+====================
+*/
+float VID_GetCurrentDisplayScale (void)
+{
+	float scale = draw_context ? SDL_GetWindowDisplayScale(draw_context) : 0.0f;
+
+	return scale > 0.0f ? scale : 1.0f;
+}
+
+/*
+====================
+VID_GetFullscreen
+ 
+returns true if we are in regular fullscreen or "desktop fullscren"
+====================
+*/
+static qboolean VID_GetFullscreen (void)
+{
+	return (SDL_GetWindowFlags(draw_context) & SDL_WINDOW_FULLSCREEN) != 0;
+}
+
+/*
+====================
+VID_GetDesktopFullscreen
+ 
+returns true if we are specifically in "desktop fullscreen" mode
+====================
+*/
+static qboolean VID_GetDesktopFullscreen (void)
+{
+	// SDL3 fullscreen without an exclusive display mode is desktop fullscreen
+	return VID_GetFullscreen() && !SDL_GetWindowFullscreenMode(draw_context);
+}
+
+/*
+====================
+VID_GetVSync
+====================
+*/
+static qboolean VID_GetVSync (void)
+{
+	int interval = 0;
+
+	return SDL_GL_GetSwapInterval(&interval) && interval == 1;
+}
+
+/*
+====================
+VID_GetWindow
+
+used by pl_win.c
+====================
+*/
+void *VID_GetWindow (void)
+{
+	return draw_context;
+}
+
+/*
+====================
+VID_SetWindowTitle - github.com/andrei-drexler/ironwail (Show game summary in window title)
+====================
+*/
+void VID_SetWindowTitle(const char* title)
+{
+	SDL_SetWindowTitle(draw_context, title);
+}
+
+/*
+====================
+VID_HasMouseOrInputFocus
+====================
+*/
+qboolean VID_HasMouseOrInputFocus (void)
+{
+	return (SDL_GetWindowFlags(draw_context) & (SDL_WINDOW_MOUSE_FOCUS | SDL_WINDOW_INPUT_FOCUS)) != 0;
+}
+
+/*
+====================
+VID_HasInputFocus
+
+Keyboard/input focus only - true only for the active foreground window. Unlike
+VID_HasMouseOrInputFocus this ignores mouse focus, so a backgrounded window with
+the cursor still hovering over it correctly reads as unfocused.
+====================
+*/
+qboolean VID_HasInputFocus (void)
+{
+	return (SDL_GetWindowFlags(draw_context) & SDL_WINDOW_INPUT_FOCUS) != 0;
+}
+
+/*
+====================
+VID_IsMinimized
+====================
+*/
+qboolean VID_IsMinimized (void)
+{
+	return (SDL_GetWindowFlags(draw_context) & (SDL_WINDOW_MINIMIZED | SDL_WINDOW_HIDDEN)) != 0;
+}
+
+/*
+================
+VID_GetDisplayModeForDisplay
+
+Returns a pointer to a statically allocated SDL_DisplayMode structure
+if there is one with the requested params on the selected display.
+Otherwise returns NULL.
+
+This is passed to SDL_SetWindowFullscreenMode to specify a pixel format
+with the requested bpp. If we didn't care about bpp we could just pass NULL.
+================
+*/
+static SDL_DisplayMode *VID_GetDisplayModeForDisplay(SDL_DisplayID display, int width, int height, int refreshrate, int bpp)
+{
+	static SDL_DisplayMode mode;
+	SDL_DisplayMode **modes;
+	qboolean found = false;
+	int i, count = 0;
+
+	modes = SDL_GetFullscreenDisplayModes(display, &count);
+	for (i = 0; modes && i < count; i++)
+	{
+		if (modes[i]->w == width && modes[i]->h == height
+			&& SDL_BITSPERPIXEL(modes[i]->format) == bpp
+			&& VID_RefreshRateHz(modes[i]) == refreshrate)
+		{
+			mode = *modes[i];	// copied: SDL frees the list below
+			found = true;
+			break;
+		}
+	}
+	SDL_free(modes);
+	return found ? &mode : NULL;
+}
+
+static SDL_DisplayMode *VID_GetDisplayMode(int width, int height, int refreshrate, int bpp)
+{
+	return VID_GetDisplayModeForDisplay(VID_GetDisplay(), width, height, refreshrate, bpp);
+}
+
+/*
+================
+VID_ValidMode
+================
+*/
+static qboolean VID_ValidMode (int width, int height, int refreshrate, int bpp, qboolean fullscreen)
+{
+// ignore width / height / bpp if vid_desktopfullscreen is enabled
+	if (fullscreen && vid_desktopfullscreen.value)
+		return true;
+
+	if (width < 320)
+		return false;
+
+	if (height < 200)
+		return false;
+
+	if (fullscreen && VID_GetDisplayMode(width, height, refreshrate, bpp) == NULL)
+		bpp = 0;
+
+	switch (bpp)
+	{
+	case 16:
+	case 24:
+	case 32:
+		break;
+	default:
+		return false;
+	}
+
+	return true;
+}
+
+static int VID_ModeAbsDiff (int a, int b)
+{
+	return (a > b) ? (a - b) : (b - a);
+}
+
+static qboolean VID_FindClosestFullscreenMode (int width, int height, int refreshrate, int bpp, vmode_t *bestmode)
+{
+	int i, best = -1;
+	unsigned long long best_dimscore = 0;
+	unsigned int best_bppdelta = 0;
+	unsigned int best_ratedelta = 0;
+
+	VID_EnsureModelist ();
+	for (i = 0; i < nummodes; i++)
+	{
+		long long dw, dh;
+		unsigned long long dimscore;
+		unsigned int bppdelta, ratedelta;
+
+		if (modelist[i].width < 320 || modelist[i].height < 200)
+			continue;
+
+		dw = (long long)modelist[i].width - width;
+		dh = (long long)modelist[i].height - height;
+		dimscore = (unsigned long long)(dw * dw + dh * dh);
+		bppdelta = bpp > 0 ? (unsigned int)VID_ModeAbsDiff(modelist[i].bpp, bpp) : 0;
+		ratedelta = refreshrate > 0 ? (unsigned int)VID_ModeAbsDiff(modelist[i].refreshrate, refreshrate) : 0;
+
+		if (best < 0 ||
+			dimscore < best_dimscore ||
+			(dimscore == best_dimscore && bppdelta < best_bppdelta) ||
+			(dimscore == best_dimscore && bppdelta == best_bppdelta && ratedelta < best_ratedelta))
+		{
+			best = i;
+			best_dimscore = dimscore;
+			best_bppdelta = bppdelta;
+			best_ratedelta = ratedelta;
+		}
+	}
+
+	if (best < 0)
+		return false;
+
+	*bestmode = modelist[best];
+	return true;
+}
+
+// Rewrites vid_width/height/refreshrate/bpp to an enumerated mode when the
+// requested exclusive-fullscreen mode isn't available (e.g. macOS Retina
+// logical window sizes that don't match any real display mode).
+static qboolean VID_UseClosestFullscreenMode (int *width, int *height, int *refreshrate, int *bpp)
+{
+	vmode_t mode;
+
+	if (!VID_FindClosestFullscreenMode(*width, *height, *refreshrate, *bpp, &mode))
+		return false;
+
+	Con_Printf ("%dx%dx%d %dHz fullscreen is not available, using closest mode %dx%dx%d %dHz\n",
+		*width, *height, *bpp, *refreshrate,
+		mode.width, mode.height, mode.bpp, mode.refreshrate);
+
+	*width = mode.width;
+	*height = mode.height;
+	*refreshrate = mode.refreshrate;
+	*bpp = mode.bpp;
+
+	Cvar_SetValueQuick (&vid_width, (float)*width);
+	Cvar_SetValueQuick (&vid_height, (float)*height);
+	Cvar_SetValueQuick (&vid_refreshrate, (float)*refreshrate);
+	Cvar_SetValueQuick (&vid_bpp, (float)*bpp);
+
+	return true;
+}
+
+/*
+================
+VID_TryFullscreenMode
+
+Try one fullscreen style and confirm SDL's resulting window state. Desktop
+fullscreen passes no display mode; exclusive fullscreen needs one.
+================
+*/
+static qboolean VID_TryFullscreenMode (qboolean desktop, const char *name, const SDL_DisplayMode *mode)
+{
+	char error[256];
+
+	if (!SDL_SetWindowFullscreenMode (draw_context, desktop ? NULL : mode))
+	{
+		q_strlcpy (error, SDL_GetError(), sizeof(error));
+		Con_Warning ("Couldn't prepare %s fullscreen: %s\n", name, error);
+		return false;
+	}
+
+	if (!SDL_SetWindowFullscreen (draw_context, true))
+	{
+		q_strlcpy (error, SDL_GetError(), sizeof(error));
+		Con_Warning ("Couldn't enter %s fullscreen: %s\n", name, error);
+
+		/* Some backends can report an error after changing the window state. */
+		SDL_SyncWindow (draw_context);
+		if (VID_GetFullscreen())
+		{
+			Con_Warning ("SDL reported failure, but the window is fullscreen; keeping it\n");
+			return true;
+		}
+		return false;
+	}
+
+	/* SDL3 applies window state asynchronously; let this change settle. */
+	SDL_SyncWindow (draw_context);
+
+	if (!VID_GetFullscreen())
+	{
+		Con_Warning ("SDL reported success entering %s fullscreen, but the window remained windowed\n", name);
+		return false;
+	}
+	if (desktop != VID_GetDesktopFullscreen())
+		Con_Warning ("SDL entered a different fullscreen style than requested; keeping it\n");
+
+	return true;
+}
+
+/*
+================
+VID_TryEnterFullscreen
+
+Failure to take over the display should not make an otherwise usable window
+fatal. Try the requested fullscreen style, then the other style, and finally
+leave the window in windowed mode. Without an exact exclusive mode, use the
+closest one SDL offers for the requested size.
+================
+*/
+static qboolean VID_TryEnterFullscreen (int width, int height, int refreshrate, int bpp)
+{
+	const qboolean desktop = vid_desktopfullscreen.value != 0;
+	const char *requested_name = desktop ? "desktop" : "exclusive";
+	const char *alternate_name = desktop ? "exclusive" : "desktop";
+	SDL_DisplayMode closest;
+	SDL_DisplayMode *exclusive_mode;
+	SDL_DisplayID display = VID_GetDisplay();
+	exclusive_mode = VID_GetDisplayModeForDisplay(display, width, height, refreshrate, bpp);
+	if (!exclusive_mode &&
+		SDL_GetClosestFullscreenDisplayMode(display, width, height, (float)refreshrate, false, &closest))
+		exclusive_mode = &closest;
+	if (!exclusive_mode && !desktop)
+		Con_Warning ("No exclusive fullscreen mode is available near %dx%d\n", width, height);
+
+	if ((desktop || exclusive_mode) &&
+		VID_TryFullscreenMode(desktop, requested_name, exclusive_mode))
+		return true;
+
+	if ((!desktop || exclusive_mode) &&
+		VID_TryFullscreenMode(!desktop, alternate_name, exclusive_mode))
+	{
+		Con_Printf ("Falling back to %s fullscreen\n", alternate_name);
+		return true;
+	}
+
+	return false;
+}
+
+/*
+================
+VID_RestoreWindowedFallback
+
+Recover from rejected fullscreen transitions with a usable, visible window.
+Desktop fullscreen deliberately bypasses normal mode validation, so clamp the
+emergency window to the target display's usable work area.
+================
+*/
+static void VID_RestoreWindowedFallback (int width, int height)
+{
+	SDL_Rect usable = {0, 0, 0, 0};
+	SDL_DisplayID display;
+	int actual_width, actual_height;
+	qboolean maximized;
+
+	/* Drop any fullscreen request SDL still holds from the rejected transition. */
+	SDL_SetWindowFullscreen (draw_context, false);
+	SDL_SyncWindow (draw_context);
+	maximized = (SDL_GetWindowFlags(draw_context) & SDL_WINDOW_MAXIMIZED) != 0;
+
+	display = VID_GetDisplay();
+
+	/* Resizing or repositioning an already maximized window triggered SDL2
+	 * backend bugs. Preserve its geometry and only restore its chrome. */
+	if (!maximized)
+	{
+		width = q_max(width, 320);
+		height = q_max(height, 200);
+		if (!SDL_GetDisplayUsableBounds(display, &usable))
+			SDL_GetDisplayBounds(display, &usable);
+		if (usable.w > 0 && usable.h > 0)
+		{
+			width = q_min(width, usable.w);
+			height = q_min(height, usable.h);
+		}
+
+		SDL_SetWindowSize (draw_context, width, height);
+		SDL_SetWindowPosition (draw_context,
+			SDL_WINDOWPOS_CENTERED_DISPLAY(display),
+			SDL_WINDOWPOS_CENTERED_DISPLAY(display));
+	}
+
+	SDL_SetWindowBordered (draw_context, vid_borderless.value ? false : true);
+	SDL_SetWindowResizable (draw_context, vid_borderless.value ? false : true);
+
+	SDL_GetWindowSize (draw_context, &actual_width, &actual_height);
+	Con_Printf ("Falling back to %dx%d windowed mode\n", actual_width, actual_height);
+}
+
+/*
+================
+VID_SetMode
+================
+*/
+static qboolean VID_SetMode (int width, int height, int refreshrate, int bpp, qboolean fullscreen)
+{
+	int		temp;
+	SDL_WindowFlags	flags;
+	char		caption[50];
+	int		depthbits, stencilbits;
+	SDL_DisplayID	previous_display;
+
+	// so Con_Printfs don't mess us up by forcing vid and snd updates
+	temp = scr_disabled_for_loading;
+	scr_disabled_for_loading = true;
+
+	CDAudio_Pause ();
+	BGM_Pause ();
+
+	/* z-buffer depth */
+	if (bpp == 16)
+	{
+		depthbits = 16;
+		stencilbits = 0;
+	}
+	else
+	{
+		depthbits = 24;
+		stencilbits = 8;
+	}
+	SDL_GL_SetAttribute(SDL_GL_DEPTH_SIZE, depthbits);
+	SDL_GL_SetAttribute(SDL_GL_STENCIL_SIZE, stencilbits);
+
+	/* fsaa */
+	SDL_GL_SetAttribute(SDL_GL_MULTISAMPLEBUFFERS, fsaa > 0 ? 1 : 0);
+	SDL_GL_SetAttribute(SDL_GL_MULTISAMPLESAMPLES, fsaa);
+
+	q_snprintf(caption, sizeof(caption), ENGINE_NAME_AND_VER);
+
+	/* Create the window if needed, hidden */
+	if (!draw_context)
+	{
+		flags = SDL_WINDOW_OPENGL | SDL_WINDOW_HIDDEN;
+
+		if (vid_borderless.value)
+			flags |= SDL_WINDOW_BORDERLESS;
+		else if (!fullscreen)
+			flags |= SDL_WINDOW_RESIZABLE;
+
+		draw_context = SDL_CreateWindow (caption, width, height, flags);
+		if (!draw_context) { // scale back fsaa
+			SDL_GL_SetAttribute(SDL_GL_MULTISAMPLEBUFFERS, 0);
+			SDL_GL_SetAttribute(SDL_GL_MULTISAMPLESAMPLES, 0);
+			draw_context = SDL_CreateWindow (caption, width, height, flags);
+		}
+		if (!draw_context) { // scale back SDL_GL_DEPTH_SIZE
+			SDL_GL_SetAttribute(SDL_GL_DEPTH_SIZE, 16);
+			draw_context = SDL_CreateWindow (caption, width, height, flags);
+		}
+		if (!draw_context) { // scale back SDL_GL_STENCIL_SIZE
+			SDL_GL_SetAttribute(SDL_GL_STENCIL_SIZE, 0);
+			draw_context = SDL_CreateWindow (caption, width, height, flags);
+		}
+		if (!draw_context)
+			Sys_Error ("Couldn't create window: %s", SDL_GetError());
+
+		previous_display = 0;
+	}
+	else
+	{
+		previous_display = SDL_GetDisplayForWindow(draw_context);
+	}
+
+	/* Ensure the window is not fullscreen */
+	if (VID_GetFullscreen ())
+	{
+		char error[256] = "";
+		const qboolean left = SDL_SetWindowFullscreen (draw_context, false);
+
+		if (!left)
+			q_strlcpy (error, SDL_GetError(), sizeof(error));
+		/* SDL3 leaves fullscreen asynchronously and reports the old state until it settles. */
+		SDL_SyncWindow (draw_context);
+
+		if (!left)
+		{
+			if (!VID_GetFullscreen())
+			{
+				Con_Warning ("SDL reported failure leaving fullscreen: %s; the window is windowed, continuing\n", error);
+			}
+			else
+			{
+				Con_Warning ("Couldn't leave fullscreen: %s; keeping the current video mode\n", error);
+				/* VID_Restart has already deleted the GL objects. Preserve the usable
+				 * window state and continue to the renderer rebuild. */
+				goto fullscreen_result;
+			}
+		}
+		else if (VID_GetFullscreen())
+		{
+			Con_Warning ("SDL reported success leaving fullscreen, but the window is still fullscreen; keeping the current video mode\n");
+			/* VID_Restart has already deleted the GL objects. Preserve the usable
+			 * window state and continue to the renderer rebuild. */
+			goto fullscreen_result;
+		}
+	}
+
+	if (SDL_GetWindowFlags(draw_context) & SDL_WINDOW_MAXIMIZED)
+		;	//don't resize/move it when already maximised. this avoids sdl2 bugs.
+	else
+	{
+		/* Set window size and display mode */
+		SDL_SetWindowSize (draw_context, width, height);
+		if (previous_display)
+			SDL_SetWindowPosition (draw_context, SDL_WINDOWPOS_CENTERED_DISPLAY(previous_display), SDL_WINDOWPOS_CENTERED_DISPLAY(previous_display));
+		else
+			SDL_SetWindowPosition(draw_context, SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED);
+	}
+	SDL_SetWindowBordered (draw_context, vid_borderless.value ? false : true);
+	SDL_SetWindowResizable (draw_context,
+		(!fullscreen && !vid_borderless.value) ? true : false);
+
+	/* Make window fullscreen if needed, and show the window. SDL accepts a hidden
+	 * window's fullscreen request and reports the window as fullscreen, but only
+	 * applies it when the window is shown. Show a hidden fullscreen window first so
+	 * the guarded transition below receives the real backend result. */
+
+	if (fullscreen)
+	{
+		if (SDL_GetWindowFlags(draw_context) & SDL_WINDOW_HIDDEN)
+			SDL_ShowWindow (draw_context);
+		if (!VID_TryEnterFullscreen (width, height, refreshrate, bpp))
+			VID_RestoreWindowedFallback (width, height);
+	}
+
+fullscreen_result:
+	SDL_ShowWindow (draw_context);
+	SDL_RaiseWindow (draw_context);
+	/* Let size, position and visibility changes settle before reading the drawable size. */
+	SDL_SyncWindow (draw_context);
+
+#if defined(_WIN32)
+EnableDarkModeForSDLWindow(draw_context); // woods #darkmode - apply dark mode to window titlebar on Windows 10/11
+#endif
+
+	/* Create GL context if needed */
+	if (!gl_context) {
+		gl_context = SDL_GL_CreateContext(draw_context);
+		if (!gl_context)
+			Sys_Error("Couldn't create GL context: %s", SDL_GetError());
+	}
+
+	gl_swap_control = true;
+	if (!SDL_GL_SetSwapInterval ((vid_vsync.value) ? 1 : 0))
+		gl_swap_control = false;
+
+	SDL_GetWindowSizeInPixels(draw_context, &vid.width, &vid.height);
+
+	vid.refreshrate = VID_GetCurrentRefreshRate();
+	vid.conwidth = vid.width & 0xFFFFFFF8;
+	vid.conheight = vid.conwidth * vid.height / vid.width;
+	vid.numpages = 2;
+
+// read the obtained z-buffer depth
+	if (!SDL_GL_GetAttribute(SDL_GL_DEPTH_SIZE, &depthbits))
+		depthbits = 0;
+
+// read obtained fsaa samples
+	if (!SDL_GL_GetAttribute(SDL_GL_MULTISAMPLESAMPLES, &fsaa_obtained))
+		fsaa_obtained = 0;
+
+// read stencil bits
+	if (!SDL_GL_GetAttribute(SDL_GL_STENCIL_SIZE, &gl_stencilbits))
+		gl_stencilbits = 0;
+
+	modestate = VID_GetFullscreen() ? MS_FULLSCREEN : MS_WINDOWED;
+
+	CDAudio_Resume ();
+	BGM_Resume ();
+	scr_disabled_for_loading = temp;
+
+// fix the leftover Alt from any Alt-Tab or the like that switched us away
+	ClearAllStates ();
+
+	if (cls.state == ca_disconnected) // woods #supressvidmsgs
+		Con_SafePrintf ("Video mode %dx%dx%d %dHz %gx scale (%d-bit z-buffer, %dx FSAA) initialized\n",
+				VID_GetCurrentWidth(),
+				VID_GetCurrentHeight(),
+				VID_GetCurrentBPP(),
+				VID_GetCurrentRefreshRate(),
+				VID_GetCurrentDisplayScale(), // woods add display scale
+				depthbits,
+				fsaa_obtained);
+
+	char videoset[50]; // woods #q_sysinfo (qrack)
+
+	sprintf(videoset, "%dx%dx%d %dHz (%d-bit z-buffer, %dx FSAA)",  // woods #q_sysinfo (qrack)
+		VID_GetCurrentWidth(),
+		VID_GetCurrentHeight(),
+		VID_GetCurrentBPP(),
+		VID_GetCurrentRefreshRate(),
+		depthbits,
+		fsaa_obtained);
+
+	strcpy(videosetg, videoset); // woods #q_sysinfo (qrack)
+
+	vid.recalc_refdef = 1;
+
+// no pending changes
+	vid_changed = false;
+
+	return true;
+}
+
+/*
+===================
+VID_Changed_f -- kristian -- notify us that a value has changed that requires a vid_restart
+===================
+*/
+static void VID_Changed_f (cvar_t *var)
+{
+	vid_changed = true;
+}
+
+/*
+===================
+VID_OnResize -- github.com/andrei-drexler/ironwail (Enable resizing)
+
+Called from the SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED handler. Keep this path light:
+update the current drawable size and mark the resize for deferred handling in
+GL_BeginRendering, where we can safely persist cvars and refresh console size
+without fighting Cocoa live-resize.
+===================
+*/
+void VID_OnResize (int width, int height)
+{
+	vid.width = width;
+	vid.height = height;
+	vid.recalc_refdef = 1;
+	vid.resized = true;
+}
+
+/*
+===================
+VID_Restart -- johnfitz -- change video modes on the fly
+===================
+*/
+static void VID_Restart (void)
+{
+	int width, height, refreshrate, bpp;
+	qboolean fullscreen, validmode;
+	qboolean blocked_sound, scr_was_disabled;
+
+	if (vid_locked || !vid_changed)
+		return;
+
+	width = (int)vid_width.value;
+	height = (int)vid_height.value;
+	refreshrate = (int)vid_refreshrate.value;
+	bpp = (int)vid_bpp.value;
+	fullscreen = vid_fullscreen.value ? true : false;
+
+//
+// validate new mode
+//
+	// Refresh before using the closest-mode list, even if a display event is pending.
+	VID_OnDisplayChange ();
+	validmode = VID_ValidMode (width, height, refreshrate, bpp, fullscreen);
+	if (!validmode && fullscreen && !vid_desktopfullscreen.value)
+		validmode = VID_UseClosestFullscreenMode(&width, &height, &refreshrate, &bpp) &&
+			VID_ValidMode(width, height, refreshrate, bpp, fullscreen);
+
+	if (!validmode)
+	{
+		Con_Printf ("%dx%dx%d %dHz %s is not a valid mode\n",
+				width, height, bpp, refreshrate, fullscreen? "fullscreen" : "windowed");
+		return;
+	}
+
+	// Console prints during GL_Init can otherwise call SCR_UpdateScreen while
+	// shaders, textures and framebuffer objects are only partially rebuilt.
+	scr_was_disabled = scr_disabled_for_loading;
+	scr_disabled_for_loading = true;
+
+	M_MenuSearch_CloseForVideoRestart();
+
+	// Mute DMA output while SDL/GL mode changes block regular sound updates.
+	blocked_sound = S_BlockSound ();
+	VID_Gamma_Restore ();
+
+// ericw -- OS X, SDL1: textures, VBO's invalid after mode change
+//          OS X, SDL2: still valid after mode change
+// To handle both cases, delete all GL objects (textures, VBO, GLSL) now.
+// We must not interleave deleting the old objects with creating new ones, because
+// one of the new objects could be given the same ID as an invalid handle
+// which is later deleted.
+
+	RSceneCache_Shutdown();
+	R_GrassShutdownGL();
+	PScript_ShutdownGL();
+	Sky_ResetGL();
+	TexMgr_DeleteTextureObjects ();
+	GLSLGamma_DeleteTexture ();
+	R_WarpScaleView_DeleteTexture ();
+	R_TeleportShutdownGL ();
+	R_LightningBeam_DeleteTexture (); // woods #beamspoly
+	R_MotionBlur_DeleteTexture (); // woods #motionblur
+	Draw_ShutdownGL (); // rounded-fill program handle becomes invalid on context loss
+	Wheel_ShutdownGL (); // weapon wheel program handle becomes invalid on context loss
+	R_DeleteShaders ();
+	GL_DeleteBModelVertexBuffer ();
+	R_DeleteBrushModelInstancingBuffers ();
+	R_DeleteAliasModelInstancingBuffers ();
+	GLMesh_DeleteVertexBuffers ();
+	FXAA_Shutdown (); // woods #fxaa
+
+//
+// set new mode
+//
+	VID_SetMode (width, height, refreshrate, bpp, fullscreen);
+
+	gl_alias_shaders_compiling_disconnected_restart = (cls.state == ca_disconnected);
+	GL_Init ();
+	gl_alias_shaders_compiling_disconnected_restart = false;
+	VID_Gamma_Apply ();
+	TexMgr_ReloadImages ();
+	GL_BuildBModelVertexBuffer ();
+	GLMesh_LoadVertexBuffers ();
+	GL_SetupState ();
+	Fog_SetupState ();
+	R_TeleportCreateShaders (); // connected restart: R_NewMap is not called here
+
+	//conwidth and conheight need to be recalculated
+	vid.conwidth = (scr_conwidth.value > 0) ? (int)scr_conwidth.value : (scr_conscale.value > 0) ? (int)(vid.width/scr_conscale.value) : vid.width;
+	vid.conwidth = CLAMP (320, vid.conwidth, vid.width);
+	vid.conwidth &= 0xFFFFFFF8;
+	vid.conheight = vid.conwidth * vid.height / vid.width;
+//
+// keep cvars in line with actual mode
+//
+	VID_SyncCvars();
+//
+// update mouse grab
+//
+	IN_UpdateGrabs();
+	LoadCustomCursorImage (); // woods #customcursor
+	Con_ReloadIBeamCursor (); // woods #customcursor - reload console cursors for correct scaling
+
+	if (blocked_sound)
+		S_UnblockSound ();
+
+	scr_disabled_for_loading = scr_was_disabled;
+}
+
+/*
+===================
+VID_ChangedRestart_f -- woods #vidrestart
+===================
+*/
+void VID_ChangedRestart_f (cvar_t* var)
+{
+	vid_changed = true;
+	VID_Restart();
+}
+
+/*
+================
+VID_Test -- johnfitz -- like vid_restart, but asks for confirmation after switching modes
+================
+*/
+static void VID_Test (void)
+{
+	int old_width, old_height, old_refreshrate, old_bpp, old_fullscreen;
+
+	if (vid_locked || !vid_changed)
+		return;
+//
+// now try the switch
+//
+	old_width = VID_GetCurrentWidth();
+	old_height = VID_GetCurrentHeight();
+	old_refreshrate = VID_GetCurrentRefreshRate();
+	old_bpp = VID_GetCurrentBPP();
+	old_fullscreen = VID_GetFullscreen() ? true : false;
+
+	VID_Restart ();
+
+	//pop up confirmation dialoge
+	if (!SCR_ModalMessage("Would you like to keep this\nvideo mode? (y/n)\n", 5.0f))
+	{
+		//revert cvars and mode
+		Cvar_SetValueQuick (&vid_width, old_width);
+		Cvar_SetValueQuick (&vid_height, old_height);
+		Cvar_SetValueQuick (&vid_refreshrate, old_refreshrate);
+		Cvar_SetValueQuick (&vid_bpp, old_bpp);
+		Cvar_SetQuick (&vid_fullscreen, old_fullscreen ? "1" : "0");
+		VID_Restart ();
+	}
+}
+
+/*
+================
+VID_Unlock -- johnfitz
+================
+*/
+static void VID_Unlock (void)
+{
+	vid_locked = false;
+	VID_SyncCvars();
+}
+
+/*
+================
+VID_Lock -- ericw
+
+Subsequent changes to vid_* mode settings, and vid_restart commands, will
+be ignored until the "vid_unlock" command is run.
+
+Used when changing gamedirs so the current settings override what was saved
+in the config.cfg.
+================
+*/
+void VID_Lock (void)
+{
+	vid_locked = true;
+}
+
+//==============================================================================
+//
+//	OPENGL STUFF
+//
+//==============================================================================
+
+/*
+===============
+GL_MakeNiceExtensionsList -- johnfitz
+===============
+*/
+static void GL_PrintNiceExtensionsList (const char *in)
+{
+	char *copy, *token;
+	if (!in) {
+		Con_SafePrintf("(none)");
+		return;
+	}
+
+	copy = (char *) Z_Strdup(in);
+	for (token = strtok(copy, " "); token; token = strtok(NULL, " "))
+		Con_SafePrintf("\n   %s", token);
+	Z_Free (copy);
+}
+
+/*
+===============
+GL_Info_f -- johnfitz
+===============
+*/
+static void GL_Info_f (void)
+{
+	Con_SafePrintf ("GL_VENDOR: %s\n", gl_vendor);
+	Con_SafePrintf ("GL_RENDERER: %s\n", gl_renderer);
+	Con_SafePrintf ("GL_VERSION: %s\n", gl_version);
+	Con_SafePrintf ("GL_EXTENSIONS: ");
+	GL_PrintNiceExtensionsList(gl_extensions);
+	Con_SafePrintf ("\n");
+}
+
+/*
+===============
+GL_CheckExtensions
+===============
+*/
+static qboolean GL_ParseExtensionList (const char *list, const char *name)
+{
+	const char	*start;
+	const char	*where, *terminator;
+
+	if (!list || !name || !*name)
+		return false;
+	if (strchr(name, ' ') != NULL)
+		return false;	// extension names must not have spaces
+
+	start = list;
+	while (1) {
+		where = strstr (start, name);
+		if (!where)
+			break;
+		terminator = where + strlen (name);
+		if (where == start || where[-1] == ' ')
+			if (*terminator == ' ' || *terminator == '\0')
+				return true;
+		start = terminator;
+	}
+	return false;
+}
+
+static void GL_CheckExtensions (void)
+{
+	int swap_control;
+
+	// ARB_vertex_buffer_object
+	//
+	if (COM_CheckParm("-novbo"))
+		Con_Warning ("Vertex buffer objects disabled at command line\n");
+	else if (gl_version_major < 1 || (gl_version_major == 1 && gl_version_minor < 5))
+		Con_Warning ("OpenGL version < 1.5, skipping ARB_vertex_buffer_object check\n");
+	else
+	{
+		GL_BindBufferFunc = (PFNGLBINDBUFFERARBPROC) SDL_GL_GetProcAddress("glBindBufferARB");
+		GL_BufferDataFunc = (PFNGLBUFFERDATAARBPROC) SDL_GL_GetProcAddress("glBufferDataARB");
+		GL_BufferSubDataFunc = (PFNGLBUFFERSUBDATAARBPROC) SDL_GL_GetProcAddress("glBufferSubDataARB");
+		GL_DeleteBuffersFunc = (PFNGLDELETEBUFFERSARBPROC) SDL_GL_GetProcAddress("glDeleteBuffersARB");
+		GL_GenBuffersFunc = (PFNGLGENBUFFERSARBPROC) SDL_GL_GetProcAddress("glGenBuffersARB");
+		GL_MapBufferFunc = (PFNGLMAPBUFFERARBPROC) SDL_GL_GetProcAddress("glMapBufferARB");	//spike -- grab these too.
+		GL_UnmapBufferFunc = (PFNGLUNMAPBUFFERARBPROC) SDL_GL_GetProcAddress("glUnmapBufferARB");
+		if (GL_BindBufferFunc && GL_BufferDataFunc && GL_BufferSubDataFunc && GL_DeleteBuffersFunc && GL_GenBuffersFunc)
+		{
+			if (cls.state == ca_disconnected) // woods #supressvidmsgs
+				Con_Printf("FOUND: ARB_vertex_buffer_object\n");
+			gl_vbo_able = true;
+		}
+		else
+		{
+			Con_Warning ("ARB_vertex_buffer_object not available\n");
+		}
+	}
+
+	if (gl_version_major > 4 || (gl_version_major == 4 && gl_version_minor >= 4) || GL_ParseExtensionList(gl_extensions, "GL_ARB_buffer_storage"))
+	{
+		GL_MapBufferRangeFunc = (PFNGLMAPBUFFERRANGEPROC) SDL_GL_GetProcAddress("glMapBufferRange");
+		GL_BufferStorageFunc = (PFNGLBUFFERSTORAGEPROC) SDL_GL_GetProcAddress("glBufferStorage");
+		if (gl_vbo_able && GL_MapBufferRangeFunc && GL_BufferStorageFunc)
+		{ 
+			if (cls.state == ca_disconnected)
+				Con_Printf("FOUND: GL_ARB_buffer_storage\n");
+		}
+		else
+			Con_Warning ("GL_ARB_buffer_storage not available\n");	//doesn't really warrent a warning, but when in rome...
+	}
+	else
+	{
+		GL_MapBufferRangeFunc = NULL;
+		GL_BufferStorageFunc = NULL;
+	}
+
+	// multitexture
+	//
+	if (COM_CheckParm("-nomtex"))
+		Con_Warning ("Mutitexture disabled at command line\n");
+	else if (GL_ParseExtensionList(gl_extensions, "GL_ARB_multitexture"))
+	{
+		GL_MTexCoord2fFunc = (PFNGLMULTITEXCOORD2FARBPROC) SDL_GL_GetProcAddress("glMultiTexCoord2fARB");
+		GL_SelectTextureFunc = (PFNGLACTIVETEXTUREARBPROC) SDL_GL_GetProcAddress("glActiveTextureARB");
+		GL_ClientActiveTextureFunc = (PFNGLCLIENTACTIVETEXTUREARBPROC) SDL_GL_GetProcAddress("glClientActiveTextureARB");
+		if (GL_MTexCoord2fFunc && GL_SelectTextureFunc && GL_ClientActiveTextureFunc)
+		{
+			if (cls.state == ca_disconnected) // woods #supressvidmsgs
+				Con_Printf("FOUND: ARB_multitexture\n");
+			gl_mtexable = true;
+			
+			glGetIntegerv(GL_MAX_TEXTURE_UNITS, &gl_max_texture_units);
+			if (cls.state == ca_disconnected) // woods #supressvidmsgs
+				Con_Printf("GL_MAX_TEXTURE_UNITS: %d\n", (int)gl_max_texture_units);
+		}
+		else
+		{
+			Con_Warning ("Couldn't link to multitexture functions\n");
+		}
+	}
+	else
+	{
+		Con_Warning ("multitexture not supported (extension not found)\n");
+	}
+
+	// texture_env_combine
+	//
+	if (COM_CheckParm("-nocombine"))
+		Con_Warning ("texture_env_combine disabled at command line\n");
+	else if (GL_ParseExtensionList(gl_extensions, "GL_ARB_texture_env_combine"))
+	{
+		if (cls.state == ca_disconnected) // woods #supressvidmsgs
+			Con_Printf("FOUND: ARB_texture_env_combine\n");
+		gl_texture_env_combine = true;
+	}
+	else if (GL_ParseExtensionList(gl_extensions, "GL_EXT_texture_env_combine"))
+	{
+		Con_Printf("FOUND: EXT_texture_env_combine\n");
+		gl_texture_env_combine = true;
+	}
+	else
+	{
+		Con_Warning ("texture_env_combine not supported\n");
+	}
+
+	// texture_env_add
+	//
+	if (COM_CheckParm("-noadd"))
+		Con_Warning ("texture_env_add disabled at command line\n");
+	else if (GL_ParseExtensionList(gl_extensions, "GL_ARB_texture_env_add"))
+	{
+		if (cls.state == ca_disconnected) // woods #supressvidmsgs
+			Con_Printf("FOUND: ARB_texture_env_add\n");
+		gl_texture_env_add = true;
+	}
+	else if (GL_ParseExtensionList(gl_extensions, "GL_EXT_texture_env_add"))
+	{
+		Con_Printf("FOUND: EXT_texture_env_add\n");
+		gl_texture_env_add = true;
+	}
+	else
+	{
+		Con_Warning ("texture_env_add not supported\n");
+	}
+
+	// swap control
+	//
+	if (!gl_swap_control)
+	{
+		Con_Warning ("vertical sync not supported (SDL_GL_SetSwapInterval failed)\n");
+	}
+	else if (!SDL_GL_GetSwapInterval(&swap_control))
+	{
+		gl_swap_control = false;
+		Con_Warning ("vertical sync not supported (SDL_GL_GetSwapInterval failed)\n");
+	}
+	else if ((vid_vsync.value && swap_control != 1) || (!vid_vsync.value && swap_control != 0))
+	{
+		gl_swap_control = false;
+		Con_Warning ("vertical sync not supported (swap_control doesn't match vid_vsync)\n");
+	}
+	else
+	{
+		if (cls.state == ca_disconnected) // woods #supressvidmsgs
+			Con_Printf("FOUND: SDL_GL_SetSwapInterval\n");
+	}
+
+	// anisotropic filtering
+	//
+	if (GL_ParseExtensionList(gl_extensions, "GL_EXT_texture_filter_anisotropic"))
+	{
+		float test1,test2;
+		GLuint tex;
+
+		// test to make sure we really have control over it
+		// 1.0 and 2.0 should always be legal values
+		glGenTextures(1, &tex);
+		glBindTexture (GL_TEXTURE_2D, tex);
+		glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_MAX_ANISOTROPY_EXT, 1.0f);
+		glGetTexParameterfv (GL_TEXTURE_2D, GL_TEXTURE_MAX_ANISOTROPY_EXT, &test1);
+		glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_MAX_ANISOTROPY_EXT, 2.0f);
+		glGetTexParameterfv (GL_TEXTURE_2D, GL_TEXTURE_MAX_ANISOTROPY_EXT, &test2);
+		glDeleteTextures(1, &tex);
+		GL_ClearBindings ();
+
+		if (test1 == 1 && test2 == 2)
+		{
+			if (cls.state == ca_disconnected) // woods #supressvidmsgs
+				Con_Printf("FOUND: EXT_texture_filter_anisotropic\n");
+			gl_anisotropy_able = true;
+		}
+		else
+		{
+			Con_Warning ("anisotropic filtering locked by driver. Current driver setting is %f\n", test1);
+		}
+
+		//get max value either way, so the menu and stuff know it
+		glGetFloatv (GL_MAX_TEXTURE_MAX_ANISOTROPY_EXT, &gl_max_anisotropy);
+		if (gl_max_anisotropy < 2)
+		{
+			gl_anisotropy_able = false;
+			gl_max_anisotropy = 1;
+			Con_Warning ("anisotropic filtering broken: disabled\n");
+		}
+	}
+	else
+	{
+		gl_max_anisotropy = 1;
+		Con_Warning ("texture_filter_anisotropic not supported\n");
+	}
+
+	// texture_non_power_of_two
+	//
+	if (COM_CheckParm("-notexturenpot"))
+		Con_Warning ("texture_non_power_of_two disabled at command line\n");
+	else if (GL_ParseExtensionList(gl_extensions, "GL_ARB_texture_non_power_of_two"))
+	{
+		if (cls.state == ca_disconnected) // woods #supressvidmsgs
+			Con_Printf("FOUND: ARB_texture_non_power_of_two\n");
+		gl_texture_NPOT = true;
+	}
+	else
+	{
+		Con_Warning ("texture_non_power_of_two not supported\n");
+	}
+
+	GL_CompressedTexImage2D = (gl_version_major>=2||(gl_version_major==1&&gl_version_minor>=3))?(QS_PFNGLCOMPRESSEDTEXIMAGE2DPROC) SDL_GL_GetProcAddress("glCompressedTexImage2D"):NULL;
+	gl_texture_s3tc = GL_CompressedTexImage2D && (																			  GL_ParseExtensionList(gl_extensions, "GL_EXT_texture_compression_s3tc"));
+	gl_texture_rgtc = GL_CompressedTexImage2D && (gl_version_major >= 3													   || GL_ParseExtensionList(gl_extensions, "GL_ARB_texture_compression_rgtc"));
+	gl_texture_bptc = GL_CompressedTexImage2D && (gl_version_major > 4 || (gl_version_major == 4 && gl_version_minor >= 2) || GL_ParseExtensionList(gl_extensions, "GL_ARB_texture_compression_bptc"));
+	gl_texture_etc2 = GL_CompressedTexImage2D && (gl_version_major > 4 || (gl_version_major == 4 && gl_version_minor >= 3) || GL_ParseExtensionList(gl_extensions, "GL_ARB_ES3_compatibility"));
+	gl_texture_astc = GL_CompressedTexImage2D && (																			  GL_ParseExtensionList(gl_extensions, "GL_ARB_ES3_2_compatibility") || GL_ParseExtensionList(gl_extensions, "GL_KHR_texture_compression_astc_ldr"));
+	gl_texture_e5bgr9 = gl_version_major >= 3;
+
+	// GLSL
+	//
+	if (COM_CheckParm("-noglsl"))
+		Con_Warning ("GLSL disabled at command line\n");
+	else if (gl_version_major >= 2)
+	{
+		GL_CreateShaderFunc = (QS_PFNGLCREATESHADERPROC) SDL_GL_GetProcAddress("glCreateShader");
+		GL_DeleteShaderFunc = (QS_PFNGLDELETESHADERPROC) SDL_GL_GetProcAddress("glDeleteShader");
+		GL_DeleteProgramFunc = (QS_PFNGLDELETEPROGRAMPROC) SDL_GL_GetProcAddress("glDeleteProgram");
+		GL_ShaderSourceFunc = (QS_PFNGLSHADERSOURCEPROC) SDL_GL_GetProcAddress("glShaderSource");
+		GL_CompileShaderFunc = (QS_PFNGLCOMPILESHADERPROC) SDL_GL_GetProcAddress("glCompileShader");
+		GL_GetShaderivFunc = (QS_PFNGLGETSHADERIVPROC) SDL_GL_GetProcAddress("glGetShaderiv");
+		GL_GetShaderInfoLogFunc = (QS_PFNGLGETSHADERINFOLOGPROC) SDL_GL_GetProcAddress("glGetShaderInfoLog");
+		GL_GetProgramivFunc = (QS_PFNGLGETPROGRAMIVPROC) SDL_GL_GetProcAddress("glGetProgramiv");
+		GL_GetProgramInfoLogFunc = (QS_PFNGLGETPROGRAMINFOLOGPROC) SDL_GL_GetProcAddress("glGetProgramInfoLog");
+		GL_CreateProgramFunc = (QS_PFNGLCREATEPROGRAMPROC) SDL_GL_GetProcAddress("glCreateProgram");
+		GL_AttachShaderFunc = (QS_PFNGLATTACHSHADERPROC) SDL_GL_GetProcAddress("glAttachShader");
+		GL_LinkProgramFunc = (QS_PFNGLLINKPROGRAMPROC) SDL_GL_GetProcAddress("glLinkProgram");
+		GL_BindAttribLocationFunc = (QS_PFNGLBINDATTRIBLOCATIONFUNC) SDL_GL_GetProcAddress("glBindAttribLocation");
+		GL_UseProgramFunc = (QS_PFNGLUSEPROGRAMPROC) SDL_GL_GetProcAddress("glUseProgram");
+		GL_GetAttribLocationFunc = (QS_PFNGLGETATTRIBLOCATIONPROC) SDL_GL_GetProcAddress("glGetAttribLocation");
+		GL_VertexAttribPointerFunc = (QS_PFNGLVERTEXATTRIBPOINTERPROC) SDL_GL_GetProcAddress("glVertexAttribPointer");
+		GL_EnableVertexAttribArrayFunc = (QS_PFNGLENABLEVERTEXATTRIBARRAYPROC) SDL_GL_GetProcAddress("glEnableVertexAttribArray");
+		GL_DisableVertexAttribArrayFunc = (QS_PFNGLDISABLEVERTEXATTRIBARRAYPROC) SDL_GL_GetProcAddress("glDisableVertexAttribArray");
+		GL_GetUniformLocationFunc = (QS_PFNGLGETUNIFORMLOCATIONPROC) SDL_GL_GetProcAddress("glGetUniformLocation");
+		GL_Uniform1iFunc = (QS_PFNGLUNIFORM1IPROC) SDL_GL_GetProcAddress("glUniform1i");
+		GL_Uniform1fFunc = (QS_PFNGLUNIFORM1FPROC) SDL_GL_GetProcAddress("glUniform1f");
+		GL_Uniform2fFunc = (QS_PFNGLUNIFORM2FPROC) SDL_GL_GetProcAddress("glUniform2f"); // woods #fxaa
+		GL_Uniform3fFunc = (QS_PFNGLUNIFORM3FPROC) SDL_GL_GetProcAddress("glUniform3f");
+		GL_Uniform4fFunc = (QS_PFNGLUNIFORM4FPROC) SDL_GL_GetProcAddress("glUniform4f");
+		GL_Uniform4fvFunc = (QS_PFNGLUNIFORM4FVPROC) SDL_GL_GetProcAddress("glUniform4fv");
+		GL_Uniform1ivFunc = (QS_PFNGLUNIFORM1IVPROC)SDL_GL_GetProcAddress("glUniform1iv"); // woods #caustics
+
+		if (GL_CreateShaderFunc &&
+			GL_DeleteShaderFunc &&
+			GL_DeleteProgramFunc &&
+			GL_ShaderSourceFunc &&
+			GL_CompileShaderFunc &&
+			GL_GetShaderivFunc &&
+			GL_GetShaderInfoLogFunc &&
+			GL_GetProgramivFunc &&
+			GL_GetProgramInfoLogFunc &&
+			GL_CreateProgramFunc &&
+			GL_AttachShaderFunc &&
+			GL_LinkProgramFunc &&
+			GL_BindAttribLocationFunc &&
+			GL_UseProgramFunc &&
+			GL_GetAttribLocationFunc &&
+			GL_VertexAttribPointerFunc &&
+			GL_EnableVertexAttribArrayFunc &&
+			GL_DisableVertexAttribArrayFunc &&
+			GL_GetUniformLocationFunc &&
+			GL_Uniform1iFunc &&
+			GL_Uniform1fFunc &&
+			GL_Uniform2fFunc && // woods #fxaa
+			GL_Uniform3fFunc &&
+			GL_Uniform4fFunc &&
+			GL_Uniform4fvFunc &&
+			GL_Uniform1ivFunc) // woods #caustic
+		{
+			if (cls.state == ca_disconnected) // woods #supressvidmsgs
+				Con_Printf("FOUND: GLSL\n");
+			glGetIntegerv(GL_MAX_TEXTURE_IMAGE_UNITS, &gl_max_texture_image_units);
+			if (cls.state == ca_disconnected) // woods #supressvidmsgs
+				Con_Printf("GL_MAX_TEXTURE_IMAGE_UNITS: %d\n", (int)gl_max_texture_image_units);
+			gl_glsl_able = true;
+		}
+		else
+		{
+			Con_Warning ("GLSL not available\n");
+		}
+	}
+	else
+	{
+		Con_Warning ("OpenGL version < 2, GLSL not available\n");
+	}
+
+	// Brush model instancing
+	//
+	gl_bmodel_instancing_able = false;
+	GL_DrawElementsInstancedFunc = NULL;
+	GL_VertexAttribDivisorFunc = NULL;
+	if (gl_glsl_able && gl_vbo_able &&
+		(gl_version_major >= 3 ||
+		 (GL_ParseExtensionList(gl_extensions, "GL_ARB_draw_instanced") &&
+		  GL_ParseExtensionList(gl_extensions, "GL_ARB_instanced_arrays"))))
+	{
+		GL_DrawElementsInstancedFunc = (QS_PFNGLDRAWELEMENTSINSTANCEDPROC) SDL_GL_GetProcAddress("glDrawElementsInstanced");
+		if (!GL_DrawElementsInstancedFunc)
+			GL_DrawElementsInstancedFunc = (QS_PFNGLDRAWELEMENTSINSTANCEDPROC) SDL_GL_GetProcAddress("glDrawElementsInstancedARB");
+
+		GL_VertexAttribDivisorFunc = (QS_PFNGLVERTEXATTRIBDIVISORPROC) SDL_GL_GetProcAddress("glVertexAttribDivisor");
+		if (!GL_VertexAttribDivisorFunc)
+			GL_VertexAttribDivisorFunc = (QS_PFNGLVERTEXATTRIBDIVISORPROC) SDL_GL_GetProcAddress("glVertexAttribDivisorARB");
+
+		if (GL_DrawElementsInstancedFunc && GL_VertexAttribDivisorFunc)
+		{
+			if (cls.state == ca_disconnected)
+				Con_Printf("FOUND: brush model instancing\n");
+			gl_bmodel_instancing_able = true;
+		}
+		else
+		{
+			Con_Warning ("brush model instancing not available\n");
+		}
+	}
+	else
+	{
+		Con_Warning ("brush model instancing not supported\n");
+	}
+	// Occlusion queries: GL 1.5 core, or ARB_occlusion_query
+	//
+	gl_occlusion_able = false;
+	GL_GenQueriesFunc = NULL;
+	GL_DeleteQueriesFunc = NULL;
+	GL_BeginQueryFunc = NULL;
+	GL_EndQueryFunc = NULL;
+	GL_GetQueryObjectuivFunc = NULL;
+	if (gl_version_major > 1 || (gl_version_major == 1 && gl_version_minor >= 5))
+	{
+		GL_GenQueriesFunc = (QS_PFNGLGENQUERIESPROC) SDL_GL_GetProcAddress("glGenQueries");
+		GL_DeleteQueriesFunc = (QS_PFNGLDELETEQUERIESPROC) SDL_GL_GetProcAddress("glDeleteQueries");
+		GL_BeginQueryFunc = (QS_PFNGLBEGINQUERYPROC) SDL_GL_GetProcAddress("glBeginQuery");
+		GL_EndQueryFunc = (QS_PFNGLENDQUERYPROC) SDL_GL_GetProcAddress("glEndQuery");
+		GL_GetQueryObjectuivFunc = (QS_PFNGLGETQUERYOBJECTUIVPROC) SDL_GL_GetProcAddress("glGetQueryObjectuiv");
+	}
+	else if (GL_ParseExtensionList(gl_extensions, "GL_ARB_occlusion_query"))
+	{
+		GL_GenQueriesFunc = (QS_PFNGLGENQUERIESPROC) SDL_GL_GetProcAddress("glGenQueriesARB");
+		GL_DeleteQueriesFunc = (QS_PFNGLDELETEQUERIESPROC) SDL_GL_GetProcAddress("glDeleteQueriesARB");
+		GL_BeginQueryFunc = (QS_PFNGLBEGINQUERYPROC) SDL_GL_GetProcAddress("glBeginQueryARB");
+		GL_EndQueryFunc = (QS_PFNGLENDQUERYPROC) SDL_GL_GetProcAddress("glEndQueryARB");
+		GL_GetQueryObjectuivFunc = (QS_PFNGLGETQUERYOBJECTUIVPROC) SDL_GL_GetProcAddress("glGetQueryObjectuivARB");
+	}
+	if (GL_GenQueriesFunc && GL_DeleteQueriesFunc && GL_BeginQueryFunc && GL_EndQueryFunc && GL_GetQueryObjectuivFunc)
+		gl_occlusion_able = true;
+
+	// GLSL alias model rendering
+	//
+
+    // woods framebuffer Objects for #fxaa
+
+    if (gl_version_major >= 3 || GL_ParseExtensionList(gl_extensions, "GL_ARB_framebuffer_object") ||
+        GL_ParseExtensionList(gl_extensions, "GL_EXT_framebuffer_object"))
+    {
+        GL_GenFramebuffersFunc = (PFNGLGENFRAMEBUFFERSPROC) SDL_GL_GetProcAddress("glGenFramebuffers");
+        if (!GL_GenFramebuffersFunc)
+            GL_GenFramebuffersFunc = (PFNGLGENFRAMEBUFFERSPROC) SDL_GL_GetProcAddress("glGenFramebuffersEXT");
+            
+        GL_BindFramebufferFunc = (PFNGLBINDFRAMEBUFFERPROC) SDL_GL_GetProcAddress("glBindFramebuffer");
+        if (!GL_BindFramebufferFunc)
+            GL_BindFramebufferFunc = (PFNGLBINDFRAMEBUFFERPROC) SDL_GL_GetProcAddress("glBindFramebufferEXT");
+            
+        GL_FramebufferTexture2DFunc = (PFNGLFRAMEBUFFERTEXTURE2DPROC) SDL_GL_GetProcAddress("glFramebufferTexture2D");
+        if (!GL_FramebufferTexture2DFunc)
+            GL_FramebufferTexture2DFunc = (PFNGLFRAMEBUFFERTEXTURE2DPROC) SDL_GL_GetProcAddress("glFramebufferTexture2DEXT");
+            
+        GL_CheckFramebufferStatusFunc = (PFNGLCHECKFRAMEBUFFERSTATUSPROC) SDL_GL_GetProcAddress("glCheckFramebufferStatus");
+        if (!GL_CheckFramebufferStatusFunc)
+            GL_CheckFramebufferStatusFunc = (PFNGLCHECKFRAMEBUFFERSTATUSPROC) SDL_GL_GetProcAddress("glCheckFramebufferStatusEXT");
+            
+        GL_DeleteFramebuffersFunc = (PFNGLDELETEFRAMEBUFFERSPROC) SDL_GL_GetProcAddress("glDeleteFramebuffers");
+        if (!GL_DeleteFramebuffersFunc)
+            GL_DeleteFramebuffersFunc = (PFNGLDELETEFRAMEBUFFERSPROC) SDL_GL_GetProcAddress("glDeleteFramebuffersEXT");
+            
+        GL_GenRenderbuffersFunc = (PFNGLGENRENDERBUFFERSPROC) SDL_GL_GetProcAddress("glGenRenderbuffers");
+        if (!GL_GenRenderbuffersFunc)
+            GL_GenRenderbuffersFunc = (PFNGLGENRENDERBUFFERSPROC) SDL_GL_GetProcAddress("glGenRenderbuffersEXT");
+            
+        GL_BindRenderbufferFunc = (PFNGLBINDRENDERBUFFERPROC) SDL_GL_GetProcAddress("glBindRenderbuffer");
+        if (!GL_BindRenderbufferFunc)
+            GL_BindRenderbufferFunc = (PFNGLBINDRENDERBUFFERPROC) SDL_GL_GetProcAddress("glBindRenderbufferEXT");
+            
+        GL_RenderbufferStorageFunc = (PFNGLRENDERBUFFERSTORAGEPROC) SDL_GL_GetProcAddress("glRenderbufferStorage");
+        if (!GL_RenderbufferStorageFunc)
+            GL_RenderbufferStorageFunc = (PFNGLRENDERBUFFERSTORAGEPROC) SDL_GL_GetProcAddress("glRenderbufferStorageEXT");
+            
+        GL_FramebufferRenderbufferFunc = (PFNGLFRAMEBUFFERRENDERBUFFERPROC) SDL_GL_GetProcAddress("glFramebufferRenderbuffer");
+        if (!GL_FramebufferRenderbufferFunc)
+            GL_FramebufferRenderbufferFunc = (PFNGLFRAMEBUFFERRENDERBUFFERPROC) SDL_GL_GetProcAddress("glFramebufferRenderbufferEXT");
+            
+        GL_DeleteRenderbuffersFunc = (PFNGLDELETERENDERBUFFERSPROC) SDL_GL_GetProcAddress("glDeleteRenderbuffers");
+        if (!GL_DeleteRenderbuffersFunc)
+            GL_DeleteRenderbuffersFunc = (PFNGLDELETERENDERBUFFERSPROC) SDL_GL_GetProcAddress("glDeleteRenderbuffersEXT");
+            
+        if (GL_GenFramebuffersFunc && GL_BindFramebufferFunc && GL_FramebufferTexture2DFunc &&
+            GL_CheckFramebufferStatusFunc && GL_DeleteFramebuffersFunc && GL_GenRenderbuffersFunc &&
+            GL_BindRenderbufferFunc && GL_RenderbufferStorageFunc && GL_FramebufferRenderbufferFunc &&
+            GL_DeleteRenderbuffersFunc)
+        {
+            if (cls.state == ca_disconnected) // woods #supressvidmsgs
+                Con_Printf("FOUND: Framebuffer Objects\n");
+            gl_fbo_able = true;
+        }
+        else
+        {
+            Con_Warning ("Framebuffer Objects not available\n");
+        }
+    }
+    else
+    {
+        Con_Warning ("Framebuffer Objects not supported\n");
+    }
+
+	// GLSL gamma -- decided after FBO detection so VID_PreferHardwareGamma
+	// can require scene-FBO support on macOS
+	//
+	if (COM_CheckParm("-noglslgamma"))
+		Con_Warning ("GLSL gamma disabled at command line\n");
+	else if (VID_PreferHardwareGamma ())
+	{
+		gl_glsl_gamma_able = false;
+		if (cls.state == ca_disconnected) // woods #supressvidmsgs
+			Con_Printf("Using hardware gamma when available\n");
+	}
+	else if (gl_glsl_able)
+	{
+		gl_glsl_gamma_able = true;
+		if (cls.state == ca_disconnected) // woods #supressvidmsgs
+			Con_Printf("Enabled: GLSL gamma\n");
+	}
+	else
+	{
+		Con_Warning ("GLSL gamma not available, using hardware gamma\n");
+	}
+
+    // glBlendFuncSeparate for FXAA transparency fix
+    if (gl_version_major >= 2 || GL_ParseExtensionList(gl_extensions, "GL_EXT_blend_func_separate"))
+    {
+        GL_BlendFuncSeparateFunc = (PFNGLBLENDFUNCSEPARATEPROC) SDL_GL_GetProcAddress("glBlendFuncSeparate");
+        if (!GL_BlendFuncSeparateFunc)
+            GL_BlendFuncSeparateFunc = (PFNGLBLENDFUNCSEPARATEPROC) SDL_GL_GetProcAddress("glBlendFuncSeparateEXT");
+            
+        if (GL_BlendFuncSeparateFunc)
+        {
+            if (cls.state == ca_disconnected) // woods #supressvidmsgs
+                Con_Printf("FOUND: glBlendFuncSeparate\n");
+        }
+        else
+        {
+            Con_Warning ("glBlendFuncSeparate not available\n");
+        }
+    }
+    else
+    {
+        Con_Warning ("glBlendFuncSeparate not supported\n");
+    }
+    
+    // GLSL alias model rendering
+    //
+	if (COM_CheckParm("-noglslalias"))
+		Con_Warning ("GLSL alias model rendering disabled at command line\n");
+	else if (gl_glsl_able && gl_vbo_able && gl_mtexable && gl_max_texture_image_units >= 4)
+	{
+		gl_glsl_alias_able = true;
+		if (cls.state == ca_disconnected) // woods #supressvidmsgs
+			Con_Printf("Enabled: GLSL alias model rendering\n");
+	}
+	else
+	{
+		Con_Warning ("GLSL alias model rendering not available, using Fitz renderer\n");
+	}
+
+	// packed_pixels
+	//
+	if (COM_CheckParm("-nopackedpixels"))
+		Con_Warning ("EXT_packed_pixels disabled at command line\n");
+	else if (gl_glsl_alias_able)
+	{
+		gl_packed_pixels = true;
+		if (cls.state == ca_disconnected) // woods #supressvidmsgs
+			Con_Printf("Enabled: EXT_packed_pixels\n");
+	}
+	#if 0 /* Disabling for non-GLSL path, needs more surgery. */
+	else if (GL_ParseExtensionList(gl_extensions, "GL_APPLE_packed_pixels"))
+	{
+		Con_Printf("FOUND: APPLE_packed_pixels\n");
+		gl_packed_pixels = true;
+	}
+	else if (GL_ParseExtensionList(gl_extensions, "GL_EXT_packed_pixels"))
+	{
+		Con_Printf("FOUND: EXT_packed_pixels\n");
+		gl_packed_pixels = true;
+	}
+	else
+	{
+		Con_Warning ("packed_pixels not supported\n");
+	}
+	#endif
+
+	// glGenerateMipmap for warp textures
+	if (COM_CheckParm("-nowarpmipmaps"))
+		Con_Warning ("glGenerateMipmap disabled at command line\n");
+	else
+	{
+		if (gl_version_major >= 3 || GL_ParseExtensionList(gl_extensions, "GL_ARB_framebuffer_object"))
+		{
+			GL_GenerateMipmap = (QS_PFNGENERATEMIPMAP) SDL_GL_GetProcAddress("glGenerateMipmap");
+			if (GL_GenerateMipmap != NULL)
+			{
+				if (cls.state == ca_disconnected) // woods #supressvidmsgs
+					Con_Printf("FOUND: glGenerateMipmap\n");
+			}
+		}
+		else if (GL_ParseExtensionList(gl_extensions, "GL_EXT_framebuffer_object"))
+		{
+			GL_GenerateMipmap = (QS_PFNGENERATEMIPMAP) SDL_GL_GetProcAddress("glGenerateMipmapEXT");
+			if (GL_GenerateMipmap != NULL)
+			{
+				if (cls.state == ca_disconnected) // woods #supressvidmsgs
+					Con_Printf("FOUND: glGenerateMipmapEXT\n");
+			}
+		}
+		if (GL_GenerateMipmap == NULL)
+			Con_Warning ("glGenerateMipmap not available, liquids won't have mipmaps\n");
+	}
+}
+
+/*
+===============
+GL_SetupState -- johnfitz
+
+does all the stuff from GL_Init that needs to be done every time a new GL render context is created
+===============
+*/
+static void GL_SetupState (void)
+{
+	glClearColor (0.15,0.15,0.15,0); //johnfitz -- originally 1,0,0,0
+	glCullFace(GL_BACK); //johnfitz -- glquake used CCW with backwards culling -- let's do it right
+	glFrontFace(GL_CW); //johnfitz -- glquake used CCW with backwards culling -- let's do it right
+	glEnable(GL_TEXTURE_2D);
+	glEnable(GL_ALPHA_TEST);
+	glAlphaFunc(GL_GREATER, 0.666);
+	glPolygonMode (GL_FRONT_AND_BACK, GL_FILL);
+	glShadeModel (GL_FLAT);
+	glHint (GL_PERSPECTIVE_CORRECTION_HINT, GL_NICEST); //johnfitz
+	glBlendFunc (GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+	glTexEnvf(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_REPLACE);
+	//spike -- these are invalid as there is no texture bound to receive this state.
+	//glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+	//glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+	//glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
+	//glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
+	glDepthRange (0, 1); //johnfitz -- moved here becuase gl_ztrick is gone.
+	glDepthFunc (GL_LEQUAL); //johnfitz -- moved here becuase gl_ztrick is gone.
+}
+
+/*
+===============
+GL_EnsureGameShaders
+===============
+*/
+void GL_EnsureGameShaders (void)
+{
+	if (!game_shaders_pending)
+		return;
+	game_shaders_pending = false;
+	GLAlias_CreateShaders ();
+	GLWorld_CreateShaders ();
+}
+
+/* Initialize capabilities now; gameplay shaders wait for their first consumer. */
+static void GL_Init (void)
+{
+	gl_vendor = (const char *) glGetString (GL_VENDOR);
+	gl_renderer = (const char *) glGetString (GL_RENDERER);
+	gl_version = (const char *) glGetString (GL_VERSION);
+	gl_extensions = (const char *) glGetString (GL_EXTENSIONS);
+
+	snprintf(videoc, sizeof(videoc), "%s", gl_renderer); // woods #q_sysinfo (qrack)
+
+	if (cls.state == ca_disconnected) // woods #supressvidmsgs
+	{
+		Con_SafePrintf("GL_VENDOR: %s\n", gl_vendor);
+		Con_SafePrintf("GL_RENDERER: %s\n", gl_renderer);
+		Con_SafePrintf("GL_VERSION: %s\n", gl_version);
+	}
+	
+	if (gl_version == NULL || sscanf(gl_version, "%d.%d", &gl_version_major, &gl_version_minor) < 2)
+	{
+		gl_version_major = 0;
+		gl_version_minor = 0;
+	}
+
+	GL_CheckExtensions (); //johnfitz
+
+#ifdef __APPLE__
+	// ericw -- enable multi-threaded OpenGL, gives a decent FPS boost.
+	// https://developer.apple.com/library/mac/technotes/tn2085/
+	if (host_parms->numcpus > 1 &&
+	    kCGLNoError != CGLEnable(CGLGetCurrentContext(), kCGLCEMPEngine))
+	{
+		Con_Warning ("Couldn't enable multi-threaded OpenGL");
+	}
+#endif
+
+	//johnfitz -- intel video workarounds from Baker
+	if (!strcmp(gl_vendor, "Intel"))
+	{
+		Con_Printf ("Intel Display Adapter detected, enabling gl_clear\n");
+		Cbuf_AddText ("gl_clear 1\n");	//Spike -- don't forget your \ns guys...
+	}
+	//johnfitz
+
+	// query max size from hardware
+	glGetIntegerv (GL_MAX_TEXTURE_SIZE, &gl_hardware_maxsize);
+	LMBLOCK_WIDTH = q_min(gl_hardware_maxsize, 512);	//keeping this small potentially allows for more efficient texsubimage calls.
+	LMBLOCK_HEIGHT = q_min(gl_hardware_maxsize, 16384);
+
+	/* The menu uses fixed-function drawing. Compile gameplay programs during
+	 * map loading, or immediately when a connected video restart needs them. */
+	game_shaders_pending = true;
+	if (cls.state == ca_connected)
+		GL_EnsureGameShaders ();
+	GL_ClearBufferBindings ();
+	
+}
+
+/*
+=================
+GL_BeginRendering -- sets values of glx, gly, glwidth, glheight
+=================
+*/
+void GL_BeginRendering (int *x, int *y, int *width, int *height)
+{
+	if (vid.resized)
+	{
+		cvar_t *conscale;
+
+		vid.resized = false;
+
+		if (vid_saveresize.value && !VID_GetDesktopFullscreen() && !VID_GetFullscreen())
+		{
+			qboolean was_changed = vid_changed;
+			qboolean was_locked = vid_locked;
+			vid_locked = true;
+			Cvar_SetValueQuick (&vid_width, (float)vid.width);
+			Cvar_SetValueQuick (&vid_height, (float)vid.height);
+			vid_locked = was_locked;
+			vid_changed = was_changed;
+		}
+
+		conscale = Cvar_FindVar ("scr_conscale");
+		if (conscale && conscale->callback)
+			conscale->callback (conscale);
+	}
+
+	*x = *y = 0;
+	*width = vid.width;
+	*height = vid.height;
+}
+
+/*
+=================
+GL_EndRendering
+=================
+*/
+cvar_t bench_flush = {"bench_flush", "0", CVAR_NONE};
+void GL_EndRendering (void)
+{
+	if (!scr_skipupdate)
+	{
+		if (bench_flush.value == 1) glFlush();
+		SDL_GL_SwapWindow(draw_context);
+	}
+}
+
+
+void VID_BeginShutdown (void)
+{
+	if (draw_context)
+		SDL_HideWindow (draw_context);
+}
+
+void	VID_Shutdown (void)
+{
+	if (vid_initialized)
+	{
+		R_MotionBlur_DeleteTexture (); // woods #motionblur
+		VID_Gamma_Shutdown (); //johnfitz
+		FXAA_Shutdown(); // woods #fxaa
+		R_DeleteBrushModelInstancingBuffers ();
+		R_DeleteAliasModelInstancingBuffers ();
+		// Free custom cursor before tearing down video subsystem
+		if (custom_cursor)
+		{
+			VID_SetCursorHandle(NULL); // restore default before freeing
+			SDL_DestroyCursor(custom_cursor);
+			custom_cursor = NULL;
+		}
+		if (menu_text_cursor)
+		{
+			SDL_DestroyCursor(menu_text_cursor);
+			menu_text_cursor = NULL;
+		}
+		menu_text_cursor_custom = false;
+		SDL_GL_DestroyContext(gl_context);
+		gl_context = NULL;
+		SDL_DestroyWindow(draw_context);
+		SDL_QuitSubSystem(SDL_INIT_VIDEO);
+		draw_context = NULL;
+		PL_VID_Shutdown();
+	}
+}
+
+void	VID_SetWindowCaption(const char *newcaption)
+{
+	SDL_SetWindowTitle(draw_context, newcaption);
+}
+
+/*
+===================================================================
+
+MAIN WINDOW
+
+===================================================================
+*/
+
+/*
+================
+ClearAllStates
+================
+*/
+static void ClearAllStates (void)
+{
+	Key_ClearStates ();
+	IN_ClearStates ();
+}
+
+
+//==========================================================================
+//
+//  COMMANDS
+//
+//==========================================================================
+
+/*
+=================
+VID_DescribeCurrentMode_f
+=================
+*/
+static void VID_DescribeCurrentMode_f (void)
+{
+	if (draw_context)
+		Con_Printf("%dx%dx%d %dHz %s\n",
+			VID_GetCurrentWidth(),
+			VID_GetCurrentHeight(),
+			VID_GetCurrentBPP(),
+			VID_GetCurrentRefreshRate(),
+			VID_GetFullscreen() ? "fullscreen" : "windowed");
+}
+
+/*
+=================
+VID_DescribeModes_f -- johnfitz -- changed formatting, and added refresh rates after each mode.
+=================
+*/
+static void VID_DescribeModes_f (void)
+{
+	int	i;
+	int	lastwidth, lastheight, lastbpp, count;
+
+	lastwidth = lastheight = lastbpp = count = 0;
+
+	VID_EnsureModelist ();
+	for (i = 0; i < nummodes; i++)
+	{
+		if (lastwidth != modelist[i].width || lastheight != modelist[i].height || lastbpp != modelist[i].bpp)
+		{
+			if (count > 0)
+				Con_SafePrintf ("\n");
+			Con_SafePrintf ("   %4i x %4i x %i : %i", modelist[i].width, modelist[i].height, modelist[i].bpp, modelist[i].refreshrate);
+			lastwidth = modelist[i].width;
+			lastheight = modelist[i].height;
+			lastbpp = modelist[i].bpp;
+			count++;
+		}
+	}
+	Con_Printf ("\n%i modes\n", count);
+}
+
+/*
+===================
+VID_FSAA_f -- ericw -- warn that vid_fsaa requires engine restart
+===================
+*/
+static void VID_FSAA_f (cvar_t *var)
+{
+	// don't print the warning if vid_fsaa is set during startup
+	if (vid_initialized)
+		Con_Printf("%s %d requires engine restart to take effect\n", var->name, (int)var->value);
+}
+
+//==========================================================================
+//
+//  INIT
+//
+//==========================================================================
+
+/*
+================
+VID_CompleteModeField -- woods #iwtabcomplete
+================
+*/
+static void VID_CompleteModeField (cvar_t* cvar, const char* partial, size_t ofs)
+{
+	int i;
+
+#define GET_FIELD_FOR_MODE(idx)		*(int*)((uintptr_t)&modelist[idx] + ofs)
+
+	VID_EnsureModelist ();
+	for (i = 0; i < nummodes; i++)
+	{
+		char buf[64];
+		if (i > 0 && GET_FIELD_FOR_MODE(i) == GET_FIELD_FOR_MODE(i - 1))
+			continue;
+		q_snprintf(buf, sizeof(buf), "%d", GET_FIELD_FOR_MODE(i));
+		Con_AddToTabList(buf, partial, cvar->value == GET_FIELD_FOR_MODE(i) ? "current" : NULL, NULL); // #demolistsort add arg
+	}
+
+#undef GET_FIELD_FOR_MODE
+}
+
+/*
+================
+VID_Width_Completion_f -- woods #iwtabcomplete
+================
+*/
+static void VID_Width_Completion_f (cvar_t* cvar, const char* partial)
+{
+	VID_CompleteModeField (cvar, partial, offsetof(vmode_t, width));
+}
+
+/*
+================
+VID_Height_Completion_f -- woods #iwtabcomplete
+================
+*/
+static void VID_Height_Completion_f (cvar_t* cvar, const char* partial)
+{
+	VID_CompleteModeField (cvar, partial, offsetof(vmode_t, height));
+}
+
+/*
+================
+VID_Refresh_Completion_f -- woods #iwtabcomplete
+================
+*/
+static void VID_Refresh_Completion_f (cvar_t* cvar, const char* partial)
+{
+	VID_CompleteModeField (cvar, partial, offsetof(vmode_t, refreshrate));
+}
+
+/*
+================
+VID_FSAA_Completion_f -- woods #iwtabcomplete
+================
+*/
+static void VID_FSAA_Completion_f (cvar_t* cvar, const char* partial)
+{
+	(void)cvar;
+
+	Con_AddToTabList("0", partial, "off", NULL);
+	Con_AddToTabList("2", partial, "2x MSAA", NULL);
+	Con_AddToTabList("4", partial, "4x MSAA", NULL);
+	Con_AddToTabList("6", partial, "6x MSAA", NULL);
+	Con_AddToTabList("8", partial, "8x MSAA", NULL);
+	Con_AddToTabList("16", partial, "16x MSAA", NULL);
+}
+
+/*
+================
+VID_FXAA_Completion_f -- woods #iwtabcomplete
+================
+*/
+static void VID_FXAA_Completion_f (cvar_t* cvar, const char* partial)
+{
+	(void)cvar;
+
+	Con_AddToTabList("0", partial, "off", NULL);
+	Con_AddToTabList("1", partial, "low", NULL);
+	Con_AddToTabList("2", partial, "medium", NULL);
+	Con_AddToTabList("3", partial, "high", NULL);
+}
+
+/*
+=================
+VID_InitModelist
+=================
+*/
+static void VID_InitModelist (void)
+{
+	int i, count = 0;
+	SDL_DisplayMode **modes = SDL_GetFullscreenDisplayModes(VID_GetDisplay(), &count);
+
+	nummodes = 0;
+	for (i = 0; modes && i < count && nummodes < MAX_MODE_LIST; i++)
+	{
+		const int refreshrate = VID_RefreshRateHz(modes[i]);
+		const int bpp = SDL_BITSPERPIXEL(modes[i]->format);
+
+		// SDL3 lists a size once per pixel density; keep one entry per size
+		if (nummodes > 0 && modelist[nummodes - 1].width == modes[i]->w &&
+			modelist[nummodes - 1].height == modes[i]->h &&
+			modelist[nummodes - 1].bpp == bpp && modelist[nummodes - 1].refreshrate == refreshrate)
+			continue;
+		modelist[nummodes].width = modes[i]->w;
+		modelist[nummodes].height = modes[i]->h;
+		modelist[nummodes].bpp = bpp;
+		modelist[nummodes].refreshrate = refreshrate;
+		nummodes++;
+	}
+	SDL_free(modes);
+}
+
+/*
+===================
+VID_Init
+===================
+*/
+void	VID_Init (void)
+{
+	int		p, width, height, refreshrate, bpp;
+	int		display_width, display_height, display_refreshrate, display_bpp;
+	qboolean	fullscreen, validmode;
+	cvar_t *v;
+	size_t i;
+	static const char	*read_vars[] = { "vid_fullscreen",
+					 "vid_width",
+					 "vid_height",
+					 "vid_refreshrate",
+					 "vid_bpp",
+					 "vid_vsync",
+					 "vid_fsaa",
+					 "vid_desktopfullscreen",
+					 "vid_borderless",
+					 "gl_load24bit",	//including this here so we don't start up to the wrong setting.
+					 "gl_load24bit_hud", // woods #24bithud
+					 "scr_conback", // woods #conback
+					 "scr_concolor" // woods #concolor
+					 };
+#define num_readvars	( sizeof(read_vars)/sizeof(read_vars[0]) )
+
+	Cvar_RegisterVariable (&vid_fullscreen); //johnfitz
+	Cvar_RegisterVariable (&vid_width); //johnfitz
+	Cvar_RegisterVariable (&vid_height); //johnfitz
+	Cvar_RegisterVariable (&vid_refreshrate); //johnfitz
+	Cvar_RegisterVariable (&vid_bpp); //johnfitz
+	Cvar_RegisterVariable (&vid_vsync);
+	Cvar_RegisterVariable (&bench_flush); //johnfitz
+	Cvar_RegisterVariable (&vid_fsaa); //QuakeSpasm
+	Cvar_RegisterVariable (&vid_fxaa); // woods #fxaa
+	Cvar_RegisterVariable (&vid_desktopfullscreen); //QuakeSpasm
+	Cvar_RegisterVariable (&vid_borderless); //QuakeSpasm
+	Cvar_RegisterVariable (&vid_saveresize); // github.com/andrei-drexler/ironwail (Enable resizing)
+	for (i = 0; i < num_readvars; i++)
+	{
+		v = Cvar_FindVar(read_vars[i]);
+		if (!v || v->callback)
+			Sys_Error("Cvar %s not found yet, or already has a callback", read_vars[i]);
+		else // woods
+		{
+			if (strcmp(read_vars[i], "vid_fsaa") == 0)
+				Cvar_SetCallback (v, VID_FSAA_f);
+			else
+				Cvar_SetCallback (v, VID_Changed_f);
+		}
+	}
+
+	Cvar_SetCompletion (&vid_width, VID_Width_Completion_f); // woods #iwtabcomplete
+	Cvar_SetCompletion (&vid_height, VID_Height_Completion_f); // woods #iwtabcomplete
+	Cvar_SetCompletion (&vid_refreshrate, VID_Refresh_Completion_f); // woods #iwtabcomplete
+	Cvar_SetCompletion (&vid_fsaa, VID_FSAA_Completion_f); // woods #iwtabcomplete
+	Cvar_SetCompletion (&vid_fxaa, VID_FXAA_Completion_f); // woods #iwtabcomplete
+
+	Cvar_SetCallback (&vid_fxaa, FXAA_VidFxaaChanged); // woods #fxaa
+
+	Cmd_AddCommand ("vid_unlock", VID_Unlock); //johnfitz
+	Cmd_AddCommand ("vid_restart", VID_Restart); //johnfitz
+	Cmd_AddCommand ("vid_test", VID_Test); //johnfitz
+	Cmd_AddCommand ("vid_describecurrentmode", VID_DescribeCurrentMode_f);
+	Cmd_AddCommand ("vid_describemodes", VID_DescribeModes_f);
+
+#if defined(__linux__)
+	/* Keep X11 first for the SDL3 cutover, with Wayland as the fallback.
+	   Default priority lets an explicit SDL_VIDEO_DRIVER still choose. */
+	SDL_SetHintWithPriority (SDL_HINT_VIDEO_DRIVER, "x11,wayland", SDL_HINT_DEFAULT);
+#endif
+
+	if (!SDL_InitSubSystem(SDL_INIT_VIDEO))
+		Sys_Error("Couldn't init SDL video: %s", SDL_GetError());
+	Con_DPrintf ("SDL video driver: %s\n", SDL_GetCurrentVideoDriver());
+
+	{
+		const SDL_DisplayMode *mode = SDL_GetDesktopDisplayMode(SDL_GetPrimaryDisplay());
+		if (!mode)
+			Sys_Error("Could not get desktop display mode: %s\n", SDL_GetError());
+
+		display_width = mode->w;
+		display_height = mode->h;
+		display_refreshrate = VID_RefreshRateHz(mode);
+		display_bpp = SDL_BITSPERPIXEL(mode->format);
+	}
+
+	Cvar_SetValueQuick (&vid_width, (float)display_width);
+	Cvar_SetValueQuick (&vid_height, (float)display_height);
+	Cvar_SetValueQuick (&vid_refreshrate, (float)display_refreshrate);
+	Cvar_SetValueQuick (&vid_bpp, (float)display_bpp);
+
+	if (CFG_OpenConfig("config.cfg") == 0)
+	{
+		CFG_ReadCvars(read_vars, num_readvars);
+		CFG_CloseConfig();
+	}
+	CFG_ReadCvarOverrides(read_vars, num_readvars);
+
+	// The HUD cvars are known now; decode the first frame's images while the window is created.
+	Draw_PreloadStartupPics ();
+
+	// The mode list is built on first use (VID_EnsureModelist).
+
+	width = (int)vid_width.value;
+	height = (int)vid_height.value;
+	refreshrate = (int)vid_refreshrate.value;
+	bpp = (int)vid_bpp.value;
+	fullscreen = (int)vid_fullscreen.value;
+	fsaa = (int)vid_fsaa.value;
+
+	if (COM_CheckParm("-current"))
+	{
+		width = display_width;
+		height = display_height;
+		refreshrate = display_refreshrate;
+		bpp = display_bpp;
+		fullscreen = true;
+	}
+	else
+	{
+		p = COM_CheckParm("-width");
+		if (p && p < com_argc-1)
+		{
+			width = Q_atoi(com_argv[p+1]);
+
+			if(!COM_CheckParm("-height"))
+				height = width * 3 / 4;
+		}
+
+		p = COM_CheckParm("-height");
+		if (p && p < com_argc-1)
+		{
+			height = Q_atoi(com_argv[p+1]);
+
+			if(!COM_CheckParm("-width"))
+				width = height * 4 / 3;
+		}
+
+		p = COM_CheckParm("-refreshrate");
+		if (p && p < com_argc-1)
+			refreshrate = Q_atoi(com_argv[p+1]);
+
+		p = COM_CheckParm("-bpp");
+		if (p && p < com_argc-1)
+			bpp = Q_atoi(com_argv[p+1]);
+
+		if (COM_CheckParm("-window") || COM_CheckParm("-w"))
+			fullscreen = false;
+		else if (COM_CheckParm("-fullscreen") || COM_CheckParm("-f"))
+			fullscreen = true;
+	}
+
+	p = COM_CheckParm ("-fsaa");
+	if (p && p < com_argc-1)
+		fsaa = atoi(com_argv[p+1]);
+
+	validmode = VID_ValidMode(width, height, refreshrate, bpp, fullscreen);
+	if (!validmode && fullscreen && !vid_desktopfullscreen.value)
+		validmode = VID_UseClosestFullscreenMode(&width, &height, &refreshrate, &bpp) &&
+			VID_ValidMode(width, height, refreshrate, bpp, fullscreen);
+
+	if (!validmode)
+	{
+		width = (int)vid_width.value;
+		height = (int)vid_height.value;
+		refreshrate = (int)vid_refreshrate.value;
+		bpp = (int)vid_bpp.value;
+		fullscreen = (int)vid_fullscreen.value;
+	}
+
+	validmode = VID_ValidMode(width, height, refreshrate, bpp, fullscreen);
+	if (!validmode && fullscreen && !vid_desktopfullscreen.value)
+		validmode = VID_UseClosestFullscreenMode(&width, &height, &refreshrate, &bpp) &&
+			VID_ValidMode(width, height, refreshrate, bpp, fullscreen);
+
+	if (!validmode)
+	{
+		width = 640;
+		height = 480;
+		refreshrate = display_refreshrate;
+		bpp = display_bpp;
+		fullscreen = false;
+	}
+
+	vid_initialized = true;
+
+	vid.maxwarpwidth = WARP_WIDTH;
+	vid.maxwarpheight = WARP_HEIGHT;
+	vid.colormap = host_colormap;
+	vid.fullbright = 256 - LittleLong (*((int *)vid.colormap + 2048));
+
+
+	VID_SetMode (width, height, refreshrate, bpp, fullscreen);
+
+	// set window icon
+	PL_SetWindowIcon();
+
+	GL_Init ();
+	GL_SetupState ();
+	Cmd_AddCommand ("gl_info", GL_Info_f); //johnfitz
+
+	//johnfitz -- removed code creating "glquake" subdirectory
+
+	vid_menucmdfn = VID_Menu_f; //johnfitz
+	vid_menudrawfn = VID_MenuDraw;
+	vid_menukeyfn = VID_MenuKey;
+	vid_menumousefn = VID_MenuMouse; // woods #mousemenu
+
+	VID_Gamma_Init(); //johnfitz
+	VID_OnDisplayChange();
+
+	//QuakeSpasm: current vid settings should override config file settings.
+	//so we have to lock the vid mode from now until after all config files are read.
+	vid_locked = true;
+}
+
+// new proc by S.A., called by alt-return key binding.
+void	VID_Toggle (void)
+{
+	// disabling the fast path completely because SDL_SetWindowFullscreen was changing
+	// the window size on SDL2/WinXP and we weren't set up to handle it. --ericw
+	//
+	// TODO: Clear out the dead code, reinstate the fast path using SDL_SetWindowFullscreen
+	// inside VID_SetMode, check window size to fix WinXP issue. This will
+	// keep all the mode changing code in one place.
+	static qboolean vid_toggle_works = false;
+	qboolean toggleWorked;
+
+	S_ClearBuffer ();
+
+	if (!vid_toggle_works)
+		goto vrestart;
+	else if (gl_vbo_able)
+	{
+		// disabling the fast path because with SDL 1.2 it invalidates VBOs (using them
+		// causes a crash, sugesting that the fullscreen toggle created a new GL context,
+		// although texture objects remain valid for some reason).
+		//
+		// SDL2 does promise window resizes / fullscreen changes preserve the GL context,
+		// so we could use the fast path with SDL2. --ericw
+		vid_toggle_works = false;
+		goto vrestart;
+	}
+
+	if (!VID_GetFullscreen() && vid_desktopfullscreen.value)
+		SDL_SetWindowFullscreenMode(draw_context, NULL);
+
+	toggleWorked = SDL_SetWindowFullscreen(draw_context, !VID_GetFullscreen());
+
+	if (toggleWorked)
+	{
+		Sbar_Changed ();	// Sbar seems to need refreshing
+
+		modestate = VID_GetFullscreen() ? MS_FULLSCREEN : MS_WINDOWED;
+
+		VID_SyncCvars();
+
+		IN_UpdateGrabs();
+	}
+	else
+	{
+		vid_toggle_works = false;
+		Con_DPrintf ("SDL_SetWindowFullscreen failed, attempting VID_Restart\n");
+	vrestart:
+		Cvar_SetQuick (&vid_fullscreen, VID_GetFullscreen() ? "0" : "1");
+		Cbuf_AddText ("vid_restart\n");
+	}
+}
+
+/*
+================
+VID_SyncCvars -- johnfitz -- set vid cvars to match current video mode
+================
+*/
+void VID_SyncCvars (void)
+{
+	if (draw_context)
+	{
+		if (!VID_GetDesktopFullscreen())
+		{
+			Cvar_SetValueQuick (&vid_width, VID_GetCurrentWidth());
+			Cvar_SetValueQuick (&vid_height, VID_GetCurrentHeight());
+		}
+		Cvar_SetValueQuick (&vid_refreshrate, VID_GetCurrentRefreshRate());
+		Cvar_SetValueQuick (&vid_bpp, VID_GetCurrentBPP());
+		Cvar_SetQuick (&vid_fullscreen, VID_GetFullscreen() ? "1" : "0");
+		// don't sync vid_desktopfullscreen, it's a user preference that
+		// should persist even if we are in windowed mode.
+		Cvar_SetQuick (&vid_vsync, VID_GetVSync() ? "1" : "0");
+	}
+
+	vid_changed = false;
+}
+
+//==========================================================================
+//
+//  NEW VIDEO MENU -- johnfitz -- woods (edited)
+//
+//==========================================================================
+
+extern cvar_t host_maxfps;
+static char fps_string[16];
+#define VID_FPS_TEXT_X 188
+#define VID_FPS_TEXT_Y 88
+#define VID_FPS_MAX_LEN 4
+static menu_textfield_t fps_field;
+static int vid_menu_mouse_x = 0;
+static int vid_menu_mouse_y = 0;
+
+static SDL_Cursor *VID_GetMenuTextCursor(void)
+{
+	qboolean want_custom = (scr_customcursor.value != 0);
+
+	if (!menu_text_cursor || menu_text_cursor_custom != want_custom)
+	{
+		if (menu_text_cursor)
+		{
+			if (vid_cursor == menu_text_cursor)
+				VID_SetCursorHandle(NULL);
+			SDL_DestroyCursor(menu_text_cursor);
+			menu_text_cursor = NULL;
+		}
+
+		menu_text_cursor = LoadCustomIBeamCursor();
+		menu_text_cursor_custom = want_custom;
+	}
+
+	return menu_text_cursor;
+}
+
+#define VID_MENU_VALUE_X 184
+#define VID_MENU_CVAR_HINT_WIDTH (17 * 8)
+
+static qboolean VID_Menu_CvarHintActive(qboolean selected, cvar_t *cv)
+{
+	return selected && Key_IsShortcutModifierDown() && cv != NULL &&
+		cv->name != NULL && cv->string != NULL;
+}
+
+static qboolean VID_Menu_TextHintActive(qboolean selected, const char *text)
+{
+	return selected && Key_IsShortcutModifierDown() && text != NULL && text[0] != '\0';
+}
+
+static void VID_Menu_DrawHintValue(int x, int y, int maxwidth, const char *hint)
+{
+	if (hint == NULL || hint[0] == '\0')
+		return;
+
+	M_PrintScroll(x, y, maxwidth, hint, realtime, false);
+}
+
+static void VID_Menu_AppendCvarHintPair(char *buffer, size_t buffer_size, const cvar_t *cv)
+{
+	char pair[128];
+
+	if (buffer_size <= 0 || cv == NULL || cv->name == NULL || cv->string == NULL)
+		return;
+
+	q_snprintf(pair, sizeof(pair), "%s %s", cv->name, cv->string);
+	if (buffer[0])
+		q_strlcat(buffer, ", ", buffer_size);
+	q_strlcat(buffer, pair, buffer_size);
+}
+
+static void VID_Menu_DrawCvarHintValue(int x, int y, int maxwidth, cvar_t *cv)
+{
+	char hint[128];
+
+	if (cv == NULL || cv->name == NULL || cv->string == NULL)
+		return;
+
+	q_snprintf(hint, sizeof(hint), "%s %s", cv->name, cv->string);
+	VID_Menu_DrawHintValue(x, y, maxwidth, hint);
+}
+
+static void VID_FPS_UpdateCvar(void)
+{
+	int value;
+	if (fps_string[0])
+	{
+		value = Q_atoi(fps_string);
+		if (value > 1000)
+		{
+			value = 1000;
+			q_snprintf(fps_string, sizeof(fps_string), "%d", value);
+			M_TextField_ClampCursor(&fps_field);
+			M_TextField_ClearSelection(&fps_field);
+		}
+	}
+	else
+	{
+		value = 0;
+	}
+	Cvar_SetValue("host_maxfps", value);
+}
+
+static void VID_FPS_SetValue(int value)
+{
+	value = CLAMP(0, value, 1000);
+	Cvar_SetValue("host_maxfps", value);
+	q_snprintf(fps_string, sizeof(fps_string), "%d", value);
+	M_TextField_ClampCursor(&fps_field);
+	M_TextField_ClearSelection(&fps_field);
+}
+
+enum {
+	VID_OPT_MODE,
+	VID_OPT_BPP,
+	VID_OPT_REFRESHRATE,
+	VID_OPT_FULLSCREEN,
+	VID_OPT_VSYNC,
+	VID_OPT_FPSLIMIT,
+	VID_OPT_TEST,
+	VID_OPT_APPLY,
+	VIDEO_OPTIONS_ITEMS
+};
+COMPILE_TIME_ASSERT(menu_search_video_count, VIDEO_OPTIONS_ITEMS == VID_MENU_SEARCH_ITEMS);
+
+static struct
+{
+	int cursor;
+	struct {
+		char text[32];
+		int len;
+	} search;
+} videomenu;
+
+static int	video_options_cursor = 0;
+
+static qboolean VID_MenuWantsTextCursor(void)
+{
+	return (m_state == m_video &&
+		(video_options_cursor == VID_OPT_FPSLIMIT || M_TextField_IsDraggingField(&fps_field)));
+}
+
+static int VID_Menu_GetItemY(int index)
+{
+	int y = 48 + index * 8;
+
+	if (index >= VID_OPT_FPSLIMIT)
+		y += 8;
+	if (index >= VID_OPT_TEST)
+		y += 16;
+
+	return y;
+}
+
+static int VID_Menu_GetItemAtY(int cy)
+{
+	int i;
+
+	for (i = 0; i < VIDEO_OPTIONS_ITEMS; ++i)
+	{
+		int y = VID_Menu_GetItemY(i);
+		int top = (i == VID_OPT_FPSLIMIT) ? y - 8 : y;
+		int bottom = y + 8;
+
+		if (cy >= top && cy < bottom)
+			return i;
+	}
+
+	return -1;
+}
+
+typedef struct {
+	int width,height;
+} vid_menu_mode;
+
+//TODO: replace these fixed-length arrays with hunk_allocated buffers
+static vid_menu_mode vid_menu_modes[MAX_MODE_LIST];
+static int vid_menu_nummodes = 0;
+
+static int vid_menu_bpps[MAX_BPPS_LIST];
+static int vid_menu_numbpps = 0;
+
+static int vid_menu_rates[MAX_RATES_LIST];
+static int vid_menu_numrates=0;
+
+/*
+================
+VID_Menu_Init
+================
+*/
+static void VID_Menu_Init (void)
+{
+	int i, j, h, w;
+
+	vid_menu_nummodes = 0;
+	for (i = 0; i < nummodes; i++)
+	{
+		w = modelist[i].width;
+		h = modelist[i].height;
+
+		for (j = 0; j < vid_menu_nummodes; j++)
+		{
+			if (vid_menu_modes[j].width == w &&
+				vid_menu_modes[j].height == h)
+				break;
+		}
+
+		if (j == vid_menu_nummodes)
+		{
+			vid_menu_modes[j].width = w;
+			vid_menu_modes[j].height = h;
+			vid_menu_nummodes++;
+		}
+	}
+}
+
+/*
+================
+VID_Menu_RebuildBppList
+
+Regenerates bpp list based on current vid_width and vid_height. Display events
+rebuild the choices without changing pending video settings.
+================
+*/
+static void VID_Menu_RebuildBppList (qboolean update_cvars)
+{
+	int i, j, b;
+
+	VID_EnsureModelist ();
+	vid_menu_numbpps = 0;
+
+	for (i = 0; i < nummodes; i++)
+	{
+		if (vid_menu_numbpps >= MAX_BPPS_LIST)
+			break;
+
+		//bpp list is limited to bpps available with current width/height
+		if (modelist[i].width != vid_width.value ||
+			modelist[i].height != vid_height.value)
+			continue;
+
+		b = modelist[i].bpp;
+
+		for (j = 0; j < vid_menu_numbpps; j++)
+		{
+			if (vid_menu_bpps[j] == b)
+				break;
+		}
+
+		if (j == vid_menu_numbpps)
+		{
+			vid_menu_bpps[j] = b;
+			vid_menu_numbpps++;
+		}
+	}
+
+	if (!update_cvars || !nummodes)
+		return;
+
+	//if there are no valid fullscreen bpps for this width/height, just pick one
+	if (vid_menu_numbpps == 0)
+	{
+		Cvar_SetValueQuick (&vid_bpp, (float)modelist[0].bpp);
+		return;
+	}
+
+	//if vid_bpp is not in the new list, change vid_bpp
+	for (i = 0; i < vid_menu_numbpps; i++)
+		if (vid_menu_bpps[i] == (int)(vid_bpp.value))
+			break;
+
+	if (i == vid_menu_numbpps)
+		Cvar_SetValueQuick (&vid_bpp, (float)vid_menu_bpps[0]);
+}
+
+/*
+================
+VID_Menu_RebuildRateList
+
+regenerates rate list based on current vid_width, vid_height and vid_bpp
+================
+*/
+static void VID_Menu_RebuildRateList (qboolean update_cvars)
+{
+	int i, j, r;
+
+	VID_EnsureModelist ();
+	vid_menu_numrates = 0;
+
+	for (i = 0; i < nummodes; i++)
+	{
+		if (vid_menu_numrates >= MAX_RATES_LIST)
+			break;
+
+		//rate list is limited to rates available with current width/height/bpp
+		if (modelist[i].width != vid_width.value ||
+		    modelist[i].height != vid_height.value ||
+		    modelist[i].bpp != vid_bpp.value)
+			continue;
+
+		r = modelist[i].refreshrate;
+
+		for (j = 0; j < vid_menu_numrates; j++)
+		{
+			if (vid_menu_rates[j] == r)
+				break;
+		}
+
+		if (j == vid_menu_numrates)
+		{
+			vid_menu_rates[j] = r;
+			vid_menu_numrates++;
+		}
+	}
+
+	if (!update_cvars || !nummodes)
+		return;
+
+	//if there are no valid fullscreen refreshrates for this width/height, just pick one
+	if (vid_menu_numrates == 0)
+	{
+		Cvar_SetValue ("vid_refreshrate",(float)modelist[0].refreshrate);
+		return;
+	}
+
+	//if vid_refreshrate is not in the new list, change vid_refreshrate
+	for (i = 0; i < vid_menu_numrates; i++)
+		if (vid_menu_rates[i] == (int)(vid_refreshrate.value))
+			break;
+
+	if (i == vid_menu_numrates)
+		Cvar_SetValue ("vid_refreshrate",(float)vid_menu_rates[0]);
+}
+
+/* Enumerating fullscreen modes can take a few hundred milliseconds, and a
+ * windowed startup never needs them, so the list is built on first use. */
+static qboolean modelist_stale = true;
+
+static void VID_EnsureModelist (void)
+{
+	if (!modelist_stale)
+		return;
+	modelist_stale = false;
+
+	VID_InitModelist ();
+	VID_Menu_Init ();
+	VID_Menu_RebuildBppList (false);
+	VID_Menu_RebuildRateList (false);
+}
+
+/* Refresh pacing and menu choices after monitor/mode changes without applying
+ * or discarding the user's pending settings. Called once per SDL event batch. */
+void VID_OnDisplayChange (void)
+{
+	if (!draw_context)
+		return;
+
+	vid.refreshrate = VID_GetCurrentRefreshRate();
+	modelist_stale = true;
+}
+
+/*
+================
+VID_Menu_ChooseNextMode
+
+chooses next resolution in order, then updates vid_width and
+vid_height cvars, then updates bpp and refreshrate lists
+================
+*/
+static void VID_Menu_ChooseNextMode (int dir)
+{
+	int i;
+
+	VID_EnsureModelist ();
+	if (vid_menu_nummodes)
+	{
+		for (i = 0; i < vid_menu_nummodes; i++)
+		{
+			if (vid_menu_modes[i].width == vid_width.value &&
+				vid_menu_modes[i].height == vid_height.value)
+				break;
+		}
+
+		if (i == vid_menu_nummodes) //can't find it in list, so it must be a custom windowed res
+		{
+			i = 0;
+		}
+		else
+		{
+			i += dir;
+			if (i >= vid_menu_nummodes)
+				i = 0;
+			else if (i < 0)
+				i = vid_menu_nummodes-1;
+		}
+
+		Cvar_SetValueQuick (&vid_width, (float)vid_menu_modes[i].width);
+		Cvar_SetValueQuick (&vid_height, (float)vid_menu_modes[i].height);
+		VID_Menu_RebuildBppList (true);
+		VID_Menu_RebuildRateList (true);
+	}
+}
+
+/*
+================
+VID_Menu_ChooseNextBpp
+
+chooses next bpp in order, then updates vid_bpp and the refresh-rate choices
+================
+*/
+static void VID_Menu_ChooseNextBpp (int dir)
+{
+	int i;
+
+	// A window resize or console edit can change the selection since the last event.
+	VID_Menu_RebuildBppList (false);
+	if (vid_menu_numbpps)
+	{
+		for (i = 0; i < vid_menu_numbpps; i++)
+		{
+			if (vid_menu_bpps[i] == vid_bpp.value)
+				break;
+		}
+
+		if (i == vid_menu_numbpps) //can't find it in list
+		{
+			i = 0;
+		}
+		else
+		{
+			i += dir;
+			if (i >= vid_menu_numbpps)
+				i = 0;
+			else if (i < 0)
+				i = vid_menu_numbpps-1;
+		}
+
+		Cvar_SetValueQuick (&vid_bpp, (float)vid_menu_bpps[i]);
+		VID_Menu_RebuildRateList (true);
+	}
+}
+
+/*
+================
+VID_Menu_ChooseNextRate
+
+chooses next refresh rate in order, then updates vid_refreshrate cvar
+================
+*/
+static void VID_Menu_ChooseNextRate (int dir)
+{
+	int i;
+
+	VID_Menu_RebuildRateList (false);
+	if (!vid_menu_numrates)
+		return;
+
+	for (i = 0; i < vid_menu_numrates; i++)
+	{
+		if (vid_menu_rates[i] == vid_refreshrate.value)
+			break;
+	}
+
+	if (i == vid_menu_numrates) //can't find it in list
+	{
+		i = 0;
+	}
+	else
+	{
+		i += dir;
+		if (i >= vid_menu_numrates)
+			i = 0;
+		else if (i < 0)
+			i = vid_menu_numrates-1;
+	}
+
+	Cvar_SetValue ("vid_refreshrate",(float)vid_menu_rates[i]);
+}
+
+static int numberOfVideoItems = VIDEO_OPTIONS_ITEMS;
+
+static const char* VID_Menu_GetItemText(int index)
+{
+	switch (index)
+	{
+	case VID_OPT_MODE:
+		return "Video Mode";
+	case VID_OPT_BPP:
+		return "Color Depth";
+	case VID_OPT_REFRESHRATE:
+		return "Refresh Rate";
+	case VID_OPT_FULLSCREEN:
+		return "Display Mode";
+	case VID_OPT_VSYNC:
+		return "Vertical Sync";
+	case VID_OPT_FPSLIMIT:
+		return "FPS Limit";
+	case VID_OPT_TEST:
+		return "Test Changes";
+	case VID_OPT_APPLY:
+		return "Apply Changes";
+	default:
+		return NULL;
+	}
+}
+
+static cvar_t *VID_Menu_GetItemCvar(int index)
+{
+	switch (index)
+	{
+	case VID_OPT_BPP:			return &vid_bpp;
+	case VID_OPT_REFRESHRATE:	return &vid_refreshrate;
+	case VID_OPT_VSYNC:			return &vid_vsync;
+	case VID_OPT_FPSLIMIT:		return &host_maxfps;
+	default:					return NULL;
+	}
+}
+
+static const char *VID_Menu_GetItemHintText(int index)
+{
+	static char buffer[96];
+
+	switch (index)
+	{
+	case VID_OPT_MODE:
+		buffer[0] = '\0';
+		VID_Menu_AppendCvarHintPair(buffer, sizeof(buffer), &vid_width);
+		VID_Menu_AppendCvarHintPair(buffer, sizeof(buffer), &vid_height);
+		return buffer;
+	case VID_OPT_FULLSCREEN:
+		buffer[0] = '\0';
+		VID_Menu_AppendCvarHintPair(buffer, sizeof(buffer), &vid_fullscreen);
+		VID_Menu_AppendCvarHintPair(buffer, sizeof(buffer), &vid_borderless);
+		return buffer;
+	default:
+		return NULL;
+	}
+}
+
+typedef enum {
+	DISPLAYMODE_FULLSCREEN,
+	DISPLAYMODE_WINDOWED,
+	DISPLAYMODE_BORDERLESS
+} windowmode_t;
+
+static windowmode_t VID_Menu_CycleDisplayMode(qboolean cycle)
+{
+	windowmode_t current;
+
+	// Get current mode
+	if (vid_fullscreen.value)
+		current = DISPLAYMODE_FULLSCREEN;
+	else if (vid_borderless.value)
+		current = DISPLAYMODE_BORDERLESS;
+	else
+		current = DISPLAYMODE_WINDOWED;
+
+	if (cycle)
+	{
+		switch (current)
+		{
+		case DISPLAYMODE_FULLSCREEN:
+			// Fullscreen -> Windowed
+			Cvar_SetValueQuick(&vid_fullscreen, 0);
+			Cvar_SetValueQuick(&vid_borderless, 0);
+			current = DISPLAYMODE_WINDOWED;
+			break;
+
+		case DISPLAYMODE_WINDOWED:
+			// Windowed -> Borderless
+			Cvar_SetValueQuick(&vid_fullscreen, 0);
+			Cvar_SetValueQuick(&vid_borderless, 1);
+			current = DISPLAYMODE_BORDERLESS;
+			break;
+
+		case DISPLAYMODE_BORDERLESS:
+			// Borderless -> Fullscreen
+			Cvar_SetValueQuick(&vid_fullscreen, 1);
+			Cvar_SetValueQuick(&vid_borderless, 0);
+			current = DISPLAYMODE_FULLSCREEN;
+			break;
+		}
+	}
+
+	return current;
+}
+
+const char *VID_MenuSearch_GetItemText(int index)
+{
+	return VID_Menu_GetItemText(index);
+}
+
+cvar_t *VID_MenuSearch_GetItemCvar(int index)
+{
+	return VID_Menu_GetItemCvar(index);
+}
+
+const char *VID_MenuSearch_GetItemHintText(int index)
+{
+	return VID_Menu_GetItemHintText(index);
+}
+
+const char *VID_MenuSearch_GetValueText(int index)
+{
+	static char value[32];
+
+	switch (index)
+	{
+	case VID_OPT_MODE:
+		q_snprintf(value, sizeof(value), "%dx%d", (int)vid_width.value, (int)vid_height.value);
+		return value;
+	case VID_OPT_BPP:
+		q_snprintf(value, sizeof(value), "%d", (int)vid_bpp.value);
+		return value;
+	case VID_OPT_REFRESHRATE:
+		q_snprintf(value, sizeof(value), "%d Hz", (int)vid_refreshrate.value);
+		return value;
+	case VID_OPT_FULLSCREEN:
+		switch (VID_Menu_CycleDisplayMode(false))
+		{
+		case DISPLAYMODE_FULLSCREEN: return "fullscreen";
+		case DISPLAYMODE_WINDOWED: return "windowed";
+		case DISPLAYMODE_BORDERLESS: return "borderless";
+		}
+		return NULL;
+	case VID_OPT_VSYNC:
+		return gl_swap_control ? (vid_vsync.value ? "on" : "off") : "N/A";
+	case VID_OPT_FPSLIMIT:
+		if (host_maxfps.value <= 0)
+			return "off";
+		q_snprintf(value, sizeof(value), "%d", (int)host_maxfps.value);
+		return value;
+	default:
+		return NULL;
+	}
+}
+
+qboolean VID_MenuSearch_ItemAvailable(int index)
+{
+	return vid_menudrawfn != NULL && index >= 0 && index < VIDEO_OPTIONS_ITEMS;
+}
+
+/*
+================
+VID_MenuKey
+================
+*/
+static void VID_MenuKey (int key)
+{
+	if (video_options_cursor == VID_OPT_FPSLIMIT && M_TextField_Key(&fps_field, key))
+	{
+		VID_FPS_UpdateCvar();
+		return;
+	}
+
+	if (video_options_cursor == VID_OPT_FPSLIMIT && key == K_MOUSE1)
+	{
+		if (vid_menu_mouse_x >= 180 && vid_menu_mouse_x <= 180 + 7 * 8 &&
+			vid_menu_mouse_y >= VID_FPS_TEXT_Y - 4 && vid_menu_mouse_y <= VID_FPS_TEXT_Y + 12)
+		{
+			M_TextField_MouseClick(&fps_field, vid_menu_mouse_x, VID_FPS_TEXT_X);
+			return;
+		}
+	}
+
+	// Handle search functionality (only when not on FPS input)
+	if (video_options_cursor != VID_OPT_FPSLIMIT)
+	{
+		if (key == K_ESCAPE)
+		{
+			if (videomenu.search.len > 0)
+			{
+				videomenu.search.len = 0;
+				videomenu.search.text[0] = 0;
+				numberOfVideoItems = VIDEO_OPTIONS_ITEMS;
+				return;
+			}
+			VID_SyncCvars();
+			S_LocalSound("misc/menu1.wav");
+			M_Menu_Options_f();
+			return;
+		}
+		else if (Key_IsShortcutModifierDown())
+		{
+			if ((key == 'u' || key == 'U') && videomenu.search.len > 0)
+			{
+				// Clear entire search with the platform shortcut modifier
+				videomenu.search.len = 0;
+				videomenu.search.text[0] = 0;
+				numberOfVideoItems = VIDEO_OPTIONS_ITEMS;
+				return;
+		}
+			else if (key == K_BACKSPACE && videomenu.search.len > 0)
+			{
+				// Delete previous word - implementing M_DeletePrevWord logic directly
+				int pos = videomenu.search.len;
+
+				// 1. Skip trailing spaces
+				while (pos > 0 && q_isspace(videomenu.search.text[pos - 1]))
+					--pos;
+
+				// 2. Walk backwards until we hit a space
+				while (pos > 0 && !q_isspace(videomenu.search.text[pos - 1]))
+					--pos;
+
+				// 3. Shrink the string
+				videomenu.search.len = pos;
+				videomenu.search.text[pos] = '\0';
+
+				// Update filtering based on new search text
+				if (videomenu.search.len > 0)
+				{
+					numberOfVideoItems = 0;
+					for (int i = 0; i < VIDEO_OPTIONS_ITEMS; i++)
+					{
+						const char* itemtext = VID_Menu_GetItemText(i);
+						if (itemtext && q_strcasestr(itemtext, videomenu.search.text))
+						{
+							numberOfVideoItems++;
+							if (numberOfVideoItems == 1)
+								video_options_cursor = i;
+						}
+					}
+				}
+				else
+				{
+					numberOfVideoItems = VIDEO_OPTIONS_ITEMS;
+				}
+				return;
+			}
+		}
+		else if (key == K_BACKSPACE)
+		{
+			if (videomenu.search.len > 0)
+			{
+				videomenu.search.text[--videomenu.search.len] = 0;
+				if (videomenu.search.len > 0)
+				{
+					numberOfVideoItems = 0;
+					for (int i = 0; i < VIDEO_OPTIONS_ITEMS; i++)
+					{
+						const char* itemtext = VID_Menu_GetItemText(i);
+						if (itemtext && q_strcasestr(itemtext, videomenu.search.text))
+						{
+							numberOfVideoItems++;
+							if (numberOfVideoItems == 1)
+								video_options_cursor = i;
+						}
+					}
+				}
+				else
+				{
+					numberOfVideoItems = VIDEO_OPTIONS_ITEMS;
+				}
+				return;
+			}
+		}
+		else if (key >= 32 && key < 127)
+		{
+			if (videomenu.search.len < sizeof(videomenu.search.text) - 1)
+			{
+				videomenu.search.text[videomenu.search.len++] = key;
+				videomenu.search.text[videomenu.search.len] = 0;
+
+				numberOfVideoItems = 0;
+				for (int i = 0; i < VIDEO_OPTIONS_ITEMS; i++)
+				{
+					const char* itemtext = VID_Menu_GetItemText(i);
+					if (itemtext && q_strcasestr(itemtext, videomenu.search.text))
+					{
+						numberOfVideoItems++;
+						if (numberOfVideoItems == 1)
+							video_options_cursor = i;
+					}
+				}
+				return;
+			}
+		}
+	}
+
+	switch (key)
+	{
+	case K_ESCAPE:
+	case K_BBUTTON:
+	case K_MOUSE4: // woods #mousemenu
+	case K_MOUSE2: // woods #mousemenu
+		VID_SyncCvars (); //sync cvars before leaving menu. FIXME: there are other ways to leave menu
+		S_LocalSound ("misc/menu1.wav");
+		M_Menu_Options_f ();
+		break;
+
+	case K_UPARROW:
+		S_LocalSound ("misc/menu1.wav");
+		if (video_options_cursor == VID_OPT_FPSLIMIT)
+		{
+			// When leaving field empty, set to 0
+			if (strlen(fps_string) == 0)
+			{
+				VID_FPS_SetValue(0);
+			}
+			else
+				M_TextField_ClearSelection(&fps_field);
+		}
+		video_options_cursor--;
+		if (video_options_cursor < 0)
+			video_options_cursor = VIDEO_OPTIONS_ITEMS-1;
+		break;
+
+	case K_DOWNARROW:
+		S_LocalSound ("misc/menu1.wav");
+		if (video_options_cursor == VID_OPT_FPSLIMIT)
+		{
+			// When leaving field empty, set to 0
+			if (strlen(fps_string) == 0)
+			{
+				VID_FPS_SetValue(0);
+			}
+			else
+				M_TextField_ClearSelection(&fps_field);
+		}
+		video_options_cursor++;
+		if (video_options_cursor >= VIDEO_OPTIONS_ITEMS)
+			video_options_cursor = 0;
+		break;
+
+	case K_LEFTARROW:
+	case K_MWHEELDOWN: // woods #mousemenu
+		S_LocalSound ("misc/menu3.wav");
+		switch (video_options_cursor)
+		{
+		case VID_OPT_MODE:
+			VID_Menu_ChooseNextMode (1);
+			break;
+		case VID_OPT_BPP:
+			VID_Menu_ChooseNextBpp (1);
+			break;
+		case VID_OPT_REFRESHRATE:
+			VID_Menu_ChooseNextRate (1);
+			break;
+		case VID_OPT_FULLSCREEN:
+			VID_Menu_CycleDisplayMode(true);  // Use the single helper function
+			break;
+		case VID_OPT_VSYNC:
+			Cbuf_AddText ("toggle vid_vsync\n"); // kristian
+			break;
+		case VID_OPT_FPSLIMIT:
+		{
+			int value = host_maxfps.value - 10;
+			if (value < 0)
+				value = 0;
+			VID_FPS_SetValue(value);
+			break;
+		}
+		default:
+			break;
+		}
+		break;
+
+	case K_RIGHTARROW:
+	case K_MWHEELUP: // woods #mousemenu
+		S_LocalSound ("misc/menu3.wav");
+		switch (video_options_cursor)
+		{
+		case VID_OPT_MODE:
+			VID_Menu_ChooseNextMode (-1);
+			break;
+		case VID_OPT_BPP:
+			VID_Menu_ChooseNextBpp (-1);
+			break;
+		case VID_OPT_REFRESHRATE:
+			VID_Menu_ChooseNextRate (-1);
+			break;
+		case VID_OPT_FULLSCREEN:
+			VID_Menu_CycleDisplayMode(true);  // Use the single helper function
+			break;
+		case VID_OPT_VSYNC:
+			Cbuf_AddText ("toggle vid_vsync\n");
+			break;
+		case VID_OPT_FPSLIMIT:
+		{
+			int value = host_maxfps.value + 10;
+			VID_FPS_SetValue(value);
+			break;
+		}
+		default:
+			break;
+		}
+		break;
+
+	case K_ENTER:
+	case K_KP_ENTER:
+	case K_ABUTTON:
+	case K_MOUSE1: // woods #mousemenu
+		m_entersound = true;
+		switch (video_options_cursor)
+		{
+		case VID_OPT_MODE:
+			VID_Menu_ChooseNextMode (1);
+			break;
+		case VID_OPT_BPP:
+			VID_Menu_ChooseNextBpp (1);
+			break;
+		case VID_OPT_REFRESHRATE:
+			VID_Menu_ChooseNextRate (1);
+			break;
+		case VID_OPT_FULLSCREEN:
+			VID_Menu_CycleDisplayMode(true);  // Use the single helper function
+			break;
+		case VID_OPT_VSYNC:
+			Cbuf_AddText ("toggle vid_vsync\n");
+			break;
+		case VID_OPT_TEST:
+			Cbuf_AddText ("vid_test\n");
+			break;
+		case VID_OPT_APPLY:
+			Cbuf_AddText ("vid_restart\n");
+			key_dest = key_game;
+			m_state = m_none;
+			IN_UpdateGrabs();
+			break;
+		case VID_OPT_FPSLIMIT:
+		{
+			int value = host_maxfps.value + 10;
+			if (value > 1000) value = 0;  // cycle back to unlimited
+			VID_FPS_SetValue(value);
+			break;
+		}
+		default:
+			break;
+		}
+		break;
+
+	default:
+		break;
+	}
+}
+
+
+qboolean VID_Menu_TextEntry(void)
+{
+	return (video_options_cursor == VID_OPT_FPSLIMIT);
+}
+
+void VID_Menu_Char(int key)
+{
+	if (video_options_cursor == VID_OPT_FPSLIMIT && M_TextField_Char(&fps_field, key))
+	{
+		VID_FPS_UpdateCvar();
+	}
+}
+
+/*
+================
+VID_MenuMouse -- woods #mousemenu (iw)
+================
+*/
+static void VID_MenuMouse(int cx, int cy)
+{
+	vid_menu_mouse_x = cx;
+	vid_menu_mouse_y = cy;
+
+	if (M_TextField_IsDraggingField(&fps_field))
+	{
+		M_TextField_MouseDrag(cx);
+		return;
+	}
+
+	int cursor = VID_Menu_GetItemAtY(cy);
+
+	// Prevent selecting gaps
+	if (cursor < 0 || cursor >= VIDEO_OPTIONS_ITEMS)
+	{
+		return;
+	}
+
+	if (video_options_cursor == VID_OPT_FPSLIMIT && cursor != VID_OPT_FPSLIMIT)
+	{
+		if (strlen(fps_string) == 0)
+		{
+			VID_FPS_SetValue(0);
+		}
+		else
+			M_TextField_ClearSelection(&fps_field);
+	}
+
+	video_options_cursor = cursor;
+}
+
+/*
+================
+VID_MenuDraw
+================
+*/
+static void VID_MenuDraw (void)
+{
+	int i, y;
+	qpic_t *p;
+	const char *title;
+
+	M_TextField_CheckMouseRelease();
+
+	y = 4;
+
+	// plaque
+	p = Draw_CachePic ("gfx/qplaque.lmp");
+	M_DrawTransPic (16, y, p);
+
+	p = Draw_CachePic ("gfx/p_option.lmp");
+	M_DrawPic ( (320-p->width)/2, y, p);
+
+	y += 28;
+
+	// title
+	title = "Video Options";
+	M_PrintWhite ((320-8*strlen(title))/2, y, title);
+
+	y += 16;
+
+	// options
+	for (i = 0; i < VIDEO_OPTIONS_ITEMS; i++)
+	{
+		y = VID_Menu_GetItemY(i);
+		const char* text = NULL;
+		const char* value = NULL;
+		cvar_t *cvar_hint = VID_Menu_GetItemCvar(i);
+		const char *text_hint = VID_Menu_GetItemHintText(i);
+		qboolean show_cvar_hint = VID_Menu_CvarHintActive(video_options_cursor == i, cvar_hint);
+		qboolean show_text_hint = VID_Menu_TextHintActive(video_options_cursor == i, text_hint);
+
+		switch (i)
+		{
+		case VID_OPT_MODE:
+			text = "        Video mode";
+			value = va("%ix%i", (int)vid_width.value, (int)vid_height.value);
+			break;
+
+		case VID_OPT_BPP:
+			text = "       Color depth";
+			value = va("%i", (int)vid_bpp.value);
+			break;
+
+		case VID_OPT_REFRESHRATE:
+			text = "      Refresh Rate";
+			value = va("%i Hz", (int)vid_refreshrate.value);
+			break;
+
+		case VID_OPT_FULLSCREEN:
+			text = "      Display Mode";
+			switch (VID_Menu_CycleDisplayMode(false))
+			{
+			case DISPLAYMODE_FULLSCREEN:
+				value = "fullscreen";
+				break;
+			case DISPLAYMODE_WINDOWED:
+				value = "windowed";
+				break;
+			case DISPLAYMODE_BORDERLESS:
+				value = "borderless";
+				break;
+			}
+			break;
+
+		case VID_OPT_VSYNC:
+			text = "     Vertical Sync";
+			if (gl_swap_control)
+				value = vid_vsync.value ? "on" : "off";
+			else
+				value = "N/A";
+			break;
+
+		case VID_OPT_FPSLIMIT:
+			text = "         FPS Limit";
+			break;
+
+		case VID_OPT_TEST:
+			value = "Test Changes";
+			break;
+
+		case VID_OPT_APPLY:
+			value = "Apply Changes";
+			break;
+		}
+
+		if (text)
+		{
+			// Check if this item matches the search
+			if (videomenu.search.len > 0)
+			{
+				const char* itemtext = VID_Menu_GetItemText(i);
+				if (itemtext && q_strcasestr(itemtext, videomenu.search.text))
+				{
+					M_PrintHighlight(16, y, text, videomenu.search.text, videomenu.search.len);
+				}
+				else
+				{
+					M_Print(16, y, text);
+				}
+			}
+			else
+			{
+				M_Print(16, y, text);
+			}
+
+		}
+
+		// Draw the value portion
+		if (show_cvar_hint)
+		{
+			VID_Menu_DrawCvarHintValue(VID_MENU_VALUE_X, y, VID_MENU_CVAR_HINT_WIDTH, cvar_hint);
+		}
+		else if (show_text_hint)
+		{
+			VID_Menu_DrawHintValue(VID_MENU_VALUE_X, y, VID_MENU_CVAR_HINT_WIDTH, text_hint);
+		}
+		else if (i == VID_OPT_FPSLIMIT)
+		{
+			M_DrawTextBox(180, y - 8, 5, 1);
+			M_TextField_DrawHighlight(&fps_field, VID_FPS_TEXT_X, y);
+
+			if (video_options_cursor == VID_OPT_FPSLIMIT)
+			{
+				M_Print(188, y, fps_string);
+				M_TextField_DrawCursor(&fps_field, VID_FPS_TEXT_X, y);
+			}
+			else if (strlen(fps_string) == 0)
+			{
+				M_Print(188, y, "0");
+			}
+			else
+			{
+				M_Print(188, y, fps_string);
+			}
+
+			if (strlen(fps_string) == 0 || atoi(fps_string) == 0)
+				M_Print(242, y, "off");
+		}
+		else if (i == VID_OPT_VSYNC && gl_swap_control)
+		{
+			M_DrawCheckbox(VID_MENU_VALUE_X, y, (int)vid_vsync.value);
+		}
+		else if (value)
+		{
+			if (videomenu.search.len > 0 &&
+				(i == VID_OPT_TEST || i == VID_OPT_APPLY) &&
+				q_strcasestr(value, videomenu.search.text))
+			{
+				M_PrintHighlight(184, y, value, videomenu.search.text, videomenu.search.len);
+			}
+			else
+			{
+				M_Print(VID_MENU_VALUE_X, y, value);
+			}
+		}
+
+		// Draw the cursor if this is the currently selected item
+		if (video_options_cursor == i)
+		{
+			M_DrawCharacter(172, y, 12 + ((int)(realtime * 4) & 1));
+		}
+	}
+
+	// Draw search box if search is active
+	if (videomenu.search.len > 0)
+	{
+		M_DrawTextBox(16, 170, 32, 1);
+		M_PrintHighlight(24, 178, videomenu.search.text,
+			videomenu.search.text,
+			videomenu.search.len);
+		int cursor_x = 24 + 8 * videomenu.search.len;
+		if (numberOfVideoItems == 0)
+			M_DrawCharacter(cursor_x, 178, 11 ^ 128);
+		else
+			M_DrawCharacter(cursor_x, 178, 10 + ((int)(realtime * 4) & 1));
+	}
+}
+
+/*
+================
+VID_Menu_f
+================
+*/
+static void VID_Menu_f (void)
+{
+	key_dest = key_menu;
+	m_state = m_video;
+	m_entersound = true;
+	video_options_cursor = 0;
+	videomenu.cursor = 0;
+	videomenu.search.len = 0;
+	videomenu.search.text[0] = 0;
+	IN_UpdateGrabs();
+
+	q_snprintf(fps_string, sizeof(fps_string), "%d", (int)host_maxfps.value);
+	M_TextField_Init(&fps_field, fps_string, VID_FPS_MAX_LEN, true);
+
+	//set all the cvars to match the current mode when entering the menu
+	VID_SyncCvars ();
+
+	//set up bpp and rate lists based on current cvars
+	VID_Menu_RebuildBppList (true);
+	VID_Menu_RebuildRateList (true);
+}
+
+qboolean VID_MenuSearch_OpenItem(int index)
+{
+	if (index < 0 || index >= VIDEO_OPTIONS_ITEMS)
+		return false;
+	if (m_state != m_video)
+		VID_Menu_f();
+	else
+	{
+		videomenu.search.len = 0;
+		videomenu.search.text[0] = 0;
+		numberOfVideoItems = VIDEO_OPTIONS_ITEMS;
+		M_TextField_ClearSelection(&fps_field);
+	}
+	video_options_cursor = index;
+	return true;
+}
+
+void VID_MenuSearch_LeaveMenu(void)
+{
+	VID_SyncCvars();
+	M_TextField_ClearSelection(&fps_field);
+}
+
+static SDL_Cursor *VID_GetCursorForDest(keydest_t dest)
+{
+	SDL_Cursor *nc;
+	qcvm_t *vm;
+
+	if (dest == key_menu)
+		vm = &cls.menu_qcvm;
+	else if (dest == key_game)
+		vm = &cl.qcvm;
+	else
+		vm = NULL;
+	nc = vm?vm->cursorhandle:NULL;
+
+	// Only use custom cursor if cvar is enabled
+	if (!nc && custom_cursor && scr_customcursor.value)
+		nc = custom_cursor;
+
+	if (dest == key_menu && (M_WantsIBeamCursor() || VID_MenuWantsTextCursor()))
+	{
+		SDL_Cursor *text_cursor = VID_GetMenuTextCursor();
+		if (text_cursor)
+			nc = text_cursor;
+	}
+
+	return nc;
+}
+
+SDL_Cursor *VID_GetGameCursorHandle(void)
+{
+	return VID_GetCursorForDest(key_game);
+}
+
+void VID_UpdateCursor(void)
+{
+	SDL_Cursor *nc;
+
+	if (key_dest == key_console || key_dest == key_message || (con_forcedup && key_dest != key_menu))
+		return;
+
+	nc = VID_GetCursorForDest(key_dest);
+	VID_SetCursorHandle(nc);
+}
+
+void VID_SetCursorHandle(SDL_Cursor *cursor)
+{
+	if (vid_cursor == cursor)
+		return;
+
+	vid_cursor = cursor;
+	if (cursor)	// null is an invalid sdl cursor handle
+		SDL_SetCursor(cursor);
+	else
+		SDL_SetCursor(SDL_GetDefaultCursor());	// doesn't need freeing or anything.
+}
+void VID_SetCursor(qcvm_t *vm, const char *cursorname, float hotspot[2], float cursorscale)
+{
+	SDL_Cursor *oldcursor;
+	int mark = Hunk_LowMark();
+	qboolean malloced = false;
+	char npath[MAX_QPATH];
+	SDL_Surface *surf = NULL;
+	byte *imagedata = NULL;
+	if (cursorname && *cursorname)
+	{
+		enum srcformat fmt;
+		int width, height;
+		COM_StripExtension(cursorname, npath, sizeof(npath));
+		imagedata = Image_LoadImage(npath, &width, &height, &fmt, &malloced);
+		if (imagedata && fmt == SRC_RGBA)
+		{	//simple 32bit RGBA byte-ordered data.
+			surf = SDL_CreateSurfaceFrom(width, height, SDL_PIXELFORMAT_RGBA32, imagedata, width*4);
+			if (cursorscale != 1 && surf)
+			{	//rescale image by cursorscale
+				int nwidth = q_max(1,width*cursorscale);
+				int nheight = q_max(1,height*cursorscale);
+				SDL_Surface *scaled = SDL_CreateSurface(nwidth, nheight, SDL_PIXELFORMAT_RGBA32);
+				SDL_BlitSurfaceScaled(surf, NULL, scaled, NULL, SDL_SCALEMODE_NEAREST);
+				SDL_DestroySurface(surf);
+				surf = scaled;
+			}
+		}
+	}
+
+	oldcursor = vm->cursorhandle;
+	if (surf)
+	{
+		vm->cursorhandle = SDL_CreateColorCursor(surf, hotspot[0], hotspot[1]);
+		SDL_DestroySurface(surf);
+	}
+	else
+		vm->cursorhandle = NULL;
+
+	Hunk_FreeToLowMark(mark);
+	if (malloced)
+		free(imagedata);
+
+	VID_UpdateCursor();
+	if (oldcursor)
+		SDL_DestroyCursor(oldcursor);
+}
+
+/*
+===================
+LoadCustomCursorImage -- woods #customcursor
+===================
+*/
+void LoadCustomCursorImage (void)
+{
+	int width, height;
+	enum srcformat fmt;
+	qboolean malloced;
+
+	if (custom_cursor)
+	{
+		VID_SetCursorHandle(NULL); // switch away before freeing
+		SDL_DestroyCursor(custom_cursor);
+		custom_cursor = NULL;
+	}
+
+	if (!scr_customcursor.value)
+		return;
+
+	if (!COM_FileExists("gfx/qssmcursor.png", NULL))
+	{
+		Con_DPrintf("No cursor image found\n");
+		return;
+	}
+
+	byte* cursorData = Image_LoadImage("gfx/qssmcursor", &width, &height, &fmt, &malloced);
+	if (!cursorData)
+	{
+		Con_DPrintf("Failed to load cursor image\n");
+		return;
+	}
+
+	Con_DPrintf("Loaded cursor image: %dx%d\n", width, height);
+
+	const int baseWidth = 40, baseHeight = 40;
+	const int baseResolutionWidth = 1920, baseResolutionHeight = 1080;
+
+	int targetWidth = (baseWidth * vid_width.value) / baseResolutionWidth;
+	int targetHeight = (baseHeight * vid_height.value) / baseResolutionHeight;
+
+	targetWidth = SDL_clamp(targetWidth, 16, 128);
+	targetHeight = SDL_clamp(targetHeight, 16, 128);
+
+	SDL_Surface* surface = SDL_CreateSurfaceFrom(
+		width, height, SDL_PIXELFORMAT_RGBA32, cursorData, width * 4
+	);
+
+	if (!surface)
+	{
+		Con_DPrintf("Failed to create cursor surface\n");
+		if (malloced) free(cursorData);
+		return;
+	}
+
+	if (width != targetWidth || height != targetHeight)
+	{
+		SDL_Surface* scaledSurface = SDL_CreateSurface(targetWidth, targetHeight, SDL_PIXELFORMAT_RGBA32);
+		if (!SDL_BlitSurfaceScaled(surface, NULL, scaledSurface, NULL, SDL_SCALEMODE_NEAREST))
+		{
+			Con_DPrintf("Failed to scale surface: %s\n", SDL_GetError());
+			SDL_DestroySurface(surface);
+			SDL_DestroySurface(scaledSurface);
+			if (malloced) free(cursorData);
+			return;
+		}
+		SDL_DestroySurface(surface);
+		surface = scaledSurface;
+	}
+
+	int hotX = (30 * surface->w) / width;
+	int hotY = (2 * surface->h) / height;
+	hotX = SDL_clamp(hotX, 0, surface->w - 1);
+	hotY = SDL_clamp(hotY, 0, surface->h - 1);
+
+	custom_cursor = SDL_CreateColorCursor(surface, hotX, hotY);
+	if (custom_cursor)
+	{
+		VID_UpdateCursor();
+		Con_DPrintf("Custom cursor set successfully\n");
+	}
+	else
+	{
+		Con_DPrintf("Failed to create custom cursor: %s\n", SDL_GetError());
+	}
+
+	SDL_DestroySurface(surface);
+	if (malloced) free(cursorData);
+}
+
+static SDL_Cursor *LoadCustomSystemCursor (const char *asset, const char *label, SDL_SystemCursor fallback, int hotx, int hoty)
+{
+	int width, height;
+	enum srcformat fmt;
+	qboolean malloced;
+	char asset_png[MAX_QPATH];
+	SDL_Cursor *cursor = NULL;
+
+	if (!scr_customcursor.value)
+		return SDL_CreateSystemCursor(fallback);
+
+	q_snprintf(asset_png, sizeof(asset_png), "%s.png", asset);
+	if (!COM_FileExists(asset_png, NULL))
+	{
+		Con_DPrintf("No %s cursor image found, using system cursor\n", label);
+		return SDL_CreateSystemCursor(fallback);
+	}
+
+	byte* cursorData = Image_LoadImage(asset, &width, &height, &fmt, &malloced);
+	if (!cursorData)
+	{
+		Con_DPrintf("Failed to load %s cursor image\n", label);
+		return SDL_CreateSystemCursor(fallback);
+	}
+
+	Con_DPrintf("Loaded %s cursor image: %dx%d\n", label, width, height);
+
+	const int baseWidth = 40, baseHeight = 40;
+	const int baseResolutionWidth = 1920, baseResolutionHeight = 1080;
+
+	int targetWidth = (baseWidth * vid_width.value) / baseResolutionWidth;
+	int targetHeight = (baseHeight * vid_height.value) / baseResolutionHeight;
+
+	targetWidth = SDL_clamp(targetWidth, 16, 128);
+	targetHeight = SDL_clamp(targetHeight, 16, 128);
+
+	SDL_Surface* surface = SDL_CreateSurfaceFrom(
+		width, height, SDL_PIXELFORMAT_RGBA32, cursorData, width * 4
+	);
+
+	if (!surface)
+	{
+		Con_DPrintf("Failed to create %s cursor surface\n", label);
+		if (malloced) free(cursorData);
+		return SDL_CreateSystemCursor(fallback);
+	}
+
+	if (width != targetWidth || height != targetHeight)
+	{
+		SDL_Surface* scaledSurface = SDL_CreateSurface(targetWidth, targetHeight, SDL_PIXELFORMAT_RGBA32);
+		if (!SDL_BlitSurfaceScaled(surface, NULL, scaledSurface, NULL, SDL_SCALEMODE_NEAREST))
+		{
+			Con_DPrintf("Failed to scale %s cursor: %s\n", label, SDL_GetError());
+			SDL_DestroySurface(surface);
+			SDL_DestroySurface(scaledSurface);
+			if (malloced) free(cursorData);
+			return SDL_CreateSystemCursor(fallback);
+		}
+		SDL_DestroySurface(surface);
+		surface = scaledSurface;
+	}
+
+	if (hotx < 0 || hoty < 0)
+	{
+		hotx = surface->w / 2;
+		hoty = surface->h / 2;
+	}
+	else
+	{
+		hotx = (hotx * surface->w) / width;
+		hoty = (hoty * surface->h) / height;
+		hotx = SDL_clamp(hotx, 0, surface->w - 1);
+		hoty = SDL_clamp(hoty, 0, surface->h - 1);
+	}
+
+	cursor = SDL_CreateColorCursor(surface, hotx, hoty);
+	if (cursor)
+	{
+		Con_DPrintf("Custom %s cursor created successfully\n", label);
+	}
+	else
+	{
+		Con_DPrintf("Failed to create custom %s cursor: %s\n", label, SDL_GetError());
+		cursor = SDL_CreateSystemCursor(fallback);
+	}
+
+	SDL_DestroySurface(surface);
+	if (malloced) free(cursorData);
+
+	return cursor;
+}
+
+/*
+===================
+LoadCustomIBeamCursor -- woods #customcursor
+Returns a custom I-beam cursor for console selection, or a system fallback.
+===================
+*/
+SDL_Cursor *LoadCustomIBeamCursor (void)
+{
+	return LoadCustomSystemCursor("gfx/qssmicursor", "I-beam", SDL_SYSTEM_CURSOR_TEXT, -1, -1);
+}
+
+/*
+===================
+LoadCustomLinkCursor -- woods #customcursor
+Returns a custom hand cursor for console links, or a system fallback.
+===================
+*/
+SDL_Cursor *LoadCustomLinkCursor (void)
+{
+	return LoadCustomSystemCursor("gfx/qssmlinkcursor", "link", SDL_SYSTEM_CURSOR_POINTER, 64, 2);
+}
+
+void VID_Minimize (void) // woods for mac command-tab
+{
+	SDL_MinimizeWindow(draw_context);
+}
+
+#if defined(_WIN32)
+/*
+====================
+EnableDarkModeForSDLWindow -- woods #darkmode
+====================
+*/
+static void EnableDarkModeForSDLWindow(SDL_Window* window)
+{
+	if (!window)
+		return;
+
+	// Get the native window handle
+	HWND hwnd = (HWND)SDL_GetPointerProperty(SDL_GetWindowProperties(window),
+		SDL_PROP_WINDOW_WIN32_HWND_POINTER, NULL);
+	if (!hwnd) {
+		// Invalid window handle
+		return;
+	}
+
+	// Set immersive dark mode - this is only supported on Windows 10 1903+
+	// We'll dynamically load the function to ensure compatibility with older Windows
+
+	BOOL useDarkMode = TRUE;
+	const DWORD DWMWA_USE_IMMERSIVE_DARK_MODE = 20;
+	const DWORD DWMWA_USE_IMMERSIVE_DARK_MODE_OLD = 19;
+
+	HMODULE dwmapi = LoadLibrary("dwmapi.dll");
+	if (dwmapi) {
+		typedef HRESULT(WINAPI* DwmSetWindowAttributeFunc)(HWND, DWORD, LPCVOID, DWORD);
+		DwmSetWindowAttributeFunc pDwmSetWindowAttribute =
+			(DwmSetWindowAttributeFunc)GetProcAddress(dwmapi, "DwmSetWindowAttribute");
+
+		if (pDwmSetWindowAttribute) {
+			// Try the newer attribute value first (20 - Windows 10 1903 and later)
+			HRESULT hr = pDwmSetWindowAttribute(hwnd, DWMWA_USE_IMMERSIVE_DARK_MODE, &useDarkMode, sizeof(useDarkMode));
+
+			// If that failed, try the older value (19 - some interim Windows 10 builds)
+			if (FAILED(hr)) {
+				// Ignore the result of this call - if it fails, we just don't get dark mode
+				pDwmSetWindowAttribute(hwnd, DWMWA_USE_IMMERSIVE_DARK_MODE_OLD, &useDarkMode, sizeof(useDarkMode));
+			}
+		}
+
+		FreeLibrary(dwmapi);
+	}
+}
+#endif

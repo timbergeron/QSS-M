@@ -1,0 +1,261 @@
+
+LOG started on: 10/05/2026 20:41:00 
+
+Console initialized.
+Exe: 20:39:50 Oct  5 2026
+384.0 megabyte heap
+
+Sound Initialization
+Video mode 800x600x24 144Hz 2x scale (24-bit z-buffer, 0x FSAA) initialized
+GL_VENDOR: NVIDIA Corporation
+GL_RENDERER: NVIDIA GeForce RTX 4070/PCIe/SSE2
+GL_VERSION: 4.6.0 NVIDIA 591.86
+FOUND: ARB_vertex_buffer_object
+FOUND: GL_ARB_buffer_storage
+FOUND: ARB_multitexture
+GL_MAX_TEXTURE_UNITS: 4
+FOUND: ARB_texture_env_combine
+FOUND: ARB_texture_env_add
+FOUND: SDL_GL_SetSwapInterval
+FOUND: EXT_texture_filter_anisotropic
+FOUND: ARB_texture_non_power_of_two
+FOUND: GLSL
+GL_MAX_TEXTURE_IMAGE_UNITS: 32
+FOUND: brush model instancing
+FOUND: Framebuffer Objects
+Enabled: GLSL gamma
+FOUND: glBlendFuncSeparate
+Enabled: GLSL alias model rendering
+Enabled: EXT_packed_pixels
+FOUND: glGenerateMipmap
+SDL audio spec  : 44100 Hz, 1024 samples, 2 mix channels (callback: 2 ch, surround: on)
+SDL audio device: 44100 Hz, 2 ch, SDL_AUDIO_F32LE, 441 sample frames
+SDL audio driver: wasapi - Speakers (Realtek(R) Audio), 65536 bytes buffer
+Audio: 16 bit, stereo, 44100 Hz
+
+Language initialization
+Couldn't load 'localization/loc_english.txt'
+from 'C:\Users\Tim Bergeron\source\repos\QSS-M\.codex-build\engine-fps-optimization-20261005\timedemo-cpu\20261005-204100'
+
+========= Quake Initialized =========
+
+execing quake.rc
+execing default.cfg
+execing fpsbench.cfg
+PROFILE_TIMEDEMO_CPU 
+TD_PASS_aerowalk_0 
+Playing demo from fps_aerowalk.dem.
+Using protocol 15
+
+<-------------------------------------->
+
+#Aerowalk
+1445 frames   0.8 seconds 1872.2 fps
+BENCH_TD read_us=19.845 next_us=5.798 finish_us=8.384 reads=1445 snapshots=1447 deltas=1447
+TD_PASS_aerowalk_1 
+Playing demo from fps_aerowalk.dem.
+Using protocol 15
+
+<-------------------------------------->
+
+#Aerowalk
+1445 frames   0.5 seconds 2881.7 fps
+BENCH_TD read_us=14.356 next_us=4.783 finish_us=4.633 reads=1445 snapshots=1447 deltas=1447
+TD_PASS_aerowalk_2 
+Playing demo from fps_aerowalk.dem.
+Using protocol 15
+
+<-------------------------------------->
+
+#Aerowalk
+1445 frames   0.5 seconds 2788.4 fps
+BENCH_TD read_us=14.907 next_us=5.154 finish_us=4.810 reads=1445 snapshots=1447 deltas=1447
+TD_PASS_aerowalk_3 
+Playing demo from fps_aerowalk.dem.
+Using protocol 15
+
+<-------------------------------------->
+
+#Aerowalk
+1445 frames   0.5 seconds 2707.3 fps
+BENCH_TD read_us=14.306 next_us=4.846 finish_us=4.714 reads=1445 snapshots=1447 deltas=1447
+TD_PASS_aerowalk_4 
+Playing demo from fps_aerowalk.dem.
+Using protocol 15
+
+<-------------------------------------->
+
+#Aerowalk
+1445 frames   0.5 seconds 2697.2 fps
+BENCH_TD read_us=14.869 next_us=5.086 finish_us=4.880 reads=1445 snapshots=1447 deltas=1447
+TD_PASS_aerowalk_5 
+Playing demo from fps_aerowalk.dem.
+Using protocol 15
+
+<-------------------------------------->
+
+#Aerowalk
+1445 frames   0.5 seconds 2833.2 fps
+BENCH_TD read_us=14.763 next_us=5.073 finish_us=4.729 reads=1445 snapshots=1447 deltas=1447
+TD_PASS_aerowalk_6 
+Playing demo from fps_aerowalk.dem.
+Using protocol 15
+
+<-------------------------------------->
+
+#Aerowalk
+1445 frames   0.5 seconds 2859.6 fps
+BENCH_TD read_us=14.385 next_us=4.821 finish_us=4.792 reads=1445 snapshots=1447 deltas=1447
+TD_PASS_aerowalk_7 
+Playing demo from fps_aerowalk.dem.
+Using protocol 15
+
+<-------------------------------------->
+
+#Aerowalk
+1445 frames   0.5 seconds 2724.5 fps
+BENCH_TD read_us=15.022 next_us=5.243 finish_us=4.843 reads=1445 snapshots=1447 deltas=1447
+TD_PASS_dm3_0 
+Playing demo from fps_dm3.dem.
+Using protocol 15
+
+<-------------------------------------->
+
+#The Abandoned Base
+1442 frames   0.5 seconds 2633.0 fps
+BENCH_TD read_us=15.586 next_us=6.075 finish_us=5.640 reads=1442 snapshots=1444 deltas=1444
+TD_PASS_dm3_1 
+Playing demo from fps_dm3.dem.
+Using protocol 15
+
+<-------------------------------------->
+
+#The Abandoned Base
+1442 frames   0.5 seconds 2684.4 fps
+BENCH_TD read_us=14.895 next_us=5.705 finish_us=5.608 reads=1442 snapshots=1444 deltas=1444
+TD_PASS_dm3_2 
+Playing demo from fps_dm3.dem.
+Using protocol 15
+
+<-------------------------------------->
+
+#The Abandoned Base
+1442 frames   0.6 seconds 2474.6 fps
+BENCH_TD read_us=15.147 next_us=5.835 finish_us=5.678 reads=1442 snapshots=1444 deltas=1444
+TD_PASS_dm3_3 
+Playing demo from fps_dm3.dem.
+Using protocol 15
+
+<-------------------------------------->
+
+#The Abandoned Base
+1442 frames   0.6 seconds 2476.2 fps
+BENCH_TD read_us=16.640 next_us=6.904 finish_us=5.815 reads=1442 snapshots=1444 deltas=1444
+TD_PASS_dm3_4 
+Playing demo from fps_dm3.dem.
+Using protocol 15
+
+<-------------------------------------->
+
+#The Abandoned Base
+1442 frames   0.6 seconds 2453.0 fps
+BENCH_TD read_us=15.969 next_us=6.360 finish_us=5.715 reads=1442 snapshots=1444 deltas=1444
+TD_PASS_dm3_5 
+Playing demo from fps_dm3.dem.
+Using protocol 15
+
+<-------------------------------------->
+
+#The Abandoned Base
+1442 frames   0.6 seconds 2506.3 fps
+BENCH_TD read_us=14.843 next_us=5.542 finish_us=5.660 reads=1442 snapshots=1444 deltas=1444
+TD_PASS_dm3_6 
+Playing demo from fps_dm3.dem.
+Using protocol 15
+
+<-------------------------------------->
+
+#The Abandoned Base
+1442 frames   0.6 seconds 2466.2 fps
+BENCH_TD read_us=16.686 next_us=6.864 finish_us=5.866 reads=1442 snapshots=1444 deltas=1444
+TD_PASS_dm3_7 
+Playing demo from fps_dm3.dem.
+Using protocol 15
+
+<-------------------------------------->
+
+#The Abandoned Base
+1442 frames   0.5 seconds 2690.8 fps
+BENCH_TD read_us=16.056 next_us=6.369 finish_us=5.759 reads=1442 snapshots=1444 deltas=1444
+TD_PASS_ctf2m8_0 
+Playing demo from fps_ctf2m8.dem.
+Using protocol 15
+
+<-------------------------------------->
+
+#Capturephobopolis
+1442 frames   0.5 seconds 2697.6 fps
+BENCH_TD read_us=18.506 next_us=7.763 finish_us=6.626 reads=1442 snapshots=1444 deltas=1444
+TD_PASS_ctf2m8_1 
+Playing demo from fps_ctf2m8.dem.
+Using protocol 15
+
+<-------------------------------------->
+
+#Capturephobopolis
+1442 frames   0.5 seconds 2749.8 fps
+BENCH_TD read_us=18.005 next_us=7.278 finish_us=6.473 reads=1442 snapshots=1444 deltas=1444
+TD_PASS_ctf2m8_2 
+Playing demo from fps_ctf2m8.dem.
+Using protocol 15
+
+<-------------------------------------->
+
+#Capturephobopolis
+1442 frames   0.5 seconds 2780.8 fps
+BENCH_TD read_us=17.807 next_us=7.190 finish_us=6.505 reads=1442 snapshots=1444 deltas=1444
+TD_PASS_ctf2m8_3 
+Playing demo from fps_ctf2m8.dem.
+Using protocol 15
+
+<-------------------------------------->
+
+#Capturephobopolis
+1442 frames   0.5 seconds 2664.4 fps
+BENCH_TD read_us=18.953 next_us=8.142 finish_us=6.529 reads=1442 snapshots=1444 deltas=1444
+TD_PASS_ctf2m8_4 
+Playing demo from fps_ctf2m8.dem.
+Using protocol 15
+
+<-------------------------------------->
+
+#Capturephobopolis
+1442 frames   0.6 seconds 2567.6 fps
+BENCH_TD read_us=18.097 next_us=7.359 finish_us=6.570 reads=1442 snapshots=1444 deltas=1444
+TD_PASS_ctf2m8_5 
+Playing demo from fps_ctf2m8.dem.
+Using protocol 15
+
+<-------------------------------------->
+
+#Capturephobopolis
+1442 frames   0.5 seconds 2748.5 fps
+BENCH_TD read_us=18.437 next_us=7.618 finish_us=6.422 reads=1442 snapshots=1444 deltas=1444
+TD_PASS_ctf2m8_6 
+Playing demo from fps_ctf2m8.dem.
+Using protocol 15
+
+<-------------------------------------->
+
+#Capturephobopolis
+1442 frames   0.5 seconds 2706.7 fps
+BENCH_TD read_us=17.692 next_us=7.159 finish_us=6.486 reads=1442 snapshots=1444 deltas=1444
+TD_PASS_ctf2m8_7 
+Playing demo from fps_ctf2m8.dem.
+Using protocol 15
+
+<-------------------------------------->
+
+#Capturephobopolis
+1442 frames   0.5 seconds 2759.6 fps
+BENCH_TD read_us=17.983 next_us=7.332 finish_us=6.425 reads=1442 snapshots=1444 deltas=1444

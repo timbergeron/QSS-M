@@ -1,0 +1,428 @@
+2026-10-05 15:24:46 Playing registered version.
+2026-10-05 15:24:46 432 unique files, 17 duplicates
+2026-10-05 15:24:46 
+2026-10-05 15:24:46 Engine Version: FTE git-30-f2576ed
+2026-10-05 15:24:46 This program is free software; you can redistribute it and/or modify it under the terms of the GNU General Public License as published by the Free Software Foundation; either version 2 of the License, or (at your option) any later version.
+2026-10-05 15:24:46 This program is distributed in the hope that it will be useful, but WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. 
+2026-10-05 15:24:46 See the GNU General Public License for more details.
+2026-10-05 15:24:46 video shutdown took 0.000466 seconds
+2026-10-05 15:24:46 video startup took 0.000000 seconds
+2026-10-05 15:24:46 Setting windowed mode 800*600 OpenGL
+2026-10-05 15:24:46 Loading renderer dll "C:\WINDOWS\system32\opengl32.dll" Success
+2026-10-05 15:24:46 Loaded renderer dll C:\WINDOWS\system32\opengl32.dll
+2026-10-05 15:24:46 WGL_EXTENSIONS: WGL_ARB_buffer_region WGL_ARB_create_context WGL_ARB_create_context_no_error WGL_ARB_create_context_profile WGL_ARB_create_context_robustness WGL_ARB_context_flush_control WGL_ARB_extensions_string WGL_ARB_make_current_read WGL_ARB_multisample WGL_ARB_pbuffer WGL_ARB_pixel_format WGL_ARB_pixel_format_float WGL_ARB_render_texture WGL_ATI_pixel_format_float WGL_EXT_colorspace WGL_EXT_create_context_es_profile WGL_EXT_create_context_es2_profile WGL_EXT_extensions_string WGL_EXT_framebuffer_sRGB WGL_EXT_pixel_format_packed_float WGL_EXT_swap_control WGL_EXT_swap_control_tear WGL_NVX_DX_interop WGL_NV_DX_interop WGL_NV_DX_interop2 WGL_NV_copy_image WGL_NV_delay_before_swap WGL_NV_float_buffer WGL_NV_multisample_coverage WGL_NV_multigpu_context WGL_NV_render_depth_texture WGL_NV_render_texture_rectangle 
+2026-10-05 15:24:46 GL_VENDOR: NVIDIA Corporation
+2026-10-05 15:24:46 GL_RENDERER: NVIDIA GeForce RTX 4070/PCIe/SSE2
+2026-10-05 15:24:46 GL_VERSION: 4.6.0 NVIDIA 591.86
+2026-10-05 15:24:46 GL_EXTENSIONS: 404 extensions
+2026-10-05 15:24:46 Driver reports invalid profile, assuming compatibility support
+2026-10-05 15:24:46 GL: Found GL_EXT_packed_depth_stencil
+2026-10-05 15:24:46 GL: Found GL_EXT_texture_filter_anisotropic
+2026-10-05 15:24:46 Anisotropic filtering supported (16x max).
+2026-10-05 15:24:46 GL: Found GL_ARB_multitexture
+2026-10-05 15:24:46 ARB Multitexture extensions found. Use -noamtex to disable.
+2026-10-05 15:24:46 GL: Found GL_EXT_stencil_wrap
+2026-10-05 15:24:46 GL: Found GL_EXT_stencil_two_side
+2026-10-05 15:24:47 GL: Found GL_ARB_depth_clamp
+2026-10-05 15:24:47 GL: Found GL_EXT_texture_object
+2026-10-05 15:24:47 GL: Found GL_EXT_compiled_vertex_array
+2026-10-05 15:24:47 GL: Found GL_EXT_texture_env_combine
+2026-10-05 15:24:47 GL: Found GL_EXT_texture_env_add
+2026-10-05 15:24:47 GL: Found GL_NV_texture_env_combine4
+2026-10-05 15:24:47 GL: Found GL_ARB_texture_env_combine
+2026-10-05 15:24:47 GL: Found GL_ARB_texture_env_dot3
+2026-10-05 15:24:47 GLSL available
+2026-10-05 15:24:47 GL: Found GL_ARB_seamless_cube_map
+2026-10-05 15:24:47 GL: Found GL_ARB_framebuffer_sRGB
+2026-10-05 15:24:47 Colour buffer: GL_R8G8B8A0
+2026-10-05 15:24:47 Depth buffer: GL_DEPTH24_STENCIL8
+2026-10-05 15:24:47 CDAudio: MCI_PLAY failed (257)
+2026-10-05 15:24:47 Hardware gamma appears to work
+2026-10-05 15:24:47 GL: Found GL_EXT_texture_compression_s3tc
+2026-10-05 15:24:47 GL: Found GL_EXT_texture_compression_dxt1
+2026-10-05 15:24:47 GL: Found GL_EXT_packed_depth_stencil
+2026-10-05 15:24:47 GL: Found GL_ARB_ES3_2_compatibility
+2026-10-05 15:24:47 Rescanning shaders
+2026-10-05 15:24:47 XInput is enabled (4 controllers found)
+2026-10-05 15:24:47 OpenAL library is not installed
+2026-10-05 15:24:47 OpenGL renderer initialized
+2026-10-05 15:24:47 video restart took 1.004033 seconds
+2026-10-05 15:24:47 main thread video restart took 1.020830 secs
+2026-10-05 15:24:47    2 channel(s)
+2026-10-05 15:24:47    16 bits/sample
+2026-10-05 15:24:47    48000 bytes/sec
+2026-10-05 15:24:47 execing ^[benchmark.cfg\tip\from C:\Users\Tim Bergeron\source\repos\QSS-M\.codex-build\engine-lifecycle-six-20261005\fteqw/qw/benchmark.cfg]
+2026-10-05 15:24:47 BENCH_SESSION_1791239086581117700
+2026-10-05 15:24:47 ^Ue080^Ue081^Ue081^Ue081^Ue081^Ue081^Ue081 Quake Initialized ^Ue081^Ue081^Ue081^Ue081^Ue081^Ue081^Ue082
+2026-10-05 15:24:47 Initializing menu.dat
+2026-10-05 15:24:47 Execing alias bench_schedule ^3:
+2026-10-05 15:24:47 ^1echo BENCH_READY;in 2 bench_initial;in 5 bench_change;in 8 bench_quit
+2026-10-05 15:24:47 ^2echo BENCH_READY;in 2 bench_initial;in 5 bench_change;in 8 bench_quit
+2026-10-05 15:24:47 BENCH_READY
+2026-10-05 15:24:48 Execing alias bench_initial ^3:
+2026-10-05 15:24:48 ^1echo BENCH_BEGIN_initial;map start
+2026-10-05 15:24:48 ^2echo BENCH_BEGIN_initial;map start
+2026-10-05 15:24:48 BENCH_BEGIN_initial
+2026-10-05 15:24:48 SpawnServer: start
+2026-10-05 15:24:48 Reloading shaders
+2026-10-05 15:24:48 maps/start.bsp: Using lightmap format BGRX8
+2026-10-05 15:24:48 Skipping PHS
+2026-10-05 15:24:48 Attempting to load native library: qwprogs
+2026-10-05 15:24:48 Loading native: $bindir/qwprogs_fte_x64.dll
+2026-10-05 15:24:48 Loading native: $bindir/qwprogs_fte.dll
+2026-10-05 15:24:48 Loading native: $basedir/qwprogs_fte_x64.dll
+2026-10-05 15:24:48 Loading native: $basedir/qwprogs_fte.dll
+2026-10-05 15:24:48 Loading native: $bindir/qwprogs_qw_x64.dll
+2026-10-05 15:24:48 Loading native: $bindir/qwprogs_qw.dll
+2026-10-05 15:24:48 Loading native: $basedir/qwprogs_qw_x64.dll
+2026-10-05 15:24:48 Loading native: $basedir/qwprogs_qw.dll
+2026-10-05 15:24:48 Loading native: $bindir/qwprogs_id1_x64.dll
+2026-10-05 15:24:48 Loading native: $bindir/qwprogs_id1.dll
+2026-10-05 15:24:48 Loading native: $basedir/qwprogs_id1_x64.dll
+2026-10-05 15:24:48 Loading native: $basedir/qwprogs_id1.dll
+2026-10-05 15:24:48 Using NQ progs
+2026-10-05 15:24:48 Loaded progs id1/progs.dat
+2026-10-05 15:24:48 gibfiltr.cfg file was not found. Using defaults
+2026-10-05 15:24:48 impfiltr.cfg not found. Impulse filters are disabled
+2026-10-05 15:24:48 New client connected
+2026-10-05 15:24:48 Client command: setinfo "*ver" "FTE v1.07 git-30-f2576ed"
+2026-10-05 15:24:48 Client command: setinfo "name" "BenchClient"
+2026-10-05 15:24:48 Client command: setinfo "topcolor" "13"
+2026-10-05 15:24:48 Client command: setinfo "bottomcolor" "12"
+2026-10-05 15:24:48 Client command: setinfo "rate" "30000"
+2026-10-05 15:24:48 Client command: setinfo "drate" "3000000"
+2026-10-05 15:24:48 Client command: setinfo "msg" "1"
+2026-10-05 15:24:48 Updated needpass.
+2026-10-05 15:24:48 stufftext0: cmd pext
+2026-10-05 15:24:48 Sending stringcmd pext
+2026-10-05 15:24:48 Client command: pext
+2026-10-05 15:24:48 BenchClient reports no extended capabilities.
+2026-10-05 15:24:49 
+2026-10-05 15:24:49 FTE (NQ, SVN git-30-f2576ed) - qw - startServerdata packet received.
+2026-10-05 15:24:49 Cmd_AddCommand: +weaponwheel already defined
+2026-10-05 15:24:49 Cmd_AddCommand: -weaponwheel already defined
+2026-10-05 15:24:49 Clearing memory
+2026-10-05 15:24:49 Couldn't load fragfile.dat
+2026-10-05 15:24:49 Standard NQ protocols
+2026-10-05 15:24:49 
+2026-10-05 15:24:49 
+2026-10-05 15:24:49 ^Ue01d^Ue01e^Ue01e^Ue01e^Ue01e^Ue01e^Ue01e^Ue01e^Ue01e^Ue01e^Ue01e^Ue01e^Ue01e^Ue01e^Ue01e^Ue01e^Ue01e^Ue01e^Ue01f
+2026-10-05 15:24:49 
+2026-10-05 15:24:49 Introduction
+2026-10-05 15:24:49 CL_SignonReply: 1
+2026-10-05 15:24:49 unable to find csaddon.dat.
+2026-10-05 15:24:49 progs.dat is not suitable for SimpleCSQC - no CSQC_DrawHud
+2026-10-05 15:24:49 maps/start.bsp: Using lightmap format BGRX8
+2026-10-05 15:24:49 Sending stringcmd prespawn
+2026-10-05 15:24:49 Client command: prespawn
+2026-10-05 15:24:49 Warning: sv_mapcheck cannot be enforced on player BenchClient (nq).
+2026-10-05 15:24:49 stufftext0: //paknames qw/pak2.pak id1/pak2.pak id1/pak1.pak id1/pak0.pak 
+2026-10-05 15:24:49 stufftext0: //paks -1450259647 -1450259647 848318630 1325833388 
+2026-10-05 15:24:49 CL_SignonReply: 2
+2026-10-05 15:24:49 Sending stringcmd name "BenchClient"
+2026-10-05 15:24:49 
+2026-10-05 15:24:49 Sending stringcmd color 13 12
+2026-10-05 15:24:49 
+2026-10-05 15:24:49 Sending stringcmd spawn 
+2026-10-05 15:24:49 Client command: name "BenchClient"
+2026-10-05 15:24:49 
+2026-10-05 15:24:49 Client command: color 13 12
+2026-10-05 15:24:49 
+2026-10-05 15:24:49 Client command: spawn 
+2026-10-05 15:24:49 BenchClient entered the game
+2026-10-05 15:24:49 CL_SignonReply: 3
+2026-10-05 15:24:49 Sending stringcmd begin
+2026-10-05 15:24:49 Client command: begin
+2026-10-05 15:24:49 BenchClient: info 0:team
+2026-10-05 15:24:49 BenchClient: info 0:*ver
+2026-10-05 15:24:49 BenchClient: info 0:name
+2026-10-05 15:24:49 BenchClient: info 0:topcolor
+2026-10-05 15:24:49 BenchClient: info 0:bottomcolor
+2026-10-05 15:24:49 BenchClient: info 0:rate
+2026-10-05 15:24:49 BenchClient: info 0:drate
+2026-10-05 15:24:49 BenchClient: info 0:msg
+2026-10-05 15:24:49 Player0 MTU changed 0->1442
+2026-10-05 15:24:49 stufftext0: //ui 0 "team" "t12"
+2026-10-05 15:24:49 SETINFO BenchClient: team=t12
+2026-10-05 15:24:49 stufftext0: //ui 0 "*ver" "FTE v1.07 git-30-f2576ed"
+2026-10-05 15:24:49 SETINFO BenchClient: *ver=FTE v1.07 git-30-f2576ed
+2026-10-05 15:24:49 stufftext0: //ui 0 "name" "BenchClient"
+2026-10-05 15:24:49 SETINFO BenchClient: name=BenchClient
+2026-10-05 15:24:49 stufftext0: //ui 0 "topcolor" "13"
+2026-10-05 15:24:49 SETINFO BenchClient: topcolor=13
+2026-10-05 15:24:49 stufftext0: //ui 0 "bottomcolor" "12"
+2026-10-05 15:24:49 SETINFO BenchClient: bottomcolor=12
+2026-10-05 15:24:49 stufftext0: //ui 0 "rate" "30000"
+2026-10-05 15:24:49 SETINFO BenchClient: rate=30000
+2026-10-05 15:24:49 stufftext0: //ui 0 "drate" "3000000"
+2026-10-05 15:24:49 SETINFO BenchClient: drate=3000000
+2026-10-05 15:24:49 stufftext0: //ui 0 "msg" "1"
+2026-10-05 15:24:49 SETINFO BenchClient: msg=1
+2026-10-05 15:24:49 CL_SignonReply: 4
+2026-10-05 15:24:49 2739 additional FS searches
+2026-10-05 15:24:49 Reloading shaders
+2026-10-05 15:24:51 Execing alias bench_change ^3:
+2026-10-05 15:24:51 ^1echo BENCH_BEGIN_change;map e1m1
+2026-10-05 15:24:51 ^2echo BENCH_BEGIN_change;map e1m1
+2026-10-05 15:24:51 BENCH_BEGIN_change
+2026-10-05 15:24:51 SpawnServer: e1m1
+2026-10-05 15:24:51 maps/e1m1.bsp: Using lightmap format BGRX8
+2026-10-05 15:24:51 Skipping PHS
+2026-10-05 15:24:51 Attempting to load native library: qwprogs
+2026-10-05 15:24:51 Loading native: $bindir/qwprogs_fte_x64.dll
+2026-10-05 15:24:51 Loading native: $bindir/qwprogs_fte.dll
+2026-10-05 15:24:51 Loading native: $basedir/qwprogs_fte_x64.dll
+2026-10-05 15:24:51 Loading native: $basedir/qwprogs_fte.dll
+2026-10-05 15:24:51 Loading native: $bindir/qwprogs_qw_x64.dll
+2026-10-05 15:24:51 Loading native: $bindir/qwprogs_qw.dll
+2026-10-05 15:24:51 Loading native: $basedir/qwprogs_qw_x64.dll
+2026-10-05 15:24:51 Loading native: $basedir/qwprogs_qw.dll
+2026-10-05 15:24:51 Loading native: $bindir/qwprogs_id1_x64.dll
+2026-10-05 15:24:51 Loading native: $bindir/qwprogs_id1.dll
+2026-10-05 15:24:51 Loading native: $basedir/qwprogs_id1_x64.dll
+2026-10-05 15:24:51 Loading native: $basedir/qwprogs_id1.dll
+2026-10-05 15:24:51 Using NQ progs
+2026-10-05 15:24:51 Loaded progs id1/progs.dat
+2026-10-05 15:24:51 maps/b_nail0.bsp: Using lightmap format BGRX8
+2026-10-05 15:24:51 maps/b_bh100.bsp: Using lightmap format BGRX8
+2026-10-05 15:24:51 maps/b_shell0.bsp: Using lightmap format BGRX8
+2026-10-05 15:24:51 maps/b_bh10.bsp: Using lightmap format BGRX8
+2026-10-05 15:24:51 maps/b_bh25.bsp: Using lightmap format BGRX8
+2026-10-05 15:24:51 maps/b_nail1.bsp: Using lightmap format BGRX8
+2026-10-05 15:24:51 maps/b_explob.bsp: Using lightmap format BGRX8
+2026-10-05 15:24:51 gibfiltr.cfg file was not found. Using defaults
+2026-10-05 15:24:51 impfiltr.cfg not found. Impulse filters are disabled
+2026-10-05 15:24:51 stufftext0: reconnect "e1m1"
+2026-10-05 15:24:51 Client command: setinfo "emodel" "6967"
+2026-10-05 15:24:51 Client command: setinfo "pmodel" "33168"
+2026-10-05 15:24:51 
+2026-10-05 15:24:51 Changing map...
+2026-10-05 15:24:51 
+2026-10-05 15:24:51 FTE (NQ, SVN git-30-f2576ed) - qw - e1m1Serverdata packet received.
+2026-10-05 15:24:51 Clearing memory
+2026-10-05 15:24:51 Couldn't load fragfile.dat
+2026-10-05 15:24:51 Standard NQ protocols
+2026-10-05 15:24:51 
+2026-10-05 15:24:51 
+2026-10-05 15:24:51 ^Ue01d^Ue01e^Ue01e^Ue01e^Ue01e^Ue01e^Ue01e^Ue01e^Ue01e^Ue01e^Ue01e^Ue01e^Ue01e^Ue01e^Ue01e^Ue01e^Ue01e^Ue01e^Ue01f
+2026-10-05 15:24:51 
+2026-10-05 15:24:51 the Slipgate Complex
+2026-10-05 15:24:51 CL_SignonReply: 1
+2026-10-05 15:24:51 unable to find csaddon.dat.
+2026-10-05 15:24:51 progs.dat is not suitable for SimpleCSQC - no CSQC_DrawHud
+2026-10-05 15:24:51 maps/start.bsp: Using lightmap format BGRX8
+2026-10-05 15:24:51 maps/e1m1.bsp: Using lightmap format BGRX8
+2026-10-05 15:24:52 maps/b_nail0.bsp: Using lightmap format BGRX8
+2026-10-05 15:24:52 maps/b_bh100.bsp: Using lightmap format BGRX8
+2026-10-05 15:24:52 maps/b_shell0.bsp: Using lightmap format BGRX8
+2026-10-05 15:24:52 maps/b_bh10.bsp: Using lightmap format BGRX8
+2026-10-05 15:24:52 maps/b_bh25.bsp: Using lightmap format BGRX8
+2026-10-05 15:24:52 maps/b_nail1.bsp: Using lightmap format BGRX8
+2026-10-05 15:24:52 maps/b_explob.bsp: Using lightmap format BGRX8
+2026-10-05 15:24:52 "doors/baseuse.wav" seems truncated by 20 bytes
+2026-10-05 15:24:52 Sending stringcmd prespawn
+2026-10-05 15:24:52 Client command: prespawn
+2026-10-05 15:24:52 Warning: sv_mapcheck cannot be enforced on player BenchClient (nq).
+2026-10-05 15:24:52 stufftext0: //paknames qw/pak2.pak id1/pak2.pak id1/pak1.pak id1/pak0.pak 
+2026-10-05 15:24:52 stufftext0: //paks -1450259647 -1450259647 848318630 1325833388 
+2026-10-05 15:24:52 CL_SignonReply: 2
+2026-10-05 15:24:52 Sending stringcmd name "BenchClient"
+2026-10-05 15:24:52 
+2026-10-05 15:24:52 Sending stringcmd color 13 12
+2026-10-05 15:24:52 
+2026-10-05 15:24:52 Sending stringcmd spawn 
+2026-10-05 15:24:52 Client command: name "BenchClient"
+2026-10-05 15:24:52 
+2026-10-05 15:24:52 Client command: color 13 12
+2026-10-05 15:24:52 
+2026-10-05 15:24:52 Client command: spawn 
+2026-10-05 15:24:52 BenchClient entered the game
+2026-10-05 15:24:52 CL_SignonReply: 3
+2026-10-05 15:24:52 Sending stringcmd begin
+2026-10-05 15:24:52 Client command: begin
+2026-10-05 15:24:52 BenchClient: info 0:map
+2026-10-05 15:24:52 BenchClient: info 0:emodel
+2026-10-05 15:24:52 BenchClient: info 0:pmodel
+2026-10-05 15:24:52 BenchClient: info 0:name
+2026-10-05 15:24:52 BenchClient: info 0:team
+2026-10-05 15:24:52 stufftext0: //svi "map" "e1m1"
+2026-10-05 15:24:52 SERVERINFO: map=e1m1
+2026-10-05 15:24:52 stufftext0: //ui 0 "emodel" "6967"
+2026-10-05 15:24:52 SETINFO BenchClient: emodel=6967
+2026-10-05 15:24:52 stufftext0: //ui 0 "pmodel" "33168"
+2026-10-05 15:24:52 SETINFO BenchClient: pmodel=33168
+2026-10-05 15:24:52 stufftext0: //ui 0 "name" "BenchClient"
+2026-10-05 15:24:52 SETINFO BenchClient: name=BenchClient
+2026-10-05 15:24:52 stufftext0: //ui 0 "team" "t12"
+2026-10-05 15:24:52 SETINFO BenchClient: team=t12
+2026-10-05 15:24:52 CL_SignonReply: 4
+2026-10-05 15:24:52 1698 additional FS searches
+2026-10-05 15:24:52 model "maps/start.bsp" no longer needed
+2026-10-05 15:24:52 model "*1:maps/start.bsp" no longer needed
+2026-10-05 15:24:52 model "*2:maps/start.bsp" no longer needed
+2026-10-05 15:24:52 model "*3:maps/start.bsp" no longer needed
+2026-10-05 15:24:52 model "*4:maps/start.bsp" no longer needed
+2026-10-05 15:24:52 model "*5:maps/start.bsp" no longer needed
+2026-10-05 15:24:52 model "*6:maps/start.bsp" no longer needed
+2026-10-05 15:24:52 model "*7:maps/start.bsp" no longer needed
+2026-10-05 15:24:52 model "*8:maps/start.bsp" no longer needed
+2026-10-05 15:24:52 model "*9:maps/start.bsp" no longer needed
+2026-10-05 15:24:52 model "*10:maps/start.bsp" no longer needed
+2026-10-05 15:24:52 model "*11:maps/start.bsp" no longer needed
+2026-10-05 15:24:52 model "*12:maps/start.bsp" no longer needed
+2026-10-05 15:24:52 model "*13:maps/start.bsp" no longer needed
+2026-10-05 15:24:52 model "*14:maps/start.bsp" no longer needed
+2026-10-05 15:24:52 model "*15:maps/start.bsp" no longer needed
+2026-10-05 15:24:52 model "*16:maps/start.bsp" no longer needed
+2026-10-05 15:24:52 model "*17:maps/start.bsp" no longer needed
+2026-10-05 15:24:52 model "*18:maps/start.bsp" no longer needed
+2026-10-05 15:24:52 model "*19:maps/start.bsp" no longer needed
+2026-10-05 15:24:52 model "*20:maps/start.bsp" no longer needed
+2026-10-05 15:24:52 model "*21:maps/start.bsp" no longer needed
+2026-10-05 15:24:52 model "*22:maps/start.bsp" no longer needed
+2026-10-05 15:24:52 model "*23:maps/start.bsp" no longer needed
+2026-10-05 15:24:52 model "*24:maps/start.bsp" no longer needed
+2026-10-05 15:24:52 model "*25:maps/start.bsp" no longer needed
+2026-10-05 15:24:52 model "*26:maps/start.bsp" no longer needed
+2026-10-05 15:24:52 model "*27:maps/start.bsp" no longer needed
+2026-10-05 15:24:52 model "*28:maps/start.bsp" no longer needed
+2026-10-05 15:24:52 model "*29:maps/start.bsp" no longer needed
+2026-10-05 15:24:52 model "*30:maps/start.bsp" no longer needed
+2026-10-05 15:24:52 model "*31:maps/start.bsp" no longer needed
+2026-10-05 15:24:52 model "*32:maps/start.bsp" no longer needed
+2026-10-05 15:24:52 model "*33:maps/start.bsp" no longer needed
+2026-10-05 15:24:52 model "*34:maps/start.bsp" no longer needed
+2026-10-05 15:24:52 model "*35:maps/start.bsp" no longer needed
+2026-10-05 15:24:52 model "*36:maps/start.bsp" no longer needed
+2026-10-05 15:24:52 model "*37:maps/start.bsp" no longer needed
+2026-10-05 15:24:52 model "*38:maps/start.bsp" no longer needed
+2026-10-05 15:24:52 model "*39:maps/start.bsp" no longer needed
+2026-10-05 15:24:52 model "*40:maps/start.bsp" no longer needed
+2026-10-05 15:24:52 model "*41:maps/start.bsp" no longer needed
+2026-10-05 15:24:52 model "*42:maps/start.bsp" no longer needed
+2026-10-05 15:24:52 model "*43:maps/start.bsp" no longer needed
+2026-10-05 15:24:52 model "*44:maps/start.bsp" no longer needed
+2026-10-05 15:24:52 model "*45:maps/start.bsp" no longer needed
+2026-10-05 15:24:52 model "*46:maps/start.bsp" no longer needed
+2026-10-05 15:24:52 model "*47:maps/start.bsp" no longer needed
+2026-10-05 15:24:52 model "*48:maps/start.bsp" no longer needed
+2026-10-05 15:24:52 model "*49:maps/start.bsp" no longer needed
+2026-10-05 15:24:52 model "*50:maps/start.bsp" no longer needed
+2026-10-05 15:24:52 model "*51:maps/start.bsp" no longer needed
+2026-10-05 15:24:52 model "*52:maps/start.bsp" no longer needed
+2026-10-05 15:24:52 model "*53:maps/start.bsp" no longer needed
+2026-10-05 15:24:52 model "*54:maps/start.bsp" no longer needed
+2026-10-05 15:24:52 model "progs/flame2.mdl" no longer needed
+2026-10-05 15:24:52 model "progs/flame.mdl" no longer needed
+2026-10-05 15:24:52 model "progs/zombie.mdl" no longer needed
+2026-10-05 15:24:52 model "progs/h_zombie.mdl" no longer needed
+2026-10-05 15:24:54 Execing alias bench_quit ^3:
+2026-10-05 15:24:54 ^1echo BENCH_BEGIN_quit;quit
+2026-10-05 15:24:54 ^2echo BENCH_BEGIN_quit;quit
+2026-10-05 15:24:54 BENCH_BEGIN_quit
+2026-10-05 15:24:54 Server ended
+2026-10-05 15:24:54 Client "BenchClient" removed
+2026-10-05 15:24:54 Resolving address: DESKTOP-50QJJG9
+2026-10-05 15:24:54 Clearing memory
+2026-10-05 15:24:54 model "" no longer needed
+2026-10-05 15:24:54 model "progs/player.mdl" no longer needed
+2026-10-05 15:24:54 model "progs/eyes.mdl" no longer needed
+2026-10-05 15:24:54 model "progs/h_player.mdl" no longer needed
+2026-10-05 15:24:54 model "progs/gib1.mdl" no longer needed
+2026-10-05 15:24:54 model "progs/gib2.mdl" no longer needed
+2026-10-05 15:24:54 model "progs/gib3.mdl" no longer needed
+2026-10-05 15:24:54 model "progs/s_bubble.spr" no longer needed
+2026-10-05 15:24:54 model "progs/s_explod.spr" no longer needed
+2026-10-05 15:24:54 model "progs/v_axe.mdl" no longer needed
+2026-10-05 15:24:54 model "progs/v_shot.mdl" no longer needed
+2026-10-05 15:24:54 model "progs/v_nail.mdl" no longer needed
+2026-10-05 15:24:54 model "progs/v_rock.mdl" no longer needed
+2026-10-05 15:24:54 model "progs/v_shot2.mdl" no longer needed
+2026-10-05 15:24:54 model "progs/v_nail2.mdl" no longer needed
+2026-10-05 15:24:54 model "progs/v_rock2.mdl" no longer needed
+2026-10-05 15:24:54 model "progs/bolt.mdl" no longer needed
+2026-10-05 15:24:54 model "progs/bolt2.mdl" no longer needed
+2026-10-05 15:24:54 model "progs/bolt3.mdl" no longer needed
+2026-10-05 15:24:54 model "progs/lavaball.mdl" no longer needed
+2026-10-05 15:24:54 model "progs/missile.mdl" no longer needed
+2026-10-05 15:24:54 model "progs/grenade.mdl" no longer needed
+2026-10-05 15:24:54 model "progs/spike.mdl" no longer needed
+2026-10-05 15:24:54 model "progs/s_spike.mdl" no longer needed
+2026-10-05 15:24:54 model "progs/backpack.mdl" no longer needed
+2026-10-05 15:24:54 model "progs/zom_gib.mdl" no longer needed
+2026-10-05 15:24:54 model "progs/v_light.mdl" no longer needed
+2026-10-05 15:24:54 model "maps/e1m1.bsp" no longer needed
+2026-10-05 15:24:54 model "*1:maps/e1m1.bsp" no longer needed
+2026-10-05 15:24:54 model "*2:maps/e1m1.bsp" no longer needed
+2026-10-05 15:24:54 model "*3:maps/e1m1.bsp" no longer needed
+2026-10-05 15:24:54 model "*4:maps/e1m1.bsp" no longer needed
+2026-10-05 15:24:54 model "*5:maps/e1m1.bsp" no longer needed
+2026-10-05 15:24:54 model "*6:maps/e1m1.bsp" no longer needed
+2026-10-05 15:24:54 model "*7:maps/e1m1.bsp" no longer needed
+2026-10-05 15:24:54 model "*8:maps/e1m1.bsp" no longer needed
+2026-10-05 15:24:54 model "*9:maps/e1m1.bsp" no longer needed
+2026-10-05 15:24:54 model "*10:maps/e1m1.bsp" no longer needed
+2026-10-05 15:24:54 model "*11:maps/e1m1.bsp" no longer needed
+2026-10-05 15:24:54 model "*12:maps/e1m1.bsp" no longer needed
+2026-10-05 15:24:54 model "*13:maps/e1m1.bsp" no longer needed
+2026-10-05 15:24:54 model "*14:maps/e1m1.bsp" no longer needed
+2026-10-05 15:24:54 model "*15:maps/e1m1.bsp" no longer needed
+2026-10-05 15:24:54 model "*16:maps/e1m1.bsp" no longer needed
+2026-10-05 15:24:54 model "*17:maps/e1m1.bsp" no longer needed
+2026-10-05 15:24:54 model "*18:maps/e1m1.bsp" no longer needed
+2026-10-05 15:24:54 model "*19:maps/e1m1.bsp" no longer needed
+2026-10-05 15:24:54 model "*20:maps/e1m1.bsp" no longer needed
+2026-10-05 15:24:54 model "*21:maps/e1m1.bsp" no longer needed
+2026-10-05 15:24:54 model "*22:maps/e1m1.bsp" no longer needed
+2026-10-05 15:24:54 model "*23:maps/e1m1.bsp" no longer needed
+2026-10-05 15:24:54 model "*24:maps/e1m1.bsp" no longer needed
+2026-10-05 15:24:54 model "*25:maps/e1m1.bsp" no longer needed
+2026-10-05 15:24:54 model "*26:maps/e1m1.bsp" no longer needed
+2026-10-05 15:24:54 model "*27:maps/e1m1.bsp" no longer needed
+2026-10-05 15:24:54 model "*28:maps/e1m1.bsp" no longer needed
+2026-10-05 15:24:54 model "*29:maps/e1m1.bsp" no longer needed
+2026-10-05 15:24:54 model "*30:maps/e1m1.bsp" no longer needed
+2026-10-05 15:24:54 model "*31:maps/e1m1.bsp" no longer needed
+2026-10-05 15:24:54 model "*32:maps/e1m1.bsp" no longer needed
+2026-10-05 15:24:54 model "*33:maps/e1m1.bsp" no longer needed
+2026-10-05 15:24:54 model "*34:maps/e1m1.bsp" no longer needed
+2026-10-05 15:24:54 model "*35:maps/e1m1.bsp" no longer needed
+2026-10-05 15:24:54 model "*36:maps/e1m1.bsp" no longer needed
+2026-10-05 15:24:54 model "*37:maps/e1m1.bsp" no longer needed
+2026-10-05 15:24:54 model "*38:maps/e1m1.bsp" no longer needed
+2026-10-05 15:24:54 model "*39:maps/e1m1.bsp" no longer needed
+2026-10-05 15:24:54 model "*40:maps/e1m1.bsp" no longer needed
+2026-10-05 15:24:54 model "*41:maps/e1m1.bsp" no longer needed
+2026-10-05 15:24:54 model "*42:maps/e1m1.bsp" no longer needed
+2026-10-05 15:24:54 model "*43:maps/e1m1.bsp" no longer needed
+2026-10-05 15:24:54 model "*44:maps/e1m1.bsp" no longer needed
+2026-10-05 15:24:54 model "*45:maps/e1m1.bsp" no longer needed
+2026-10-05 15:24:54 model "*46:maps/e1m1.bsp" no longer needed
+2026-10-05 15:24:54 model "*47:maps/e1m1.bsp" no longer needed
+2026-10-05 15:24:54 model "*48:maps/e1m1.bsp" no longer needed
+2026-10-05 15:24:54 model "*49:maps/e1m1.bsp" no longer needed
+2026-10-05 15:24:54 model "*50:maps/e1m1.bsp" no longer needed
+2026-10-05 15:24:54 model "*51:maps/e1m1.bsp" no longer needed
+2026-10-05 15:24:54 model "*52:maps/e1m1.bsp" no longer needed
+2026-10-05 15:24:54 model "*53:maps/e1m1.bsp" no longer needed
+2026-10-05 15:24:54 model "*54:maps/e1m1.bsp" no longer needed
+2026-10-05 15:24:54 model "*55:maps/e1m1.bsp" no longer needed
+2026-10-05 15:24:54 model "*56:maps/e1m1.bsp" no longer needed
+2026-10-05 15:24:54 model "*57:maps/e1m1.bsp" no longer needed
+2026-10-05 15:24:54 model "maps/b_nail0.bsp" no longer needed
+2026-10-05 15:24:54 model "maps/b_bh100.bsp" no longer needed
+2026-10-05 15:24:54 model "maps/b_shell0.bsp" no longer needed
+2026-10-05 15:24:54 model "maps/b_bh10.bsp" no longer needed
+2026-10-05 15:24:54 model "maps/b_bh25.bsp" no longer needed
+2026-10-05 15:24:54 model "maps/b_nail1.bsp" no longer needed
+2026-10-05 15:24:54 model "maps/b_explob.bsp" no longer needed
+2026-10-05 15:24:54 model "progs/armor.mdl" no longer needed
+2026-10-05 15:24:54 model "progs/g_nail.mdl" no longer needed
+2026-10-05 15:24:54 model "progs/soldier.mdl" no longer needed
+2026-10-05 15:24:54 model "progs/h_guard.mdl" no longer needed
+2026-10-05 15:24:54 model "progs/quaddama.mdl" no longer needed
+2026-10-05 15:24:54 model "progs/h_dog.mdl" no longer needed
+2026-10-05 15:24:54 model "progs/dog.mdl" no longer needed
+2026-10-05 15:24:54 model "progs/suit.mdl" no longer needed
+2026-10-05 15:24:54 model "progs/g_shot.mdl" no longer needed
+2026-10-05 15:24:54 Destroyed 354/983 images
