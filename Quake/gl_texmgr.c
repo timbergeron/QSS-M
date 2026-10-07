@@ -1171,30 +1171,30 @@ static int TexMgr_ItemColorBucket (const byte *p)
 }
 
 /* A grid avoids repeatedly sampling the same few columns of a wide skin. */
-static size_t TexMgr_ItemColorIndex (size_t sample, size_t width, size_t height)
-{
-	size_t columns = q_min(width, (size_t)64), rows = q_min(height, (size_t)64);
-	size_t x = ((sample % columns) * 2 + 1) * width / (columns * 2);
-	size_t y = ((sample / columns) * 2 + 1) * height / (rows * 2);
-	return y * width + x;
-}
-
 static qboolean TexMgr_SampleItemColor (const byte *pixels, size_t width, size_t height, vec3_t color)
 {
 	double weights[25] = {0}, sums[25][3] = {{0}};
 	double best_distance = DBL_MAX;
 	int best = -1, bucket, c;
-	size_t i, selected = 0;
+	size_t i, x, y, selected = 0;
+	size_t columns = q_min(width, (size_t)64), rows = q_min(height, (size_t)64);
+	size_t offsets[64], row_offsets[64];
+	signed char buckets[64 * 64];
 	/* Bound upload-time sampling even for large replacement skins. */
-	size_t count = q_min(width, (size_t)64) * q_min(height, (size_t)64);
-	for (i = 0; i < count; i++)
+	for (x = 0; x < columns; x++)
+		offsets[x] = (x * 2 + 1) * width / (columns * 2);
+	for (y = 0; y < rows; y++)
+		row_offsets[y] = ((y * 2 + 1) * height / (rows * 2)) * width;
+	for (y = 0, i = 0; y < rows; y++)
+	for (x = 0; x < columns; x++, i++)
 	{
-		size_t index = TexMgr_ItemColorIndex(i, width, height);
+		size_t index = row_offsets[y] + offsets[x];
 		const byte *p = pixels + index * 4;
 		int hi = q_max(p[0], q_max(p[1], p[2]));
 		int lo = q_min(p[0], q_min(p[1], p[2]));
 		double weight;
 		bucket = TexMgr_ItemColorBucket(p);
+		buckets[i] = (signed char)bucket;
 		if (bucket < 0)
 			continue;
 		weight = (hi - lo + 1) * (double)hi;
@@ -1209,12 +1209,13 @@ static qboolean TexMgr_SampleItemColor (const byte *pixels, size_t width, size_t
 		return false;
 	for (c = 0; c < 3; c++)
 		sums[best][c] /= weights[best];
-	for (i = 0; i < count; i++)
+	for (y = 0, i = 0; y < rows; y++)
+	for (x = 0; x < columns; x++, i++)
 	{
-		size_t index = TexMgr_ItemColorIndex(i, width, height);
+		size_t index = row_offsets[y] + offsets[x];
 		const byte *p = pixels + index * 4;
 		double distance = 0;
-		if (TexMgr_ItemColorBucket(p) != best)
+		if (buckets[i] != best)
 			continue;
 		for (c = 0; c < 3; c++)
 		{
@@ -2865,6 +2866,8 @@ typedef struct texprep_result_s
 	size_t allocation_size;
 	byte *pixels;
 	texprep_level_t levels[TEXPREP_MAX_MIPS];
+	qboolean itemcolor_valid;
+	vec3_t itemcolor;
 } texprep_result_t;
 
 typedef struct texprep_jobstate_s
@@ -3052,6 +3055,13 @@ static void TexPrep_FreeResult (texprep_result_t *result)
 	free (result->pixels);
 	result->pixels = NULL;
 	result->allocation_size = 0;
+}
+
+static void TexPrep_PrepareItemColor (texprep_jobstate_t *state)
+{
+	texprep_result_t *result = &state->result;
+	result->itemcolor_valid = state->job->owner && TexMgr_SampleItemColor (
+		result->pixels + result->levels[0].offset, result->width, result->height, result->itemcolor);
 }
 
 static void TexPrep_PrepareOne (texprep_jobstate_t *state)
@@ -3252,6 +3262,8 @@ static void TexPrep_PrepareOne (texprep_jobstate_t *state)
 		}
 	}
 
+	TexPrep_PrepareItemColor (state);
+
 done:
 	free (resampled);
 	free (work);
@@ -3300,7 +3312,8 @@ static gltexture_t *TexPrep_Commit (const texprep_jobstate_t *state)
 	glt->width = result->width;
 	glt->height = result->height;
 	glt->flags = result->effective_flags;
-	TexMgr_CacheItemColor(glt, result->pixels + result->levels[0].offset);
+	glt->itemcolor_valid = result->itemcolor_valid;
+	VectorCopy (result->itemcolor, glt->itemcolor);
 
 	GL_Bind (glt);
 	internalformat = (glt->flags & TEXPREF_ALPHA) ? gl_alpha_format : gl_solid_format;
