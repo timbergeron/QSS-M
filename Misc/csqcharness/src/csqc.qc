@@ -85,6 +85,7 @@ void() cq_surfaces =
 
 void() cq_selftest =
 {
+	st_roundedrect();
 	cq_surfaces();
 	cq_builtin_find();
 	cq_mousetarget();

@@ -3194,6 +3194,14 @@ void Draw_Fill_Plus_Radius (int x, int y, int w, int h, plcolour_t c, float alph
 
 void Draw_Fill_Ex (int x, int y, int w, int h, plcolour_t c, float alpha, qboolean roundcorners, unsigned char roundmask, float radius, float feather)
 {
+	float colour[4];
+	Draw_ResolvePlayerColour (&c, alpha, colour);
+	Draw_FillRoundedRGBA (x, y, w, h, colour, roundcorners, roundmask, radius, feather);
+}
+
+// Float coordinates and colours preserve CSQC's subpixel layout and fades.
+void Draw_FillRoundedRGBA (float x, float y, float w, float h, const float rgba[4], qboolean roundcorners, unsigned char roundmask, float radius, float feather)
+{
 	qboolean use_rounding;
 	float left, right, top, bottom;
 	float colour[4];
@@ -3230,7 +3238,7 @@ void Draw_Fill_Ex (int x, int y, int w, int h, plcolour_t c, float alpha, qboole
 	glEnable (GL_BLEND);
 	glDisable (GL_ALPHA_TEST);
 
-	Draw_ResolvePlayerColour (&c, alpha, colour);
+	memcpy (colour, rgba, sizeof(colour));
 	colour[3] *= gl_menu_alpha;
 
 	left = (float)x;
@@ -3281,7 +3289,7 @@ void Draw_Fill_Ex (int x, int y, int w, int h, plcolour_t c, float alpha, qboole
 	else
 	{
 		// Fallback: triangle fan approximation.
-		int segments = (int)ceilf(radius * 1.5f);
+		int segments = (int)ceilf(q_min(radius * 1.5f, 16.0f));
 		float top_left_x = left + radius_tl;
 		float top_right_x = right - radius_tr;
 		float right_bottom_y = bottom - radius_br;

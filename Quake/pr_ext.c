@@ -6302,6 +6302,45 @@ static void PF_cl_drawfill(void)
 }
 
 
+// Named extension: old drawfill bytecode and its optional flags stay unchanged.
+static void PF_cl_drawroundedrect(void)
+{
+	const float *pos = G_VECTOR(OFS_PARM0);
+	const float *size = G_VECTOR(OFS_PARM1);
+	const float *rgb = G_VECTOR(OFS_PARM2);
+	float rgba[4];
+	float radius = G_FLOAT(OFS_PARM4);
+	float mask = qcvm->argc > 5 ? G_FLOAT(OFS_PARM5) : 0;
+	// One physical pixel at the current CSQC or MenuQC scale.
+	float feather = qcvm->argc > 6 ? G_FLOAT(OFS_PARM6) : 1.0f / PR_GetVMScale();
+	int i;
+
+	G_FLOAT(OFS_RETURN) = 0;
+	if (qcvm->argc < 5 || !isfinite(radius) || !isfinite(mask) ||
+		!isfinite(feather) || mask < 0 || mask > DRAW_CORNERS_ALL || feather < 0 ||
+		!isfinite(pos[0]) || !isfinite(pos[1]) ||
+		!isfinite(size[0]) || !isfinite(size[1]) || size[0] <= 0 || size[1] <= 0 ||
+		!isfinite(pos[0] + size[0]) || !isfinite(pos[1] + size[1]) ||
+		!isfinite(G_FLOAT(OFS_PARM3)))
+		return;
+	for (i = 0; i < 3; i++)
+	{
+		if (!isfinite(rgb[i]))
+			return;
+		rgba[i] = bound(0.0f, rgb[i], 1.0f);
+	}
+	rgba[3] = bound(0.0f, G_FLOAT(OFS_PARM3), 1.0f);
+	if (rgba[3] <= 0)
+		return;
+
+	Draw_FillRoundedRGBA(pos[0], pos[1], size[0], size[1], rgba,
+		true, (unsigned char)mask, radius, feather);
+	// Engine menus restore alpha test; QC drawing expects blended textures.
+	glEnable(GL_BLEND);
+	glDisable(GL_ALPHA_TEST);
+	G_FLOAT(OFS_RETURN) = 1;
+}
+
 static qpic_t *polygon_pic;
 #define MAX_POLYVERTS
 static polygonvert_t polygon_verts[256];
@@ -9802,6 +9841,8 @@ static struct
 	{"drawrawstring",	PF_NoSSQC,			PF_cl_drawrawstring,321,	PF_cl_drawrawstring,455,	D("float(vector position, string text, vector size, vector rgb, float alpha, optional float drawflag)", "Draws the specified string without using any markup at all, even in engines that support it.\nIf UTF-8 is globally enabled in the engine, then that encoding is used (without additional markup), otherwise it is raw quake chars.\nSoftware engines may assume a size of '8 8 0', rgb='1 1 1', alpha=1, flag&3=0, but it is not an error to draw out of the screen.")},// (EXT_CSQC, [EXT_CSQC_???])
 	{"drawpic",			PF_NoSSQC,			PF_cl_drawpic,		322,	PF_cl_drawpic,456,			D("float(vector position, string pic, vector size, vector rgb, float alpha, optional float drawflag)", "Draws an shader within the given 2d screen box. Software engines may omit support for rgb+alpha, but must support rescaling, and must clip to the screen without crashing.")},// (EXT_CSQC, [EXT_CSQC_???])
 	{"drawfill",		PF_NoSSQC,			PF_cl_drawfill,		323,	PF_cl_drawfill,457,			D("float(vector position, vector size, vector rgb, float alpha, optional float drawflag)", "Draws a solid block over the given 2d box, with given colour, alpha, and blend mode (specified via flags).\nflags&3=0 simple blend.\nflags&3=1 additive blend")},// (EXT_CSQC, [EXT_CSQC_???])
+	{"drawroundedrect", PF_NoSSQC, PF_cl_drawroundedrect, 0, PF_cl_drawroundedrect, 0,
+        D("float(vector position, vector size, vector rgb, float alpha, float radius, optional float cornermask, optional float feather)", "Draws a rounded rectangle using QSS-M's antialiased fill renderer. Declare as #0 and detect with checkbuiltin. Position, size, radius and feather use virtual HUD/menu units. Negative radius selects 25% of the shortest side; oversized radii clamp to half the shortest side. Corner bits: TL=1, TR=2, BR=4, BL=8; omitted or zero rounds all corners. Feather defaults to one physical pixel. RGB/alpha clamp to 0..1. Returns 1 when drawn, 0 for empty/transparent boxes, nonfinite arguments, or invalid corner mask/feather. Preserves the QC clipping region and blended drawing state.")},
 	{"drawsetcliparea",	PF_NoSSQC,			PF_cl_drawsetclip,	324,	PF_cl_drawsetclip,458,		D("void(float x, float y, float width, float height)", "Specifies a 2d clipping region (aka: scissor test). 2d draw calls will all be clipped to this 2d box, the area outside will not be modified by any 2d draw call (even 2d polygons).")},// (EXT_CSQC_???)
 	{"drawresetcliparea",PF_NoSSQC,			PF_cl_drawresetclip,325,	PF_cl_drawresetclip,459,	D("void(void)", "Reverts the scissor/clip area to the whole screen.")},// (EXT_CSQC_???)
 	{"drawstring",		PF_NoSSQC,			PF_cl_drawstring,	326,	PF_cl_drawstring,467,		D("float(vector position, string text, vector size, vector rgb, float alpha, float drawflag)", "Draws a string, interpreting markup and recolouring as appropriate.")},// #326

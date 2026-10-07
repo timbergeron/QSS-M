@@ -69,6 +69,7 @@ void Draw_FillPlayer (int x, int y, int w, int h, plcolour_t c, float alpha); //
 void Draw_Fill_Plus (int x, int y, int w, int h, plcolour_t c, float alpha, qboolean roundcorners, unsigned char roundmask);
 void Draw_Fill_Plus_Radius (int x, int y, int w, int h, plcolour_t c, float alpha, qboolean roundcorners, unsigned char roundmask, float radius);
 void Draw_Fill_Ex (int x, int y, int w, int h, plcolour_t c, float alpha, qboolean roundcorners, unsigned char roundmask, float radius, float feather);
+void Draw_FillRoundedRGBA (float x, float y, float w, float h, const float rgba[4], qboolean roundcorners, unsigned char roundmask, float radius, float feather);
 void Draw_ShutdownGL (void); // invalidate cached GLSL handles on context loss
 void Draw_FadeScreen (void);
 void Draw_FadeScreen_Alpha (float alpha);

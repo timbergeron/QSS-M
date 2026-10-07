@@ -223,6 +223,7 @@ void() mq_bounds =
 
 void() mq_selftest =
 {
+	st_roundedrect();
 	mq_models();
 	mq_bounds();
 	mq_registercvar();

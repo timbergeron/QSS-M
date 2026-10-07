@@ -102,6 +102,27 @@ void(string module) st_report =
 	print("SELFTEST DONE ", module, " pass=", ftos(st_pass), " fail=", ftos(st_fail), "\n");
 };
 
+// Shared by CSQC and MenuQC; #0 mapping comes from each generated header.
+void() st_roundedrect =
+{
+	local float invalid = sqrt(-1);
+	st_ok("roundedrect/registered", checkbuiltin(drawroundedrect));
+	st_poisonf();
+	st_eqf("roundedrect/empty", drawroundedrect('0 0 0', '0 16 0', '1 1 1', 1, 4), 0);
+	st_poisonf();
+	st_eqf("roundedrect/negative-size", drawroundedrect('0 0 0', '-1 16 0', '1 1 1', 1, 4), 0);
+	st_poisonf();
+	st_eqf("roundedrect/transparent", drawroundedrect('0 0 0', '16 16 0', '1 1 1', 0, 4), 0);
+	st_poisonf();
+	st_eqf("roundedrect/nan-radius", drawroundedrect('0 0 0', '16 16 0', '1 1 1', 1, invalid), 0);
+	st_poisonf();
+	st_eqf("roundedrect/bad-mask", drawroundedrect('0 0 0', '16 16 0', '1 1 1', 1, 4, 16), 0);
+	st_poisonf();
+	st_eqf("roundedrect/bad-feather", drawroundedrect('0 0 0', '16 16 0', '1 1 1', 1, 4, 0, -1), 0);
+	st_eqf("roundedrect/oversized-radius", drawroundedrect('0 0 0', '16 16 0', '1 1 1', 1, 1000), 1);
+	st_eqf("roundedrect/auto-radius", drawroundedrect('0 0 0', '16 16 0', '1 1 1', 1, -1), 1);
+};
+
 //======================================================================
 // checks valid in both modules
 //======================================================================
