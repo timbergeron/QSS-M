@@ -519,7 +519,7 @@ Mod_FindName
 
 ==================
 */
-static qmodel_t *Mod_FindName (const char *name)
+static qmodel_t *Mod_FindNameEx (const char *name, qboolean crash)
 {
 	int		i;
 	qmodel_t	*mod;
@@ -539,7 +539,11 @@ static qmodel_t *Mod_FindName (const char *name)
 	if (i == mod_numknown)
 	{
 		if (mod_numknown == MAX_MOD_KNOWN)
-			Sys_Error ("mod_numknown == MAX_MOD_KNOWN");
+		{
+			if (crash)
+				Sys_Error ("mod_numknown == MAX_MOD_KNOWN");
+			return NULL;
+		}
 		q_strlcpy (mod->name, name, MAX_QPATH);
 		mod->needload = true;
 		mod_numknown++;
@@ -547,6 +551,11 @@ static qmodel_t *Mod_FindName (const char *name)
 	}
 
 	return mod;
+}
+
+static qmodel_t *Mod_FindName (const char *name)
+{
+	return Mod_FindNameEx(name, true);
 }
 
 /*
@@ -577,6 +586,8 @@ Loads a model into the cache
 */
 double mod_load_total_time, mod_load_read_time;	//tb -- load profiling
 unsigned int mod_load_calls;
+
+static qboolean mod_quiet_miss;	// set by Mod_TryForName while retrying a known miss
 
 static qmodel_t *Mod_LoadModel (qmodel_t *mod, qboolean crash)
 {
@@ -652,7 +663,7 @@ static qmodel_t *Mod_LoadModel (qmodel_t *mod, qboolean crash)
 			;	//*foo doesn't warn, unless its *NUM. inline models. gah.
 		else if (cl.suppress_precache_miss_warnings)
 			cl.suppressed_model_precache_warnings++;
-		else
+		else if (!mod_quiet_miss)
 			Con_Warning("Mod_LoadModel: %s not found\n", mod->name);
 
 		//avoid crashes
@@ -774,6 +785,83 @@ static qmodel_t *Mod_LoadModel (qmodel_t *mod, qboolean crash)
 	}
 
 	return mod;
+}
+
+// Recent Mod_TryForName failures. QC commonly re-issues setmodel/precache
+// every frame, and a miss keeps no record or slot, so without this a missing
+// file would be searched for (and warned about) every frame. A small ring is
+// enough: it only rate-limits retries, so evicting an entry is harmless.
+#define MOD_TRYMISS_COUNT		64
+#define MOD_TRYMISS_INTERVAL	1.0
+static struct
+{
+	char	name[MAX_QPATH];
+	double	time;
+} mod_trymiss[MOD_TRYMISS_COUNT];
+static int mod_trymiss_next;
+
+// Optional QC loads must not exhaust the global model table with misses.
+// Keep records already visible to other callers, but release an unpublished
+// failed load's new record. Existing invalid records are retryable too.
+qmodel_t *Mod_TryForName (const char *name)
+{
+	int previous_count = mod_numknown;
+	qmodel_t *mod;
+	int i, miss = -1;
+
+	if (!name || !*name || strlen(name) >= MAX_QPATH)
+		return NULL;
+	for (i = 0; i < MOD_TRYMISS_COUNT; i++)
+	{
+		if (!strcmp(mod_trymiss[i].name, name))
+		{
+			miss = i;
+			break;
+		}
+	}
+	if (miss >= 0 && realtime >= mod_trymiss[miss].time &&
+		realtime - mod_trymiss[miss].time < MOD_TRYMISS_INTERVAL)
+	{	// Recent miss: skip the disk unless something else has loaded it since.
+		for (i = 0; i < mod_numknown; i++)
+			if (!strcmp(mod_known[i].name, name))
+				break;
+		if (i == mod_numknown || mod_known[i].type == mod_ext_invalid)
+			return NULL;
+	}
+	mod = Mod_FindNameEx(name, false);
+	if (!mod)
+		return NULL;
+	if (mod->type == mod_ext_invalid)
+		mod->needload = true;
+	mod_quiet_miss = (miss >= 0);	// warn on the first miss, not every retry
+	Mod_LoadModel(mod, false);
+	mod_quiet_miss = false;
+	if (mod->type != mod_ext_invalid)
+	{
+		if (miss >= 0)
+			mod_trymiss[miss].name[0] = 0;
+		return mod;
+	}
+
+	if (miss < 0)
+	{
+		miss = mod_trymiss_next;
+		mod_trymiss_next = (mod_trymiss_next + 1) % MOD_TRYMISS_COUNT;
+		q_strlcpy(mod_trymiss[miss].name, name, sizeof(mod_trymiss[miss].name));
+	}
+	mod_trymiss[miss].time = realtime;
+
+	// A rejected load has not published a handle. Never reclaim a pre-existing
+	// record, or one followed by inline model records created during loading.
+	if (mod_numknown == previous_count + 1 && mod == &mod_known[previous_count])
+	{
+		TexMgr_FreeTexturesForOwner(mod);
+		memset(mod, 0, sizeof(*mod));
+		mod_numknown = previous_count;
+		mod_generation++;
+		InvalidateTraceLineCache();
+	}
+	return NULL;
 }
 
 /*
@@ -6113,6 +6201,12 @@ static void Mod_LoadAliasModel (qmodel_t *mod, void *buffer, int pvtype)
 
 	start = Hunk_LowMark ();
 
+	if (com_filesize < (qofs_t)sizeof(mdl_t))
+	{
+		Con_Warning("%s is too small to be an alias model\n", mod->name);
+		mod->type = mod_ext_invalid;
+		return;
+	}
 	pinmodel = (mdl_t *)buffer;
 	mod_base = (byte *)buffer; //johnfitz
 

@@ -88,6 +88,7 @@ void PR_DumpPlatform_f(void);						//console command: writes out a qsextensions.
 //special hacks...
 int PF_SV_ForceParticlePrecache(const char *s);
 int SV_Precache_Model(const char *s);
+int CL_ModelIndexForName(const char *name, qboolean queryonly);
 int SV_Precache_Sound(const char *s);
 void PR_spawnfunc_misc_model(edict_t *self);
 
