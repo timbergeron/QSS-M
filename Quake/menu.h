@@ -79,7 +79,8 @@ enum m_state_e {
 	m_bookmarks_edit, // woods #bookmarksmenu
 	m_namehistory, // woods #namehistory
 	m_namemaker, // woods #namemaker
-	m_resetconfig
+	m_resetconfig,
+	m_netgraph // woods #netgraph
 };
 
 extern enum m_state_e m_state;
@@ -207,6 +208,11 @@ void M_OneScroll_Reset(menuonescroll_t *scroll);
 void M_PrintScrollOnce(int x, int y, int maxwidth, const char *str, double time, qboolean color);
 
 void M_Draw (void);
+void M_Menu_NetGraph_f (qboolean from_menu); // woods #netgraph -- netgraph.c
+void M_NetGraph_Draw (void);
+void M_NetGraph_Key (int key);
+void M_NetGraph_Mousemove (int cx, int cy);
+void M_NetGraph_Leave (void);
 void M_DrawCharacter (int cx, int line, int num);
 void M_DrawQuakeBar(int x, int y, int cols);
 

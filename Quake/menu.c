@@ -20221,6 +20221,7 @@ static enum hud_e
 	HUD_CONSOLEFONT,
 	HUD_OBSITEMS,
 	HUD_SCOREBOARD_SORT,
+	HUD_NETGRAPH, // woods #netgraph
 	HUD_COUNT
 } hud_cursor;
 
@@ -20280,6 +20281,8 @@ static const char* M_HUD_GetItemText(int index)
 		return "Observer Items";
 	case HUD_SCOREBOARD_SORT:
 		return "Scoreboard Sort";
+	case HUD_NETGRAPH:
+		return "Network Graph";
 
 	default:
 		q_snprintf(buffer, sizeof(buffer), "Unknown Item %d", index);
@@ -20486,6 +20489,10 @@ void M_HUD_Draw(void)
 		{
 		case HUD_CROSSHAIR:
 			text = "         Crosshair";
+			M_Print(178, y-2, "...");
+			break;
+		case HUD_NETGRAPH: // woods #netgraph
+			text = "     Network Graph";
 			M_Print(178, y-2, "...");
 			break;
 		case HUD_SCALE:
@@ -20836,6 +20843,9 @@ void M_HUD_Key(int k)
 		case HUD_CROSSHAIR:
 			M_Menu_Crosshair_f();
 			break;
+		case HUD_NETGRAPH: // woods #netgraph
+			M_Menu_NetGraph_f(true);
+			break;
 		case HUD_SBARSTYLE:
 			M_HUD_AdjustSliders(1);
 			break;
@@ -20897,6 +20907,11 @@ void M_HUD_Key(int k)
 			if (hud_cursor == HUD_CROSSHAIR)
 			{
 				M_Menu_Crosshair_f();
+				break;
+			}
+			if (hud_cursor == HUD_NETGRAPH) // woods #netgraph
+			{
+				M_Menu_NetGraph_f(true);
 				break;
 			}
 
@@ -20999,7 +21014,7 @@ void M_HUD_Key(int k)
 		break;
 
 	case K_MWHEELDOWN:
-		if (hud_cursor != HUD_CROSSHAIR)
+		if (hud_cursor != HUD_CROSSHAIR && hud_cursor != HUD_NETGRAPH)
 			M_HUD_AdjustSliders(-1);
 		break;
 
@@ -21008,7 +21023,7 @@ void M_HUD_Key(int k)
 		break;
 
 	case K_MWHEELUP:
-		if (hud_cursor != HUD_CROSSHAIR)
+		if (hud_cursor != HUD_CROSSHAIR && hud_cursor != HUD_NETGRAPH)
 			M_HUD_AdjustSliders(1);
 		break;
 	}
@@ -21069,6 +21084,7 @@ void M_HUD_Mousemove(int cx, int cy)
 		case HUD_MOVEKEYS:
 		case HUD_OBSITEMS:
 		case HUD_SCOREBOARD_SORT:
+		case HUD_NETGRAPH:
 		case HUD_COUNT:
 			// No action needed for these cases in mouse movement
 			break;
@@ -22876,6 +22892,10 @@ static void M_LeaveMenuState (enum m_state_e from)
 		M_Discord_EndWebhookEdit();
 		break;
 
+	case m_netgraph: // woods #netgraph
+		M_NetGraph_Leave();
+		break;
+
 	/* Hold nothing that outlives the menu. */
 	case m_none:
 	case m_main:
@@ -23008,7 +23028,7 @@ static const char * const menusearch_hud_labels[] = {
 	"Crosshair", "HUD Scale", "Screen Size", "Statusbar Alpha", "Status Bar Style",
 	"Show FPS", "Show Match Scores", "Match Clock", "Match Clock Count Up", "Show Ping", "Show Clock",
 	"Show Speed", "Show Scores", "Player Auto ID", "Movement Keys", "Console Font Size",
-	"Observer Items", "Scoreboard Sort"
+	"Observer Items", "Scoreboard Sort", "Network Graph"
 };
 static const char * const menusearch_console_labels[] = {
 	"Font Size", "Console Height", "Down/Up Speed", "Transparency", "Background Image",
@@ -23394,6 +23414,7 @@ static const char *MenuSearch_HUDKeywords(int index)
 	switch (index)
 	{
 	case HUD_CROSSHAIR: return "reticle aim sight";
+	case HUD_NETGRAPH: return "netgraph lag ping packet loss jitter latency network diagnostics hitch";
 	case HUD_SCALE: return "interface ui size scaling zoom dpi";
 	case HUD_SCRSIZE: return "viewport view size statusbar screen area";
 	case HUD_SBALPHA: return "statusbar transparency opacity translucent";
@@ -47040,6 +47061,10 @@ void M_Draw (void)
 		M_Version_Draw();
 		break;
 
+	case m_netgraph: // woods #netgraph
+		M_NetGraph_Draw();
+		break;
+
 	case m_resetconfig: // woods #resetconfig
 		M_ResetConfig_Draw();
 		break;
@@ -47475,6 +47500,10 @@ void M_Keydown (int key, qboolean repeat)
 		M_Version_Key(key);
 		return;
 
+	case m_netgraph: // woods #netgraph
+		M_NetGraph_Key(key);
+		return;
+
 	case m_resetconfig: // woods #resetconfig
 		M_ResetConfig_Key(key);
 		return;
@@ -47761,6 +47790,10 @@ void M_Mousemove(int x, int y) // woods #mousemenu
 
 	case m_version:
 		M_Version_Mousemove(x, y);
+		return;
+
+	case m_netgraph: // woods #netgraph
+		M_NetGraph_Mousemove(x, y);
 		return;
 
 	case m_resetconfig: // woods #resetconfig

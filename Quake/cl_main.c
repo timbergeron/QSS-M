@@ -1325,6 +1325,8 @@ float	CL_LerpPoint (void)
 	{
 		if (frac > 1.01)
 		{
+			if (netdiag_active) // woods #netgraph -- ran past the newest snapshot
+				NetDiag_Starved ();
 			cl.time = cl.mtime[0];
 			frac = 1;
 		}
@@ -6716,6 +6718,8 @@ int CL_ReadFromServer (void)
 	{
 		cl.oldtime = cl.time;
 		cl.time += host_frametime;
+		if (netdiag_active) // woods #netgraph -- start of this frame's socket reads
+			NetDiag_ReadPass ();
 	}
 
 	do
@@ -7662,6 +7666,8 @@ static void CL_PingPLReport_Parse(int startslot, int firstarg)
 		cl.scores[slot].ping = CLAMP(0, ping, 9999);
 		cl.scores[slot].packetloss = CLAMP(0, packetloss, 100);
 		cl.scores[slot].movementloss = CLAMP(0, movementloss, 100);
+		if (netdiag_active) // woods #netgraph -- movement loss only when the report carried it
+			NetDiag_Ping (slot, cl.scores[slot].ping, (end && *end == ',') ? cl.scores[slot].movementloss : -1);
 	}
 
 	cl.pingplreport_received = true;
@@ -8001,6 +8007,7 @@ void CL_Init (void)
 	Cvar_RegisterVariable (&cl_pitchspeed);
 	Cvar_RegisterVariable (&cl_anglespeedkey);
 	Cvar_RegisterVariable (&cl_shownet);
+	NetDiag_Init (); // woods #netgraph
 	Cvar_RegisterVariable (&cl_nolerp);
 	Cvar_RegisterVariable (&cl_smoothcam_cubic); // woods #smoothcam
 	Cvar_RegisterVariable (&cl_nopred);

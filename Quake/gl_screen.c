@@ -8428,7 +8428,11 @@ void SCR_UpdateScreen (void)
 			Con_Printf ("load failed.\n");
 		}
 		else
+		{
+			if (netdiag_wantframe) // woods #netgraph -- mark the plaque time as loading, not as one long frame
+				NetDiag_Frame ();
 			return;
+		}
 	}
 
 	if (!scr_initialized || !con_initialized)
@@ -8561,6 +8565,7 @@ void SCR_UpdateScreen (void)
 		SCR_DrawDemoControls(); // woods (iw) #democontrols
 		SCR_ShowPing (); // woods #scrping
 		SCR_ShowPL (); // woods #scrpl
+		SCR_DrawNetGraph (); // woods #netgraph
 		SCR_DrawMatchClock (); // woods #matchhud
 		SCR_DrawMatchScores (); // woods #matchhud
 		SCR_ShowFlagStatus (); // woods #matchhud #flagstatus
@@ -8599,6 +8604,9 @@ void SCR_UpdateScreen (void)
 	GLSLGamma_GammaCorrect ();
 
 	GL_EndRendering ();
+
+	if (netdiag_wantframe) // woods #netgraph -- frame interval is measured at presentation
+		NetDiag_Frame ();
 }
 
 //============================================================================

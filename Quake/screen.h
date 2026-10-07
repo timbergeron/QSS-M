@@ -86,6 +86,7 @@ extern	cvar_t		scr_sbarshowqeammo; // woods #sbarstyles
 extern	cvar_t		scr_sbar; // woods #sbarstyles
 
 void SCR_UpdateWholeScreen (void);
+void SCR_DrawNetGraph (void); // woods #netgraph
 
 //johnfitz -- stuff for 2d drawing control
 typedef enum {
@@ -122,6 +123,7 @@ typedef enum {
 	CANVAS_TOPRIGHT2, // woods #matchhud
 	CANVAS_TOPRIGHT3, // woods #matchhud
 	CANVAS_TOPRIGHT4, // woods #hud_diff
+	CANVAS_NETGRAPH, // woods #netgraph -- whole view at HUD scale
 	CANVAS_CSQC,
 	CANVAS_MENUQC,
 	CANVAS_INVALID = -1

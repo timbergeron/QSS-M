@@ -1333,6 +1333,7 @@ int Datagram_SendMessage (qsocket_t *sock, sizebuf_t *data)
 	unsigned int	packetLen;
 	unsigned int	dataLen;
 	unsigned int	eom;
+	int				ret;
 
 #ifdef DEBUG
 	if (data->cursize == 0)
@@ -1368,7 +1369,12 @@ int Datagram_SendMessage (qsocket_t *sock, sizebuf_t *data)
 
 	sock->canSend = false;
 
-	if (sfunc.Write (sock->socket, (byte *)&packetBuffer, packetLen, &sock->addr) == -1)
+	ret = sfunc.Write (sock->socket, (byte *)&packetBuffer, packetLen, &sock->addr);
+	if (NETDIAG_SOCK(sock)) // woods #netgraph
+	{
+		NetDiag_Sent (NETDIAG_REL, packetLen, ret);
+	}
+	if (ret == -1)
 		return -1;
 
 	sock->lastSendTime = net_time;
@@ -1382,6 +1388,7 @@ static int SendMessageNext (qsocket_t *sock)
 	unsigned int	packetLen;
 	unsigned int	dataLen;
 	unsigned int	eom;
+	int				ret;
 
 	if (sock->sendMessageLength <= sock->max_datagram)
 	{
@@ -1401,7 +1408,12 @@ static int SendMessageNext (qsocket_t *sock)
 
 	sock->sendNext = false;
 
-	if (sfunc.Write (sock->socket, (byte *)&packetBuffer, packetLen, &sock->addr) == -1)
+	ret = sfunc.Write (sock->socket, (byte *)&packetBuffer, packetLen, &sock->addr);
+	if (NETDIAG_SOCK(sock)) // woods #netgraph
+	{
+		NetDiag_Sent (NETDIAG_REL, packetLen, ret);
+	}
+	if (ret == -1)
 		return -1;
 
 	sock->lastSendTime = net_time;
@@ -1415,6 +1427,7 @@ static int ReSendMessage (qsocket_t *sock)
 	unsigned int	packetLen;
 	unsigned int	dataLen;
 	unsigned int	eom;
+	int				ret;
 
 	if (sock->sendMessageLength <= sock->max_datagram)
 	{
@@ -1432,7 +1445,14 @@ static int ReSendMessage (qsocket_t *sock)
 	packetBuffer.sequence = BigLong(sock->sendSequence - 1);
 	Q_memcpy (packetBuffer.data, sock->sendMessage, dataLen);
 
-	if (sfunc.Write (sock->socket, (byte *)&packetBuffer, packetLen, &sock->addr) == -1)
+	ret = sfunc.Write (sock->socket, (byte *)&packetBuffer, packetLen, &sock->addr);
+	if (NETDIAG_SOCK(sock)) // woods #netgraph
+	{
+		NetDiag_Sent (NETDIAG_REL, packetLen, ret);
+		if (ret == (int)packetLen)	// a resend that didn't go out isn't one
+			NetDiag_Resent ();
+	}
+	if (ret == -1)
 		return -1;
 
 	sock->lastSendTime = net_time;
@@ -1459,6 +1479,7 @@ qboolean Datagram_CanSendUnreliableMessage (qsocket_t *sock)
 int Datagram_SendUnreliableMessage (qsocket_t *sock, sizebuf_t *data)
 {
 	int	packetLen;
+	int	ret;
 
 #ifdef DEBUG
 	if (data->cursize == 0)
@@ -1474,7 +1495,12 @@ int Datagram_SendUnreliableMessage (qsocket_t *sock, sizebuf_t *data)
 	packetBuffer.sequence = BigLong(sock->unreliableSendSequence++);
 	Q_memcpy (packetBuffer.data, data->data, data->cursize);
 
-	if (sfunc.Write (sock->socket, (byte *)&packetBuffer, packetLen, &sock->addr) == -1)
+	ret = sfunc.Write (sock->socket, (byte *)&packetBuffer, packetLen, &sock->addr);
+	if (NETDIAG_SOCK(sock)) // woods #netgraph
+	{
+		NetDiag_Sent (NETDIAG_UNREL, packetLen, ret);
+	}
+	if (ret == -1)
 		return -1;
 
 	packetsSent++;
@@ -1776,6 +1802,7 @@ int	Datagram_GetMessage (qsocket_t *sock)
 	struct qsockaddr readaddr;
 	unsigned int	sequence;
 	unsigned int	count;
+	unsigned int	rawlength;	// woods #netgraph
 
 	if (!sock->canSend)
 		if ((net_time - sock->lastSendTime) > 1.0)
@@ -1808,18 +1835,37 @@ int	Datagram_GetMessage (qsocket_t *sock)
 			continue;
 		}
 
+		rawlength = length;	// woods #netgraph -- full datagram size, header included
+
 		if (length < NET_HEADERSIZE)
 		{
+			if (NETDIAG_SOCK(sock)) // woods #netgraph
+			{
+				NetDiag_Received (NETDIAG_OTHER, rawlength);
+				NetDiag_Short ();
+			}
 			shortPacketCount++;
 			continue;
 		}
 
 		if (BigLong(packetBuffer.length) == 0xffffffff)
+		{
+			if (NETDIAG_SOCK(sock)) // woods #netgraph
+				NetDiag_Received (NETDIAG_OTHER, rawlength);
 			continue;	//some kind of lingering QW or DP response?
+		}
 
 		if (!Datagram_DecodePacketHeader(length, &packetlength, &flags))
+		{
+			if (NETDIAG_SOCK(sock)) // woods #netgraph
+				NetDiag_Received (NETDIAG_OTHER, rawlength);
 			continue;
+		}
 		length = packetlength;
+
+		if (NETDIAG_SOCK(sock)) // woods #netgraph -- class by header flags; matched traffic counts even if rejected below
+			NetDiag_Received ((flags & NETFLAG_CTL) ? NETDIAG_OTHER : (flags & NETFLAG_UNRELIABLE) ? NETDIAG_UNREL :
+				(flags & NETFLAG_ACK) ? NETDIAG_ACK : (flags & NETFLAG_DATA) ? NETDIAG_REL : NETDIAG_OTHER, rawlength);
 
 		if (flags & NETFLAG_CTL)
 		{
@@ -1844,6 +1890,8 @@ int	Datagram_GetMessage (qsocket_t *sock)
 			if (sequence < sock->unreliableReceiveSequence)
 			{
 				Con_DPrintf("Got a stale datagram\n");
+				if (NETDIAG_SOCK(sock)) // woods #netgraph
+					NetDiag_Stale ();
 				ret = 0;
 				break;
 			}
@@ -1857,6 +1905,8 @@ int	Datagram_GetMessage (qsocket_t *sock)
 			}
 			NET_QSocketRecordUnreliableReceive(sock, count);
 			sock->unreliableReceiveSequence = sequence + 1;
+			if (NETDIAG_SOCK(sock)) // woods #netgraph
+				NetDiag_Arrival ((int)q_min (count, 0x7fffffffu));
 
 			length -= NET_HEADERSIZE;
 
@@ -1903,10 +1953,16 @@ int	Datagram_GetMessage (qsocket_t *sock)
 		{
 			packetBuffer.length = BigLong(NET_HEADERSIZE | NETFLAG_ACK);
 			packetBuffer.sequence = BigLong(sequence);
-			sfunc.Write (sock->socket, (byte *)&packetBuffer, NET_HEADERSIZE, &readaddr);
+			{
+				int ackret = sfunc.Write (sock->socket, (byte *)&packetBuffer, NET_HEADERSIZE, &readaddr);
+				if (NETDIAG_SOCK(sock)) // woods #netgraph -- the ACK write itself is unchanged
+					NetDiag_Sent (NETDIAG_ACK, NET_HEADERSIZE, ackret);
+			}
 
 			if (sequence != sock->receiveSequence)
 			{
+				if (NETDIAG_SOCK(sock)) // woods #netgraph
+					NetDiag_Dup ();
 				receivedDuplicateCount++;
 				continue;
 			}

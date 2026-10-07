@@ -77,6 +77,10 @@ const char *NET_QSocketGetMaskedAddressStringForDisplay (const struct qsocket_s 
 qboolean NET_QSocketGetProQuakeAngleHack (const struct qsocket_s *sock);
 int NET_QSocketGetSequenceIn (const struct qsocket_s *sock);
 int NET_QSocketGetSequenceOut (const struct qsocket_s *sock);
+#define NETDIAG_KIND_LOOP		0 // woods #netgraph
+#define NETDIAG_KIND_DATAGRAM	1
+#define NETDIAG_KIND_OTHER		2
+int NET_QSocketDiag (const struct qsocket_s *sock, int *cansend, int *backlog, double *lastmsg); // woods #netgraph
 void NET_QSocketClearPacketLoss(struct qsocket_s *sock);
 void NET_QSocketClearUnreliableReceiveMapDrops(struct qsocket_s *sock);
 void NET_QSocketRecordUnreliableReceive(struct qsocket_s *sock, unsigned int dropped);

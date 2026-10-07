@@ -296,6 +296,7 @@ OBJS := strlcat.o \
 	net_address.o \
 	net_hostname_cache.o \
 	net_dgrm.o \
+	netgraph.o \
 	net_loop.o \
 	net_main.o \
 	chase.o \

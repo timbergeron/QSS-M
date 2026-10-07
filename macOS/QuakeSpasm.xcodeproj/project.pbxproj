@@ -75,6 +75,7 @@
 		664D98C019CF6B78000D395C /* r_sprite.c in Sources */ = {isa = PBXBuildFile; fileRef = 483A786C0D2EEAF000CB2E4C /* r_sprite.c */; };
 		664D98C119CF6B78000D395C /* r_world.c in Sources */ = {isa = PBXBuildFile; fileRef = 483A786D0D2EEAF000CB2E4C /* r_world.c */; };
 		664D98C219CF6B78000D395C /* net_dgrm.c in Sources */ = {isa = PBXBuildFile; fileRef = 48728D280D3004A70004D61B /* net_dgrm.c */; };
+		6BD5EDE347F4709D4D5A668E /* netgraph.c in Sources */ = {isa = PBXBuildFile; fileRef = 45D9CF338A0A499756A18226 /* netgraph.c */; };
 		664D98C319CF6B78000D395C /* net_loop.c in Sources */ = {isa = PBXBuildFile; fileRef = 48728D2A0D3004A80004D61B /* net_loop.c */; };
 		664D98C419CF6B78000D395C /* snd_dma.c in Sources */ = {isa = PBXBuildFile; fileRef = 486577C80D31A22A00E7920A /* snd_dma.c */; };
 		664D98C519CF6B78000D395C /* snd_mem.c in Sources */ = {isa = PBXBuildFile; fileRef = 486577C90D31A22A00E7920A /* snd_mem.c */; };
@@ -367,6 +368,7 @@
 		FECAFE03000000000000F00D /* f_modified.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; name = f_modified.h; path = ../Quake/f_modified.h; sourceTree = SOURCE_ROOT; };
 		486577CA0D31A22A00E7920A /* snd_mix.c */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.c; name = snd_mix.c; path = ../Quake/snd_mix.c; sourceTree = SOURCE_ROOT; };
 		48728D280D3004A70004D61B /* net_dgrm.c */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.c; name = net_dgrm.c; path = ../Quake/net_dgrm.c; sourceTree = SOURCE_ROOT; };
+		45D9CF338A0A499756A18226 /* netgraph.c */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.c; name = netgraph.c; path = ../Quake/netgraph.c; sourceTree = SOURCE_ROOT; };
 		48728D290D3004A80004D61B /* net_dgrm.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; name = net_dgrm.h; path = ../Quake/net_dgrm.h; sourceTree = SOURCE_ROOT; };
 		48728D2A0D3004A80004D61B /* net_loop.c */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.c; name = net_loop.c; path = ../Quake/net_loop.c; sourceTree = SOURCE_ROOT; };
 		48728D2B0D3004A80004D61B /* net_loop.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; name = net_loop.h; path = ../Quake/net_loop.h; sourceTree = SOURCE_ROOT; };
@@ -794,6 +796,7 @@
 				7FA834B8E03DEBBE46CD7BF3 /* md5.c */,
 				48134A1412102F400015BF15 /* net_bsd.c */,
 				48728D280D3004A70004D61B /* net_dgrm.c */,
+				45D9CF338A0A499756A18226 /* netgraph.c */,
 				48728D2A0D3004A80004D61B /* net_loop.c */,
 				483A783F0D2EEAAB00CB2E4C /* net_main.c */,
 				D15A00110000000000000001 /* net_address.c */,
@@ -1102,6 +1105,7 @@
 				664D98C019CF6B78000D395C /* r_sprite.c in Sources */,
 				664D98C119CF6B78000D395C /* r_world.c in Sources */,
 				664D98C219CF6B78000D395C /* net_dgrm.c in Sources */,
+				6BD5EDE347F4709D4D5A668E /* netgraph.c in Sources */,
 				664D98C319CF6B78000D395C /* net_loop.c in Sources */,
 				664D98C419CF6B78000D395C /* snd_dma.c in Sources */,
 				FD07DF972782B50C005CB9D9 /* location.c in Sources */,

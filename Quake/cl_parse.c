@@ -715,6 +715,8 @@ static void CLFTE_ParseEntitiesUpdate(void)
 		if (seq > cl.movemessages)
 			seq -= 0x10000;	//check for cl.movemessages overflowing the low 16 bits, and compensate.
 		cl.ackedmovemessages = seq;
+		if (netdiag_active) // woods #netgraph
+			NetDiag_CmdAck (seq);
 
 		if (cl.qcvm.extglobals.servercommandframe)
 			*cl.qcvm.extglobals.servercommandframe = cl.ackedmovemessages;
@@ -725,6 +727,8 @@ static void CLFTE_ParseEntitiesUpdate(void)
 	{	//don't mess up lerps if the server is splitting entities into multiple packets.
 		cl.mtime[1] = cl.mtime[0];
 		cl.mtime[0] = newtime;
+		if (netdiag_active) // woods #netgraph
+			NetDiag_ServerTime (newtime);
 	}
 
 	for (;;)
@@ -1157,6 +1161,8 @@ static void CLDP_ParseEntitiesUpdate(void)
 	if (cl.ackframes_count < sizeof(cl.ackframes)/sizeof(cl.ackframes[0]))
 		cl.ackframes[cl.ackframes_count++] = ack;
 	cl.ackedmovemessages = MSG_ReadLong();	//input sequence ack
+	if (netdiag_active) // woods #netgraph
+		NetDiag_CmdAck (cl.ackedmovemessages);
 	if (cl.qcvm.extglobals.servercommandframe)
 		*cl.qcvm.extglobals.servercommandframe = cl.ackedmovemessages;
 
@@ -4043,6 +4049,8 @@ static qboolean CL_ParseSpecialPrints(const char *printtext)
 				cl.scores[i].ping = ping;
 				cl.scores[i].packetloss = 0;
 				cl.scores[i].movementloss = 0;
+				if (netdiag_active) // woods #netgraph -- legacy "ping" reply carries no movement loss
+					NetDiag_Ping (i, ping, -1);
 				i++;
 				cl.printplayer = i;
 				return true;
@@ -5034,6 +5042,9 @@ void CL_ParseServerMessage (void)
 
 		cmd = MSG_ReadByte ();
 
+		if (netdiag_active) // woods #netgraph -- bytes per message type
+			NetDiag_Svc (cmd, cmd == -1 ? msg_readcount : msg_readcount - 1);
+
 		if (cmd == -1)
 		{
 			SHOWNET("END OF MESSAGE");
@@ -5113,8 +5124,14 @@ void CL_ParseServerMessage (void)
 		case svc_time:
 			cl.mtime[1] = cl.mtime[0];
 			cl.mtime[0] = MSG_ReadFloat ();
+			if (netdiag_active) // woods #netgraph
+				NetDiag_ServerTime (cl.mtime[0]);
 			if (cl.protocol_pext2 & PEXT2_PREDINFO)
-				MSG_ReadShort();	//input sequence ack.
+			{
+				int ack = (unsigned short)MSG_ReadShort();	//input sequence ack.
+				if (netdiag_active) // woods #netgraph
+					NetDiag_CmdAck16 (ack);
+			}
 			break;
 
 		case svc_clientdata:

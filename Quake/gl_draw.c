@@ -3443,6 +3443,16 @@ qboolean Draw_GetCanvasTransform(canvastype canvas, vrect_t *bounds, vrect_t *vi
 		viewport->height = 200 * s;
 		return true;
 
+	case CANVAS_NETGRAPH: // woods #netgraph
+		s = CLAMP(1.0f, scr_sbarscale.value, (float)glwidth / 320.0f);
+		bounds->width = glwidth / s;
+		bounds->height = glheight / s;
+		viewport->x = glx;
+		viewport->y = gly;
+		viewport->width = glwidth;
+		viewport->height = glheight;
+		return true;
+
 	case CANVAS_SBAR2:
 		s = CLAMP(1.0f, scr_sbarscale.value, (float)glwidth / 320.0f);
 		bounds->x = 0;
@@ -3555,6 +3565,11 @@ void GL_SetCanvas (canvastype newcanvas)
 	case CANVAS_DEFAULT2: // woods
 		glOrtho(0, glwidth / 2, glheight / 2, 0, -99999, 99999);
 		glViewport(glx, gly, glwidth, glheight);
+		break;
+	case CANVAS_NETGRAPH: // woods #netgraph -- the whole view at HUD scale, so any corner fits
+		s = CLAMP (1.0, scr_sbarscale.value, (float)glwidth / 320.0);
+		glOrtho (0, glwidth / s, glheight / s, 0, -99999, 99999);
+		glViewport (glx, gly, glwidth, glheight);
 		break;
 	case CANVAS_SCOREBOARD: // woods for +showscores #scoreboard
 		s = (float)glwidth / vid.conwidth; //use console scale

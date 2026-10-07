@@ -317,6 +317,7 @@ typedef struct
 
 #include "protocol.h"
 #include "net.h"
+#include "netgraph.h" // woods #netgraph
 
 #include "cmd.h"
 #include "crc.h"

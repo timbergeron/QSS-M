@@ -303,6 +303,8 @@ void NET_FreeQSocket(qsocket_t *sock)
 {
 	qsocket_t	*s;
 
+	NetDiag_SockClosed (sock); // woods #netgraph -- storage is reused; never attribute another socket's traffic
+
 	// remove it from active list
 	if (sock == net_activeSockets)
 		net_activeSockets = net_activeSockets->next;
@@ -335,6 +337,27 @@ int NET_QSocketGetSequenceIn (const qsocket_t *s)
 int NET_QSocketGetSequenceOut (const qsocket_t *s)
 {	//returns the next unreliable sequence that will be sent
 	return s->unreliableSendSequence;
+}
+
+/*
+=================
+NET_QSocketDiag -- woods #netgraph
+
+Read-only view of a connection for the netgraph: transport kind, whether a
+reliable is in flight, how many reliable bytes are queued, and when the last
+message arrived.
+=================
+*/
+int NET_QSocketDiag (const qsocket_t *s, int *cansend, int *backlog, double *lastmsg)
+{
+	*cansend = s->canSend;
+	*backlog = s->sendMessageLength;
+	*lastmsg = s->lastMessageTime;
+	if (IS_LOOP_DRIVER(s->driver))
+		return NETDIAG_KIND_LOOP;
+	if (s->driver >= 0 && s->driver < net_numdrivers && !strcmp (net_drivers[s->driver].name, "Datagram"))
+		return NETDIAG_KIND_DATAGRAM;
+	return NETDIAG_KIND_OTHER;
 }
 void NET_QSocketClearPacketLoss(qsocket_t *s)
 {

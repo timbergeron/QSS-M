@@ -616,6 +616,7 @@ sizebuf_t lag_buff[32]; // JPG - support for synthetic lag
 byte lag_data[32][1024];  // JPG - support for synthetic lag // woods -- 1024 to match CL_SendMove and the maxsize set in CL_SendMove2
 unsigned int lag_head, lag_tail; // JPG - support for synthetic lag
 double lag_sendtime[32]; // JPG - support for synthetic lag
+static int lag_seq[32]; // woods #netgraph -- movement sequence in each delayed slot, -1 none
 
 /* JPG - this function sends delayed move messages
 ==============
@@ -643,6 +644,8 @@ void CL_SendLagMove(void)
 			Con_Printf("CL_SendMove: lost server connection\n");
 			CL_Disconnect();
 		}
+		else if (netdiag_active && lag_seq[lag_index] >= 0) // woods #netgraph -- actual wire time, after pq_lag
+			NetDiag_CmdSent (lag_seq[lag_index]);
 	}
 }
 
@@ -779,6 +782,8 @@ void CL_SendMove(const usercmd_t* cmd)
 		Con_Printf("CL_SendMove: lost server connection\n");
 		CL_Disconnect();
 	}
+	else if (netdiag_active && cmd && cl.movemessages > 2) // woods #netgraph
+		NetDiag_CmdSent (cl.movemessages - 1);
 }
 
 /*
@@ -797,6 +802,7 @@ void CL_SendMove2 (const usercmd_t *cmd)
 	buf->cursize = 0;
 	buf->data = lag_data[lag_head & 31]; // JPG - added head index
 	lag_sendtime[lag_head++ & 31] = realtime + (pq_lag.value / 1000.0);
+	lag_seq[(lag_head - 1) & 31] = -1; // woods #netgraph -- set below once a move is written
 
 	for (i = 0; i < cl.ackframes_count; i++)
 	{
@@ -892,6 +898,7 @@ void CL_SendMove2 (const usercmd_t *cmd)
 	// allways dump the first two message, because it may contain leftover inputs
 	// from the last level
 	//
+		lag_seq[(lag_head - 1) & 31] = cl.movemessages >= 2 ? cl.movemessages : -1; // woods #netgraph -- this move's sequence, once it's sent for real
 		if (++cl.movemessages <= 2)
 			buf->cursize = dump;
 		else

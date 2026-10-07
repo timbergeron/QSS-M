@@ -294,6 +294,7 @@ copy "$(SolutionDir)..\zlib\$(PlatformShortName)\*.dll" "$(TargetDir)"</Command>
     <ClCompile Include="..\..\Quake\update.c" />
     <ClCompile Include="..\..\Quake\net_address.c" />
     <ClCompile Include="..\..\Quake\net_dgrm.c" />
+    <ClCompile Include="..\..\Quake\netgraph.c" />
     <ClCompile Include="..\..\Quake\net_hostname_cache.c" />
     <ClCompile Include="..\..\Quake\net_loop.c" />
     <ClCompile Include="..\..\Quake\net_main.c" />
@@ -381,6 +382,7 @@ copy "$(SolutionDir)..\zlib\$(PlatformShortName)\*.dll" "$(TargetDir)"</Command>
     <ClInclude Include="..\..\Quake\net_defs.h" />
     <ClInclude Include="..\..\Quake\net_hostname_cache.h" />
     <ClInclude Include="..\..\Quake\net_dgrm.h" />
+    <ClInclude Include="..\..\Quake\netgraph.h" />
     <ClInclude Include="..\..\Quake\net_loop.h" />
     <ClInclude Include="..\..\Quake\net_sys.h" />
     <ClInclude Include="..\..\Quake\net_wins.h" />
