@@ -675,6 +675,7 @@ void Host_EndGame (const char *message, ...)
 	else
 		CL_Disconnect ();
 
+	COM_AbortLoadCache ();
 	Host_Longjmp (host_abortserver, 1);
 }
 
@@ -727,6 +728,7 @@ void Host_Error (const char *error, ...)
 
 	inerror = false;
 
+	COM_AbortLoadCache ();
 	Host_Longjmp (host_abortserver, 1);
 }
 

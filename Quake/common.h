@@ -507,6 +507,12 @@ FILE *FSZIP_Deflate(FILE *src, qofs_t srcsize, qofs_t outsize, const char *entry
 void COM_WriteFile (const char *filename, const void *data, int len);
 int COM_OpenFile (const char *filename, int *handle, unsigned int *path_id);
 int COM_FOpenFile (const char *filename, FILE **file, unsigned int *path_id);
+int COM_FOpenFileCandidates (const char *const *filenames, int count, FILE **file, unsigned int *path_id);
+void COM_BeginLoadCache (void);
+void COM_EndLoadCache (void);
+void COM_AbortLoadCache (void);
+void COM_InvalidateLoadCache (void);
+void COM_MarkLoadCacheStale (void);
 qboolean COM_FileExists (const char *filename, unsigned int *path_id);
 const searchpath_t *COM_FileSearchPath (const char *filename); // valid until the search paths change
 qboolean COM_ConfigFileUsesConfigsDir (const char *filename);

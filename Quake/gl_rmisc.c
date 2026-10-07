@@ -843,7 +843,16 @@ static void R_ParseWorldspawn (void)
 R_NewMap
 ===============
 */
+static void R_NewMap_Load (void);
+
 void R_NewMap (void)
+{
+	COM_BeginLoadCache ();
+	R_NewMap_Load ();
+	COM_EndLoadCache ();
+}
+
+static void R_NewMap_Load (void)
 {
 	int		i;
 	double t0, tprev;

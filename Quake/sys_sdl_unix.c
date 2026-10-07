@@ -1056,7 +1056,10 @@ void Sys_Init (void)
 
 void Sys_mkdir (const char *path)
 {
-	int rc = mkdir (path, 0777);
+	int rc;
+
+	COM_MarkLoadCacheStale ();	// a load in progress must see the new directory
+	rc = mkdir (path, 0777);
 	if (rc != 0 && errno == EEXIST)
 	{
 		struct stat st;

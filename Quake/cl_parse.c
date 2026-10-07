@@ -1396,7 +1396,16 @@ static void CL_KeepaliveMessage (void)
 CL_ParseServerInfo
 ==================
 */
+static void CL_ParseServerInfo_Load (void);
+
 static void CL_ParseServerInfo (void)
+{
+	COM_BeginLoadCache ();
+	CL_ParseServerInfo_Load ();
+	COM_EndLoadCache ();
+}
+
+static void CL_ParseServerInfo_Load (void)
 {
 	const char	*str;
 	int		i;

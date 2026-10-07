@@ -617,9 +617,13 @@ returns its format with the file open.  loadfilename is left set to the hit.
 */
 static enum imgkind Image_Locate (const char *name, FILE **out)
 {
-	FILE	*f;
-	char *prefixes[3] = {"", "textures/", "textures/"};
-	int i;
+	static const char *const prefixes[] = {"", "textures/", "textures/"};
+	static const char *const extensions[] = {"dds", "tga", "png", "jpeg", "jpg", "pcx"};
+	static const enum imgkind kinds[] = {IMG_DDS, IMG_TGA, IMG_PNG, IMG_JPEG, IMG_JPEG, IMG_PCX};
+	char paths[19][MAX_OSPATH];
+	const char *candidates[19];
+	enum imgkind formats[19];
+	int i, j, count = 0, hit;
 
 	const char *origname = name;
 
@@ -635,66 +639,20 @@ static enum imgkind Image_Locate (const char *name, FILE **out)
 		if (strstr(name, "progs/player.mdl_") && !gl_load24bit_skins.value) // woods #loadskins
 			break;
 
-		q_snprintf (loadfilename, sizeof(loadfilename), "%s%s.dds", prefixes[i], name);
-		COM_FOpenFile (loadfilename, &f, NULL);
-		if (f)
+		for (j = 0; j < countof(extensions); j++)
 		{
-			*out = f;
-			return IMG_DDS;
-		}
-
-		q_snprintf (loadfilename, sizeof(loadfilename), "%s%s.tga", prefixes[i], name);
-		COM_FOpenFile (loadfilename, &f, NULL);
-		if (f)
-		{
-			*out = f;
-			return IMG_TGA;
-		}
-
-		q_snprintf (loadfilename, sizeof(loadfilename), "%s%s.png", prefixes[i], name);
-		COM_FOpenFile (loadfilename, &f, NULL);
-		if (f)
-		{
-			*out = f;
-			return IMG_PNG;
-		}
-
-		q_snprintf (loadfilename, sizeof(loadfilename), "%s%s.jpeg", prefixes[i], name);
-		COM_FOpenFile (loadfilename, &f, NULL);
-		if (f)
-		{
-			*out = f;
-			return IMG_JPEG;
-		}
-
-		q_snprintf (loadfilename, sizeof(loadfilename), "%s%s.jpg", prefixes[i], name);
-		COM_FOpenFile (loadfilename, &f, NULL);
-		if (f)
-		{
-			*out = f;
-			return IMG_JPEG;
-		}
-
-		q_snprintf (loadfilename, sizeof(loadfilename), "%s%s.pcx", prefixes[i], name);
-		COM_FOpenFile (loadfilename, &f, NULL);
-		if (f)
-		{
-			*out = f;
-			return IMG_PCX;
+			q_snprintf (paths[count], sizeof(paths[count]), "%s%s.%s", prefixes[i], name, extensions[j]);
+			candidates[count] = paths[count];
+			formats[count++] = kinds[j];
 		}
 	}
 
-	name = origname;
-	q_snprintf (loadfilename, sizeof(loadfilename), "%s%s.lmp", "", name);
-	COM_FOpenFile (loadfilename, &f, NULL);
-	if (f)
-	{
-		*out = f;
-		return IMG_LMP;
-	}
-
-	*out = NULL;
-	return IMG_NONE;
+	q_snprintf (paths[count], sizeof(paths[count]), "%s.lmp", origname);
+	candidates[count] = paths[count];
+	formats[count++] = IMG_LMP;
+	hit = COM_FOpenFileCandidates (candidates, count, out, NULL);
+	q_strlcpy (loadfilename, paths[hit >= 0 ? hit : count - 1], sizeof(loadfilename));
+	return hit >= 0 ? formats[hit] : IMG_NONE;
 }
 
 static qboolean Image_PrefetchTake (const char *name, byte **data, int *width, int *height, qboolean *malloced);

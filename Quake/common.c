@@ -3272,6 +3272,123 @@ static int COM_FindPackFileIndex (pack_t *pak, const char *filename)
 	return -1;
 }
 
+/*
+While a level loads, remember which loose-file parent directories exist, so a
+missing replacement texture or model costs one stat per directory rather than
+one per candidate. PACK entries and files in existing directories still get
+their normal lookup. Scopes nest; the cache is dropped when the outermost one
+ends, so files added between loads are still found.
+*/
+#define COM_DIRCACHE_SLOTS	256
+typedef struct
+{
+	unsigned int	hash;
+	qboolean		exists;
+	char			*path;
+} com_dircache_t;
+static com_dircache_t	com_dircache[COM_DIRCACHE_SLOTS];
+static int				com_dircache_depth, com_dircache_count;
+static SDL_AtomicInt	com_dircache_stale;	// a directory was created, possibly on another thread
+
+void COM_BeginLoadCache (void)
+{
+	com_dircache_depth++;
+}
+
+// Called by Sys_mkdir from any thread: the main thread drops the cache at its
+// next lookup, so a load that creates a directory sees it straight away.
+void COM_MarkLoadCacheStale (void)
+{
+	SDL_SetAtomicInt (&com_dircache_stale, 1);
+}
+
+// Forget every cached directory but stay inside any open load scope.
+void COM_InvalidateLoadCache (void)
+{
+	int i;
+
+	for (i = 0; i < COM_DIRCACHE_SLOTS; i++)
+	{
+		free (com_dircache[i].path);
+		com_dircache[i].path = NULL;
+	}
+	com_dircache_count = 0;
+}
+
+void COM_EndLoadCache (void)
+{
+	if (com_dircache_depth > 1)
+	{
+		com_dircache_depth--;
+		return;
+	}
+	com_dircache_depth = 0;
+	COM_InvalidateLoadCache ();
+}
+
+// Host_Error unwinds past open scopes, so it drops the cache outright.
+void COM_AbortLoadCache (void)
+{
+	if (com_dircache_depth)
+	{
+		com_dircache_depth = 1;
+		COM_EndLoadCache ();
+	}
+}
+
+static int COM_FileTypeForSearch (const char *path)
+{
+	const char *slash;
+#ifdef _WIN32
+	const char *backslash;
+#endif
+	size_t len, i;
+	unsigned int hash, slot;
+	com_dircache_t *entry;
+	int type;
+
+	if (!com_dircache_depth)
+		return Sys_FileType (path);
+	if (SDL_GetAtomicInt (&com_dircache_stale))
+	{
+		SDL_SetAtomicInt (&com_dircache_stale, 0);
+		COM_InvalidateLoadCache ();
+	}
+
+	slash = strrchr (path, '/');
+#ifdef _WIN32
+	backslash = strrchr (path, '\\');
+	if (!slash || (backslash && backslash > slash))
+		slash = backslash;
+#endif
+	if (!slash || slash == path)
+		return Sys_FileType (path);
+
+	len = slash - path;
+	for (i = 0, hash = 2166136261u; i < len; i++)
+		hash = (hash ^ (unsigned char)path[i]) * 16777619u;
+	for (slot = hash % COM_DIRCACHE_SLOTS; com_dircache[slot].path; slot = (slot + 1) % COM_DIRCACHE_SLOTS)
+	{
+		entry = &com_dircache[slot];
+		if (entry->hash == hash && !strncmp (entry->path, path, len) && !entry->path[len])
+			return entry->exists ? Sys_FileType (path) : FS_ENT_NONE;
+	}
+
+	type = Sys_FileType (path);
+	if (com_dircache_count >= COM_DIRCACHE_SLOTS / 2)
+		return type;
+	entry = &com_dircache[slot];
+	entry->path = (char *) malloc (len + 1);
+	if (!entry->path)
+		return type;
+	memcpy (entry->path, path, len);
+	entry->path[len] = '\0';
+	entry->hash = hash;
+	entry->exists = type != FS_ENT_NONE || (Sys_FileType (entry->path) & FS_ENT_DIRECTORY);
+	com_dircache_count++;
+	return type;
+}
+
 static int COM_FindFile_impl (const char *filename, int *handle, FILE **file,
 							unsigned int *path_id, const searchpath_t **source);
 
@@ -3384,7 +3501,7 @@ static int COM_FindFile_impl (const char *filename, int *handle, FILE **file,
 			}
 
 			q_snprintf (netpath, sizeof(netpath), "%s/%s",search->filename, filename);
-			if (! (Sys_FileType(netpath) & FS_ENT_FILE))
+			if (! (COM_FileTypeForSearch(netpath) & FS_ENT_FILE))
 				continue;
 
 			if (path_id)
@@ -3561,6 +3678,24 @@ into the file.
 int COM_FOpenFile (const char *filename, FILE **file, unsigned int *path_id)
 {
 	return COM_FindFile (filename, NULL, file, path_id, NULL);
+}
+
+// Return the first candidate index with an open file, preserving filename-first
+// precedence.
+int COM_FOpenFileCandidates (const char *const *filenames, int count, FILE **file, unsigned int *path_id)
+{
+	int i;
+
+	*file = NULL;
+	COM_BeginLoadCache ();
+	for (i = 0; i < count; i++)
+	{
+		COM_FindFile (filenames[i], NULL, file, path_id, NULL);
+		if (*file)
+			break;
+	}
+	COM_EndLoadCache ();
+	return *file ? i : -1;
 }
 
 /*

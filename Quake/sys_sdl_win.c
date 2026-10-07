@@ -1060,6 +1060,7 @@ void Sys_Init (void)
 
 void Sys_mkdir (const char *path)
 {
+	COM_MarkLoadCacheStale ();	// a load in progress must see the new directory
 	if (CreateDirectory(path, NULL) != 0)
 		return;
 	if (GetLastError() != ERROR_ALREADY_EXISTS)

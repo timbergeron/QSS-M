@@ -4655,7 +4655,16 @@ static void SV_ClearClientLocDownloads(void)
 	}
 }
 
+static void SV_SpawnServer_Load (const char *server);
+
 void SV_SpawnServer (const char *server)
+{
+	COM_BeginLoadCache ();
+	SV_SpawnServer_Load (server);
+	COM_EndLoadCache ();
+}
+
+static void SV_SpawnServer_Load (const char *server)
 {
 	static char	dummy[8] = { 0,0,0,0,0,0,0,0 };
 	edict_t		*ent;
