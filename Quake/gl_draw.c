@@ -1036,6 +1036,10 @@ qboolean Draw_ReloadTextures(qboolean force)
 
 	if (force)
 	{
+		// The skybox faces are kept across maps (Sky_NewMapClear) but aren't
+		// TEXPREF_PERSIST, so TexMgr_NewGame frees them. Drop the sky's pointers
+		// first, or it draws (and later frees) whatever reuses those records.
+		Sky_ClearAll ();
 		TexMgr_NewGame ();
 		Draw_NewGame ();
 #ifdef PSET_SCRIPT
