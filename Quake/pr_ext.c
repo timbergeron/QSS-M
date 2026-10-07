@@ -85,8 +85,8 @@ static int PR_MenuModelIndexForName(const char *name, qboolean queryonly)
 	if (queryonly)
 		return 0;
 
-	model = Mod_ForName(name, false);
-	if (!model || model->type == mod_ext_invalid)
+	model = Mod_TryForName(name);
+	if (!model)
 		return 0;
 
 	if (menuqc_nummodels == menuqc_maxmodels)
@@ -108,7 +108,7 @@ qmodel_t *PR_MenuModelForIndex(int modelindex)
 	qmodel_t *model;
 	if (modelindex <= 0 || (size_t)modelindex > menuqc_nummodels)
 		return NULL;
-	model = Mod_ForName(menuqc_models[modelindex-1].name, false);
+	model = Mod_TryForName(menuqc_models[modelindex-1].name);
 	return (model && model->type != mod_ext_invalid)?model:NULL;
 }
 
@@ -2324,7 +2324,7 @@ static void PF_frameforname(void)
 {
 	float modelindex	= G_FLOAT(OFS_PARM0);
 	const char *framename	= G_STRING(OFS_PARM1);
-	qmodel_t *mod = (modelindex >= 0 && modelindex < 65536)?PR_GetVMModel((int)modelindex):NULL;
+	qmodel_t *mod = (modelindex > -65536 && modelindex < 65536)?PR_GetVMModel((int)modelindex):NULL;
 	aliashdr_t *alias;
 
 	G_FLOAT(OFS_RETURN) = -1;
@@ -2346,7 +2346,7 @@ static void PF_frametoname(void)
 	float modelindex	= G_FLOAT(OFS_PARM0);
 	float framenumf		= G_FLOAT(OFS_PARM1);
 	int framenum;
-	qmodel_t *mod = (modelindex >= 0 && modelindex < 65536)?PR_GetVMModel((int)modelindex):NULL;
+	qmodel_t *mod = (modelindex > -65536 && modelindex < 65536)?PR_GetVMModel((int)modelindex):NULL;
 	aliashdr_t *alias;
 
 	if (mod && mod->type == mod_alias && (alias = Mod_Extradata(mod)) &&
@@ -2360,7 +2360,7 @@ static void PF_frameduration(void)
 	float modelindex	= G_FLOAT(OFS_PARM0);
 	float framenumf		= G_FLOAT(OFS_PARM1);
 	int framenum;
-	qmodel_t *mod = (modelindex >= 0 && modelindex < 65536)?PR_GetVMModel((int)modelindex):NULL;
+	qmodel_t *mod = (modelindex > -65536 && modelindex < 65536)?PR_GetVMModel((int)modelindex):NULL;
 	aliashdr_t *alias;
 
 	G_FLOAT(OFS_RETURN) = 0;
@@ -4244,6 +4244,60 @@ static void PF_bufstr_free(void)
 	strbuflist[bufno].strings[index] = NULL;
 }
 
+// FTE match modes: auto/pattern use case-insensitive wildcards.
+static qboolean PR_BufferStringMatches(const char *str, const char *pattern, int method)
+{
+	size_t slen, plen;
+	switch (method)
+	{
+	case 1: return !strcmp(str, pattern);
+	case 2: return !strncmp(str, pattern, strlen(pattern));
+	case 3:
+		slen = strlen(str);
+		plen = strlen(pattern);
+		return plen <= slen && !strcmp(str + slen - plen, pattern);
+	case 4: return strstr(str, pattern) != NULL;
+	default: return wildcmp(pattern, str);
+	}
+}
+
+static void PF_bufstr_find(void)
+{
+	float handle = G_FLOAT(OFS_PARM0);
+	float first = qcvm->argc > 3 ? G_FLOAT(OFS_PARM3) : 0;
+	float stride = qcvm->argc > 4 ? G_FLOAT(OFS_PARM4) : 1;
+	float mode = qcvm->argc > 2 ? G_FLOAT(OFS_PARM2) : 5;
+	const char *pattern = G_STRING(OFS_PARM1);
+	struct strbuf *buf;
+	unsigned int idx, step;
+	int method;
+
+	G_FLOAT(OFS_RETURN) = -1;
+	// Check as floats before narrowing, including NaN, infinity and overflow.
+	if (!(handle >= BUFSTRBASE && handle < BUFSTRBASE + NUMSTRINGBUFS) ||
+		!(first >= 0 && first < 2147483648.0f) ||
+		!(stride >= 1 && stride < 2147483648.0f))
+		return;
+	buf = &strbuflist[(unsigned int)(handle - BUFSTRBASE)];
+	if (buf->owningvm != qcvm)
+		return;
+	idx = (unsigned int)first;
+	step = (unsigned int)stride;
+	method = mode >= 0 && mode < 6 ? (int)mode : 5;
+	while (idx < buf->used)
+	{
+		const char *str = buf->strings[idx];
+		if (str && PR_BufferStringMatches(str, pattern, method))
+		{
+			G_FLOAT(OFS_RETURN) = idx;
+			return;
+		}
+		if (step >= buf->used - idx)
+			break;
+		idx += step;
+	}
+}
+
 static void PF_buf_cvarlist(void)
 {
 	size_t bufno = G_FLOAT(OFS_PARM0)-BUFSTRBASE;
@@ -6030,6 +6084,20 @@ static void DrawQC_CharacterQuad (float x, float y, int num, float w, float h,
 	glTexCoord2f (fcol, frow + cellheight - epsilon_v);
 	glVertex2f (x, y+h);
 }
+static qboolean DrawQC_BeginBlend(float flags)
+{
+	qboolean additive = flags >= -2147483648.0f && flags < 2147483648.0f && (((int)flags & 3) == 1);
+	if (additive)
+		glBlendFunc(GL_SRC_ALPHA, GL_ONE);
+	return additive;
+}
+
+static void DrawQC_EndBlend(qboolean additive)
+{
+	if (additive)
+		glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+}
+
 static void PF_cl_drawcharacter(void)
 {
 	G_FLOAT(OFS_RETURN) = 0;	//declared float; set it before any early out
@@ -6040,16 +6108,18 @@ static void PF_cl_drawcharacter(void)
 	float *rgb	= G_VECTOR(OFS_PARM3);
 	float alpha	= G_FLOAT (OFS_PARM4);
 	float sl, tl, sh, th;
-//	int flags	= G_FLOAT (OFS_PARM5);
+	qboolean additive;
 
 	if (charcode == 32)
 		return; //don't waste time on spaces
 
+	additive = DrawQC_BeginBlend(qcvm->argc > 5 ? G_FLOAT(OFS_PARM5) : 0);
 	DrawQC_BindFont(&sl, &tl, &sh, &th);
 	glColor4f (rgb[0], rgb[1], rgb[2], alpha);
 	glBegin (GL_QUADS);
 	DrawQC_CharacterQuad (pos[0], pos[1], charcode, size[0], size[1], sl, tl, sh, th);
 	glEnd ();
+	DrawQC_EndBlend(additive);
 }
 
 static void PF_cl_drawrawstring(void)
@@ -6062,7 +6132,7 @@ static void PF_cl_drawrawstring(void)
 	float *rgb	= G_VECTOR(OFS_PARM3);
 	float alpha	= G_FLOAT (OFS_PARM4);
 	float sl, tl, sh, th;
-//	int flags	= G_FLOAT (OFS_PARM5);
+	qboolean additive;
 
 	float x = pos[0];
 	int c;
@@ -6070,6 +6140,7 @@ static void PF_cl_drawrawstring(void)
 	if (!*text)
 		return; //don't waste time on spaces
 
+	additive = DrawQC_BeginBlend(qcvm->argc > 5 ? G_FLOAT(OFS_PARM5) : 0);
 	DrawQC_BindFont(&sl, &tl, &sh, &th);
 	glColor4f (rgb[0], rgb[1], rgb[2], alpha);
 	glBegin (GL_QUADS);
@@ -6079,6 +6150,7 @@ static void PF_cl_drawrawstring(void)
 		x += size[0];
 	}
 	glEnd ();
+	DrawQC_EndBlend(additive);
 }
 static void PF_cl_drawstring(void)
 {
@@ -6090,7 +6162,7 @@ static void PF_cl_drawstring(void)
 	float *rgb	= G_VECTOR(OFS_PARM3);
 	float alpha	= G_FLOAT (OFS_PARM4);
 	float sl, tl, sh, th;
-//	int flags	= G_FLOAT (OFS_PARM5);
+	qboolean additive;
 
 	float x = pos[0];
 	struct markup_s mu;
@@ -6101,6 +6173,7 @@ static void PF_cl_drawstring(void)
 
 	PR_Markup_Begin(&mu, text, rgb, alpha);
 
+	additive = DrawQC_BeginBlend(qcvm->argc > 5 ? G_FLOAT(OFS_PARM5) : 0);
 	DrawQC_BindFont(&sl, &tl, &sh, &th);
 	glBegin (GL_QUADS);
 	while ((c = PR_Markup_Parse(&mu)))
@@ -6110,6 +6183,7 @@ static void PF_cl_drawstring(void)
 		x += size[0];
 	}
 	glEnd ();
+	DrawQC_EndBlend(additive);
 }
 static void PF_cl_stringwidth(void)
 {
@@ -6181,18 +6255,20 @@ static void PF_cl_drawpic(void)
 	float *size	= G_VECTOR(OFS_PARM2);
 	float *rgb	= G_VECTOR(OFS_PARM3);
 	float alpha	= G_FLOAT (OFS_PARM4);
-//	int flags	= G_FLOAT (OFS_PARM5);
+	qboolean additive;
 
 	if (pic)
 	{
+		additive = DrawQC_BeginBlend(qcvm->argc > 5 ? G_FLOAT(OFS_PARM5) : 0);
 		glColor4f (rgb[0], rgb[1], rgb[2], alpha);
 		Draw_SubPic (pos[0], pos[1], size[0], size[1], pic, 0, 0, 1, 1);
+		DrawQC_EndBlend(additive);
 	}
 }
 
 static void DrawQC_RotPic(const float *pivot, const float *mins, const float *maxs,
 	qpic_t *pic, const float *texmins, const float *texsize, const float *rgb,
-	float alpha, float angle)
+	float alpha, float angle, float flags)
 {
 	float radians = angle * M_PI_DIV_180;
 	float saxis[2] = {cos(radians), sin(radians)};
@@ -6211,6 +6287,7 @@ static void DrawQC_RotPic(const float *pivot, const float *mins, const float *ma
 	};
 	polygonvert_t verts[4];
 	unsigned int i;
+	qboolean additive;
 
 	if (!pic)
 		return;
@@ -6227,7 +6304,9 @@ static void DrawQC_RotPic(const float *pivot, const float *mins, const float *ma
 		verts[i].rgba[3] = alpha;
 	}
 
+	additive = DrawQC_BeginBlend(flags);
 	Draw_PicPolygon(pic, countof(verts), verts);
+	DrawQC_EndBlend(additive);
 }
 
 static void PF_cl_drawrotpic(void)
@@ -6237,7 +6316,7 @@ static void PF_cl_drawrotpic(void)
 
 	DrawQC_RotPic(G_VECTOR(OFS_PARM0), G_VECTOR(OFS_PARM1), G_VECTOR(OFS_PARM2),
 		DrawQC_CachePic(G_STRING(OFS_PARM3), PICFLAG_AUTO), texmins, texsize,
-		G_VECTOR(OFS_PARM4), G_FLOAT(OFS_PARM5), G_FLOAT(OFS_PARM6));
+		G_VECTOR(OFS_PARM4), G_FLOAT(OFS_PARM5), G_FLOAT(OFS_PARM6), 0);
 	G_FLOAT(OFS_RETURN) = 1;
 }
 
@@ -6247,8 +6326,7 @@ static void PF_cl_drawrotsubpic(void)
 
 	DrawQC_RotPic(G_VECTOR(OFS_PARM0), G_VECTOR(OFS_PARM1), G_VECTOR(OFS_PARM2),
 		DrawQC_CachePic(G_STRING(OFS_PARM3), PICFLAG_AUTO), G_VECTOR(OFS_PARM4),
-		G_VECTOR(OFS_PARM5), G_VECTOR(OFS_PARM6), alphaandangles[0], alphaandangles[1]);
-	// alphaandangles[2] is the draw flag, currently ignored like other 2d QC draw flags.
+		G_VECTOR(OFS_PARM5), G_VECTOR(OFS_PARM6), alphaandangles[0], alphaandangles[1], alphaandangles[2]);
 	G_FLOAT(OFS_RETURN) = 1;
 }
 
@@ -6270,13 +6348,38 @@ static void PF_cl_drawsubpic(void)
 	float *srcsize	= G_VECTOR(OFS_PARM4);
 	float *rgb	= G_VECTOR(OFS_PARM5);
 	float alpha	= G_FLOAT (OFS_PARM6); 
-//	int flags	= G_FLOAT (OFS_PARM7);
+	qboolean additive;
 
 	if (pic)
 	{
+		additive = DrawQC_BeginBlend(qcvm->argc > 7 ? G_FLOAT(OFS_PARM7) : 0);
 		glColor4f (rgb[0], rgb[1], rgb[2], alpha);
 		Draw_SubPic (pos[0], pos[1], size[0], size[1], pic, srcpos[0], srcpos[1], srcsize[0], srcsize[1]);
+		DrawQC_EndBlend(additive);
 	}
+}
+
+static void PF_cl_drawline(void)
+{
+	const float *a = G_VECTOR(OFS_PARM1);
+	const float *b = G_VECTOR(OFS_PARM2);
+	const float *rgb = G_VECTOR(OFS_PARM3);
+	float alpha = G_FLOAT(OFS_PARM4);
+	qboolean additive;
+
+	if (!isfinite(a[0]) || !isfinite(a[1]) || !isfinite(b[0]) || !isfinite(b[1]))
+		return;
+	additive = DrawQC_BeginBlend(qcvm->argc > 5 ? G_FLOAT(OFS_PARM5) : 0);
+	// FTE ignores the width argument too: a line is one physical pixel wide.
+	glLineWidth(1);
+	glDisable(GL_TEXTURE_2D);
+	glColor4f(rgb[0], rgb[1], rgb[2], alpha);
+	glBegin(GL_LINES);
+	glVertex2f(a[0], a[1]);
+	glVertex2f(b[0], b[1]);
+	glEnd();
+	glEnable(GL_TEXTURE_2D);
+	DrawQC_EndBlend(additive);
 }
 
 static void PF_cl_drawfill(void)
@@ -6285,8 +6388,9 @@ static void PF_cl_drawfill(void)
 	float *size	= G_VECTOR(OFS_PARM1);
 	float *rgb	= G_VECTOR(OFS_PARM2);
 	float alpha	= G_FLOAT (OFS_PARM3);
-//	int flags	= G_FLOAT (OFS_PARM4);
+	qboolean additive;
 
+	additive = DrawQC_BeginBlend(qcvm->argc > 4 ? G_FLOAT(OFS_PARM4) : 0);
 	glDisable (GL_TEXTURE_2D);
 
 	glColor4f (rgb[0], rgb[1], rgb[2], alpha);
@@ -6299,6 +6403,7 @@ static void PF_cl_drawfill(void)
 	glEnd ();
 
 	glEnable (GL_TEXTURE_2D);
+	DrawQC_EndBlend(additive);
 }
 
 
@@ -7654,47 +7759,105 @@ static void PF_uri_get(void) {
     G_FLOAT(OFS_RETURN) = 1;
 }
 
+// FTE's getentitytoken uses QC token rules, rather than the map loader's
+// legacy escape conversion. Consume the whole token even when it is truncated.
+static const char *PR_EntityToken(const char *data, char *out, size_t capacity)
+{
+	size_t length = 0;
+	int c, previous = 0;
+
+	out[0] = 0;
+	if (!data)
+		return NULL;
+	for (;;)
+	{
+		while (*data && strchr(" \t\r\n\v", *data))
+			data++;
+		if (data[0] == '/' && data[1] == '/')
+		{
+			while (*data && *data != '\n')
+				data++;
+		}
+		else if (data[0] == '/' && data[1] == '*')
+		{
+			data += 2;
+			while (*data && !(data[0] == '*' && data[1] == '/'))
+				data++;
+			if (*data)
+				data += 2;
+		}
+		else
+			break;
+	}
+	if (!*data)
+		return NULL;
+
+	if (*data == '"')
+	{
+		data++;
+		while ((c = (unsigned char)*data) != 0)
+		{
+			data++;
+			if (c == '"')
+				break;
+			if (c == '\\')
+			{
+				switch (*data)
+				{
+				case '"': case '\\': c = *data++; break;
+				case 'n': c = '\n'; data++; break;
+				case 'r': c = '\r'; data++; break;
+				case 't': c = '\t'; data++; break;
+				default: break; // preserve unknown escape sequences
+				}
+			}
+			else if ((c == '\n' || c == '\r') && previous == '"')
+				break; // FTE compatibility with legacy wad paths ending in \"
+			if (length + 1 < capacity)
+				out[length++] = c;
+			previous = c;
+		}
+	}
+	else if (strchr("{}()':,", *data))
+		out[length++] = *data++;
+	else
+	{
+		while (*data && !strchr(" \t\r\n\v{}()':,\"", *data))
+		{
+			if (length + 1 < capacity)
+				out[length++] = *data;
+			data++;
+		}
+	}
+	out[length] = 0;
+	return data;
+}
+
 static const char *csqcmapentitydata;
+static char *csqcmapentitystring;
 static void PF_cs_getentitytoken(void)
 {
 	if (qcvm->argc)
 	{
-		csqcmapentitydata = cl.worldmodel->entities;
+		const char *input = G_STRING(OFS_PARM0);
+		// Copy before freeing the previous source: input can be a QC tempstring.
+		char *copy = *input ? strdup(input) : NULL;
+		if (*input && !copy)
+			Sys_Error("getentitytoken: out of memory");
+		free(csqcmapentitystring);
+		csqcmapentitystring = copy;
+		csqcmapentitydata = copy ? copy : (qcvm->worldmodel ? qcvm->worldmodel->entities : NULL);
 		G_INT(OFS_RETURN) = 0;
 		return;
 	}
 
-	if (csqcmapentitydata)
 	{
-		csqcmapentitydata = COM_Parse(csqcmapentitydata);	
-		if (!csqcmapentitydata)
-			G_INT(OFS_RETURN) = 0;
-		else
-		{
-			//Match the flawed logic inside ED_NewString... mostly, stoopid length limits.
-			char *string = com_token, *tmp = PR_GetTempString(), *new_p = tmp;
-			int i, l = strlen(com_token);
-
-			for (i = 0; i < l && new_p-tmp < STRINGTEMP_LENGTH-1; i++)
-			{
-				if (string[i] == '\\' && i < l-1)
-				{
-					i++;
-					if (string[i] == 'n')
-						*new_p++ = '\n';
-					else
-						*new_p++ = '\\';
-				}
-				else
-					*new_p++ = string[i];
-			}
-			*new_p = 0;
-			G_INT(OFS_RETURN) = PR_SetEngineString(tmp);
-		}
+		char *token = PR_GetTempString();
+		csqcmapentitydata = PR_EntityToken(csqcmapentitydata, token, STRINGTEMP_LENGTH);
+		G_INT(OFS_RETURN) = csqcmapentitydata ? PR_SetEngineString(token) : 0;
 	}
-	else
-		G_INT(OFS_RETURN) = 0;
 }
+
 static void PF_m_setmodel(void)
 {
 	edict_t *ed = G_EDICT(OFS_PARM0);
@@ -7738,6 +7901,12 @@ static void PF_m_setmodel(void)
 			VectorCopy(vec3_origin, emaxs->vector);
 		}
 	}
+}
+static void PF_cs_getmodelindex(void)
+{
+	const char *name = G_STRING(OFS_PARM0);
+	qboolean queryonly = (qcvm->argc > 1) && G_FLOAT(OFS_PARM1);
+	G_FLOAT(OFS_RETURN) = CL_ModelIndexForName(name, queryonly);
 }
 static void PF_m_getmodelindex(void)
 {
@@ -9709,7 +9878,7 @@ static struct
 	{"strunzone",		PF_strunzone,		PF_strunzone,		119, PF_strunzone,57,	D("void(string s)", "Destroys a string that was allocated by strunzone. Further references to the string MAY crash the game.")},	// (FRIK_FILE)
 	{"tokenize_menuqc",	PF_Tokenize,		PF_Tokenize,		0,	PF_Tokenize,58, "float(string s)"},	//alias of tokenize's canonical #58; kept so existing source using this name still compiles
 	{"localsound",		PF_NoSSQC,			PF_cl_localsound,	177,	PF_cl_localsound,65, D("void(string soundname, optional float channel, optional float volume)", "Plays a sound... locally... probably best not to call this from ssqc. Also disables reverb.")},//	#177
-	{"getmodelindex",	PF_NoSSQC,			PF_NoCSQC,			200,	PF_m_getmodelindex,200, D("float(string modelname, optional float queryonly)", "Acts as an alternative to precache_model(foo);setmodel(bar, foo); return bar.modelindex;\nIf queryonly is set and the model was not previously precached, the builtin will return 0 without needlessly precaching the model.")},
+	{"getmodelindex",	PF_NoSSQC,			PF_cs_getmodelindex,			200,	PF_m_getmodelindex,200, D("float(string modelname, optional float queryonly)", "Acts as an alternative to precache_model(foo);setmodel(bar, foo); return bar.modelindex;\nIf queryonly is set and the model was not previously precached, the builtin will return 0 without needlessly precaching the model.")},
 //	{"externcall",		PF_externcall,		PF_externcall,		201,	PF_NoMenu, D("__variant(float prnum, string funcname, ...)", "Directly call a function in a different/same progs by its name.\nprnum=0 is the 'default' or 'main' progs.\nprnum=-1 means current progs.\nprnum=-2 will scan through the active progs and will use the first it finds.")},
 //	{"addprogs",		PF_addprogs,		PF_addprogs,		202,	PF_NoMenu, D("float(string progsname)", "Loads an additional .dat file into the current qcvm. The returned handle can be used with any of the externcall/externset/externvalue builtins.\nThere are cvars that allow progs to be loaded automatically.")},
 //	{"externvalue",		PF_externvalue,		PF_externvalue,		203,	PF_NoMenu, D("__variant(float prnum, string varname)", "Reads a global in the named progs by the name of that global.\nprnum=0 is the 'default' or 'main' progs.\nprnum=-1 means current progs.\nprnum=-2 will scan through the active progs and will use the first it finds.")},
@@ -9830,7 +9999,7 @@ static struct
 	{"unproject",		PF_NoSSQC,			PF_cl_unproject,	310,	PF_NoMenu, D("vector (vector v)", "Transform a 2d screen-space point (with depth) into a 3d world-space point, according the various origin+angle+fov etc settings set via setproperty.")},// (EXT_CSQC)
 	{"project",			PF_NoSSQC,			PF_cl_project,		311,	PF_NoMenu, D("vector (vector v)", "Transform a 3d world-space point into a 2d screen-space point, according the various origin+angle+fov etc settings set via setproperty.")},// (EXT_CSQC)
 //	{"drawtextfield",	PF_NoSSQC,			PF_FullCSQCOnly,	0,		PF_NoMenu, D("void(vector pos, vector size, float alignflags, string text)", "Draws a multi-line block of text, including word wrapping and alignment. alignflags bits are RTLB, typically 3.")},// (EXT_CSQC)
-//	{"drawline",		PF_NoSSQC,			PF_FullCSQCOnly,	315,	PF_NoMenu, D("void(float width, vector pos1, vector pos2, vector rgb, float alpha, optional float drawflag)", "Draws a 2d line between the two 2d points.")},// (EXT_CSQC)
+	{"drawline",		PF_NoSSQC,			PF_cl_drawline,	315,	PF_cl_drawline,466, D("void(float width, vector pos1, vector pos2, vector rgb, float alpha, optional float drawflag)", "Draws a 2d line between the two 2d points. Width is ignored, as in FTE; lines are one physical pixel wide.")},// (EXT_CSQC)
 	{"iscachedpic",		PF_NoSSQC,			PF_cl_iscachedpic,	316,	PF_cl_iscachedpic,451,		D("float(string name)", "Checks to see if the image is currently loaded. Engines might lie, or cache between maps.")},// (EXT_CSQC)
 	{"precache_pic",	PF_NoSSQC,			PF_cl_precachepic,	317,	PF_cl_precachepic,452,		D("string(string name, optional float flags)", "Forces the engine to load the named image. If trywad is specified, the specified name must any lack path and extension.")},// (EXT_CSQC)
 //	{"r_uploadimage",	PF_NoSSQC,			PF_FullCSQCOnly,	0,		PF_NoMenu, D("void(string imagename, int width, int height, int *pixeldata)", "Updates a texture with the specified rgba data. Will be created if needed.")},
@@ -9845,12 +10014,12 @@ static struct
         D("float(vector position, vector size, vector rgb, float alpha, float radius, optional float cornermask, optional float feather)", "Draws a rounded rectangle using QSS-M's antialiased fill renderer. Declare as #0 and detect with checkbuiltin. Position, size, radius and feather use virtual HUD/menu units. Negative radius selects 25% of the shortest side; oversized radii clamp to half the shortest side. Corner bits: TL=1, TR=2, BR=4, BL=8; omitted or zero rounds all corners. Feather defaults to one physical pixel. RGB/alpha clamp to 0..1. Returns 1 when drawn, 0 for empty/transparent boxes, nonfinite arguments, or invalid corner mask/feather. Preserves the QC clipping region and blended drawing state.")},
 	{"drawsetcliparea",	PF_NoSSQC,			PF_cl_drawsetclip,	324,	PF_cl_drawsetclip,458,		D("void(float x, float y, float width, float height)", "Specifies a 2d clipping region (aka: scissor test). 2d draw calls will all be clipped to this 2d box, the area outside will not be modified by any 2d draw call (even 2d polygons).")},// (EXT_CSQC_???)
 	{"drawresetcliparea",PF_NoSSQC,			PF_cl_drawresetclip,325,	PF_cl_drawresetclip,459,	D("void(void)", "Reverts the scissor/clip area to the whole screen.")},// (EXT_CSQC_???)
-	{"drawstring",		PF_NoSSQC,			PF_cl_drawstring,	326,	PF_cl_drawstring,467,		D("float(vector position, string text, vector size, vector rgb, float alpha, float drawflag)", "Draws a string, interpreting markup and recolouring as appropriate.")},// #326
+	{"drawstring",		PF_NoSSQC,			PF_cl_drawstring,	326,	PF_cl_drawstring,467,		D("float(vector position, string text, vector size, vector rgb, float alpha, optional float drawflag)", "Draws a string, interpreting markup and recolouring as appropriate.")},// #326
 	{"stringwidth",		PF_NoSSQC,			PF_cl_stringwidth,	327,	PF_cl_stringwidth,468,		D("float(string text, float usecolours, vector fontsize='8 8')", "Calculates the width of the screen in virtual pixels. If usecolours is 1, markup that does not affect the string width will be ignored. Will always be decoded as UTF-8 if UTF-8 is globally enabled.\nIf the char size is not specified, '8 8 0' will be assumed.")},// EXT_CSQC_'DARKPLACES'
 	{"drawsubpic",		PF_NoSSQC,			PF_cl_drawsubpic,	328,	PF_cl_drawsubpic,469,		D("void(vector pos, vector sz, string pic, vector srcpos, vector srcsz, vector rgb, float alpha, optional float drawflag)", "Draws a rescaled subsection of an image to the screen.")},// #328 EXT_CSQC_'DARKPLACES'
 	{"drawsubpic_legacy",PF_NoSSQC,			PF_NoCSQC,			0,	PF_cl_drawsubpic,369, D("void(vector pos, vector sz, string pic, vector srcpos, vector srcsz, vector rgb, float alpha, optional float drawflag)", "alias. superseded qss menuqc slot, kept bound for existing bytecode")},
 	{"drawrotpic",		PF_NoSSQC,			PF_cl_drawrotpic,	0,		PF_cl_drawrotpic,0,		D("void(vector pivot, vector mins, vector maxs, string pic, vector rgb, float alpha, float angle)", "Draws an image rotating at the pivot. To rotate in the center, use mins+maxs of half the size with mins negated. Angle is in degrees.")},
-	{"drawrotsubpic",	PF_NoSSQC,			PF_cl_drawrotsubpic,	0,		PF_cl_drawrotsubpic,0,	D("void(vector pivot, vector mins, vector maxs, string pic, vector txmin, vector txsize, vector rgb, vector alphaandangles)", "Draws a rotating subsection of an image. Positions follow drawrotpic, texture coordinates follow drawsubpic, and alphaandangles contains alpha, angle, and a draw flag that is currently ignored.")},
+	{"drawrotsubpic",	PF_NoSSQC,			PF_cl_drawrotsubpic,	0,		PF_cl_drawrotsubpic,0,	D("void(vector pivot, vector mins, vector maxs, string pic, vector txmin, vector txsize, vector rgb, vector alphaandangles)", "Draws a rotating subsection of an image. Positions follow drawrotpic, texture coordinates follow drawsubpic, and alphaandangles contains alpha, angle, and a draw flag (0 normal, 1 additive).")},
 	{"getstati",		PF_NoSSQC,			PF_cl_getstat_int,	330,	PF_NoMenu, D("#define getstati_punf(stnum) (float)(__variant)getstati(stnum)\nint(float stnum)", "Retrieves the numerical value of the given EV_INTEGER or EV_ENTITY stat. Use getstati_punf if you wish to type-pun a float stat as an int to avoid truncation issues with DP's network protocol.")},// (EXT_CSQC)
 	{"getstatf",		PF_NoSSQC,			PF_cl_getstat_float,331,	PF_NoMenu, D("#define getstatbits getstatf\nfloat(float stnum, optional float firstbit, optional float bitcount)", "Retrieves the numerical value of the given EV_FLOAT stat. If firstbit and bitcount are specified, retrieves the upper bits of the STAT_ITEMS stat (converted into a float, so there are no VM dependancies).")},// (EXT_CSQC)
 	{"getstats",		PF_NoSSQC,			PF_cl_getstat_string,332,	PF_NoMenu, D("string(float stnum)", "Retrieves the value of the given EV_STRING stat, as a tempstring.\nString stats use a separate pool of stats from numeric ones.\n")},
@@ -9883,7 +10052,7 @@ static struct
 	{"wasfreed",		PF_WasFreed,		PF_WasFreed,		353,	PF_WasFreed,353, D("float(entity ent)", "Quickly check to see if the entity is currently free. This function is only valid during the two-second non-reuse window, after that it may give bad results. Try one second to make it more robust.")},//(EXT_CSQC) (should be availabe on server too)
 	{"serverkey",		PF_sv_serverkey_s,	PF_cl_serverkey_s,	354,	PF_cl_serverkey_s,354, D("string(string key)", "Look up a key in the server's public serverinfo string")},//
 	{"serverkeyfloat",	PF_sv_serverkey_f,	PF_cl_serverkey_f,	0,		PF_cl_serverkey_f,0, D("float(string key, optional float assumevalue)", "Version of serverkey that returns the value as a float (which avoids tempstrings).")},//
-	{"getentitytoken",	PF_NoSSQC,			PF_cs_getentitytoken,355,	PF_NoMenu, D("string(optional string resetstring)", "Grab the next token in the map's entity lump.\nIf resetstring is not specified, the next token will be returned with no other sideeffects.\nIf empty, will reset from the map before returning the first token, probably {.\nIf not empty, will tokenize from that string instead.\nAlways returns tempstrings.")},//;
+	{"getentitytoken",	PF_NoSSQC,			PF_cs_getentitytoken,355,	PF_NoMenu, D("string(optional string resetstring)", "Grab the next token in the map's entity lump.\nIf resetstring is not specified, the next token will be returned with no other sideeffects.\nIf empty, resets to the map entity lump and returns null.\nIf not empty, copies that string as the new input and returns null.\nAlways returns tempstrings.")},//;
 //	{"findfont",		PF_NoSSQC,			PF_FullCSQCOnly,	356,	PF_NoMenu, D("float(string s)", "Looks up a named font slot. Matches the actual font name as a last resort.")},//;
 	{"loadfont",		PF_NoSSQC,			PF_cl_loadfont,		357,	PF_NoMenu, D("float(string fontname, string fontmaps, string sizes, float slot, optional float fix_scale, optional float fix_voffset)", "Loads a 16-by-16 bitmap font atlas into one of 32 CSQC font slots and returns its drawfont handle. Automatic allocation skips reserved slot 0, but an explicit slot 0 is supported. TrueType fonts are not supported.")},
 	{"sendevent",		PF_NoSSQC,			PF_cl_sendevent,	359,	PF_NoMenu, D("void(string evname, string evargs, ...)", "Invoke Cmd_evname_evargs in ssqc. evargs must be a string of initials refering to the types of the arguments to pass. v=vector, e=entity(.entnum field is sent), f=float, i=int. 6 arguments max - you can get more if you pack your floats into vectors.")},// (EXT_CSQC_1)
@@ -10044,7 +10213,7 @@ static struct
 	{"soundlength",		PF_NoSSQC,			PF_cl_soundlength,	534,	PF_cl_soundlength,534, D("float(string sample)", "Provides a way to query the duration of a sound sample, allowing you to set up a timer to chain samples.")},
 	{"buf_loadfile",	PF_buf_loadfile,	PF_buf_loadfile,	535,	PF_buf_loadfile,535, D("float(string filename, strbuf bufhandle)", "Appends the named file into a string buffer (which must have been created in advance). The return value merely says whether the file was readable.")},
 	{"buf_writefile",	PF_buf_writefile,	PF_buf_writefile,	536,	PF_buf_writefile,536, D("float(filestream filehandle, strbuf bufhandle, optional float startpos, optional float numstrings)", "Writes the contents of a string buffer onto the end of the supplied filehandle (you must have already used fopen). Additional optional arguments permit you to constrain the writes to a subsection of the stringbuffer.")},
-	//{"bufstr_find",	PF_bufstr_find,		PF_bufstr_find,		537,	PF_bufstr_find,537, D("float(strbuf bufhandle, string match, float matchtype=5, optional float firstidx=0, optional float step=1)", "Finds the first occurence of the requested string, returning its index (or -1).")},
+	{"bufstr_find",	PF_bufstr_find,		PF_bufstr_find,		537,	PF_bufstr_find,537, D("const float MATCH_AUTO=0, MATCH_EXACT=1, MATCH_LEFT=2, MATCH_RIGHT=3, MATCH_MIDDLE=4, MATCH_PATTERN=5;\nfloat(strbuf bufhandle, string match, optional float matchtype, optional float firstidx, optional float step)", "Finds the first matching string, returning its index (or -1). Defaults: MATCH_PATTERN, firstidx 0, step 1. Holes are skipped; step must be positive.")},
 
 	{"setkeydest",		PF_NoSSQC,			PF_NoCSQC,			601,	PF_m_setkeydest,601, D("void(float dest)", "Grab key focus")},
 	{"getkeydest",		PF_NoSSQC,			PF_NoCSQC,			602,	PF_m_getkeydest,602, D("float()", "Returns key focus")},
@@ -10502,7 +10671,12 @@ void PR_ShutdownExtensions(void)
 	PF_buf_shutdown();
 	tokenize_flush();
 	if (qcvm == &cl.qcvm)
+	{
+		free(csqcmapentitystring);
+		csqcmapentitystring = NULL;
+		csqcmapentitydata = NULL;
 		PR_ReloadPics(true);
+	}
 	if (qcvm == &cls.menu_qcvm)
 		PR_MenuModels_Clear();
 
