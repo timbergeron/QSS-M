@@ -2296,6 +2296,7 @@ static void GL_Init (void)
 	if (cls.state == ca_connected)
 		GL_EnsureGameShaders ();
 	GL_ClearBufferBindings ();
+	GL_ResetBufferNames ();
 	
 }
 

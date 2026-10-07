@@ -1695,8 +1695,8 @@ void GL_BuildBModelVertexBuffer (void)
 
 	GL_DeleteBuffersFunc (1, &gl_bmodel_vbo);
 	GL_DeleteBuffersFunc (1, &gl_bmodel_lmbounds_vbo);
-	GL_GenBuffersFunc (1, &gl_bmodel_vbo);
-	GL_GenBuffersFunc (1, &gl_bmodel_lmbounds_vbo);
+	gl_bmodel_vbo = GL_GenBufferName ();
+	gl_bmodel_lmbounds_vbo = GL_GenBufferName ();
 
 // count all verts in all models
 	numverts = 0;

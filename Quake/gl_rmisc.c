@@ -1187,6 +1187,46 @@ void GL_BindBuffer (GLenum target, GLuint buffer)
 
 /*
 ====================
+GL_GenBufferName
+
+glGenBuffers returns values, so a threaded driver must stop and catch up with
+its worker. Level loads take names from a pool generated in bulk, which
+GL_ResetBufferNames refills for each new context.
+====================
+*/
+static GLuint	gl_buffernames[256];
+static int		gl_numbuffernames;
+static void		*gl_buffernames_context;	// the context the pooled names belong to
+
+GLuint GL_GenBufferName (void)
+{
+	if (!gl_numbuffernames)
+	{
+		GL_GenBuffersFunc (countof(gl_buffernames), gl_buffernames);
+		gl_numbuffernames = countof(gl_buffernames);
+		gl_buffernames_context = SDL_GL_GetCurrentContext ();
+	}
+	return gl_buffernames[--gl_numbuffernames];
+}
+
+// vid_restart usually keeps the context, and its pooled names with it; only a
+// new context invalidates them (they can't be deleted there: the same numbers
+// may already name live objects).
+void GL_ResetBufferNames (void)
+{
+	if (gl_numbuffernames && gl_buffernames_context == SDL_GL_GetCurrentContext ())
+		return;
+	gl_numbuffernames = 0;
+	if (gl_vbo_able)
+	{
+		GL_GenBuffersFunc (countof(gl_buffernames), gl_buffernames);
+		gl_numbuffernames = countof(gl_buffernames);
+		gl_buffernames_context = SDL_GL_GetCurrentContext ();
+	}
+}
+
+/*
+====================
 GL_ClearBufferBindings
 
 This must be called if you do anything that could make the cached bindings

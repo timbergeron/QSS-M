@@ -399,13 +399,13 @@ void GLMesh_LoadVertexBuffer (qmodel_t *m, aliashdr_t *mainhdr)
 	{
 		// upload indexes buffer
 		GL_DeleteBuffersFunc (1, &m->meshindexesvbo);
-		GL_GenBuffersFunc (1, &m->meshindexesvbo);
+		m->meshindexesvbo = GL_GenBufferName ();
 		GL_BindBufferFunc (GL_ELEMENT_ARRAY_BUFFER, m->meshindexesvbo);
 		GL_BufferDataFunc (GL_ELEMENT_ARRAY_BUFFER, (GLsizeiptr)GLMesh_CheckedSize (numindexes, sizeof (unsigned short), "GLMesh_LoadVertexBuffer"), ebodata, GL_STATIC_DRAW);
 
 		// upload vertexes buffer
 		GL_DeleteBuffersFunc (1, &m->meshvbo);
-		GL_GenBuffersFunc (1, &m->meshvbo);
+		m->meshvbo = GL_GenBufferName ();
 		GL_BindBufferFunc (GL_ARRAY_BUFFER, m->meshvbo);
 		GL_BufferDataFunc (GL_ARRAY_BUFFER, (GLsizeiptr)totalvbosize, vbodata, GL_STATIC_DRAW);
 

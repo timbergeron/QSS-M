@@ -721,6 +721,8 @@ extern byte *skipsubmodels;
 
 void GL_BindBuffer (GLenum target, GLuint buffer);
 void GL_ClearBufferBindings (void);
+GLuint GL_GenBufferName (void);
+void GL_ResetBufferNames (void);
 
 void GLSLGamma_DeleteTexture (void);
 void GLSLGamma_BeginFrame (void);

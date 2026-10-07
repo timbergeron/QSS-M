@@ -1251,10 +1251,10 @@ qboolean TexMgr_GetItemColor (gltexture_t *texture, vec3_t color)
 
 /*
 ================
-TexMgr_NewTexture
+TexMgr_AllocTexture -- a texture record without a GL name
 ================
 */
-gltexture_t *TexMgr_NewTexture (void)
+static gltexture_t *TexMgr_AllocTexture (void)
 {
 	gltexture_t *glt;
 
@@ -1277,8 +1277,31 @@ gltexture_t *TexMgr_NewTexture (void)
 	glt->next = active_gltextures;
 	active_gltextures = glt;
 
-	glGenTextures(1, &glt->texnum);
 	numgltextures++;
+	return glt;
+}
+
+/* glGenTextures returns values, so a threaded driver must stop and catch up
+ * with its worker. Level loads take names from a pool generated in bulk. */
+static GLuint	texmgr_names[1024];
+static int		texmgr_numnames;
+static void		*texmgr_names_context;	// the context the pooled names belong to
+
+static GLuint TexMgr_GenName (void)
+{
+	if (!texmgr_numnames)
+	{
+		glGenTextures (countof(texmgr_names), texmgr_names);
+		texmgr_numnames = countof(texmgr_names);
+		texmgr_names_context = SDL_GL_GetCurrentContext ();
+	}
+	return texmgr_names[--texmgr_numnames];
+}
+
+gltexture_t *TexMgr_NewTexture (void)
+{
+	gltexture_t *glt = TexMgr_AllocTexture ();
+	glt->texnum = TexMgr_GenName ();
 	return glt;
 }
 
@@ -3291,11 +3314,10 @@ static const char *TexPrep_StatusName (texprep_status_t status)
 	}
 }
 
-static gltexture_t *TexPrep_Commit (const texprep_jobstate_t *state)
+static gltexture_t *TexPrep_Commit (const texprep_jobstate_t *state, gltexture_t *glt)
 {
 	const texmgr_loadjob_t *job = state->job;
 	const texprep_result_t *result = &state->result;
-	gltexture_t *glt = TexMgr_NewTexture ();
 	unsigned int level;
 	int internalformat;
 
@@ -3328,6 +3350,13 @@ static gltexture_t *TexPrep_Commit (const texprep_jobstate_t *state)
 	}
 	TexMgr_SetFilterModes (glt);
 	return glt;
+}
+
+static void TexPrep_CommitBatch (texprep_jobstate_t *states, texmgr_loadjob_t *jobs, size_t count)
+{
+	size_t i;
+	for (i = 0; i < count; i++)
+		*jobs[i].destination = TexPrep_Commit (&states[i], TexMgr_NewTexture ());
 }
 
 void TexMgr_LoadImageBatch (texmgr_loadjob_t *jobs, size_t count)
@@ -3396,11 +3425,7 @@ void TexMgr_LoadImageBatch (texmgr_loadjob_t *jobs, size_t count)
 		}
 	}
 
-	for (i = 0; i < count; i++)
-	{
-		gltexture_t *loaded = TexPrep_Commit (&states[i]);
-		*jobs[i].destination = loaded;
-	}
+	TexPrep_CommitBatch (states, jobs, count);
 	committed = profile ? Sys_DoubleTime () : 0;
 
 	if (profile)
@@ -3734,6 +3759,8 @@ void TexMgr_ReloadImages (void)
 
 	TexMgr_ColormapTexture_Free(NULL);	//just flush colourmapped cache instead of reloading them all unecessarily.
 	GL_ClearBindings ();
+	if (texmgr_names_context != SDL_GL_GetCurrentContext ())
+		texmgr_numnames = 0;	// pooled names belonged to the old context
 
 	for (glt = active_gltextures; glt; glt = glt->next)
 	{
