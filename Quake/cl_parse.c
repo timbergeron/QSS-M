@@ -1711,6 +1711,19 @@ static void CL_ParseServerInfo_Load (void)
 		CL_PrintWrongGameDirWarning();
 
 	S_Voip_MapChange();
+
+	/* A demo can't download anything, so load its precaches now, inside the
+	 * serverinfo frame, as vanilla Quake does; otherwise the deferred loading
+	 * lands in the first timed timedemo frames. A sky fetch or transfer that
+	 * starts here leaves the rest to the usual per-frame path. */
+	if (cls.demoplayback)
+	{
+		extern qboolean curl_download_active;
+		int tries;
+		for (tries = 0; tries < 4 && !CL_CheckDownloads (); tries++)
+			if (cls.download.active || curl_download_active || Sky_AsyncDownload_IsActive ())
+				break;
+	}
 	CL_ConnectTimingMark ("serverinfo parsed");
 }
 
