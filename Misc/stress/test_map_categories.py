@@ -72,6 +72,8 @@ int Sys_FileType(const char *path) {
     struct stat st;
     return !stat(path, &st) && S_ISREG(st.st_mode) ? FS_ENT_FILE : FS_ENT_NONE;
 }
+// Outside a level load the directory cache just asks the OS.
+static int COM_FileTypeForSearch(const char *path) { return Sys_FileType(path); }
 // Source queries must not open or decompress files.
 qofs_t Sys_FileOpenRead(const char *path, int *handle) {
     (void)path; (void)handle; abort();
