@@ -3356,14 +3356,14 @@ static float R_GrassWeatherNoise (float x, float y, unsigned int salt)
 	return (n00 + (n10 - n00) * fx) * (1.0f - fy) + (n01 + (n11 - n01) * fx) * fy;
 }
 
-static void R_GrassWindBend (const grass_wind_t *wind, const vec3_t pos, float height, float movement, unsigned int seed, vec3_t bend)
+static float R_GrassWindBend (const grass_wind_t *wind, const vec3_t pos, float height, float movement, unsigned int seed, vec3_t bend)
 {
 	float time, veer, cv, sv, dir[2], gust, rnd, stiffness, rate, lean, flutter, flutterside, scale, len2;
 
 	if (movement <= 0.0f)
 	{
 		bend[0] = bend[1] = bend[2] = 0.0f;
-		return;
+		return 0.0f;
 	}
 
 	time = R_GrassAnimTime();
@@ -3396,6 +3396,34 @@ static void R_GrassWindBend (const grass_wind_t *wind, const vec3_t pos, float h
 	// swing the tip on an arc so blades keep their length instead of stretching
 	len2 = bend[0] * bend[0] + bend[1] * bend[1];
 	bend[2] = -(height - sqrtf(q_max(height * height - len2, height * height * 0.25f)));
+	return gust;
+}
+
+/*
+How much of a blade to draw: blades grow out of the turf across the LOD
+thinning threshold and sink back in toward the draw distance, so neither
+cutoff pops. Mirrors the static path in the grass vertex shader. The shader
+modes sink over the band their old alpha fade covered; fixed-function blades
+never faded, so they keep their reach and only sink over the last quarter.
+*/
+static float R_GrassBladeGrow (float lodchance, float lodrand, const vec3_t pos, const vec3_t vieworg, const grass_lod_params_t *lodparams, qboolean shader)
+{
+	float fadestart = shader ? 0.55f : 0.75f;
+	float fadeend = shader ? 0.85f : 1.0f;
+	float grow, d, f;
+	vec3_t delta;
+
+	grow = 1.0f;
+	if (lodchance < 1.0f)
+		grow = CLAMP(0.0f, (lodchance - lodrand) / (0.35f * lodchance), 1.0f); // ramp scales with the chance so far blades aren't all stunted
+	if (grow > 0.0f && lodparams->use_dist)
+	{
+		VectorSubtract(pos, vieworg, delta);
+		d = sqrtf(DotProduct(delta, delta));
+		f = CLAMP(0.0f, (d - lodparams->dist * fadestart) / (lodparams->dist * (fadeend - fadestart)), 1.0f);
+		grow *= 1.0f - f * f * (3.0f - 2.0f * f);
+	}
+	return grow;
 }
 
 static qboolean R_GrassPointInTriangle2D (float pu, float pv, float au, float av, float bu, float bv, float cu, float cv, float invdenom, float *ba, float *bb, float *bc)
@@ -4165,7 +4193,7 @@ static void R_GrassBladeLeanDir (float packedlean, const vec3_t tangent, const v
 	leandir[2] = tangent[2] * ca + bitangent[2] * sa;
 }
 
-static void R_DrawGrassBlade (const vec3_t base, const vec3_t normal, const vec3_t side, const vec3_t leandir, float packedlean, const vec3_t bend, float height, float width, float shade, float seed, float curl, const vec3_t basecolor, const vec3_t tipcolor, qboolean simple)
+static void R_DrawGrassBlade (const vec3_t base, const vec3_t normal, const vec3_t side, const vec3_t leandir, float packedlean, const vec3_t bend, float sheen, float height, float width, float shade, float seed, float curl, const vec3_t basecolor, const vec3_t tipcolor, qboolean simple)
 {
 	const float *levels;
 	int segs, k;
@@ -4180,7 +4208,7 @@ static void R_DrawGrassBlade (const vec3_t base, const vec3_t normal, const vec3
 	lean = packedlean - floorf(packedlean);
 	for (k = 0; k <= segs; k++)
 	{
-		float t, lt, w, blend;
+		float t, lt, w, blend, windt;
 		vec3_t center;
 
 		t = levels[k];
@@ -4192,7 +4220,8 @@ static void R_DrawGrassBlade (const vec3_t base, const vec3_t normal, const vec3
 			VectorMA(center, height * curl * 0.16f * t * t, side, center);
 			VectorMA(center, -height * curl * 0.08f * t * t, normal, center);
 		}
-		VectorMA(center, t * (0.2f + 0.8f * t), bend, center);
+		windt = t * (0.2f + 0.8f * t);
+		VectorMA(center, windt, bend, center);
 
 		w = width * R_GrassBladeWidthProfile(t);
 		VectorMA(center, w, side, left[k]);
@@ -4201,6 +4230,9 @@ static void R_DrawGrassBlade (const vec3_t base, const vec3_t normal, const vec3
 		color[k][0] = (basecolor[0] + (tipcolor[0] - basecolor[0]) * blend) * shade;
 		color[k][1] = (basecolor[1] + (tipcolor[1] - basecolor[1]) * blend) * shade;
 		color[k][2] = (basecolor[2] + (tipcolor[2] - basecolor[2]) * blend) * shade;
+		color[k][0] *= 1.0f + 0.24f * sheen * windt; // same gust sheen as the grass fragment shader
+		color[k][1] *= 1.0f + 0.22f * sheen * windt;
+		color[k][2] *= 1.0f + 0.12f * sheen * windt;
 		tc[k] = t * 2.0f - 1.0f;
 	}
 
@@ -4510,7 +4542,7 @@ static void R_DrawGrassSurfaceBlades (qmodel_t *model, const entity_t *ent, cons
 	{
 		const grass_cached_blade_t *blade;
 		unsigned int seed, bladebits;
-		float lodscale, lodchance, height, width, shade, widthrand, shaderand, anglerand, curlrand, curl, packedlean;
+		float lodscale, lodchance, grow, height, width, shade, widthrand, shaderand, anglerand, curlrand, curl, packedlean;
 		vec3_t base, light, variedbasecolor, variedtipcolor, litbasecolor, littipcolor, leandir;
 		qboolean cheaplight;
 
@@ -4524,7 +4556,10 @@ static void R_DrawGrassSurfaceBlades (qmodel_t *model, const entity_t *ent, cons
 
 		lodscale = R_GrassPointDensityScale(blade->pos, vieworg, lodparams);
 		lodchance = lodscale * cellweight;
-		if (lodchance <= 0.0f || (lodchance < 1.0f && R_GrassBitsToFloat(blade->lodbits) > lodchance))
+		if (lodchance <= 0.0f)
+			continue;
+		grow = R_GrassBladeGrow(lodchance, R_GrassBitsToFloat(blade->lodbits), blade->pos, vieworg, lodparams, mode == GRASS_BLADE_MODE_SHADER);
+		if (grow <= 0.0f)
 			continue;
 		cheaplight = (lodscale < 0.5f);
 
@@ -4535,7 +4570,8 @@ static void R_DrawGrassSurfaceBlades (qmodel_t *model, const entity_t *ent, cons
 		shaderand = (float)((bladebits >> 8) & 0xffU) * (1.0f / 255.0f);
 		anglerand = (float)((bladebits >> 16) & 0xffffU) * (1.0f / 65535.0f);
 		height = baseheight * blade->heightscale;
-		width = CLAMP(0.25f, height * (0.018f + widthrand * 0.020f), 0.80f);
+		width = CLAMP(0.25f, height * (0.018f + widthrand * 0.020f), 0.80f) * grow;
+		height *= grow;
 		shade = 0.75f + shaderand * 0.45f;
 		curlrand = (float)((blade->colorbits >> 24) & 0xffU) * (1.0f / 255.0f);
 		curl = curlrand > 0.90f ? 0.45f + (curlrand - 0.90f) * (0.55f / 0.10f) : 0.0f;
@@ -4553,12 +4589,13 @@ static void R_DrawGrassSurfaceBlades (qmodel_t *model, const entity_t *ent, cons
 		if (mode == GRASS_BLADE_MODE_SHADER)
 		{
 			R_GrassShaderSideForPoint(vieworg, base, normal, tangent, shader_side);
-			R_DrawGrassBlade(base, normal, shader_side, leandir, packedlean, shader_bend, height, width * 1.05f, shade, (float)(seed & 0xffffU) * (1.0f / 256.0f), curl, litbasecolor, littipcolor, cheaplight);
+			R_DrawGrassBlade(base, normal, shader_side, leandir, packedlean, shader_bend, 0.0f, height, width * 1.05f, shade, (float)(seed & 0xffffU) * (1.0f / 256.0f), curl, litbasecolor, littipcolor, cheaplight);
 		}
 		else
 		{
 			float angle, ca, sa;
 			vec3_t side, bend;
+			float gust;
 
 			angle = anglerand * M_PI * 2.0f;
 			ca = cosf(angle);
@@ -4566,9 +4603,9 @@ static void R_DrawGrassSurfaceBlades (qmodel_t *model, const entity_t *ent, cons
 			side[0] = tangent[0] * ca + bitangent[0] * sa;
 			side[1] = tangent[1] * ca + bitangent[1] * sa;
 			side[2] = tangent[2] * ca + bitangent[2] * sa;
-			R_GrassWindBend(wind, blade->pos, height, movement, seed, bend);
+			gust = R_GrassWindBend(wind, blade->pos, height, movement, seed, bend);
 
-			R_DrawGrassBlade(base, normal, side, leandir, packedlean, bend, height, width, shade, (float)(seed & 0xffffU) * (1.0f / 256.0f), curl, litbasecolor, littipcolor, cheaplight);
+			R_DrawGrassBlade(base, normal, side, leandir, packedlean, bend, gust, height, width, shade, (float)(seed & 0xffffU) * (1.0f / 256.0f), curl, litbasecolor, littipcolor, cheaplight);
 			if (!cheaplight)
 			{
 				vec3_t side2, leandir2;
@@ -4579,7 +4616,7 @@ static void R_DrawGrassSurfaceBlades (qmodel_t *model, const entity_t *ent, cons
 				side2[2] = -tangent[2] * sa + bitangent[2] * ca;
 				packedlean2 = R_GrassBladeRestLean(seed + 113U);
 				R_GrassBladeLeanDir(packedlean2, tangent, bitangent, leandir2);
-				R_DrawGrassBlade(base, normal, side2, leandir2, packedlean2, bend, height * 0.92f, width * 0.72f, shade * 0.9f, (float)((seed + 113U) & 0xffffU) * (1.0f / 256.0f), curl * 0.75f, litbasecolor, littipcolor, false);
+				R_DrawGrassBlade(base, normal, side2, leandir2, packedlean2, bend, gust, height * 0.92f, width * 0.72f, shade * 0.9f, (float)((seed + 113U) & 0xffffU) * (1.0f / 256.0f), curl * 0.75f, litbasecolor, littipcolor, false);
 			}
 		}
 	}
@@ -4772,6 +4809,7 @@ static void GLGrass_CreateShaders (void)
 		"varying vec4 BladeColor;\n"
 		"varying float BladeCull;\n"
 		"varying vec3 BladeDynLight;\n"
+		"varying float BladeSheen;\n"
 		"varying float FogFragCoord;\n"
 		"\n"
 		"vec3 GrassSafeNormalize(vec3 v, vec3 fallback)\n"
@@ -4840,9 +4878,19 @@ static void GLGrass_CreateShaders (void)
 		"	if (GrassStaticMode != 0)\n"
 		"	{\n"
 		"		vec4 geom = gl_MultiTexCoord1;\n"
+		// blades grow out of / sink into the turf across the thinning and
+		// distance cutoffs instead of popping (R_GrassBladeGrow on the CPU)
 		"		float lodchance = GrassStaticDensityScale(vertex.xyz) * GrassStaticCellWeight;\n"
-		"		if (lodchance <= 0.0 || (lodchance < 1.0 && geom.z > lodchance))\n"
+		"		float grow = 1.0;\n"
+		"		if (lodchance <= 0.0)\n"
+		"			grow = 0.0;\n"
+		"		else if (lodchance < 1.0)\n"
+		"			grow = clamp((lodchance - geom.z) / (0.35 * lodchance), 0.0, 1.0);\n"
+		"		if (GrassFadeDist > 0.0)\n"
+		"			grow *= 1.0 - smoothstep(GrassFadeDist * 0.55, GrassFadeDist * 0.85, distance(vertex.xyz, GrassEyePos));\n"
+		"		if (grow <= 0.0)\n"
 		"			bladeCull = 0.0;\n"
+		"		geom.xy *= grow;\n"
 		"		vec3 normal = GrassSafeNormalize(GrassStaticNormal, vec3(0.0, 0.0, 1.0));\n"
 		"		up = normal;\n"
 		"		bladeHeight = geom.x;\n"
@@ -4875,6 +4923,7 @@ static void GLGrass_CreateShaders (void)
 		"				dynLight += (add * (1.0 / 128.0)) * GrassDLightColorMin[li].xyz;\n"
 		"		}\n"
 		"	}\n"
+		"	float sheen = 0.0;\n"
 		"	if (GrassMovement > 0.0 && bend > 0.0)\n"
 		"	{\n"
 		// mirrors R_GrassWindBend: local veer around the prevailing wind,
@@ -4895,6 +4944,7 @@ static void GLGrass_CreateShaders (void)
 		"		float flutterSide = (0.008 + 0.025 * gust) * sin(mod(GrassTime * rate * 1.37, 6.28318) + rnd * 12.56637);\n"
 		"		vec2 sway = (dir * (lean + flutter) + vec2(-dir.y, dir.x) * flutterSide) * (bladeHeight * GrassMovement * bend);\n"
 		"		vertex.xy += sway;\n"
+		"		sheen = gust * bend;\n"
 		// swing on an arc so the blade keeps its length instead of stretching
 		"		float h = bladeHeight * bend;\n"
 		"		vertex.xyz -= up * (h - sqrt(max(h * h - dot(sway, sway), h * h * 0.25)));\n"
@@ -4903,6 +4953,7 @@ static void GLGrass_CreateShaders (void)
 		"	BladeColor = gl_Color;\n"
 		"	BladeCull = bladeCull;\n"
 		"	BladeDynLight = dynLight;\n"
+		"	BladeSheen = sheen;\n"
 		"	gl_Position = gl_ModelViewProjectionMatrix * vertex;\n"
 		"	FogFragCoord = gl_Position.w;\n"
 		"}\n";
@@ -4919,6 +4970,7 @@ static void GLGrass_CreateShaders (void)
 		"varying vec4 BladeColor;\n"
 		"varying float BladeCull;\n"
 		"varying vec3 BladeDynLight;\n"
+		"varying float BladeSheen;\n"
 		"varying float FogFragCoord;\n"
 		"\n"
 		"float FogFactor(float dist)\n"
@@ -4989,9 +5041,7 @@ static void GLGrass_CreateShaders (void)
 		"{\n"
 		"	float curl = clamp(BladeCoord.w, 0.0, 1.0);\n"
 		"	vec4 blade = GrassBlade(BladeCoord.xy, BladeCoord.z, curl);\n"
-		"	float alpha = GrassAmount * BladeCull;\n"
-		"	if (GrassFadeDist > 0.0)\n"
-		"		alpha *= 1.0 - smoothstep(GrassFadeDist * 0.55, GrassFadeDist * 0.85, FogFragCoord);\n"
+		"	float alpha = GrassAmount * BladeCull;\n" // distance fade is done by shrinking in the vertex shader
 		"	if (alpha < 0.12)\n"
 		"		discard;\n"
 		"	vec3 bladeTexture = GrassBladeTexture(BladeCoord.xy, BladeCoord.z, curl);\n"
@@ -5005,6 +5055,7 @@ static void GLGrass_CreateShaders (void)
 		"	float translucency = 1.0 + 0.14 * tipBlend * tipBlend * (1.0 - side);\n" // thin upper leaf passes light
 		"	colour *= sideShade * ao * translucency;\n"
 		"	colour *= 1.0 + BladeDynLight;\n"
+		"	colour *= 1.0 + vec3(0.24, 0.22, 0.12) * BladeSheen;\n" // bent blades catch the light, so gusts show as rolling bright bands
 		"\n"
 		"	colour += vec3(GrassDither());\n"
 		"	float fog = FogFactor(FogFragCoord);\n"
@@ -6097,7 +6148,7 @@ void GLWorld_CreateShaders (void)
 		"\n"
 		// texture-space take on the blade wind: gust bands roll across the
 		// surface, blades lean with them and flutter harder inside a gust
-		"float GrassFlow(vec2 p, float rnd)\n" // p in texture tiles, so both blade layers share one gust field
+		"float GrassFlow(vec2 p, float rnd, out float gustOut)\n" // p in texture tiles, so both blade layers share one gust field
 		"{\n"
 		"	float gustScale = max(GrassGustScale, 0.0);\n"
 		"	float freq = 0.6 * (0.5 + gustScale);\n"
@@ -6105,13 +6156,14 @@ void GLWorld_CreateShaders (void)
 		"	float gust = 0.7 * GrassWindNoise(p * freq - vec2(drift, drift * 0.3));\n"
 		"	gust += 0.3 * GrassWindNoise(p * (freq * 2.3) + vec2(31.0, 17.0) - vec2(mod(drift * 2.3, 256.0), mod(drift * 0.69, 256.0)));\n"
 		"	gust = smoothstep(0.36, 0.82, gust);\n"
+		"	gustOut = gust;\n"
 		"	float rate = 4.5 + 3.0 * rnd;\n"
 		"	float lean = (0.035 + 0.13 * gust) * (0.75 + 0.5 * fract(rnd * 7.31 + 0.27));\n"
 		"	float flutter = (0.008 + 0.035 * gust) * sin(mod(GrassTime * rate, 6.28318) + rnd * 6.28318);\n"
 		"	return lean + flutter;\n"
 		"}\n"
 		"\n"
-		"float GrassBlade(vec2 uv, vec2 scale, float seed)\n"
+		"float GrassBlade(vec2 uv, vec2 scale, float seed, inout float sheen)\n"
 		"{\n"
 		"	vec2 q = uv * scale + seed;\n"
 		"	vec2 cell = floor(q);\n"
@@ -6122,12 +6174,15 @@ void GLWorld_CreateShaders (void)
 		"	float width = 0.018 + 0.022 * GrassHash(cell + vec2(9.1, 2.4));\n"
 		"	float root = 0.20 + 0.60 * GrassHash(cell + vec2(12.5, 6.6) + seed);\n"
 		"	float tip = f.y * f.y;\n"
-		"	float wind = GrassFlow((cell + 0.5) / scale, rnd) * GrassMovement;\n"
+		"	float gust;\n"
+		"	float wind = GrassFlow((cell + 0.5) / scale, rnd, gust) * GrassMovement;\n"
 		"	float center = root + tip * (wind + (rnd - 0.5) * 0.18);\n"
 		"	float shape = 1.0 - smoothstep(0.0, width, abs(f.x - center));\n"
 		"	shape *= smoothstep(0.02, 0.18, f.y);\n"
 		"	shape *= 1.0 - smoothstep(height, height + 0.08, f.y);\n"
-		"	return shape * (0.65 + 0.35 * rnd);\n"
+		"	shape *= 0.65 + 0.35 * rnd;\n"
+		"	sheen = max(sheen, shape * gust * min(GrassMovement, 1.0) * tip);\n"
+		"	return shape;\n"
 		"}\n"
 		"\n"
 		"void main()\n"
@@ -6170,12 +6225,14 @@ void GLWorld_CreateShaders (void)
 		"		result.rgb *= 2.0;\n"
 		"	if (UseGrass && GrassAmount > 0.0)\n"
 		"	{\n"
-		"		float grass = GrassBlade(tc_tex.xy, vec2(48.0, 18.0), 0.0);\n"
-		"		grass += 0.65 * GrassBlade(tc_tex.xy + vec2(0.17, 0.41), vec2(72.0, 27.0), 19.7);\n"
+		"		float sheen = 0.0;\n"
+		"		float grass = GrassBlade(tc_tex.xy, vec2(48.0, 18.0), 0.0, sheen);\n"
+		"		grass += 0.65 * GrassBlade(tc_tex.xy + vec2(0.17, 0.41), vec2(72.0, 27.0), 19.7, sheen);\n"
 		"		grass = clamp(grass, 0.0, 1.0);\n"
 		"		float grassVar = GrassNoise(tc_tex.xy * 18.0 + GrassTime * 0.03);\n"
 		"		vec3 grassColor = mix(GrassBaseColor, GrassTipColor, grassVar);\n"
 		"		grassColor *= max(grassLightColor, vec3(0.05));\n"
+		"		grassColor *= 1.0 + vec3(0.30, 0.28, 0.15) * sheen;\n" // gust bands roll across as a lighter sheen
 		"		float grassAlpha = grass * GrassAmount * grassLightFactor;\n"
 		"		vec3 grassMix = mix(result.rgb * 0.65, grassColor, 0.75);\n"
 		"		result.rgb = mix(result.rgb, grassMix, grassAlpha);\n"
