@@ -70,7 +70,7 @@ macOS dependency handling is intentionally hybrid:
 |---|---|
 | GnuTLS, libtasn1, Nettle | Explicit versions and source hashes in `setup-vcpkg.sh`: GnuTLS 3.8.13, libtasn1 4.21.0, and Nettle 3.10.2. |
 | FLAC, Ogg, Opus, Opusfile, Vorbis, libmad, libxmp, zlib | Built from the ports supplied by the pinned vcpkg registry baseline. Their versions are not overridden locally. |
-| SDL3 | Checked-in universal `SDL3.framework` 3.4.16, copied unchanged from the official release DMG and linked and embedded by Xcode. |
+| SDL3 | Checked-in universal `SDL3.framework` 3.4.18, copied unchanged from the official release DMG and linked and embedded by Xcode. |
 | curl, libiconv, Apple frameworks | Supplied by the macOS SDK or operating system. |
 
 This differs from the Windows build, which vendors its codec DLLs and matching

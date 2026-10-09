@@ -1396,8 +1396,8 @@ static void IN_MouseInfo_f(void)
 }
 
 #if defined(_WIN32)
-/* Vendor/product exclusions from SDL 3.4.16's SDL_joystick.c:
- * https://github.com/libsdl-org/SDL/blob/release-3.4.16/src/joystick/SDL_joystick.c
+/* Vendor/product exclusions from SDL 3.4.18's SDL_joystick.c:
+ * https://github.com/libsdl-org/SDL/blob/release-3.4.18/src/joystick/SDL_joystick.c
  * Keep this data aligned with the bundled SDL when updating it. Custom filter
  * hints use SDL's ordinary enumeration so its parser and overrides still apply. */
 static qboolean IN_DirectInputIgnored (unsigned int id)
@@ -1416,7 +1416,7 @@ static qboolean IN_DirectInputIgnored (unsigned int id)
 		0x00282516u, 0x800804d9u, 0x800904d9u, 0xa29204d9u, 0xa29304d9u,
 		0xa13c04f2u, 0x018a0e6fu, 0x02661532u, 0x02821532u, 0x000220d6u,
 		0x006d256cu, 0x006e256cu, 0x01a226ceu, 0x19693297u, 0x01213434u,
-		0x02113434u, 0x02a03434u, 0x03533434u, 0xd0303434u,
+		0x01633434u, 0x02113434u, 0x02a03434u, 0x03533434u, 0xd0303434u,
 	};
 	static const unsigned int rog_mice[] = {
 		0x18e30b05u, 0x18e50b05u, 0x19060b05u, 0x19580b05u, 0x1a180b05u, 0x1a1a0b05u, 0x1a1c0b05u

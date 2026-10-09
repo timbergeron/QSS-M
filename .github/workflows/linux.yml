@@ -14,7 +14,7 @@ jobs:
       matrix:
         sdl:
           # The pin vendored for macOS and Windows; this job's artifact bundles it.
-          - { version: "3.4.16", commit: "fa2c02bb6e21974a89ea9824bc53c9932abe5f9c", package: true }
+          - { version: "3.4.18", commit: "829a65d769d935c4852f8159e964312c0957260a", package: true }
           # The supported minimum, compiled and linked only, to catch newer API use.
           - { version: "3.2.12", commit: "5ac37a8ffcf89da390404c1016833d56e2d67ae4", package: false }
 

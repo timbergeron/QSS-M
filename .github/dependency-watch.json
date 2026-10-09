@@ -1,10 +1,10 @@
 [
   {
     "name": "SDL3",
-    "vendored": "3.4.16",
+    "vendored": "3.4.18",
     "dlls": ["Windows/SDL3/lib/x86/SDL3.dll", "Windows/SDL3/lib/x64/SDL3.dll"],
     "packages": [
-      { "repository": "mingw64", "name": "mingw-w64-x86_64-sdl3", "baseline": "3.4.16-1" }
+      { "repository": "mingw64", "name": "mingw-w64-x86_64-sdl3", "baseline": "3.4.18-1" }
     ]
   },
   {
