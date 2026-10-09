@@ -55,7 +55,7 @@ i686-w64-mingw32-objdump   -p x86/libFLAC.dll | grep 'DLL Name'
 | libmpg123          | 1.33.7-1       | `mingw-w64-{x86_64,i686}-mpg123`           |
 | libogg             | 1.3.6          | `mingw-w64-{x86_64,i686}-libogg-1.3.6`     |
 | libwinpthread      | 14.0.0.r426.g4564ee4b5-1 | `mingw-w64-{x86_64,i686}-libwinpthread` |
-| libgcc (x86 only)  | gcc 16.2.0-3   | `mingw-w64-i686-gcc-libs`                  |
+| libgcc (x86 only)  | gcc 16.2.0-5   | `mingw-w64-i686-libgcc` (monitored as `gcc-libs`) |
 
 Package revisions are included above for the September and October 2026
 refreshes. Downloads were verified against the SHA-256 hashes in the MSYS2

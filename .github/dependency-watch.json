@@ -124,7 +124,7 @@
     "vendored": "16.2.0",
     "dlls": ["Windows/codecs/x86/libgcc_s_dw2-1.dll"],
     "packages": [
-      { "repository": "mingw32", "name": "mingw-w64-i686-gcc-libs", "baseline": "16.2.0-3" }
+      { "repository": "mingw32", "name": "mingw-w64-i686-gcc-libs", "baseline": "16.2.0-5" }
     ]
   }
 ]
