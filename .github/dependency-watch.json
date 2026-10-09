@@ -111,12 +111,12 @@
   },
   {
     "name": "winpthreads",
-    "vendored": "14.0.0.r375.g9c1abbbf5",
+    "vendored": "14.0.0.r426.g4564ee4b5",
     "cadence": "monthly",
     "dlls": ["Windows/codecs/x86/libwinpthread-1.dll", "Windows/codecs/x64/libwinpthread-1.dll"],
     "packages": [
-      { "repository": "mingw32", "name": "mingw-w64-i686-winpthreads", "baseline": "14.0.0.r375.g9c1abbbf5-1" },
-      { "repository": "mingw64", "name": "mingw-w64-x86_64-winpthreads", "baseline": "14.0.0.r375.g9c1abbbf5-1" }
+      { "repository": "mingw32", "name": "mingw-w64-i686-winpthreads", "baseline": "14.0.0.r426.g4564ee4b5-1" },
+      { "repository": "mingw64", "name": "mingw-w64-x86_64-winpthreads", "baseline": "14.0.0.r426.g4564ee4b5-1" }
     ]
   },
   {

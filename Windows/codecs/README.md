@@ -54,11 +54,12 @@ i686-w64-mingw32-objdump   -p x86/libFLAC.dll | grep 'DLL Name'
 | libmikmod          | 3.3.14         | MSYS2 x64 `3.3.14-1`; upstream source for x86 |
 | libmpg123          | 1.33.7-1       | `mingw-w64-{x86_64,i686}-mpg123`           |
 | libogg             | 1.3.6          | `mingw-w64-{x86_64,i686}-libogg-1.3.6`     |
-| libwinpthread      | 14.0.0.r375.g9c1abbbf5-1 | `mingw-w64-{x86_64,i686}-libwinpthread` |
+| libwinpthread      | 14.0.0.r426.g4564ee4b5-1 | `mingw-w64-{x86_64,i686}-libwinpthread` |
 | libgcc (x86 only)  | gcc 16.2.0-3   | `mingw-w64-i686-gcc-libs`                  |
 
-Package revisions are included above for the September 2026 refresh. Downloads
-were verified against the SHA-256 hashes in the MSYS2 repository indexes.
+Package revisions are included above for the September and October 2026
+refreshes. Downloads were verified against the SHA-256 hashes in the MSYS2
+repository indexes.
 The matching `winpthreads` package is the development package; the runtime DLL
 comes from `libwinpthread`. The monitor tracks their common source version.
 
@@ -100,8 +101,9 @@ The DLL imports `SHLWAPI.dll` (system) and, on x86, the shared
 The Windows import libraries (`libFLAC.dll.a` for MinGW, `libFLAC.lib` for MSVC)
 target `libFLAC.dll` and were generated with `dlltool` from the shipped DLL.
 Import libraries can be kept when the DLL name and required exported symbols
-remain ABI-compatible. Every updated DLL in the September 2026 refresh retains
-all previously exported names, so the existing import libraries were retained.
+remain ABI-compatible. Every updated DLL in the September and October 2026
+refreshes retains all previously exported names, so the existing import libraries
+were retained.
 The hand-patched opus headers, which
 use `<opus/...>` include paths to match the `-Iinclude` build flag, were also
 kept as-is.
