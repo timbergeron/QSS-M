@@ -51,7 +51,7 @@ i686-w64-mingw32-objdump   -p x86/libFLAC.dll | grep 'DLL Name'
 | libopusfile        | 0.12           | `mingw-w64-{x86_64,i686}-opusfile-0.12`    |
 | libvorbis          | 1.3.7-3        | `mingw-w64-{x86_64,i686}-libvorbis`        |
 | libxmp             | 4.7.4-1        | `mingw-w64-{x86_64,i686}-libxmp`           |
-| libmikmod          | 3.3.14         | MSYS2 x64 `3.3.14-1`; upstream source for x86 |
+| libmikmod          | 3.3.15         | MSYS2 x64 `3.3.15-1`; upstream source for x86 |
 | libmpg123          | 1.33.7-1       | `mingw-w64-{x86_64,i686}-mpg123`           |
 | libogg             | 1.3.6          | `mingw-w64-{x86_64,i686}-libogg-1.3.6`     |
 | libwinpthread      | 14.0.0.r426.g4564ee4b5-1 | `mingw-w64-{x86_64,i686}-libwinpthread` |
@@ -76,13 +76,13 @@ automatically). macOS also uses libxmp, built from its vcpkg baseline with the
 matching vcpkg header rather than a separate platform-specific copy.
 
 Note: libmikmod is disabled in the MinGW and macOS builds, where libxmp handles
-module playback. It remains enabled in the MSVC project. The Windows 3.3.14 DLL
+module playback. It remains enabled in the MSVC project. The Windows 3.3.15 DLL
 is built with DirectSound/WinMM/WASAPI output drivers, so
 it imports `dsound.dll` / `user32.dll` / `winmm.dll` / `ole32.dll` (system DLLs) — these
 are inert here: `snd_mikmod.c` registers only `drv_nos` and decodes via
 `VC_WriteBytes`. Version is header-driven (`LIBMIKMOD_VERSION_*` in
 `include/mikmod.h`). MSYS2 no longer publishes this package for x86, so that
-DLL is cross-compiled from the same upstream release with static libgcc; see
+DLL is built from the same upstream release with static libgcc; see
 [`include/mikmod_config.txt`](include/mikmod_config.txt) for the source checksum
 and build commands. Neither architecture needs a new runtime DLL.
 

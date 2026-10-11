@@ -44,10 +44,10 @@
   },
   {
     "name": "libmikmod",
-    "vendored": "3.3.14",
+    "vendored": "3.3.15",
     "dlls": ["Windows/codecs/x86/libmikmod-3.dll", "Windows/codecs/x64/libmikmod-3.dll"],
     "packages": [
-      { "repository": "mingw64", "name": "mingw-w64-x86_64-libmikmod", "baseline": "3.3.14-1" }
+      { "repository": "mingw64", "name": "mingw-w64-x86_64-libmikmod", "baseline": "3.3.15-1" }
     ]
   },
   {
