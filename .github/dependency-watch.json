@@ -102,11 +102,11 @@
   },
   {
     "name": "libxmp",
-    "vendored": "4.7.3",
+    "vendored": "4.7.4",
     "dlls": ["Windows/codecs/x86/libxmp.dll", "Windows/codecs/x64/libxmp.dll"],
     "packages": [
-      { "repository": "mingw32", "name": "mingw-w64-i686-libxmp", "baseline": "4.7.3-1" },
-      { "repository": "mingw64", "name": "mingw-w64-x86_64-libxmp", "baseline": "4.7.3-1" }
+      { "repository": "mingw32", "name": "mingw-w64-i686-libxmp", "baseline": "4.7.4-1" },
+      { "repository": "mingw64", "name": "mingw-w64-x86_64-libxmp", "baseline": "4.7.4-1" }
     ]
   },
   {

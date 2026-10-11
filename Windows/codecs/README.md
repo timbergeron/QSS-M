@@ -50,7 +50,7 @@ i686-w64-mingw32-objdump   -p x86/libFLAC.dll | grep 'DLL Name'
 | libopus            | 1.6.1          | `mingw-w64-{x86_64,i686}-opus-1.6.1`       |
 | libopusfile        | 0.12           | `mingw-w64-{x86_64,i686}-opusfile-0.12`    |
 | libvorbis          | 1.3.7-3        | `mingw-w64-{x86_64,i686}-libvorbis`        |
-| libxmp             | 4.7.3-1        | `mingw-w64-{x86_64,i686}-libxmp`           |
+| libxmp             | 4.7.4-1        | `mingw-w64-{x86_64,i686}-libxmp`           |
 | libmikmod          | 3.3.14         | MSYS2 x64 `3.3.14-1`; upstream source for x86 |
 | libmpg123          | 1.33.7-1       | `mingw-w64-{x86_64,i686}-mpg123`           |
 | libogg             | 1.3.6          | `mingw-w64-{x86_64,i686}-libogg-1.3.6`     |
@@ -68,7 +68,7 @@ same DLL FLAC needs, so no additional runtime file. `libopusfile.dll` needs
 `libogg-0.dll` + `libopus-0.dll`; it does **not** need `libopusurl-0.dll` (HTTP
 streaming is unused, so that DLL is intentionally not vendored).
 
-Note: the libxmp 4.7.3 packages import only Windows system libraries, including
+Note: the libxmp 4.7.4 packages import only Windows system libraries, including
 on x86. Earlier 4.7.x builds also imported `libgcc_s_dw2-1.dll`. Unlike opus,
 libxmp's version is reported from the `XMP_VERSION` macro in `include/xmp.h`, so
 that header **must** be refreshed alongside the DLL (host.c/menu.c pick it up
