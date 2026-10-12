@@ -23318,7 +23318,11 @@ static void M_Translate_Draw (void)
 	if (translatemenu.player_edit) { M_Translate_DrawPlayerCard(); return; }
 	M_Translate_RefreshPlayers();
 	M_Translate_RefreshSend();
-	Draw_String(TRANSLATE_LIST_X, 4, title);
+	if (!translatemenu.compose && !translatemenu.adding)
+		M_DrawCountHeader(TRANSLATE_LIST_X, 4, TRANSLATE_LIST_COLS, title,
+			translatemenu.count, "Player", "Players");
+	else
+		Draw_String(TRANSLATE_LIST_X, 4, title);
 	M_DrawQuakeBar(TRANSLATE_LIST_X - 8, 16, TRANSLATE_LIST_COLS + 2);
 	if (translatemenu.compose)
 	{
