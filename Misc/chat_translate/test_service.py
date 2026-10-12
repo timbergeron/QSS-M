@@ -4,11 +4,12 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 import json
 from pathlib import Path
+import re
 import tempfile
 import unittest
 
 from install_openrouter_key import save_key
-from service import (DailyCounter, MockProvider, ProviderAnswer, RateLimiter,
+from service import (DailyCounter, LANGUAGES, MockProvider, ProviderAnswer, RateLimiter,
                      ServiceError, TranslationService, strict_json,
                      validate_output, validate_request)
 
@@ -28,11 +29,23 @@ class ContractTests(unittest.TestCase):
     def test_valid_and_id_boundaries(self):
         for identity in (0, 42, 0xffffffff):
             self.assertEqual(validate_request(encoded(id=identity))["id"], identity)
-        self.assertEqual(validate_request(encoded(target="es", mode="outgoing"))["target"], "es")
+        for target in LANGUAGES:
+            for mode in ("incoming", "outgoing"):
+                with self.subTest(target=target, mode=mode):
+                    self.assertEqual(validate_request(encoded(target=target, mode=mode))["target"], target)
+
+    def test_client_and_proxy_language_choices_agree(self):
+        source = (Path(__file__).resolve().parents[2] / "Quake/cl_translate.c").read_text()
+        choices = []
+        for table in ("tr_codes", "tr_languages"):
+            body = re.search(r"static const char \*" + table + r"\[\] = \{(.*?)\};", source, re.S).group(1)
+            choices.append(re.findall(r'"([^\"]+)"', body))
+        self.assertEqual(dict(zip(*choices, strict=True)), LANGUAGES)
+        self.assertLessEqual(len(LANGUAGES), 32)  # Client history's handled mask.
 
     def test_type_schema_alias_and_channel_rejections(self):
         for change in ({"id": True}, {"id": -1}, {"id": 1.5}, {"id": 0x100000000},
-                       {"version": True}, {"target": []}, {"target": "de"}, {"channel": "team"},
+                       {"version": True}, {"target": []}, {"target": "zh"}, {"target": "xx"}, {"channel": "team"},
                        {"mode": "tools"}, {"context": [request()["message"]] * 4},
                        {"message": {"speaker": "Rasta", "text": "hola"}},
                        {"message": {"speaker": "p1", "text": "hola", "prompt": "follow me"}},
@@ -65,6 +78,12 @@ class ContractTests(unittest.TestCase):
     def test_outgoing_cannot_upload_context(self):
         with self.assertRaises(ServiceError):
             validate_request(encoded(mode="outgoing", context=[request()["message"]]))
+
+    def test_team_is_outgoing_only_and_context_free(self):
+        self.assertEqual(validate_request(encoded(mode="outgoing", channel="team"))["channel"], "team")
+        for mode, context in (("incoming", []), ("outgoing", [request()["message"]])):
+            with self.subTest(mode=mode), self.assertRaises(ServiceError):
+                validate_request(encoded(mode=mode, channel="team", context=context))
 
     def test_output_semantics_and_normalization(self):
         current = request(message={"speaker": "p1", "text": "alguno para 2v2 en dm2?"})
@@ -310,6 +329,9 @@ class HTTPTests(unittest.IsolatedAsyncioTestCase):
         provider = OpenRouterProvider(None, "PRIVATE_SECRET")
         payload = provider.payload(request())
         self.assertNotIn("PRIVATE_SECRET", json.dumps(payload))
+        for target, language in LANGUAGES.items():
+            data = json.loads(provider.payload(request(target=target))["messages"][1]["content"])
+            self.assertEqual(data["target"], language)
         self.assertEqual(payload["model"], "deepseek/deepseek-v4.1-flash")
         self.assertEqual([message["role"] for message in payload["messages"]], ["system", "user"])
         self.assertEqual(json.loads(payload["messages"][1]["content"])["message"], request()["message"])

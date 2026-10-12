@@ -7,24 +7,77 @@ the deterministic tests or mock service.
 
 ## Player commands
 
-Open **Options > Console > Chat Translation** to select players, choose reading
-and writing languages, or open the public-message composer. Enter or click a
-player to start/stop following them; arrows on player rows only navigate. The
-player list scrolls and shows each watch's actual target, including watches
-created in the console. Ignored or ambiguous names are visibly unavailable.
+Open **Options > Console > Chat Translation** to see whose chat you are translating
+including players added in the console. The menu follows the Bookmarks layout:
+a scrolling list of names, with the selected player's language centered in the
+tooltip below. The player list starts after a blank line below **Send Translated
+Message**. Each player has their own target: use left/right for a quick language
+change. Enter, clicking their row, or **e:edit** opens a Bookmarks-style card with
+their name, language, and **Remember by name** checkbox. **Accept Changes** applies
+both choices; Escape discards the edits. Use the footer's **backspace:remove** shortcut or press
+Delete on that player's row to stop translating them.
+**Add Translated Player(s)** opens a chooser containing only available players you have not
+added. Pick **Translate to**, then Enter or click a name to add it and return to
+the menu. **Remember by name** defaults to **No**. Choose **Yes** to save the
+player's language and restore translation when their full name appears in later
+games, including after restarting QSS-M. Matching is case-sensitive, ignores
+Quake name colors, and still excludes your own name, ignored players, and
+ambiguous names. Names identify the rule; they do not authenticate a person.
+Saved names remain in the main menu while disconnected or absent from the current
+server. Their language, Remember checkbox, and removal controls work offline;
+editing those preferences makes no translation request. Add Player and Send
+remain disabled outside multiplayer.
+Changing a saved player's language updates their rule. Removing the player
+forgets it. **Remove All** and `translate off` also forget all saved rules.
+Rules live in `id1/chat_translate_rules.txt` under the engine's user directory,
+independent of the current mod; configs, aliases, and server commands cannot
+create them.
+
+**@everyone (translate all players)** appears below the names after a blank line
+and adds all remaining eligible players with that language,
+preserving the targets of players already selected. This choice applies to new
+players only. With **Remember by name: Yes**, it saves those particular names;
+later arrivals are not automatically included. **Add Translated Player(s)** dims and becomes
+inactive when no eligible players are available. **Remove All** clears the selection.
+Both lists use the Bookmarks navigation: arrows, Home/End, Page Up/Down, mouse
+wheel, a draggable scrollbar, and typing a name's initial. Long selected names
+scroll within their row. Player names keep the scoreboard's original glyphs and
+per-character colors, with the same content filter. Self, ignored, ambiguous and
+unreadable names are omitted from the chooser.
+
+**Send Translated Message** opens the public-message composer, with its own
+**Translate to** language choice. It dims and becomes inactive outside a supported
+multiplayer game, including single-player games and demos. The empty message
+field shows a dimmed placeholder; entered text uses normal opacity.
+The list, chooser, and composer share the Bookmarks title and divider. Footer
+shortcuts add a player, edit their language, or remove them. Hold Ctrl (Command on macOS) for these keyboard
+shortcuts, or click their footer labels. Escape cancels a chooser or returns
+from the composer. There is one Chat Translation menu, with
+no separate live-chat mode.
 Opening, drawing, hovering, and editing a draft never upload anything. The
 composer sends only when you activate Send or press Enter in the message field;
 it keeps drafts on failure/cancellation and clears them after a successful send.
 
-Reading defaults to English and writing to Spanish. Language preferences are
-archived in `cl_translate_read_language` and `cl_translate_write_language`;
-changing these cvars alone cannot start or retarget a watch or send a message.
-Changing the reading language through the menu updates selected players for new
-chat. Different targets set in the console appear as `mixed` until you choose a
-common reading language. Player selections are never archived.
+Reading defaults to English and writing to Spanish. The menu remembers these
+choices for the current run; there are no translation language cvars or archived
+preferences. Changing a player's language leaves everyone else's target intact.
+Player selections last for the current game unless explicitly remembered by name.
+
+Menu and Tab choices are English (`en`), Spanish (`es`), Portuguese (`pt`),
+French (`fr`), German (`de`), Italian (`it`), Dutch (`nl`), Polish (`pl`),
+Swedish (`sv`), Norwegian (`no`), Danish (`da`), Finnish (`fi`), Czech (`cs`),
+Romanian (`ro`), Hungarian (`hu`), Turkish (`tr`), Indonesian (`id`), Malay (`ms`),
+Vietnamese (`vi`), Filipino (`fil`), Croatian (`hr`), and Slovak (`sk`). The service
+requests plain Latin letters and ASCII punctuation; accents are approximated
+for the existing Quake font.
 
 ```text
 translate @Rasta
+translate save @Rasta
+translate spanish save @Rasta
+translate @everyone
+translate save @everyone
+translate spanish @everyone
 translate spanish Anyone up for 2v2 on dm2?
 translate off @Rasta
 translate off
@@ -35,11 +88,33 @@ translate help
 `translate @Rasta` follows that player's chat in English, regardless of the menu's
 reading preference. Select a language explicitly with `translate english @Rasta`
 or `translate spanish @Rasta`. `@player` means listen; ordinary text after a
-language means translate and send public chat. Type `translate @` and press Tab
-to choose a player. Tab completes languages and selectable player names,
-including multiword names; it omits your own name, ignored players, and names
-that cannot be identified uniquely. `en` and `es` are accepted. Missing players
-and ambiguous matches produce distinct errors and never become outgoing chat.
+language means translate and send public chat. Add **save** before `@player` to
+remember the rule across games and restarts: `translate save @Rasta` defaults to
+English, and `translate spanish save @Rasta` saves Spanish. `translate save
+@everyone` (or `translate portuguese save @everyone`) saves the currently eligible
+names, including players already selected, using that target. Later arrivals
+are not selected automatically. Tab completes **save** and then the player name.
+Without **save**, a new watch lasts for the current connection; changing an
+already remembered player's language also updates their existing rule.
+Hold Ctrl while submitting the
+console command to send its translation as team chat; Command also works on
+macOS. The destination is captured at submission, so releasing or pressing the
+modifier while translation is pending cannot change it. Watching `@player`
+continues to follow public chat, and the menu composer sends public chat.
+Type `tran` and press Tab to
+complete the command; type `translate @` and press Tab to choose a player.
+Tab completes languages and selectable player names through the console's existing
+completion system, including multiword names. It omits your own name, ignored
+players, and names that cannot be identified uniquely. Full language names and
+the listed codes are accepted, without regard to case.
+Missing players and ambiguous matches produce distinct errors and never become outgoing chat.
+`translate @everyone` follows every currently eligible player in English;
+`translate spanish @everyone` applies Spanish to all of them. These exclude your
+own name, ignored players, ambiguous names and unsupported chat formats. Later
+arrivals are not selected automatically; repeat the command to include them.
+Tab offers `@everyone`, and `translate off @everyone` is equivalent to
+`translate off`. To select a player literally named everyone, quote the name:
+`translate @"everyone"`.
 Quotes are optional around the entire player name. Repeating a watch command
 keeps it enabled without repeating catch-up; use `translate off` to stop.
 
@@ -50,11 +125,9 @@ Translating Rasta's public chat to English.
 Stop: translate off @Rasta
 ```
 
-The first watch or outgoing send in a connection displays one shared disclosure
-about timbergeron.com, OpenRouter, the model host, and recent context. Changing
-maps, targets, or selected players does not repeat it. `translate help` explains
-what is uploaded, including catch-up/context limits and public outgoing chat;
-help is available while disconnected and does not start translation.
+`translate help` shows command examples and short descriptions. It highlights
+commands, separates entries with blank lines, and omits sentence-ending periods.
+It is available while disconnected and does not start translation.
 
 Watch activation also says `Checking 2 recent messages.` (using the actual count
 queued, at most three), or `Listening for new chat.` when no eligible history
@@ -64,7 +137,7 @@ cannot be queued, the acknowledgment says so. The menu shows the same feedback.
 
 Watching catches up with up to three messages from that player from the last
 minute, oldest first, then follows new messages. Earlier results carry an
-`[EN earlier]` or `[ES earlier]` label. Already handled messages are not repeated.
+`[EN earlier]`, `[PT earlier]`, etc. label. Already handled messages are not repeated.
 New chat takes priority over catch-up; explicitly typed outgoing messages take
 priority over both. All requests expire five seconds after submission (live
 incoming jobs expire five seconds after the original arrived). Catch-up is best
@@ -73,24 +146,27 @@ effort within that lifetime and the service allowance.
 Original chat is displayed immediately. Translations appear as separate
 attributed console/notify lines without another chat sound. Output uses the
 engine's tested Unicode-to-Quake fallback; accents become readable approximations.
-Labels are `[EN]` / `[ES]` for new chat, `[EN earlier]` / `[ES earlier]` for
-catch-up, and `[Sent EN]` / `[Sent ES]` for outgoing confirmations. A confirmation
-does not repeat the translated message body: the normal server echo displays it.
-Outgoing progress stays in the menu; unchanged repeat-watch commands stay quiet.
+Labels use the uppercase target code: `[EN]`, `[PT]`, etc. for new chat,
+`[EN earlier]` for catch-up. Only the tag uses the console's masked gold text;
+the player name and translation stay unmasked. Outgoing messages appear through the normal server
+echo, with no extra console confirmation. Progress and success feedback stay in
+the menu; unchanged repeat-watch commands stay quiet.
 Oversized outgoing translations are refused instead of silently truncated.
 Failures do not send the original automatically. The typed command remains in
 console history for retry, according to the player's existing history setting.
 
 Watches are local and off by default. They survive a map change on the same
 connection when scoreboard identity remains unchanged, and end on disconnect,
-demo playback or a player identity change. Ignore/filter changes discard local
-history and queued work. Team, direct, unknown-format, demo and CSQC-owned chat
+demo playback or a player identity change. Explicitly saved name rules restore
+eligible watches when those names appear again. Ignore/filter changes discard local
+history and queued work. Incoming team, direct, unknown-format, demo and CSQC-owned chat
 are excluded. The public-chat pilot recognizes complete `\001name: text\n` lines
 with a unique scoreboard match; this is a display heuristic, not authenticated
 sender identity. A public name colliding with team syntax is rejected.
 
-Uploads can only start through a directly submitted local console line or an
-actual local menu activation. Aliases,
+New upload authorization can only come from a directly submitted local console
+line or an actual local menu activation. Remembered name rules retain that
+explicit authorization across games. Aliases,
 binds, `exec`, startup scripts, stufftext and QC console interception cannot
 start watches or outgoing translation. There are no upload-enabling cvars or
 runtime endpoint settings. Settings/aliases cannot grant that privilege. A whole
@@ -104,7 +180,9 @@ player in memory, even before activation. It does not create a transcript file
 for translation. Nothing in that buffer is uploaded until a watch is started.
 Each incoming request includes only the selected player's current message and
 up to three preceding messages from that same player no older than 20 seconds.
-Outgoing requests contain only the explicitly typed message. No other players'
+Outgoing requests contain only the explicitly typed message and identify its
+public/team destination. Team sends require the local console modifier action;
+they never upload team-chat history. No other players'
 messages, display prefixes, roster, server address, hostname, demo data or map
 files are uploaded. Names mentioned inside chat bodies remain part of the text.
 
@@ -159,7 +237,9 @@ the production translation module and menu input/draw logic with SDL/libcurl
 against a loopback mock and engine stubs. It exercises parser, attribution,
 context, catch-up, send, expiry, ignore/reset/identity changes and cancellation,
 plus menu/console synchronization, passive navigation, roster changes, scrolling,
-draft retention and layout bounds without a renderer or game files.
+draft retention and layout bounds without a renderer or game files. Saved-rule
+checks cover menu opt-in, restart/slot/color matching, duplicates and ignored
+players, rule edits/removal, failed writes, and malformed local preference files.
 
 The synthetic corpus includes English controls, Spanish/Portuguese slang,
 mixed-language text, unknown text, embedded instructions and exact game tokens.
@@ -177,13 +257,24 @@ no macOS SDK/Xcode toolchain is available in this environment.
 `bash Misc/chat_translate/build_linux.sh -j4` builds using the current host's SDL3
 installation and ignores dependency files left by retired temporary SDK prefixes.
 
-The October 12 menu update passed the 23 service tests and a client/menu harness
-with 23 loopback mock requests under ASan/UBSan, plus console-completion and
-Unicode regressions. The Linux client linked successfully. Actual offscreen
-client captures verified the menu and composer with existing game assets and
-synthetic SDL typing while disconnected. Updated `menu.c` and `cl_translate.c`
-also cross-compile for Windows 64-bit; this does not replace native Windows/macOS
-runtime validation.
+The October 12 language, per-player menu, and team-send update passed 26 service tests and
+a client/menu harness with 35 loopback mock requests under ASan/UBSan, plus
+console-completion and Unicode regressions. The Linux client linked successfully.
+Actual offscreen captures verified the main menu and composer with existing game
+assets and synthetic SDL typing while disconnected. The matching service was
+deployed with a rollback backup; synthetic Portuguese incoming and Vietnamese
+outgoing requests succeeded with ASCII output and preserved `2v2`/`dm2` tokens.
+The outgoing-team contract was also deployed and verified with synthetic Spanish
+text; incoming team requests still return HTTP 400. The client checks cover
+releasing/pressing the modifier after submission, unchanged team/public sends,
+and failure without publishing a team message publicly.
+These checks do not replace native Windows/macOS runtime or multilingual quality
+evaluation.
+
+The Everyone update passed the client/menu harness under ASan/UBSan with 38 mock
+requests and a Linux build. It covers exclusions, quoted keyword collisions,
+repeat commands without re-upload, batch retargeting/catch-up, new arrivals,
+and both keyboard/mouse bulk addition without replacing individual targets.
 
 ## Contract
 
@@ -193,8 +284,9 @@ POST `application/json` to `/qssm/translate`, at most 4096 encoded UTF-8 bytes:
 {"version":1,"id":42,"target":"en","mode":"incoming","channel":"public","context":[{"speaker":"p1","text":"cambiamos mapa?"}],"message":{"speaker":"p1","text":"dale"}}
 ```
 
-`mode` is `incoming` or `outgoing`; outgoing context must be empty. Only `public`
-and the implemented `en`/`es` targets are accepted. At most three context lines;
+`mode` is `incoming` or `outgoing`; outgoing context must be empty. Incoming
+`channel` must be `public`; outgoing accepts `public` or `team`. Only the 22
+target codes listed above are accepted. At most three context lines;
 512 UTF-8 bytes per text. Speaker aliases are `p1` through `p4`. Duplicate keys,
 unknown fields, invalid UTF-8/NULs and unexpected types are rejected. IDs are
 integral unsigned 32-bit values and are echoed by the service, never the model.

@@ -22851,13 +22851,25 @@ void M_Console_Mousemove(int cx, int cy)
 
 /* Chat translation menu: draw/hover are read-only; only local input calls the
  * trusted translation controller. No commands, aliases, or cvar opt-in. */
-#define TRANSLATE_VISIBLE_PLAYERS 6
+extern qboolean WordFilter_Check (const char *text, char *dest, size_t size);
+#define TRANSLATE_LIST_X 16
+#define TRANSLATE_LIST_Y 32
+#define TRANSLATE_LIST_COLS 36
+#define TRANSLATE_LIST_ROWS 16
 #define TRANSLATE_FIELD_CHARS 32
+#define TRANSLATE_ADD_ROW 0
+#define TRANSLATE_MESSAGE_ROW 1
+#define TRANSLATE_PLAYERS_ROW 3
+#define TRANSLATE_CHOOSE_PLAYERS_ROW 2
 static struct
 {
-	cl_translate_player_t players[MAX_SCOREBOARD];
-	int count, cursor, scroll, compose_cursor;
-	qboolean compose, editing, initialized, awaiting_send;
+	cl_translate_player_t players[CL_TRANSLATE_MAX_SELECTIONS];
+	cl_translate_player_t edit_player;
+	menulist_t list;
+	menuticker_t ticker;
+	int count, compose_cursor, prev_cursor, player_cursor, edit_language;
+	qboolean adding, compose, editing, initialized, awaiting_send, can_add, can_compose;
+	qboolean scrollbar_grab, remember, player_edit, edit_remember;
 	char draft[513], notice[160];
 	double notice_until;
 	unsigned int send_id;
@@ -22870,7 +22882,7 @@ static void M_Translate_Notice (const char *text)
 	translatemenu.notice_until = realtime + 6;
 }
 
-static void M_Translate_PrintWrapped (int y, const char *text, int lines)
+static void M_Translate_PrintWrapped (int y, const char *text, int lines, qboolean centered)
 {
 	while (*text && lines-- > 0)
 	{
@@ -22883,37 +22895,91 @@ static void M_Translate_PrintWrapped (int y, const char *text, int lines)
 			if (word) length = word;
 		}
 		memcpy(line, text, length); line[length] = 0;
-		M_PrintWhite(16, y, line);
+		M_PrintWhite(centered ? (320 - (int)length * 8) / 2 : 16, y, line);
 		text += length;
 		while (*text == ' ') text++;
 		y += 8;
 	}
 }
 
+static int M_Translate_EveryoneRow (void)
+{
+	return translatemenu.count + TRANSLATE_CHOOSE_PLAYERS_ROW + 1;
+}
+
+static int M_Translate_PlayerIndex (void)
+{
+	int first = translatemenu.adding ? TRANSLATE_CHOOSE_PLAYERS_ROW : TRANSLATE_PLAYERS_ROW;
+	return translatemenu.list.cursor >= first && translatemenu.list.cursor < translatemenu.count + first ?
+		translatemenu.list.cursor - first : -1;
+}
+
+static int M_Translate_Rows (void)
+{
+	return translatemenu.count + (translatemenu.adding ? TRANSLATE_CHOOSE_PLAYERS_ROW + 2 : translatemenu.count ? 5 : 2);
+}
+
+static qboolean M_Translate_RowEnabled (int row)
+{
+	if (row < 0 || row >= M_Translate_Rows()) return false;
+	if (translatemenu.adding)
+		return row != M_Translate_EveryoneRow() - 1 && (row != M_Translate_EveryoneRow() || translatemenu.can_add);
+	if (row == TRANSLATE_ADD_ROW) return translatemenu.can_add;
+	if (row == TRANSLATE_MESSAGE_ROW) return translatemenu.can_compose;
+	if (row == TRANSLATE_PLAYERS_ROW - 1 || row == translatemenu.count + TRANSLATE_PLAYERS_ROW) return false;
+	return true;
+}
+
+static int M_Translate_NextRow (int row, int direction)
+{
+	int i, rows = M_Translate_Rows();
+	for (i = 0; i < rows; i++)
+	{
+		row = (row + direction + rows) % rows;
+		if (M_Translate_RowEnabled(row)) return row;
+	}
+	return -1;
+}
+
 static void M_Translate_RefreshPlayers (void)
 {
 	cl_translate_player_t previous;
-	int i;
-	qboolean player_selected = translatemenu.cursor > 0 && translatemenu.cursor <= translatemenu.count;
-	int control = translatemenu.cursor - translatemenu.count;
-	if (player_selected) previous = translatemenu.players[translatemenu.cursor - 1];
-	translatemenu.count = CL_Translate_MenuPlayers(translatemenu.players, MAX_SCOREBOARD);
-	if (player_selected)
+	int i, count = 0, selected = M_Translate_PlayerIndex();
+	qboolean everyone = translatemenu.adding && translatemenu.list.cursor == M_Translate_EveryoneRow();
+	qboolean clear = !translatemenu.adding && translatemenu.count > 0 &&
+		translatemenu.list.cursor == translatemenu.count + TRANSLATE_PLAYERS_ROW + 1;
+	if (selected >= 0) previous = translatemenu.players[selected];
+	translatemenu.count = CL_Translate_MenuPlayers(translatemenu.players, CL_TRANSLATE_MAX_SELECTIONS);
+	translatemenu.can_add = false;
+	translatemenu.can_compose = !CL_Translate_UnavailableReason();
+	for (i = 0; i < translatemenu.count; i++)
+	{
+		if (translatemenu.players[i].language < 0 && translatemenu.players[i].selectable)
+			translatemenu.can_add = true;
+		if (translatemenu.adding ? translatemenu.players[i].language < 0 && translatemenu.players[i].selectable :
+			translatemenu.players[i].language >= 0)
+			translatemenu.players[count++] = translatemenu.players[i];
+	}
+	translatemenu.count = translatemenu.adding ? count : CL_Translate_MenuSelections(translatemenu.players, CL_TRANSLATE_MAX_SELECTIONS);
+	if (selected >= 0)
 	{
 		for (i = 0; i < translatemenu.count; i++)
-			if (translatemenu.players[i].slot == previous.slot && !strcmp(translatemenu.players[i].name, previous.name)) break;
-		translatemenu.cursor = i < translatemenu.count ? i + 1 : 0;
+			if ((translatemenu.players[i].slot == previous.slot && !strcmp(translatemenu.players[i].name, previous.name)) ||
+				(!translatemenu.adding && previous.remembered && translatemenu.players[i].remembered &&
+				 (translatemenu.players[i].slot == -1 || translatemenu.players[i].selectable) &&
+				 !strcmp(translatemenu.players[i].display, previous.display))) break;
+		translatemenu.list.cursor = i < translatemenu.count ? i + (translatemenu.adding ? TRANSLATE_CHOOSE_PLAYERS_ROW : TRANSLATE_PLAYERS_ROW) : 0;
 	}
-	else if (control > 0) translatemenu.cursor = translatemenu.count + control;
-	translatemenu.cursor = CLAMP(0, translatemenu.cursor, translatemenu.count + 3);
-	if (translatemenu.cursor > 0 && translatemenu.cursor <= translatemenu.count)
-	{
-		int selected = translatemenu.cursor - 1;
-		if (selected < translatemenu.scroll) translatemenu.scroll = selected;
-		if (selected >= translatemenu.scroll + TRANSLATE_VISIBLE_PLAYERS)
-			translatemenu.scroll = selected - TRANSLATE_VISIBLE_PLAYERS + 1;
-	}
-	translatemenu.scroll = CLAMP(0, translatemenu.scroll, q_max(0, translatemenu.count - TRANSLATE_VISIBLE_PLAYERS));
+	else if (translatemenu.adding) translatemenu.list.cursor = everyone ? M_Translate_EveryoneRow() : CLAMP(0, translatemenu.list.cursor, 1);
+	else if (clear) translatemenu.list.cursor = translatemenu.count ? translatemenu.count + TRANSLATE_PLAYERS_ROW + 1 : 0;
+	translatemenu.list.numitems = M_Translate_Rows();
+	translatemenu.list.viewsize = TRANSLATE_LIST_ROWS;
+	translatemenu.list.isactive_fn = M_Translate_RowEnabled;
+	translatemenu.list.cursor = CLAMP(0, translatemenu.list.cursor, q_max(0, M_Translate_Rows() - 1));
+	if (!M_Translate_RowEnabled(translatemenu.list.cursor))
+		translatemenu.list.cursor = M_Translate_NextRow(translatemenu.list.cursor, 1);
+	translatemenu.list.scroll = CLAMP(0, translatemenu.list.scroll, q_max(0, M_List_GetOverflow(&translatemenu.list)));
+	if (translatemenu.list.cursor >= 0) M_List_AutoScroll(&translatemenu.list);
 }
 
 static void M_Translate_RefreshSend (void)
@@ -22935,38 +23001,49 @@ static void M_Translate_RefreshSend (void)
 	translatemenu.editing = true;
 }
 
+static void M_Translate_ShowPlayers (qboolean adding)
+{
+	translatemenu.adding = adding;
+	translatemenu.player_edit = false;
+	translatemenu.remember = false;
+	translatemenu.list.cursor = translatemenu.list.scroll = 0;
+	translatemenu.count = 0;
+	translatemenu.notice_until = 0;
+	translatemenu.scrollbar_grab = false;
+	translatemenu.prev_cursor = -1;
+	M_Ticker_Init(&translatemenu.ticker);
+	M_Translate_RefreshPlayers();
+	translatemenu.list.cursor = adding ? (translatemenu.count ? TRANSLATE_CHOOSE_PLAYERS_ROW : 0) :
+		translatemenu.count ? TRANSLATE_PLAYERS_ROW : M_Translate_NextRow(-1, 1);
+	M_List_CenterCursor(&translatemenu.list);
+}
+
 void M_Menu_Translate_f (void)
 {
 	key_dest = key_menu;
 	m_state = m_translate;
 	m_entersound = true;
 	translatemenu.compose = translatemenu.editing = false;
-	translatemenu.cursor = translatemenu.scroll = 0;
 	if (!translatemenu.initialized)
 	{
 		M_TextField_Init(&translatemenu.field, translatemenu.draft, sizeof(translatemenu.draft) - 1, false);
 		translatemenu.initialized = true;
 	}
-	M_Translate_RefreshPlayers();
+	M_Translate_ShowPlayers(false);
 	M_Translate_RefreshSend();
 }
 
 static int M_Translate_RowY (int row)
 {
-	if (!row) return 40;
-	if (row <= translatemenu.count) return 72 + (row - 1 - translatemenu.scroll) * 8;
-	return 128 + (row - translatemenu.count - 1) * 16;
+	return TRANSLATE_LIST_Y + (row - translatemenu.list.scroll) * 8;
 }
 
 static int M_Translate_HitRow (int y)
 {
-	int i;
-	if (y >= 40 && y < 48) return 0;
-	for (i = translatemenu.scroll; i < translatemenu.count && i < translatemenu.scroll + TRANSLATE_VISIBLE_PLAYERS; i++)
-		if (y >= 72 + (i - translatemenu.scroll) * 8 && y < 80 + (i - translatemenu.scroll) * 8) return i + 1;
-	for (i = 1; i <= 3; i++) if (y >= 128 + (i - 1) * 16 && y < 136 + (i - 1) * 16)
-		return translatemenu.count + i;
-	return -1;
+	int row;
+	if (y < TRANSLATE_LIST_Y || y >= TRANSLATE_LIST_Y + TRANSLATE_LIST_ROWS * 8) return -1;
+	row = translatemenu.list.scroll + (y - TRANSLATE_LIST_Y) / 8;
+	return row < translatemenu.list.numitems ? row : -1;
 }
 
 static int M_Translate_FieldViewStart (void)
@@ -22999,125 +23076,388 @@ static void M_Translate_Send (void)
 	}
 }
 
-static void M_Translate_Activate (int direction)
+static int M_Translate_NextLanguage (int language, int direction)
 {
-	int row = translatemenu.cursor;
-	if (!row) CL_Translate_MenuReadLanguage((CL_Translate_ReadLanguage() + direction + 2) % 2);
-	else if (row <= translatemenu.count)
+	int count = CL_Translate_LanguageCount();
+	return (language + direction + count) % count;
+}
+
+static void M_Translate_OpenComposer (void)
+{
+	if (CL_Translate_UnavailableReason()) return;
+	translatemenu.compose = true;
+	translatemenu.compose_cursor = 1;
+	translatemenu.editing = !translatemenu.awaiting_send;
+	M_TextField_ClearSelection(&translatemenu.field);
+}
+
+static void M_Translate_OpenPlayerCard (void)
+{
+	cl_translate_player_t current[CL_TRANSLATE_MAX_SELECTIONS];
+	int selected = M_Translate_PlayerIndex(), i, count;
+	if (selected < 0) return;
+	translatemenu.edit_player = translatemenu.players[selected];
+	count = CL_Translate_MenuSelections(current, CL_TRANSLATE_MAX_SELECTIONS);
+	for (i = 0; i < count; i++)
+		if (current[i].slot == translatemenu.edit_player.slot &&
+			!strcmp(current[i].name, translatemenu.edit_player.name) &&
+			(current[i].selectable || (current[i].slot == -1 && current[i].remembered)) && current[i].language >= 0) break;
+	if (i == count) { M_Translate_Notice("The player selection changed"); return; }
+	translatemenu.edit_player = current[i];
+	translatemenu.edit_language = current[i].language;
+	translatemenu.edit_remember = current[i].remembered;
+	translatemenu.player_cursor = 2;
+	translatemenu.player_edit = true;
+	translatemenu.notice_until = 0;
+	m_entersound = true;
+}
+
+static void M_Translate_DrawPlayerCard (void)
+{
+	char filtered[MAX_SCOREBOARDNAME];
+	const char *name = translatemenu.edit_player.name;
+	static const int rows[] = {86, 114, 138};
+	if (cl_contentfilter.value == 2 && WordFilter_Check(name, filtered, sizeof(filtered))) name = filtered;
+	/* The same field boxes, checkbox and Accept Changes button as Bookmarks. */
+	M_Print(10, 40, "Player");
+	M_DrawTextBox(6, 46, 36, 1);
+	M_PrintWhite(14, 54, name);
+	M_Print(10, 72, "Language");
+	M_DrawTextBox(6, 78, 36, 1);
+	M_PrintWhite(14, 86, CL_Translate_LanguageName(translatemenu.edit_language));
+	M_Print(10, 114, "Remember by name");
+	M_DrawCheckboxBox(146, 114, translatemenu.edit_remember);
+	M_DrawTextBox(6, 130, 14, 1);
+	M_Print(15, 138, "Accept Changes");
+	M_DrawCharacter(0, rows[translatemenu.player_cursor], 12 + ((int)(realtime * 4) & 1));
+	if (translatemenu.notice_until > realtime)
 	{
-		cl_translate_player_t *player = &translatemenu.players[row - 1];
-		if (!player->selectable && player->language < 0)
+		M_DrawTextBox(6, 160, 36, 2);
+		M_Translate_PrintWrapped(168, translatemenu.notice, 2, false);
+	}
+}
+
+static int M_Translate_PlayerCardHit (int x, int y)
+{
+	if (x < 6 || x >= 310) return -1;
+	if (y >= 78 && y < 102) return 0;
+	if (y >= 110 && y < 126 && x < 170) return 1;
+	if (y >= 130 && y < 154 && x < 134) return 2;
+	return -1;
+}
+
+static void M_Translate_PlayerCardKey (int key)
+{
+	if (key == K_UPARROW || key == K_DOWNARROW || key == K_TAB)
+	{
+		translatemenu.player_cursor = (translatemenu.player_cursor + (key == K_UPARROW ? 2 : 1)) % 3;
+		S_LocalSound("misc/menu1.wav"); return;
+	}
+	if (key == K_MOUSE1)
+	{
+		int row = M_Translate_PlayerCardHit(m_mousex, m_mousey);
+		if (row < 0) return;
+		translatemenu.player_cursor = row;
+	}
+	if (key != K_ENTER && key != K_KP_ENTER && key != K_ABUTTON && key != K_MOUSE1 &&
+		key != K_LEFTARROW && key != K_RIGHTARROW && key != K_SPACE) return;
+	if (!translatemenu.player_cursor)
+		translatemenu.edit_language = M_Translate_NextLanguage(translatemenu.edit_language, key == K_LEFTARROW ? -1 : 1);
+	else if (translatemenu.player_cursor == 1) translatemenu.edit_remember = !translatemenu.edit_remember;
+	else if (key == K_ENTER || key == K_KP_ENTER || key == K_ABUTTON || key == K_MOUSE1)
+	{
+		if (CL_Translate_MenuEditPlayer(translatemenu.edit_player.slot, translatemenu.edit_player.name,
+			translatemenu.edit_language, translatemenu.edit_remember))
 		{
-			M_Translate_Notice(!strcmp(player->reason, "ignored") ? "This player is ignored. Unignore them first." :
-				"This player name cannot be identified uniquely.");
+			translatemenu.player_edit = false;
+			M_Translate_RefreshPlayers();
+		}
+		M_Translate_Notice(CL_Translate_MenuNotice());
+	}
+	S_LocalSound("misc/menu3.wav");
+}
+
+static void M_Translate_Activate (int direction, qboolean remove)
+{
+	int row = translatemenu.list.cursor;
+	if (!M_Translate_RowEnabled(row)) return;
+	if (translatemenu.adding)
+	{
+		if (!row)
+		{
+			CL_Translate_MenuReadLanguage(M_Translate_NextLanguage(CL_Translate_ReadLanguage(), direction));
+			translatemenu.notice_until = 0;
+		}
+		else if (row == 1)
+		{
+			translatemenu.remember = !translatemenu.remember;
+			translatemenu.notice_until = 0;
+		}
+		else if (row == M_Translate_EveryoneRow())
+		{
+			qboolean added = translatemenu.remember ? CL_Translate_MenuWatchEveryoneRemembered(CL_Translate_ReadLanguage()) :
+				CL_Translate_MenuWatchEveryone(CL_Translate_ReadLanguage());
+			if (added) M_Translate_ShowPlayers(false);
+			else M_Translate_RefreshPlayers();
+			M_Translate_Notice(CL_Translate_MenuNotice());
+		}
+		else if (row < translatemenu.count + TRANSLATE_CHOOSE_PLAYERS_ROW)
+		{
+			cl_translate_player_t player = translatemenu.players[row - TRANSLATE_CHOOSE_PLAYERS_ROW];
+			cl_translate_player_t current[MAX_SCOREBOARD];
+			int i, count = CL_Translate_MenuPlayers(current, MAX_SCOREBOARD);
+			int language = CL_Translate_ReadLanguage();
+			/* A console watch created while this row was cached stays intact. */
+			for (i = 0; i < count; i++)
+				if (current[i].slot == player.slot && !strcmp(current[i].name, player.name) && current[i].language >= 0)
+					language = current[i].language;
+			if (!(translatemenu.remember ? CL_Translate_MenuWatchSaved(player.slot, player.name, language) :
+				CL_Translate_MenuWatch(player.slot, player.name, language)))
+			{
+				M_Translate_Notice(CL_Translate_MenuNotice());
+				M_Translate_RefreshPlayers();
+				return;
+			}
+			M_Translate_ShowPlayers(false);
+			M_Translate_Notice(CL_Translate_MenuNotice());
 			return;
 		}
-		CL_Translate_MenuWatch(player->slot, player->name, player->language < 0 ? CL_Translate_ReadLanguage() : -1);
-	}
-	else if (row == translatemenu.count + 1) CL_Translate_MenuStopAll();
-	else if (row == translatemenu.count + 2) CL_Translate_MenuWriteLanguage((CL_Translate_WriteLanguage() + direction + 2) % 2);
-	else
-	{
-		translatemenu.compose = true;
-		translatemenu.compose_cursor = 1;
-		translatemenu.editing = !translatemenu.awaiting_send;
-		M_TextField_ClearSelection(&translatemenu.field);
 		return;
 	}
+	if (M_Translate_PlayerIndex() >= 0)
+	{
+		cl_translate_player_t *player = &translatemenu.players[M_Translate_PlayerIndex()];
+		if (remove) CL_Translate_MenuRemovePlayer(player->slot, player->name);
+		else
+		{
+			cl_translate_player_t current[CL_TRANSLATE_MAX_SELECTIONS];
+			int i, count = CL_Translate_MenuSelections(current, CL_TRANSLATE_MAX_SELECTIONS);
+			for (i = 0; i < count; i++)
+				if (current[i].slot == player->slot && !strcmp(current[i].name, player->name) && current[i].language >= 0) break;
+			/* A cached language control must never restart a stopped watch. */
+			if (i == count) { M_Translate_Notice("The player selection changed"); return; }
+			CL_Translate_MenuEditPlayer(player->slot, player->name, M_Translate_NextLanguage(current[i].language, direction), current[i].remembered);
+		}
+	}
+	else if (row == TRANSLATE_ADD_ROW)
+	{
+		M_Translate_RefreshPlayers();
+		if (translatemenu.can_add) M_Translate_ShowPlayers(true);
+		return;
+	}
+	else if (row == TRANSLATE_MESSAGE_ROW)
+	{
+		M_Translate_OpenComposer();
+		return;
+	}
+	else CL_Translate_MenuStopAll();
 	M_Translate_Notice(CL_Translate_MenuNotice());
+}
+
+static void M_Translate_PrintMaybeDim (int x, int y, const char *text, qboolean enabled)
+{
+	if (enabled) M_Print(x, y, text);
+	else M_PrintRGBA(x, y, text, CL_PLColours_Parse("0xffffff"), CONTROLLER_DIM_ALPHA, true);
+}
+
+static const char *M_Translate_ItemText (int row, char text[96])
+{
+	if (translatemenu.adding)
+	{
+		if (!row)
+		{
+			q_snprintf(text, 96, "Translate to: %s", CL_Translate_LanguageName(CL_Translate_ReadLanguage()));
+			return text;
+		}
+		if (row == 1) return translatemenu.remember ? "Remember by name: Yes" : "Remember by name: No";
+		if (row == M_Translate_EveryoneRow() - 1) return "";
+		if (row == M_Translate_EveryoneRow()) return "@everyone (translate all players)";
+		return translatemenu.players[row - TRANSLATE_CHOOSE_PLAYERS_ROW].display;
+	}
+	if (row == TRANSLATE_ADD_ROW) return "Add Translated Player(s)";
+	if (row == TRANSLATE_MESSAGE_ROW) return "Send Translated Message";
+	if (row == TRANSLATE_PLAYERS_ROW - 1 || row == translatemenu.count + TRANSLATE_PLAYERS_ROW) return "";
+	if (row < translatemenu.count + TRANSLATE_PLAYERS_ROW) return translatemenu.players[row - TRANSLATE_PLAYERS_ROW].display;
+	return "Remove All";
+}
+
+static qboolean M_Translate_Match (int row, char initial)
+{
+	char text[96];
+	const char *label = M_Translate_ItemText(row, text);
+	if (translatemenu.adding && row == M_Translate_EveryoneRow()) label++;
+	return M_Translate_RowEnabled(row) && q_tolower(label[0]) == initial;
+}
+
+static int M_Translate_ShortcutX (void)
+{
+	return (320 - (int)strlen(KEY_SHORTCUT_MODIFIER_NAME_LOWER "+ a:add  e:edit  backspace:remove") * 8) / 2;
+}
+
+static void M_Translate_DrawShortcuts (void)
+{
+	int x = M_Translate_ShortcutX();
+	M_Print(x, 192, KEY_SHORTCUT_MODIFIER_NAME_LOWER "+ ");
+	x += ((int)strlen(KEY_SHORTCUT_MODIFIER_NAME_LOWER) + 2) * 8;
+	M_Translate_PrintMaybeDim(x, 192, "a:add", translatemenu.can_add);
+	M_Translate_PrintMaybeDim(x + 56, 192, "e:edit", translatemenu.adding || M_Translate_PlayerIndex() >= 0);
+	M_Translate_PrintMaybeDim(x + 120, 192, "backspace:remove", !translatemenu.adding && M_Translate_PlayerIndex() >= 0);
 }
 
 static void M_Translate_Draw (void)
 {
-	char text[160], clipped[24];
-	int i, y;
+	char text[160], rowtext[96];
+	int i, first, visible, selected, y;
+	const char *title = translatemenu.compose ? "Send Translated Message" :
+		translatemenu.adding ? "Add Translated Player(s)" : "Chat Translation";
 	const char *unavailable = CL_Translate_UnavailableReason();
 	M_TextField_CheckMouseRelease();
+	if (translatemenu.player_edit) { M_Translate_DrawPlayerCard(); return; }
 	M_Translate_RefreshPlayers();
 	M_Translate_RefreshSend();
-	M_PrintWhite((320 - (translatemenu.compose ? 19 : 16) * 8) / 2, 16,
-		translatemenu.compose ? "Translate a Message" : "Chat Translation");
+	Draw_String(TRANSLATE_LIST_X, 4, title);
+	M_DrawQuakeBar(TRANSLATE_LIST_X - 8, 16, TRANSLATE_LIST_COLS + 2);
 	if (translatemenu.compose)
 	{
 		int start = M_Translate_FieldViewStart();
-		menu_textfield_t visible = translatemenu.field;
-		M_Print(16, 40, "Write chat in");
-		M_Print(216, 40, CL_Translate_LanguageName(CL_Translate_WriteLanguage()));
-		M_PrintWhite(16, 64, "Message");
+		menu_textfield_t field = translatemenu.field;
+		M_Print(16, 40, "Translate to");
+		M_Print(MENU_VALUE_X, 40, CL_Translate_LanguageName(CL_Translate_WriteLanguage()));
+		M_PrintWhite(16, 72, "Message");
 		q_snprintf(text, sizeof(text), "%u/512", (unsigned int)strlen(translatemenu.draft));
-		M_PrintWhite(240, 64, text);
+		M_PrintWhite(240, 72, text);
 		M_DrawTextBox(16, 80, 34, 1);
 		q_strlcpy(text, translatemenu.draft + start, TRANSLATE_FIELD_CHARS + 1);
-		visible.text = text;
-		visible.cursor = CLAMP(0, visible.cursor - start, (int)strlen(text));
-		visible.sel_start = visible.sel_start < 0 ? -1 : CLAMP(0, visible.sel_start - start, (int)strlen(text));
-		if (translatemenu.editing && !translatemenu.awaiting_send) M_TextField_DrawHighlight(&visible, 24, 88);
-		M_PrintWhite(24, 88, *text ? text : "Type your message...");
-		if (translatemenu.editing && !translatemenu.awaiting_send) M_TextField_DrawCursor(&visible, 24, 88);
-		M_PrintWhite(16, 112, "Enter sends publicly. Esc goes back.");
-		q_snprintf(text, sizeof(text), "Send publicly in %s", CL_Translate_LanguageName(CL_Translate_WriteLanguage()));
-		if (M_Translate_CanSend()) M_Print(16, 136, text); else M_PrintWhite(16, 136, text);
-		M_Print(16, 152, "Back");
+		field.text = text;
+		field.cursor = CLAMP(0, field.cursor - start, (int)strlen(text));
+		field.sel_start = field.sel_start < 0 ? -1 : CLAMP(0, field.sel_start - start, (int)strlen(text));
+		if (translatemenu.editing && !translatemenu.awaiting_send) M_TextField_DrawHighlight(&field, 24, 88);
+		if (*text) M_PrintWhite(24, 88, text);
+		else M_PrintRGBA(24, 88, "Type your message", CL_PLColours_Parse("0xffffff"), CONTROLLER_DIM_ALPHA, false);
+		if (translatemenu.editing && !translatemenu.awaiting_send) M_TextField_DrawCursor(&field, 24, 88);
+		M_DrawTextBox(8, 128, 4, 1);
+		M_Translate_PrintMaybeDim(16, 136, "Send", M_Translate_CanSend());
 		if (CL_Translate_SendState(NULL, text, sizeof(text)) == TRANSLATE_SEND_PENDING)
-			M_Translate_PrintWrapped(168, text, 2);
-		else if (translatemenu.notice_until > realtime) M_Translate_PrintWrapped(168, translatemenu.notice, 2);
-		else if (unavailable) M_Translate_PrintWrapped(168, unavailable, 2);
-		y = translatemenu.compose_cursor == 0 ? 40 : translatemenu.compose_cursor == 1 ? 88 :
-			translatemenu.compose_cursor == 2 ? 136 : 152;
+			M_Translate_PrintWrapped(164, text, 2, true);
+		else if (translatemenu.notice_until > realtime) M_Translate_PrintWrapped(164, translatemenu.notice, 2, true);
+		else if (unavailable) M_Translate_PrintWrapped(164, unavailable, 2, true);
+		y = translatemenu.compose_cursor == 0 ? 40 : translatemenu.compose_cursor == 1 ? 88 : 136;
+		M_DrawCharacter(8, y, 12 + ((int)(realtime * 4) & 1));
+		return;
 	}
-	else
+	if (!keydown[K_MOUSE1]) translatemenu.scrollbar_grab = false;
+	if (translatemenu.prev_cursor != translatemenu.list.cursor)
 	{
-		CL_Translate_MenuStatus(text, sizeof(text));
-		M_PrintWhite(16, 28, text);
-		M_Print(16, 40, "Read chat in");
-		M_Print(216, 40, CL_Translate_MixedLanguages() ? "mixed" : CL_Translate_LanguageName(CL_Translate_ReadLanguage()));
-		M_PrintWhite(16, 56, "Players");
-		if (translatemenu.count > TRANSLATE_VISIBLE_PLAYERS)
-		{
-			q_snprintf(text, sizeof(text), "%d-%d of %d", translatemenu.scroll + 1,
-				q_min(translatemenu.count, translatemenu.scroll + TRANSLATE_VISIBLE_PLAYERS), translatemenu.count);
-			M_PrintWhite(200, 56, text);
-		}
-		if (!translatemenu.count)
-			M_Translate_PrintWrapped(72, unavailable ? unavailable : "No other players are connected.", 3);
-		for (i = translatemenu.scroll; i < translatemenu.count && i < translatemenu.scroll + TRANSLATE_VISIBLE_PLAYERS; i++)
-		{
-			cl_translate_player_t *player = &translatemenu.players[i];
-			y = 72 + (i - translatemenu.scroll) * 8;
-			q_strlcpy(clipped, player->display, sizeof(clipped));
-			if (strlen(player->display) >= sizeof(clipped)) memcpy(clipped + sizeof(clipped) - 4, "...", 4);
-			M_DrawCheckbox(24, y, player->language >= 0);
-			if (player->selectable) M_Print(44, y, clipped); else M_PrintWhite(44, y, clipped);
-			M_PrintWhite(240, y, !player->selectable ? player->reason : player->language < 0 ? "off" :
-				player->language == 0 ? "EN" : "ES");
-		}
-		M_Print(16, 128, "Stop all translation");
-		M_Print(16, 144, "Write chat in");
-		M_Print(216, 144, CL_Translate_LanguageName(CL_Translate_WriteLanguage()));
-		M_Print(16, 160, "Translate a message...");
-		if (translatemenu.notice_until > realtime) M_Translate_PrintWrapped(176, translatemenu.notice, 1);
-		else if (translatemenu.cursor > 0 && translatemenu.cursor <= translatemenu.count)
-		{
-			cl_translate_player_t *player = &translatemenu.players[translatemenu.cursor - 1];
-			int language = player->language < 0 ? CL_Translate_ReadLanguage() : player->language;
-			if (language == 0) q_snprintf(text, sizeof(text), "Console: translate @%s", player->display);
-			else q_snprintf(text, sizeof(text), "Console: translate %s @%s", CL_Translate_LanguageCode(language), player->display);
-			M_Translate_PrintWrapped(176, text, 1);
-		}
-		else M_PrintWhite(16, 176, "Select players; recent chat included.");
-		y = M_Translate_RowY(translatemenu.cursor);
+		translatemenu.prev_cursor = translatemenu.list.cursor;
+		M_Ticker_Init(&translatemenu.ticker);
 	}
-	M_DrawCharacter(8, y, 12 + ((int)(realtime * 4) & 1));
-	M_PrintWhite(16, 184, "Chat + recent context are sent to");
-	M_PrintWhite(16, 192, "timbergeron.com / OpenRouter / host");
+	else M_Ticker_Update(&translatemenu.ticker);
+	M_List_GetVisibleRange(&translatemenu.list, &first, &visible);
+	for (i = first; i < first + visible; i++)
+	{
+		const char *label = M_Translate_ItemText(i, rowtext);
+		char filtered_name[MAX_SCOREBOARDNAME];
+		qboolean player = translatemenu.adding ? i >= TRANSLATE_CHOOSE_PLAYERS_ROW && i < translatemenu.count + TRANSLATE_CHOOSE_PLAYERS_ROW :
+			i >= TRANSLATE_PLAYERS_ROW && i < translatemenu.count + TRANSLATE_PLAYERS_ROW;
+		qboolean everyone = translatemenu.adding && i == M_Translate_EveryoneRow();
+		int indent = player || everyone || (!translatemenu.adding && i == translatemenu.count + TRANSLATE_PLAYERS_ROW + 1) ? 16 : 0;
+		if (player)
+		{
+			/* Draw the same glyph bytes as the scoreboard, without a uniform
+			 * mask. Readable names remain separate for matching/completion. */
+			label = translatemenu.players[i - (translatemenu.adding ? TRANSLATE_CHOOSE_PLAYERS_ROW : TRANSLATE_PLAYERS_ROW)].name;
+			if (cl_contentfilter.value == 2 && WordFilter_Check(label, filtered_name, sizeof(filtered_name)))
+				label = filtered_name;
+		}
+		if (!*label) continue;
+		y = M_Translate_RowY(i);
+		if (everyone)
+		{
+			int x = TRANSLATE_LIST_X + indent;
+			M_Translate_PrintMaybeDim(x, y, "@everyone", translatemenu.can_add);
+			if (translatemenu.can_add) M_PrintWhite(x + 9 * 8, y, " (translate all players)");
+			else M_PrintRGBA(x + 9 * 8, y, " (translate all players)", CL_PLColours_Parse("0xffffff"), CONTROLLER_DIM_ALPHA, false);
+		}
+		else if (M_Translate_RowEnabled(i))
+			M_PrintScroll(TRANSLATE_LIST_X + indent, y, (TRANSLATE_LIST_COLS - 2) * 8 - indent, label,
+				i == translatemenu.list.cursor ? translatemenu.ticker.scroll_time : 0.0,
+				!player);
+		else M_Translate_PrintMaybeDim(TRANSLATE_LIST_X + indent, y, label, false);
+		if (i == translatemenu.list.cursor)
+			M_DrawCharacter(TRANSLATE_LIST_X + indent - 8, y, 12 + ((int)(realtime * 4) & 1));
+	}
+	if (!translatemenu.adding && !translatemenu.count && !translatemenu.can_add && !translatemenu.can_compose)
+		M_Translate_PrintWrapped(96, "No saved players", 1, true);
+	selected = M_Translate_PlayerIndex();
+	/* Like a bookmark's address, the selected player's language always owns
+	 * the tooltip. Routine acknowledgments never cover this information. */
+	if (selected >= 0 || (translatemenu.adding && translatemenu.list.cursor == M_Translate_EveryoneRow()))
+	{
+		int language = translatemenu.adding ? CL_Translate_ReadLanguage() : translatemenu.players[selected].language;
+		q_snprintf(text, sizeof(text), "Language: %s", CL_Translate_LanguageName(language));
+		M_Translate_PrintWrapped(172, text, 1, true);
+	}
+	else if (translatemenu.notice_until > realtime) M_Translate_PrintWrapped(172, translatemenu.notice, 1, true);
+	else if (unavailable && translatemenu.adding) M_Translate_PrintWrapped(172, unavailable, 1, true);
+	else if (translatemenu.adding)
+		M_Translate_PrintWrapped(172, translatemenu.list.cursor == 0 ?
+			"Language for new players" : translatemenu.list.cursor == 1 ?
+			"Use this name in future games" : "Add all remaining players", 1, true);
+	else if (translatemenu.list.cursor >= 0) M_Translate_PrintWrapped(172, translatemenu.list.cursor == TRANSLATE_ADD_ROW ?
+		"Choose whose chat to translate" : translatemenu.list.cursor == TRANSLATE_MESSAGE_ROW ?
+		"Translate and send a public message" : "Remove all selected players", 1, true);
+	if (M_List_GetOverflow(&translatemenu.list) > 0)
+	{
+		M_List_DrawScrollbar(&translatemenu.list, TRANSLATE_LIST_X + TRANSLATE_LIST_COLS * 8 - 8, TRANSLATE_LIST_Y);
+		if (translatemenu.list.scroll > 0)
+			M_DrawEllipsisBar(TRANSLATE_LIST_X, TRANSLATE_LIST_Y - 8, TRANSLATE_LIST_COLS);
+		if (translatemenu.list.scroll + translatemenu.list.viewsize < translatemenu.list.numitems)
+			M_DrawEllipsisBar(TRANSLATE_LIST_X, TRANSLATE_LIST_Y + translatemenu.list.viewsize * 8, TRANSLATE_LIST_COLS);
+	}
+	M_Translate_DrawShortcuts();
 }
 
 static void M_Translate_Back (void)
 {
+	translatemenu.scrollbar_grab = false;
 	M_TextField_ClearSelection(&translatemenu.field);
 	translatemenu.editing = false;
+	if (translatemenu.player_edit) { translatemenu.player_edit = false; return; }
 	if (translatemenu.compose) { translatemenu.compose = false; return; }
+	if (translatemenu.adding)
+	{
+		M_Translate_ShowPlayers(false);
+		return;
+	}
 	M_Menu_Console_f(); console_cursor = CONSOLE_TRANSLATE;
+}
+
+static void M_Translate_Shortcut (int key)
+{
+	if (key == 'a' || key == 'A')
+	{
+		M_Translate_RefreshPlayers();
+		if (translatemenu.can_add) M_Translate_ShowPlayers(true);
+	}
+	else if (key == 't' || key == 'T') M_Translate_OpenComposer();
+	else if (key == 'e' || key == 'E')
+	{
+		if (translatemenu.adding)
+		{
+			if (translatemenu.list.cursor == 1) M_Translate_Activate(1, false);
+			else CL_Translate_MenuReadLanguage(M_Translate_NextLanguage(CL_Translate_ReadLanguage(), 1));
+		}
+		else if (M_Translate_PlayerIndex() >= 0) M_Translate_OpenPlayerCard();
+	}
+	else if (key == K_BACKSPACE || key == K_DEL)
+	{
+		if (!translatemenu.adding && M_Translate_PlayerIndex() >= 0) M_Translate_Activate(1, true);
+	}
+	else if ((key == 'c' || key == 'C') && !translatemenu.adding && translatemenu.count)
+	{
+		CL_Translate_MenuStopAll();
+		M_Translate_Notice(CL_Translate_MenuNotice());
+	}
 }
 
 static void M_Translate_Key (int key)
@@ -23125,14 +23465,18 @@ static void M_Translate_Key (int key)
 	int row;
 	M_Translate_RefreshSend();
 	if (key == K_ESCAPE || key == K_BBUTTON || key == K_MOUSE2 || key == K_MOUSE4)
-	{ M_Translate_Back(); return; }
+	{
+		if (translatemenu.scrollbar_grab) { translatemenu.scrollbar_grab = false; return; }
+		M_Translate_Back(); return;
+	}
+	if (translatemenu.player_edit) { M_Translate_PlayerCardKey(key); return; }
 	if (translatemenu.compose)
 	{
 		if (translatemenu.editing && !translatemenu.awaiting_send && M_TextField_Key(&translatemenu.field, key))
 		{ translatemenu.notice_until = 0; return; }
 		if (key == K_UPARROW || key == K_DOWNARROW || key == K_TAB)
 		{
-			translatemenu.compose_cursor = (translatemenu.compose_cursor + (key == K_UPARROW ? 3 : 1)) % 4;
+			translatemenu.compose_cursor = (translatemenu.compose_cursor + (key == K_UPARROW ? 2 : 1)) % 3;
 			translatemenu.editing = translatemenu.compose_cursor == 1 && !translatemenu.awaiting_send;
 			S_LocalSound("misc/menu1.wav"); return;
 		}
@@ -23147,40 +23491,65 @@ static void M_Translate_Key (int key)
 				return;
 			}
 			if (m_mousey >= 40 && m_mousey < 48) translatemenu.compose_cursor = 0;
-			else if (m_mousey >= 136 && m_mousey < 144) translatemenu.compose_cursor = 2;
-			else if (m_mousey >= 152 && m_mousey < 160) translatemenu.compose_cursor = 3;
+			else if (m_mousey >= 128 && m_mousey < 152 && m_mousex < 56) translatemenu.compose_cursor = 2;
 			else return;
 			translatemenu.editing = false;
 		}
 		if ((key == K_LEFTARROW || key == K_RIGHTARROW) && translatemenu.compose_cursor == 0)
-		{ CL_Translate_MenuWriteLanguage((CL_Translate_WriteLanguage() + 1) % 2); return; }
+		{ CL_Translate_MenuWriteLanguage(M_Translate_NextLanguage(CL_Translate_WriteLanguage(), key == K_LEFTARROW ? -1 : 1)); return; }
 		if (key == K_ENTER || key == K_KP_ENTER || key == K_ABUTTON || key == K_MOUSE1)
 		{
 			m_entersound = true;
-			if (!translatemenu.compose_cursor) CL_Translate_MenuWriteLanguage((CL_Translate_WriteLanguage() + 1) % 2);
-			else if (translatemenu.compose_cursor == 3) M_Translate_Back();
+			if (!translatemenu.compose_cursor) CL_Translate_MenuWriteLanguage(M_Translate_NextLanguage(CL_Translate_WriteLanguage(), 1));
 			else if (!translatemenu.awaiting_send) M_Translate_Send();
 		}
 		return;
 	}
-	if (key == K_UPARROW || key == K_MWHEELUP || key == K_DOWNARROW || key == K_MWHEELDOWN || key == K_TAB)
+	if (translatemenu.scrollbar_grab) return;
+	if (Key_IsShortcutModifierDown() && (key == 'a' || key == 'A' || key == 'e' || key == 'E' ||
+		key == 't' || key == 'T' || key == 'c' || key == 'C' || key == K_BACKSPACE))
+	{ M_Translate_Shortcut(key); return; }
+	if (translatemenu.list.cursor >= 0 && M_List_Key(&translatemenu.list, key == K_TAB ? K_DOWNARROW : key))
 	{
-		int direction = key == K_UPARROW || key == K_MWHEELUP ? -1 : 1;
-		translatemenu.cursor = (translatemenu.cursor + direction + translatemenu.count + 4) % (translatemenu.count + 4);
-		S_LocalSound("misc/menu1.wav"); return;
+		int direction = key == K_UPARROW || key == K_KP_UPARROW || key == K_PGUP || key == K_KP_PGUP ||
+			key == K_END || key == K_KP_END ? -1 : 1;
+		if (!M_Translate_RowEnabled(translatemenu.list.cursor))
+			translatemenu.list.cursor = M_Translate_NextRow(translatemenu.list.cursor - direction, direction);
+		return;
 	}
+	if (!Key_IsShortcutModifierDown() && M_List_CycleMatch(&translatemenu.list, key, M_Translate_Match)) return;
 	if (key == K_MOUSE1)
 	{
-		if (m_mousex < 16 || m_mousex >= 304 || (row = M_Translate_HitRow(m_mousey)) < 0) return;
-		translatemenu.cursor = row;
+		int x = M_Translate_ShortcutX() + ((int)strlen(KEY_SHORTCUT_MODIFIER_NAME_LOWER) + 2) * 8;
+		if (m_mousey >= 192 && m_mousey < 200)
+		{
+			if (m_mousex >= x && m_mousex < x + 40) M_Translate_Shortcut('a');
+			else if (m_mousex >= x + 56 && m_mousex < x + 104) M_Translate_Shortcut('e');
+			else if (m_mousex >= x + 120 && m_mousex < x + 248) M_Translate_Shortcut(K_BACKSPACE);
+			return;
+		}
+		if (m_mousex >= 288 && m_mousex < 304 && m_mousey >= TRANSLATE_LIST_Y && m_mousey < 160 &&
+			M_List_UseScrollbar(&translatemenu.list, m_mousey - TRANSLATE_LIST_Y))
+		{
+			translatemenu.scrollbar_grab = true;
+			M_List_Mousemove(&translatemenu.list, m_mousey - TRANSLATE_LIST_Y);
+			return;
+		}
+		if (m_mousex < 16 || m_mousex >= 288 || (row = M_Translate_HitRow(m_mousey)) < 0) return;
+		if (!M_Translate_RowEnabled(row)) return;
+		translatemenu.list.cursor = row;
 	}
-	if (key == K_ENTER || key == K_KP_ENTER || key == K_ABUTTON || key == K_MOUSE1 || key == K_LEFTARROW || key == K_RIGHTARROW)
+	if (key == K_ENTER || key == K_KP_ENTER || key == K_ABUTTON || key == K_MOUSE1 || key == K_LEFTARROW || key == K_RIGHTARROW || key == K_DEL)
 	{
 		/* Arrows change language only; scrolling past a player never enables it. */
-		if ((key == K_LEFTARROW || key == K_RIGHTARROW) && translatemenu.cursor > 0 &&
-			translatemenu.cursor != translatemenu.count + 2) return;
+		if ((key == K_LEFTARROW || key == K_RIGHTARROW) &&
+			(translatemenu.adding ? translatemenu.list.cursor > 1 : M_Translate_PlayerIndex() < 0)) return;
+		if (key == K_DEL && (translatemenu.adding || M_Translate_PlayerIndex() < 0)) return;
 		m_entersound = true;
-		M_Translate_Activate(key == K_LEFTARROW ? -1 : 1);
+		if (!translatemenu.adding && M_Translate_PlayerIndex() >= 0 &&
+			(key == K_ENTER || key == K_KP_ENTER || key == K_ABUTTON || key == K_MOUSE1))
+		{ M_Translate_OpenPlayerCard(); return; }
+		M_Translate_Activate(key == K_LEFTARROW ? -1 : 1, key == K_DEL);
 	}
 }
 
@@ -23198,14 +23567,30 @@ static qboolean M_Translate_TextEntry (void)
 static void M_Translate_Mousemove (int x, int y)
 {
 	int row;
+	if (translatemenu.player_edit)
+	{
+		row = M_Translate_PlayerCardHit(x, y);
+		if (row >= 0) translatemenu.player_cursor = row;
+		return;
+	}
 	if (textfield_mouse_dragging && textfield_drag_field == &translatemenu.field)
 	{ M_TextField_MouseDrag(x); return; }
-	if (translatemenu.compose || x < 16 || x >= 304) return;
-	if ((row = M_Translate_HitRow(y)) >= 0) translatemenu.cursor = row;
+	if (translatemenu.compose) return;
+	if (translatemenu.scrollbar_grab)
+	{
+		if (!keydown[K_MOUSE1]) { translatemenu.scrollbar_grab = false; return; }
+		M_List_UseScrollbar(&translatemenu.list, y - TRANSLATE_LIST_Y);
+		M_List_Mousemove(&translatemenu.list, y - TRANSLATE_LIST_Y);
+		return;
+	}
+	if (x < 16 || x >= 288 || (row = M_Translate_HitRow(y)) < 0 || !M_Translate_RowEnabled(row)) return;
+	M_List_Mousemove(&translatemenu.list, y - TRANSLATE_LIST_Y);
 }
 
 static void M_Translate_Leave (void)
 {
+	translatemenu.player_edit = false;
+	translatemenu.scrollbar_grab = false;
 	translatemenu.editing = false;
 	M_TextField_ClearSelection(&translatemenu.field);
 	if (textfield_drag_field == &translatemenu.field)

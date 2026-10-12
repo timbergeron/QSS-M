@@ -37,6 +37,8 @@ class ClientMock(MockProvider):
             return ProviderAnswer({"status": "translated", "text": "Delayed message"})
         if request["message"]["text"] == "Send %h; quit":
             return ProviderAnswer({"status": "translated", "text": "Enviar %h; quit"})
+        if request["message"]["text"] == "language label test":
+            return ProviderAnswer({"status": "translated", "text": f"Mock {request['target']} translation"})
         return await super().translate(request)
 
 
@@ -52,9 +54,26 @@ async def main(sanitize=False):
         source = directory / "unicode.c"
         source.write_text(unicode)
         menu = (ROOT / "Quake/menu.c").read_text()
+        # Exercise the same list navigation, scrollbar math and ticker used by
+        # Bookmarks; only rendering and unrelated engine input are stubbed.
+        types_start = menu.rfind("typedef struct", 0, menu.index("} listsearch_t;"))
+        types_end = menu.index("} menulist_t;", types_start) + len("} menulist_t;")
+        ticker_start = menu.rfind("typedef struct", 0, menu.index("} menuticker_t;"))
+        ticker_end = menu.index("} menuticker_t;", ticker_start) + len("} menuticker_t;")
+        (directory / "translation-list-types.inc").write_text(menu[types_start:types_end] + "\n" + menu[ticker_start:ticker_end])
+        lists_start = menu.index("void M_List_AutoScroll(")
+        lists_end = menu.index("void M_DeletePrevWord(", lists_start)
+        (directory / "translation-list.inc").write_text(menu[lists_start:lists_end] +
+            function(menu, "static void M_Ticker_Init(") + function(menu, "static void M_Ticker_Update("))
         start = menu.index("/* Chat translation menu:")
         end = menu.index("/*\n==================\nM_LeaveMenuState", start)
-        (directory / "translation-menu.inc").write_text(menu[start:end])
+        layout = "\n".join(line for line in menu.splitlines()
+                           if line.startswith(("#define MENU_VALUE_X ", "#define MENU_CURSOR_X ",
+                                               "#define CONTROLLER_DIM_ALPHA")))
+        (directory / "translation-menu.inc").write_text(layout + "\n" + menu[start:end])
+        commands = (ROOT / "Quake/cmd.c").read_text()
+        completion = function(commands, "cmd_function_t* Cmd_FindCommand (")
+        (directory / "translation-completion.inc").write_text(completion)
         binary = directory / "translation-client"
         flags = shlex.split(subprocess.check_output(
             ["pkg-config", "--cflags", "--libs", "sdl3", "libcurl"], text=True))
@@ -73,19 +92,25 @@ async def main(sanitize=False):
         site = web.TCPSite(runner, "127.0.0.1", 0)
         await site.start()
         port = site._server.sockets[0].getsockname()[1]
-        env = {**os.environ, "QSSM_TRANSLATE_TEST_URL": f"http://127.0.0.1:{port}/qssm/translate"}
+        env = {**os.environ, "QSSM_TRANSLATE_TEST_URL": f"http://127.0.0.1:{port}/qssm/translate",
+               "QSSM_TRANSLATE_TEST_DIR": str(directory)}
         try:
             child = await asyncio.create_subprocess_exec(str(binary), env=env)
             result = await asyncio.wait_for(child.wait(), 15)
             if result:
                 raise RuntimeError(f"Translation client harness exited {result}")
             assert len(provider.requests) >= 8
+            new_targets = {item["target"] for item in provider.requests if item["message"]["text"] == "language label test"}
+            assert {"de", "fil", "fr"} <= new_targets
+            assert any(item["channel"] == "team" for item in provider.requests)
             for item in provider.requests:
                 serialized = json.dumps(item)
                 assert "private context" not in serialized and "Rasta" not in serialized
                 assert "Other Player" not in serialized and "Replacement" not in serialized
                 if item["mode"] == "outgoing":
                     assert item["context"] == []
+                if item["channel"] == "team":
+                    assert item["mode"] == "outgoing" and item["context"] == []
             # Catch-up includes useful same-speaker context, exactly once.
             dale = next(item for item in provider.requests if item["message"]["text"] == "dale")
             assert [line["text"] for line in dale["context"]] == ["hola", "cambiamos mapa?"]
