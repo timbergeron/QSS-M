@@ -21887,6 +21887,7 @@ static enum console_e
 #define CONSOLE_CONBACK_BOX_X 178
 #define CONSOLE_CONBACK_BOX_WIDTH 14
 #define CONSOLE_CONBACK_TEXT_X (CONSOLE_CONBACK_BOX_X + 8)
+#define CONSOLE_SEARCH_BOX_Y 176
 int numberOfConsoleItems = CONSOLE_ITEMS;
 
 static struct
@@ -21950,6 +21951,8 @@ static int M_Console_GetItemY(int index)
 
 	if (index >= CONSOLE_CONBACK)
 		y += 8;
+	if (index > CONSOLE_CONBACK)
+		y += 8;
 
 	return y;
 }
@@ -21960,7 +21963,7 @@ static int M_Console_GetItemAtY(int cy)
 	{
 		int y = M_Console_GetItemY(i);
 		int top = (i == CONSOLE_CONBACK) ? y - 8 : y;
-		int bottom = y + 8;
+		int bottom = (i == CONSOLE_CONBACK) ? y + 16 : y + 8;
 
 		if (cy >= top && cy < bottom)
 			return i;
@@ -22543,15 +22546,15 @@ void M_Console_Draw(void)
 	// Draw search box if search is active
 	if (consolemenu.search.len > 0)
 	{
-		M_DrawTextBox(16, 170, 32, 1);
-		M_PrintHighlight(24, 178, consolemenu.search.text,
+		M_DrawTextBox(16, CONSOLE_SEARCH_BOX_Y, 32, 1);
+		M_PrintHighlight(24, CONSOLE_SEARCH_BOX_Y + 8, consolemenu.search.text,
 			consolemenu.search.text,
 			consolemenu.search.len);
 		int cursor_x = 24 + 8 * consolemenu.search.len;
 		if (numberOfConsoleItems == 0)
-			M_DrawCharacter(cursor_x, 178, 11 ^ 128);
+			M_DrawCharacter(cursor_x, CONSOLE_SEARCH_BOX_Y + 8, 11 ^ 128);
 		else
-			M_DrawCharacter(cursor_x, 178, 10 + ((int)(realtime * 4) & 1));
+			M_DrawCharacter(cursor_x, CONSOLE_SEARCH_BOX_Y + 8, 10 + ((int)(realtime * 4) & 1));
 	}
 }
 
@@ -22712,7 +22715,7 @@ void M_Console_Key(int k)
 	case K_MOUSE1:
 		m_entersound = true;
 
-		if (consolemenu.search.len > 0 && m_mousey >= 170)
+		if (consolemenu.search.len > 0 && m_mousey >= CONSOLE_SEARCH_BOX_Y)
 			break;
 
 		{
@@ -22833,7 +22836,7 @@ void M_Console_Mousemove(int cx, int cy)
 	}
 
 	// Don't process mouse movement if it's in the search box area
-	if (consolemenu.search.len > 0 && cy >= 170)
+	if (consolemenu.search.len > 0 && cy >= CONSOLE_SEARCH_BOX_Y)
 		return;
 
 	// Calculate which menu item the mouse is over
