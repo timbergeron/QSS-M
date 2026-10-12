@@ -80,6 +80,7 @@ static void Cbuf_AddText(const char *text) { strcat(submitted, text); }
 static void Con_Printf(const char *fmt, ...) {}
 static qboolean History_SaveHistoryEnabled(void) { return false; }
 static qboolean Key_ConsoleQuitMistype(const char *text) { return false; }
+static qboolean CL_Translate_Console(const char *text) { return false; }
 static void Key_ConsoleUndoReset(void) {}
 static void SCR_UpdateScreen(void) {}
 static void Char_Console2(int ch) {

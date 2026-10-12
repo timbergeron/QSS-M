@@ -268,6 +268,7 @@ CL_ClearState
 */
 void CL_ClearState (void)
 {
+	CL_Translate_MapChanged();
 	SCR_ResetTitle ();
 
 	if (cl.qcvm.extfuncs.CSQC_Shutdown)
@@ -742,6 +743,7 @@ This is also called on Host_Error, so it shouldn't cause any errors
 */
 void CL_Disconnect (void)
 {
+	CL_Translate_Reset();
 	CL_ConnectTimingCancel();
 	CL_AsyncDownload_Cancel();
 	cl_portpingprobe_pending_host[0] = '\0';
@@ -7437,6 +7439,7 @@ static void CL_UserinfoChanged(scoreboard_t *sb)
 {
 	char tmp[64];
 	Info_GetKey(sb->userinfo, "name", sb->name, sizeof(sb->name));
+	CL_Translate_PlayerChanged((int)(sb - cl.scores), sb->name);
 	Info_GetKey(sb->userinfo, "topcolor", tmp, sizeof(tmp));
 	sb->shirt = CL_PLColours_Parse(*tmp?tmp:"0");
 	Info_GetKey(sb->userinfo, "bottomcolor", tmp, sizeof(tmp));
@@ -7983,6 +7986,7 @@ void CL_Init (void)
 	SZ_Alloc (&cls.message, 1024);
 	cls.download.percent = -1.0f;
 	CL_Demo_Init();
+	CL_Translate_Init();
 	Mapshot_Init();			// before Discord: presence and alerts resolve mapshot URLs
 	Discord_Init();
 

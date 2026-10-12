@@ -67,6 +67,7 @@
 #include <stdlib.h>
 #include <stdarg.h>
 #include <string.h>
+#include <ctype.h>
 #include <float.h>
 
 /*==========================================================================*/

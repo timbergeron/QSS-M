@@ -672,6 +672,11 @@ bounded by what the server will accept, not by MAXCMDLINE.
 */
 int Key_ConsoleInputLimit (void)
 {
+	/* Translation is a command with a message tail; its command words must
+	 * not consume the much shorter cl_chatmode chat-input allowance. */
+	if (!q_strncasecmp(key_lines[edit_line] + 1, "translate", 9) &&
+		(key_lines[edit_line][10] == ' ' || key_lines[edit_line][10] == '\t'))
+		return MAXCMDLINE;
 	if (cl_chatmode.value && (cls.state == ca_connected && cl.gametype == GAME_DEATHMATCH))
 	{
 		if ((cl.modtype == 1) || (cl.modtype == 4))
@@ -1109,8 +1114,13 @@ static void Key_ConsoleKey (int key)
 		// server stufftext, both of which reach the buffer as src_command.
 		if (!chatprefixed && Key_ConsoleQuitMistype (workline + 1))
 			return;
-		Cbuf_AddText (workline + 1);	// skip the prompt
-		Cbuf_AddText ("\n");
+		/* Translation authorizes uploads here, before aliases/stufftext lose
+		 * their provenance. Its message tail is data, including semicolons. */
+		if (chatprefixed || !CL_Translate_Console(workline + 1))
+		{
+			Cbuf_AddText (workline + 1);	// skip the prompt
+			Cbuf_AddText ("\n");
+		}
 		Con_Printf ("%s\n", workline);
 
 		if (History_SaveHistoryEnabled())

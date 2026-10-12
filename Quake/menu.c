@@ -121,6 +121,7 @@ void M_Menu_ModMenu_f (void);
 		void M_Menu_HUD_f (void);
 			void M_Menu_Crosshair_f (void);
 		void M_Menu_Console_f (void);
+		void M_Menu_Translate_f (void);
 		void M_Menu_Startup_f (void);
 		void M_Menu_DemoOptions_f (void);
 		void M_Menu_PakLoading_f (void);
@@ -21872,6 +21873,7 @@ static enum console_e
 	CONSOLE_CONBACK,
 	CONSOLE_CONCOLOR,
 	CONSOLE_CONTENTFILTER,
+	CONSOLE_TRANSLATE,
 	CONSOLE_TYPING,
 	CONSOLE_AUTOHINT,
 	CONSOLE_CLEAR_ON_TOGGLE,
@@ -21947,8 +21949,6 @@ static int M_Console_GetItemY(int index)
 	int y = 48 + index * 8;
 
 	if (index >= CONSOLE_CONBACK)
-		y += 8;
-	if (index >= CONSOLE_CLEAR_CONSOLE)
 		y += 8;
 
 	return y;
@@ -22156,6 +22156,8 @@ static const char* M_Console_GetItemText(int index)
 		return "Background Color";
 	case CONSOLE_CONTENTFILTER:
 		return "Content Filter";
+	case CONSOLE_TRANSLATE:
+		return "Chat Translation";
 	case CONSOLE_TYPING:
 		return "Typing Status";
 	case CONSOLE_AUTOHINT:
@@ -22198,6 +22200,7 @@ static const char *M_Console_GetItemHintText(int index)
 	switch (index)
 	{
 	case CONSOLE_CLEAR_CONSOLE:	return "cmd clear";
+	case CONSOLE_TRANSLATE:		return "menu_translate";
 	case CONSOLE_CLEAR_HISTORY:	return "cmd clearhistory";
 	default:					return NULL;
 	}
@@ -22338,6 +22341,9 @@ static void M_Console_ActivateItem(void)
 	{
 		switch (console_cursor)
 		{
+		case CONSOLE_TRANSLATE:
+			M_Menu_Translate_f();
+			break;
 		case CONSOLE_CLEAR_CONSOLE:
 			Cbuf_AddText("clear\n");
 			break;
@@ -22446,6 +22452,10 @@ void M_Console_Draw(void)
 			value = filter_text;
 			break;
 
+		case CONSOLE_TRANSLATE:
+			text = "Chat Translation";
+			value = "...";
+			break;
 		case CONSOLE_TYPING:
 			text = "   Typing Status";
 			if (!show_cvar_hint)
@@ -22839,6 +22849,369 @@ void M_Console_Mousemove(int cx, int cy)
 	}
 }
 
+/* Chat translation menu: draw/hover are read-only; only local input calls the
+ * trusted translation controller. No commands, aliases, or cvar opt-in. */
+#define TRANSLATE_VISIBLE_PLAYERS 6
+#define TRANSLATE_FIELD_CHARS 32
+static struct
+{
+	cl_translate_player_t players[MAX_SCOREBOARD];
+	int count, cursor, scroll, compose_cursor;
+	qboolean compose, editing, initialized, awaiting_send;
+	char draft[513], notice[160];
+	double notice_until;
+	unsigned int send_id;
+	menu_textfield_t field;
+} translatemenu;
+
+static void M_Translate_Notice (const char *text)
+{
+	q_strlcpy(translatemenu.notice, text, sizeof(translatemenu.notice));
+	translatemenu.notice_until = realtime + 6;
+}
+
+static void M_Translate_PrintWrapped (int y, const char *text, int lines)
+{
+	while (*text && lines-- > 0)
+	{
+		char line[37];
+		size_t length = q_min(strlen(text), sizeof(line) - 1);
+		if (text[length] && text[length] != ' ')
+		{
+			size_t word = length;
+			while (word && text[word] != ' ') word--;
+			if (word) length = word;
+		}
+		memcpy(line, text, length); line[length] = 0;
+		M_PrintWhite(16, y, line);
+		text += length;
+		while (*text == ' ') text++;
+		y += 8;
+	}
+}
+
+static void M_Translate_RefreshPlayers (void)
+{
+	cl_translate_player_t previous;
+	int i;
+	qboolean player_selected = translatemenu.cursor > 0 && translatemenu.cursor <= translatemenu.count;
+	int control = translatemenu.cursor - translatemenu.count;
+	if (player_selected) previous = translatemenu.players[translatemenu.cursor - 1];
+	translatemenu.count = CL_Translate_MenuPlayers(translatemenu.players, MAX_SCOREBOARD);
+	if (player_selected)
+	{
+		for (i = 0; i < translatemenu.count; i++)
+			if (translatemenu.players[i].slot == previous.slot && !strcmp(translatemenu.players[i].name, previous.name)) break;
+		translatemenu.cursor = i < translatemenu.count ? i + 1 : 0;
+	}
+	else if (control > 0) translatemenu.cursor = translatemenu.count + control;
+	translatemenu.cursor = CLAMP(0, translatemenu.cursor, translatemenu.count + 3);
+	if (translatemenu.cursor > 0 && translatemenu.cursor <= translatemenu.count)
+	{
+		int selected = translatemenu.cursor - 1;
+		if (selected < translatemenu.scroll) translatemenu.scroll = selected;
+		if (selected >= translatemenu.scroll + TRANSLATE_VISIBLE_PLAYERS)
+			translatemenu.scroll = selected - TRANSLATE_VISIBLE_PLAYERS + 1;
+	}
+	translatemenu.scroll = CLAMP(0, translatemenu.scroll, q_max(0, translatemenu.count - TRANSLATE_VISIBLE_PLAYERS));
+}
+
+static void M_Translate_RefreshSend (void)
+{
+	unsigned int id;
+	char message[160];
+	cl_translate_send_state_t state = CL_Translate_SendState(&id, message, sizeof(message));
+	if (!translatemenu.awaiting_send) return;
+	if (id != translatemenu.send_id) { translatemenu.awaiting_send = false; return; }
+	if (state == TRANSLATE_SEND_PENDING) return;
+	translatemenu.awaiting_send = false;
+	M_Translate_Notice(message);
+	if (state == TRANSLATE_SEND_SENT)
+	{
+		translatemenu.draft[0] = 0;
+		M_TextField_Init(&translatemenu.field, translatemenu.draft, sizeof(translatemenu.draft) - 1, false);
+	}
+	translatemenu.compose_cursor = 1;
+	translatemenu.editing = true;
+}
+
+void M_Menu_Translate_f (void)
+{
+	key_dest = key_menu;
+	m_state = m_translate;
+	m_entersound = true;
+	translatemenu.compose = translatemenu.editing = false;
+	translatemenu.cursor = translatemenu.scroll = 0;
+	if (!translatemenu.initialized)
+	{
+		M_TextField_Init(&translatemenu.field, translatemenu.draft, sizeof(translatemenu.draft) - 1, false);
+		translatemenu.initialized = true;
+	}
+	M_Translate_RefreshPlayers();
+	M_Translate_RefreshSend();
+}
+
+static int M_Translate_RowY (int row)
+{
+	if (!row) return 40;
+	if (row <= translatemenu.count) return 72 + (row - 1 - translatemenu.scroll) * 8;
+	return 128 + (row - translatemenu.count - 1) * 16;
+}
+
+static int M_Translate_HitRow (int y)
+{
+	int i;
+	if (y >= 40 && y < 48) return 0;
+	for (i = translatemenu.scroll; i < translatemenu.count && i < translatemenu.scroll + TRANSLATE_VISIBLE_PLAYERS; i++)
+		if (y >= 72 + (i - translatemenu.scroll) * 8 && y < 80 + (i - translatemenu.scroll) * 8) return i + 1;
+	for (i = 1; i <= 3; i++) if (y >= 128 + (i - 1) * 16 && y < 136 + (i - 1) * 16)
+		return translatemenu.count + i;
+	return -1;
+}
+
+static int M_Translate_FieldViewStart (void)
+{
+	return q_max(0, translatemenu.field.cursor - TRANSLATE_FIELD_CHARS + 1);
+}
+
+static qboolean M_Translate_CanSend (void)
+{
+	const char *text = translatemenu.draft;
+	while (*text == ' ') text++;
+	return *text && !CL_Translate_UnavailableReason() &&
+		CL_Translate_SendState(NULL, NULL, 0) != TRANSLATE_SEND_PENDING;
+}
+
+static void M_Translate_Send (void)
+{
+	char message[160];
+	if (CL_Translate_MenuSend(CL_Translate_WriteLanguage(), translatemenu.draft))
+	{
+		CL_Translate_SendState(&translatemenu.send_id, message, sizeof(message));
+		translatemenu.awaiting_send = true;
+		translatemenu.editing = false;
+		translatemenu.compose_cursor = 2;
+	}
+	else
+	{
+		CL_Translate_SendState(NULL, message, sizeof(message));
+		M_Translate_Notice(message);
+	}
+}
+
+static void M_Translate_Activate (int direction)
+{
+	int row = translatemenu.cursor;
+	if (!row) CL_Translate_MenuReadLanguage((CL_Translate_ReadLanguage() + direction + 2) % 2);
+	else if (row <= translatemenu.count)
+	{
+		cl_translate_player_t *player = &translatemenu.players[row - 1];
+		if (!player->selectable && player->language < 0)
+		{
+			M_Translate_Notice(!strcmp(player->reason, "ignored") ? "This player is ignored. Unignore them first." :
+				"This player name cannot be identified uniquely.");
+			return;
+		}
+		CL_Translate_MenuWatch(player->slot, player->name, player->language < 0 ? CL_Translate_ReadLanguage() : -1);
+	}
+	else if (row == translatemenu.count + 1) CL_Translate_MenuStopAll();
+	else if (row == translatemenu.count + 2) CL_Translate_MenuWriteLanguage((CL_Translate_WriteLanguage() + direction + 2) % 2);
+	else
+	{
+		translatemenu.compose = true;
+		translatemenu.compose_cursor = 1;
+		translatemenu.editing = !translatemenu.awaiting_send;
+		M_TextField_ClearSelection(&translatemenu.field);
+		return;
+	}
+	M_Translate_Notice(CL_Translate_MenuNotice());
+}
+
+static void M_Translate_Draw (void)
+{
+	char text[160], clipped[24];
+	int i, y;
+	const char *unavailable = CL_Translate_UnavailableReason();
+	M_TextField_CheckMouseRelease();
+	M_Translate_RefreshPlayers();
+	M_Translate_RefreshSend();
+	M_PrintWhite((320 - (translatemenu.compose ? 19 : 16) * 8) / 2, 16,
+		translatemenu.compose ? "Translate a Message" : "Chat Translation");
+	if (translatemenu.compose)
+	{
+		int start = M_Translate_FieldViewStart();
+		menu_textfield_t visible = translatemenu.field;
+		M_Print(16, 40, "Write chat in");
+		M_Print(216, 40, CL_Translate_LanguageName(CL_Translate_WriteLanguage()));
+		M_PrintWhite(16, 64, "Message");
+		q_snprintf(text, sizeof(text), "%u/512", (unsigned int)strlen(translatemenu.draft));
+		M_PrintWhite(240, 64, text);
+		M_DrawTextBox(16, 80, 34, 1);
+		q_strlcpy(text, translatemenu.draft + start, TRANSLATE_FIELD_CHARS + 1);
+		visible.text = text;
+		visible.cursor = CLAMP(0, visible.cursor - start, (int)strlen(text));
+		visible.sel_start = visible.sel_start < 0 ? -1 : CLAMP(0, visible.sel_start - start, (int)strlen(text));
+		if (translatemenu.editing && !translatemenu.awaiting_send) M_TextField_DrawHighlight(&visible, 24, 88);
+		M_PrintWhite(24, 88, *text ? text : "Type your message...");
+		if (translatemenu.editing && !translatemenu.awaiting_send) M_TextField_DrawCursor(&visible, 24, 88);
+		M_PrintWhite(16, 112, "Enter sends publicly. Esc goes back.");
+		q_snprintf(text, sizeof(text), "Send publicly in %s", CL_Translate_LanguageName(CL_Translate_WriteLanguage()));
+		if (M_Translate_CanSend()) M_Print(16, 136, text); else M_PrintWhite(16, 136, text);
+		M_Print(16, 152, "Back");
+		if (CL_Translate_SendState(NULL, text, sizeof(text)) == TRANSLATE_SEND_PENDING)
+			M_Translate_PrintWrapped(168, text, 2);
+		else if (translatemenu.notice_until > realtime) M_Translate_PrintWrapped(168, translatemenu.notice, 2);
+		else if (unavailable) M_Translate_PrintWrapped(168, unavailable, 2);
+		y = translatemenu.compose_cursor == 0 ? 40 : translatemenu.compose_cursor == 1 ? 88 :
+			translatemenu.compose_cursor == 2 ? 136 : 152;
+	}
+	else
+	{
+		CL_Translate_MenuStatus(text, sizeof(text));
+		M_PrintWhite(16, 28, text);
+		M_Print(16, 40, "Read chat in");
+		M_Print(216, 40, CL_Translate_MixedLanguages() ? "mixed" : CL_Translate_LanguageName(CL_Translate_ReadLanguage()));
+		M_PrintWhite(16, 56, "Players");
+		if (translatemenu.count > TRANSLATE_VISIBLE_PLAYERS)
+		{
+			q_snprintf(text, sizeof(text), "%d-%d of %d", translatemenu.scroll + 1,
+				q_min(translatemenu.count, translatemenu.scroll + TRANSLATE_VISIBLE_PLAYERS), translatemenu.count);
+			M_PrintWhite(200, 56, text);
+		}
+		if (!translatemenu.count)
+			M_Translate_PrintWrapped(72, unavailable ? unavailable : "No other players are connected.", 3);
+		for (i = translatemenu.scroll; i < translatemenu.count && i < translatemenu.scroll + TRANSLATE_VISIBLE_PLAYERS; i++)
+		{
+			cl_translate_player_t *player = &translatemenu.players[i];
+			y = 72 + (i - translatemenu.scroll) * 8;
+			q_strlcpy(clipped, player->display, sizeof(clipped));
+			if (strlen(player->display) >= sizeof(clipped)) memcpy(clipped + sizeof(clipped) - 4, "...", 4);
+			M_DrawCheckbox(24, y, player->language >= 0);
+			if (player->selectable) M_Print(44, y, clipped); else M_PrintWhite(44, y, clipped);
+			M_PrintWhite(240, y, !player->selectable ? player->reason : player->language < 0 ? "off" :
+				player->language == 0 ? "EN" : "ES");
+		}
+		M_Print(16, 128, "Stop all translation");
+		M_Print(16, 144, "Write chat in");
+		M_Print(216, 144, CL_Translate_LanguageName(CL_Translate_WriteLanguage()));
+		M_Print(16, 160, "Translate a message...");
+		if (translatemenu.notice_until > realtime) M_Translate_PrintWrapped(176, translatemenu.notice, 1);
+		else if (translatemenu.cursor > 0 && translatemenu.cursor <= translatemenu.count)
+		{
+			cl_translate_player_t *player = &translatemenu.players[translatemenu.cursor - 1];
+			int language = player->language < 0 ? CL_Translate_ReadLanguage() : player->language;
+			if (language == 0) q_snprintf(text, sizeof(text), "Console: translate @%s", player->display);
+			else q_snprintf(text, sizeof(text), "Console: translate %s @%s", CL_Translate_LanguageCode(language), player->display);
+			M_Translate_PrintWrapped(176, text, 1);
+		}
+		else M_PrintWhite(16, 176, "Select players; recent chat included.");
+		y = M_Translate_RowY(translatemenu.cursor);
+	}
+	M_DrawCharacter(8, y, 12 + ((int)(realtime * 4) & 1));
+	M_PrintWhite(16, 184, "Chat + recent context are sent to");
+	M_PrintWhite(16, 192, "timbergeron.com / OpenRouter / host");
+}
+
+static void M_Translate_Back (void)
+{
+	M_TextField_ClearSelection(&translatemenu.field);
+	translatemenu.editing = false;
+	if (translatemenu.compose) { translatemenu.compose = false; return; }
+	M_Menu_Console_f(); console_cursor = CONSOLE_TRANSLATE;
+}
+
+static void M_Translate_Key (int key)
+{
+	int row;
+	M_Translate_RefreshSend();
+	if (key == K_ESCAPE || key == K_BBUTTON || key == K_MOUSE2 || key == K_MOUSE4)
+	{ M_Translate_Back(); return; }
+	if (translatemenu.compose)
+	{
+		if (translatemenu.editing && !translatemenu.awaiting_send && M_TextField_Key(&translatemenu.field, key))
+		{ translatemenu.notice_until = 0; return; }
+		if (key == K_UPARROW || key == K_DOWNARROW || key == K_TAB)
+		{
+			translatemenu.compose_cursor = (translatemenu.compose_cursor + (key == K_UPARROW ? 3 : 1)) % 4;
+			translatemenu.editing = translatemenu.compose_cursor == 1 && !translatemenu.awaiting_send;
+			S_LocalSound("misc/menu1.wav"); return;
+		}
+		if (key == K_MOUSE1)
+		{
+			if (m_mousex < 16 || m_mousex >= 304) return;
+			if (m_mousey >= 80 && m_mousey < 104)
+			{
+				if (translatemenu.awaiting_send) return;
+				translatemenu.compose_cursor = 1; translatemenu.editing = true;
+				M_TextField_MouseClick(&translatemenu.field, m_mousex, 24 - M_Translate_FieldViewStart() * 8);
+				return;
+			}
+			if (m_mousey >= 40 && m_mousey < 48) translatemenu.compose_cursor = 0;
+			else if (m_mousey >= 136 && m_mousey < 144) translatemenu.compose_cursor = 2;
+			else if (m_mousey >= 152 && m_mousey < 160) translatemenu.compose_cursor = 3;
+			else return;
+			translatemenu.editing = false;
+		}
+		if ((key == K_LEFTARROW || key == K_RIGHTARROW) && translatemenu.compose_cursor == 0)
+		{ CL_Translate_MenuWriteLanguage((CL_Translate_WriteLanguage() + 1) % 2); return; }
+		if (key == K_ENTER || key == K_KP_ENTER || key == K_ABUTTON || key == K_MOUSE1)
+		{
+			m_entersound = true;
+			if (!translatemenu.compose_cursor) CL_Translate_MenuWriteLanguage((CL_Translate_WriteLanguage() + 1) % 2);
+			else if (translatemenu.compose_cursor == 3) M_Translate_Back();
+			else if (!translatemenu.awaiting_send) M_Translate_Send();
+		}
+		return;
+	}
+	if (key == K_UPARROW || key == K_MWHEELUP || key == K_DOWNARROW || key == K_MWHEELDOWN || key == K_TAB)
+	{
+		int direction = key == K_UPARROW || key == K_MWHEELUP ? -1 : 1;
+		translatemenu.cursor = (translatemenu.cursor + direction + translatemenu.count + 4) % (translatemenu.count + 4);
+		S_LocalSound("misc/menu1.wav"); return;
+	}
+	if (key == K_MOUSE1)
+	{
+		if (m_mousex < 16 || m_mousex >= 304 || (row = M_Translate_HitRow(m_mousey)) < 0) return;
+		translatemenu.cursor = row;
+	}
+	if (key == K_ENTER || key == K_KP_ENTER || key == K_ABUTTON || key == K_MOUSE1 || key == K_LEFTARROW || key == K_RIGHTARROW)
+	{
+		/* Arrows change language only; scrolling past a player never enables it. */
+		if ((key == K_LEFTARROW || key == K_RIGHTARROW) && translatemenu.cursor > 0 &&
+			translatemenu.cursor != translatemenu.count + 2) return;
+		m_entersound = true;
+		M_Translate_Activate(key == K_LEFTARROW ? -1 : 1);
+	}
+}
+
+static void M_Translate_Char (int key)
+{
+	if (translatemenu.compose && translatemenu.editing && !translatemenu.awaiting_send &&
+		M_TextField_Char(&translatemenu.field, key)) translatemenu.notice_until = 0;
+}
+
+static qboolean M_Translate_TextEntry (void)
+{
+	return translatemenu.compose && translatemenu.editing && !translatemenu.awaiting_send;
+}
+
+static void M_Translate_Mousemove (int x, int y)
+{
+	int row;
+	if (textfield_mouse_dragging && textfield_drag_field == &translatemenu.field)
+	{ M_TextField_MouseDrag(x); return; }
+	if (translatemenu.compose || x < 16 || x >= 304) return;
+	if ((row = M_Translate_HitRow(y)) >= 0) translatemenu.cursor = row;
+}
+
+static void M_Translate_Leave (void)
+{
+	translatemenu.editing = false;
+	M_TextField_ClearSelection(&translatemenu.field);
+	if (textfield_drag_field == &translatemenu.field)
+	{ textfield_mouse_dragging = false; textfield_drag_field = NULL; }
+}
+
 /*
 ==================
 M_LeaveMenuState
@@ -22856,6 +23229,9 @@ static void M_LeaveMenuState (enum m_state_e from)
 {
 	switch (from)
 	{
+	case m_translate:
+		M_Translate_Leave();
+		break;
 	case m_slist:
 		CleanupPingThreads();
 		break;
@@ -23032,7 +23408,7 @@ static const char * const menusearch_hud_labels[] = {
 };
 static const char * const menusearch_console_labels[] = {
 	"Font Size", "Console Height", "Down/Up Speed", "Transparency", "Background Image",
-	"Background Color", "Content Filter", "Typing Status", "Auto Hints", "Clear On Toggle",
+	"Background Color", "Content Filter", "Chat Translation", "Typing Status", "Auto Hints", "Clear On Toggle",
 	"Save History", "Clear Console", "Clear History"
 };
 /* Main Menu has no label table here: m_main_items owns its rows. */
@@ -23444,6 +23820,7 @@ static const char *MenuSearch_ConsoleKeywords(int index)
 	case CONSOLE_CONBACK: return "terminal background image texture";
 	case CONSOLE_CONCOLOR: return "terminal background color colour tint rgb";
 	case CONSOLE_CONTENTFILTER: return "profanity language censor mature filter";
+	case CONSOLE_TRANSLATE: return "translate translation chat language english spanish player incoming outgoing";
 	case CONSOLE_TYPING: return "chat input status indicator";
 	case CONSOLE_AUTOHINT: return "autocomplete suggestions commands help";
 	case CONSOLE_CLEAR_ON_TOGGLE: return "input erase reset close open";
@@ -45077,6 +45454,7 @@ static struct
 	{"menu_hud", M_Menu_HUD_f},
 	{"menu_crosshair", M_Menu_Crosshair_f},
 	{"menu_console", M_Menu_Console_f},
+	{"menu_translate", M_Menu_Translate_f},
 	{"menu_colorpicker", M_Menu_ColorPicker_f},
 	{"menu_startup", M_Menu_Startup_f},
 	{"menu_demooptions", M_Menu_DemoOptions_f},
@@ -47136,6 +47514,9 @@ void M_Draw (void)
 	case m_console:
 		M_Console_Draw();
 		break;
+	case m_translate:
+		M_Translate_Draw();
+		break;
 
 	case m_mods: // woods #modsmenu (iw)
 		M_Mods_Draw();
@@ -47575,6 +47956,9 @@ void M_Keydown (int key, qboolean repeat)
 	case m_console:
 		M_Console_Key(key);
 		break;
+	case m_translate:
+		M_Translate_Key(key);
+		break;
 
 	case m_mods: // woods #modsmenu (iw)
 		M_Mods_Key(key);
@@ -47771,6 +48155,9 @@ void M_Mousemove(int x, int y) // woods #mousemenu
 	case m_console:
 		M_Console_Mousemove(x, y);
 		return;
+	case m_translate:
+		M_Translate_Mousemove(x, y);
+		return;
 
 	case m_extras:
 		M_Extras_Mousemove(x, y);
@@ -47880,6 +48267,9 @@ void M_Charinput (int key)
 	case m_console:
 		M_Console_Char(key);
 		return;
+	case m_translate:
+		M_Translate_Char(key);
+		return;
 	case m_sky:
 		M_Sky_Char(key);
 		return;
@@ -47923,6 +48313,8 @@ qboolean M_TextEntry (void)
 		return M_NameMaker_TextEntry();
 	case m_console:
 		return M_Console_TextEntry();
+	case m_translate:
+		return M_Translate_TextEntry();
 	case m_discord:
 		return M_Discord_TextEntry();
 	case m_sky:

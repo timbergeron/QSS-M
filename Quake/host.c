@@ -2500,6 +2500,7 @@ void _Host_Frame (double time)
 	URI_Frame(); // woods #uri
 	CL_AsyncDownload_Frame();
 	CL_LocDownload_Frame();
+	CL_Translate_Frame();
 	M_DownloadMods_Frame();
 
 	if (cl.sendprespawn)
@@ -2871,6 +2872,7 @@ void Host_Shutdown(void)
 	Image_PreloadRelease ();
 	NET_CancelWebRequests(); // also covers Sys_Error and quit paths that skip Host_Quit_f
 	NET_CancelServerQueries();
+	CL_Translate_Shutdown();
 	Discord_Shutdown(); // joins curl workers before NET_Shutdown cleans up libcurl
 	Mapshot_Shutdown();
 	SCR_Shutdown();
