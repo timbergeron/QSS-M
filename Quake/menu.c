@@ -22868,7 +22868,7 @@ extern qboolean WordFilter_Check (const char *text, char *dest, size_t size);
 #define TRANSLATE_ADD_ROW 0
 #define TRANSLATE_MESSAGE_ROW 1
 #define TRANSLATE_PLAYERS_ROW 3
-#define TRANSLATE_CHOOSE_PLAYERS_ROW 2
+#define TRANSLATE_CHOOSE_PLAYERS_ROW 3
 static struct
 {
 	cl_translate_player_t players[CL_TRANSLATE_MAX_SELECTIONS];
@@ -22931,7 +22931,8 @@ static qboolean M_Translate_RowEnabled (int row)
 {
 	if (row < 0 || row >= M_Translate_Rows()) return false;
 	if (translatemenu.adding)
-		return row != M_Translate_EveryoneRow() - 1 && (row != M_Translate_EveryoneRow() || translatemenu.can_add);
+		return row != TRANSLATE_CHOOSE_PLAYERS_ROW - 1 && row != M_Translate_EveryoneRow() - 1 &&
+			(row != M_Translate_EveryoneRow() || translatemenu.can_add);
 	if (row == TRANSLATE_ADD_ROW) return translatemenu.can_add;
 	if (row == TRANSLATE_MESSAGE_ROW) return translatemenu.can_compose;
 	if (row == TRANSLATE_PLAYERS_ROW - 1 || row == translatemenu.count + TRANSLATE_PLAYERS_ROW) return false;
@@ -23278,7 +23279,7 @@ static const char *M_Translate_ItemText (int row, char text[96])
 			return text;
 		}
 		if (row == 1) return translatemenu.remember ? "Remember by name: Yes" : "Remember by name: No";
-		if (row == M_Translate_EveryoneRow() - 1) return "";
+		if (row == TRANSLATE_CHOOSE_PLAYERS_ROW - 1 || row == M_Translate_EveryoneRow() - 1) return "";
 		if (row == M_Translate_EveryoneRow()) return "@everyone (translate all players)";
 		return translatemenu.players[row - TRANSLATE_CHOOSE_PLAYERS_ROW].display;
 	}
