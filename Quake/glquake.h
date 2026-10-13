@@ -678,6 +678,7 @@ void Sky_DrawSky (void);
 void Sky_NewMap (void);
 void Skywind_SetupFrame(void);
 void Sky_ResetGL (void);
+void Sky_RefreshTextures (void);
 void Sky_LoadTexture (qmodel_t *mod, texture_t *mt, enum srcformat fmt, unsigned int width, unsigned int height);
 void Sky_LoadTextureQ64 (qmodel_t *mod, texture_t *mt);
 qboolean  Sky_LoadExternalTextures (qmodel_t* mod, texture_t* mt); // woods #extsky
@@ -699,6 +700,7 @@ extern vec4_t skyroom_orientation;
 void TexMgr_RecalcWarpImageSize (void);
 
 enum {FILLED_POLYGON, OUTLINED_POLYGON}; // woods #texturepointer
+void TexturePointer_Reset (void);
 qboolean TexturePointer_Copy (qboolean copy_image);
 
 void R_ClearTextureChains (qmodel_t *mod, texchain_t chain);

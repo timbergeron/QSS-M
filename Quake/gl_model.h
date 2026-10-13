@@ -86,6 +86,10 @@ typedef struct texture_s
 	char				name[16];
 	unsigned			width, height;
 	unsigned			shift;		// Q64
+	// Original BSP pixels follow this struct; replacement images may differ.
+	int				source_format;
+	unsigned			source_width, source_height;
+	uintptr_t			source_offset;
 	struct gltexture_s	*gltexture; //johnfitz -- pointer to gltexture
 	struct gltexture_s	*fullbright; //johnfitz -- fullbright mask texture
 	struct gltexture_s	*tele_normal;
@@ -252,6 +256,8 @@ typedef struct mspriteframe_s
 	int					width, height;
 	float				up, down, left, right;
 	float				smax, tmax; //johnfitz -- image might be padded
+	uintptr_t			source_offset;
+	int				source_format, source_framenum;
 	struct gltexture_s	*gltexture;
 } mspriteframe_t;
 
@@ -481,7 +487,7 @@ typedef struct qmodel_s
 							// that this model came from
 	qboolean	needload;		// bmodels and sprites don't cache normally
 	qboolean	textures_retained;	// tb -- gl textures were kept across the map change, see Mod_ClearAll
-	int		retain_signature;	// tb -- load settings those textures were made under
+	int		retain_signature;	// effective external-image mode of loaded/retained textures
 
 	modtype_t	type;
 	int			numframes;
@@ -632,6 +638,7 @@ extern int	mod_generation;	// bumped whenever model data may be freed or replace
 qmodel_t *Mod_ForName (const char *name, qboolean crash);
 qmodel_t *Mod_TryForName (const char *name);
 void	Mod_ForEachModel(void(*callback)(qmodel_t *mod));
+void Mod_ReloadTextures (void);
 void	*Mod_Extradata (qmodel_t *mod);	// handles caching
 void	Mod_TouchModel (const char *name);
 qboolean Mod_CalcBSPFileSurfaceAreas (const char *path, map_surface_areas_t *areas);

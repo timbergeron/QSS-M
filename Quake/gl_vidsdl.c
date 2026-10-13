@@ -2606,6 +2606,7 @@ void	VID_Init (void)
 	int		display_width, display_height, display_refreshrate, display_bpp;
 	qboolean	fullscreen, validmode;
 	cvar_t *v;
+	extern cvar_t gl_load24bit, gl_load24bit_hud;
 	size_t i;
 	static const char	*read_vars[] = { "vid_fullscreen",
 					 "vid_width",
@@ -2637,6 +2638,10 @@ void	VID_Init (void)
 	for (i = 0; i < num_readvars; i++)
 	{
 		v = Cvar_FindVar(read_vars[i]);
+		/* These are read with the video settings at startup, but have their
+		 * own live texture-refresh callbacks registered by Mod_Init. */
+		if (v == &gl_load24bit || v == &gl_load24bit_hud)
+			continue;
 		if (!v || v->callback)
 			Sys_Error("Cvar %s not found yet, or already has a callback", read_vars[i]);
 		else // woods

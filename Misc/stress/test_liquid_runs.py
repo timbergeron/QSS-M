@@ -74,7 +74,7 @@ typedef struct { int type, firstmodelsurface, nummodelsurfaces, numtextures; msu
 typedef struct { qmodel_t *model; int effects; unsigned char alpha; int culled, id, solid, mkey; } entity_t;
 static int mod_generation;
 static struct { void *polys; } lightmaps[8];
-static int lightmap_count = 8;
+static int lightmap_count = 8, lightmaps_latecached;
 /* recording stubs */
 static int calls[16384], ncalls, active_unit, run_open, run_kind, run_begins, run_ends, available = 1;
 static int drawn_ids[4096], ndrawn, drawn_lists[4096], full_chains, list_chains;

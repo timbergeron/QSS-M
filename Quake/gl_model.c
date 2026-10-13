@@ -41,6 +41,18 @@ static qmodel_t *Mod_LoadModel (qmodel_t *mod, qboolean crash);
 static void Q1BSPX_Reset (void);
 
 static void Mod_Print (void);
+static int Mod_RetainSignature (void);
+static qboolean mod_texture_reload_pending, mod_model_texture_reload_pending;
+static void Mod_TextureModeChanged (cvar_t *var)
+{
+	extern cvar_t gl_load24bit;
+	if (host_initialized && !isDedicated)
+	{
+		mod_texture_reload_pending = true;
+		if (var == &gl_load24bit)
+			mod_model_texture_reload_pending = true;
+	}
+}
 
 static cvar_t	external_ents = {"external_ents", "1", CVAR_ARCHIVE};
 static cvar_t	external_ents_dir = {"external_ents_dir", "", CVAR_ARCHIVE};
@@ -138,6 +150,7 @@ void Mod_Init (void)
 	Cvar_RegisterVariable (&external_ents_dir);
 	Cvar_RegisterVariable (&external_lits_dir); // woods #litdir
 	Cvar_RegisterVariable (&gl_load24bit);
+	Cvar_SetCallback (&gl_load24bit, Mod_TextureModeChanged);
 	Cvar_RegisterVariable (&mod_retain_textures);
 	Cvar_RegisterVariable (&r_replacemodels);
 	Cvar_SetCompletion (&r_replacemodels, &R_ReplaceModels_Completion_f); // woods #iwtabcomplete
@@ -146,6 +159,7 @@ void Mod_Init (void)
 	Cvar_RegisterVariable (&gl_load24bit_skins); // woods #loadskins
 	Cvar_SetCallback (&gl_load24bit_skins, Cache_Flush_f); // woods #loadskins
 	Cvar_RegisterVariable (&gl_load24bit_hud); // woods #24bithud
+	Cvar_SetCallback (&gl_load24bit_hud, Mod_TextureModeChanged);
 	Cvar_RegisterVariable (&mod_lightscale_broken);
 	Cvar_RegisterVariable (&mod_lightgrid);
 	Cvar_RegisterVariable (&scr_concolor); // woods #concolor
@@ -366,7 +380,7 @@ byte *Mod_LeafPVS (mleaf_t *leaf, qmodel_t *model)
 byte *Mod_NoVisPVS (qmodel_t *model)
 {
 	int pvsbytes;
- 
+
 	pvsbytes = (model->numleafs+7)>>3;
 	pvsbytes = (pvsbytes+3)&~3;
 	if (mod_novis == NULL || pvsbytes > mod_novis_capacity)
@@ -375,7 +389,7 @@ byte *Mod_NoVisPVS (qmodel_t *model)
 		mod_novis = (byte *) realloc (mod_novis, mod_novis_capacity);
 		if (!mod_novis)
 			Sys_Error ("Mod_NoVisPVS: realloc() failed on %d bytes", mod_novis_capacity);
-		
+
 		memset(mod_novis, 0xff, mod_novis_capacity);
 	}
 	return mod_novis;
@@ -411,7 +425,8 @@ the rest.  Returns true if the model's textures were kept.
 
 static int Mod_RetainSignature (void)
 {
-	return (int)gl_load24bit.value;		// what decides where Mod_LoadTextures looks for textures
+	/* Compare image selection, not numeric spelling or preparation policy. */
+	return !gl_load24bit.value ? 0 : gl_load24bit.value == 2 ? 2 : 1;
 }
 
 static qboolean Mod_RetainTextures (qmodel_t *mod)
@@ -762,6 +777,9 @@ static qmodel_t *Mod_LoadModel (qmodel_t *mod, qboolean crash)
 		break;
 	}
 
+	/* Mod_LoadTextures must compare the mode of any retained images before
+	 * recording the mode of this load. Alias and sprite loaders use it too. */
+	mod->retain_signature = Mod_RetainSignature ();
 	free (buf);
 	Q1BSPX_Reset ();
 
@@ -1576,6 +1594,10 @@ static texture_t *Mod_LoadMipTex(const byte *mipstart, size_t entrylen, enum src
 	tx->width = mt->width;
 	tx->height = mt->height;
 	tx->shift = shift;
+	tx->source_format = *fmt;
+	tx->source_width = *width;
+	tx->source_height = *height;
+	tx->source_offset = srcdata ? (uintptr_t)(srcdata - mipstart) : 0;
 
 	if (srcdata)
 	{
@@ -1592,7 +1614,12 @@ static texture_t *Mod_LoadMipTex(const byte *mipstart, size_t entrylen, enum src
 
 		memcpy ( tx+1, srcdata, *pixelbytes);
 		if (*pixelbytes < allocpixelbytes)
+		{
 			memset ((byte *)(tx+1) + *pixelbytes, 0, allocpixelbytes - *pixelbytes);
+			/* A file reload must not read geometry or another miptex in place
+			 * of the missing pixels. Keep the padded in-memory source. */
+			tx->source_offset = 0;
+		}
 	}
 	else
 	{
@@ -2008,6 +2035,263 @@ static qboolean Mod_ClaimRetainedTextures (texture_t *tx)
 	return true;
 }
 
+/* Re-select images without replacing textures referenced by BSP surfaces. */
+static void Mod_UploadBrushTexture (texture_t *tx, mod_texture_batch_t *batch, qboolean retain_active)
+{
+	char texturename[64], filename[MAX_OSPATH], mapname[MAX_OSPATH];
+	src_offset_t offset = tx->source_offset ? tx->source_offset : (src_offset_t)(tx + 1);
+	const char *source_file = tx->source_offset ? loadmodel->name : "";
+	int mark, fwidth, fheight;
+	byte *data;
+	qboolean malloced;
+	enum srcformat fmt = tx->source_format;
+	unsigned int imgwidth = tx->source_width, imgheight = tx->source_height;
+	unsigned int imgpixels = imgwidth * imgheight;
+
+	if (!q_strncasecmp(tx->name,"sky",3)) //sky texture //also note -- was Q_strncmp, changed to match qbsp
+	{
+		Mod_FlushTextureBatch (batch);
+		if (!gl_load24bit.value || !Sky_LoadExternalTextures(loadmodel, tx)) // woods #extsky
+		{
+			if (loadmodel->bspversion == BSPVERSION_QUAKE64)
+				Sky_LoadTextureQ64 (loadmodel, tx);
+			else
+				Sky_LoadTexture (loadmodel, tx, fmt, imgwidth, imgheight);
+		}
+	}
+	else if (tx->name[0] == '*') //warping texture
+	{
+		Mod_FlushTextureBatch (batch);
+		enum srcformat rfmt = SRC_RGBA;
+		fwidth = fheight = 0;
+		malloced = false;
+		//external textures -- first look in "textures/mapname/" then look in "textures/"
+		mark = Hunk_LowMark();
+		COM_StripExtension (loadmodel->name + 5, mapname, sizeof(mapname));
+		q_snprintf (filename, sizeof(filename), "textures/%s/#%s", mapname, tx->name+1); //this also replaces the '*' with a '#'
+
+		if (gl_load24bit.value == 2) // woods #load24bit2
+		{
+			data = /*!gl_load24bit.value ? NULL : */Image_LoadImage(filename, &fwidth, &fheight, &rfmt, &malloced); // woods load water
+			if (!data)
+			{
+				q_snprintf (filename, sizeof(filename), "textures/#%s", tx->name+1);
+				data = /*!gl_load24bit.value ? NULL : */Image_LoadImage (filename, &fwidth, &fheight, &rfmt, &malloced); // woods load water
+			}
+		}
+		else
+		{
+			data = !gl_load24bit.value ? NULL : Image_LoadImage(filename, &fwidth, &fheight, &rfmt, &malloced);
+			if (!data)
+			{
+				q_snprintf (filename, sizeof(filename), "textures/#%s", tx->name + 1);
+				data = !gl_load24bit.value ? NULL : Image_LoadImage (filename, &fwidth, &fheight, &rfmt, &malloced);
+			}
+		}
+
+		/* Generate from the original pixels before a diffuse upload can rescale them. */
+		if (!q_strncasecmp(tx->name, "*tele", 5))
+		{
+			R_TeleportLoadNormal(loadmodel, tx, fmt, (const byte *)(tx + 1), imgwidth, imgheight);
+			if (tx->tele_normal)
+				loadmodel->hasteletextures = true;
+		}
+
+		//now load whatever we found
+		if (data && !r_fastturb.value) //load external image // woods #fastturb
+		{
+			q_strlcpy (texturename, filename, sizeof(texturename));
+			Mod_DetectLiquidTexture(tx, rfmt, data, fwidth, fheight); // woods #autocshift
+			tx->gltexture = TexMgr_LoadImage (loadmodel, texturename, fwidth, fheight,
+				rfmt, data, filename, 0, TEXPREF_MIPMAP); // woods #watermip
+		}
+		else //use the texture from the bsp file
+		{
+			q_snprintf (texturename, sizeof(texturename), "%s:%s", loadmodel->name, tx->name);
+			Mod_DetectLiquidTexture(tx, fmt, (byte *)(tx+1), imgwidth, imgheight); // woods #autocshift
+			byte *pixels = (byte *)(tx + 1);
+			if (fmt == SRC_RGBA)
+			{
+				size_t bytes = TexMgr_ImageSize (imgwidth, imgheight, fmt);
+				pixels = Hunk_AllocNoFill ((int)bytes);
+				memcpy (pixels, tx + 1, bytes);
+			}
+			tx->gltexture = TexMgr_LoadImage (loadmodel, texturename, imgwidth, imgheight,
+				fmt, pixels, source_file, offset, TEXPREF_MIPMAP); // woods #watermip
+		}
+
+		Hunk_FreeToLowMark (mark);
+		if (malloced)
+			free(data);
+	}
+	else //regular texture
+	{
+		// ericw -- fence textures
+		int	extraflags;
+		enum srcformat rfmt = SRC_RGBA;
+		fwidth = fheight = 0;
+		malloced = false;
+
+		extraflags = 0;
+		if (tx->name[0] == '{')
+			extraflags |= TEXPREF_ALPHA;
+		// ericw
+
+		if (retain_active && Mod_ClaimRetainedTextures (tx))
+			return;
+
+		//external textures -- first look in "textures/mapname/" then look in "textures/"
+		mark = Hunk_LowMark ();
+		COM_StripExtension (loadmodel->name + 5, mapname, sizeof(mapname));
+		q_snprintf (filename, sizeof(filename), "textures/%s/%s", mapname, tx->name);
+
+		if (gl_load24bit.value == 2) // woods #load24bit2
+		{
+			qboolean brushbsp = isSpecialMap(mapname);
+
+			if (brushbsp)
+				data = Image_LoadImage(filename, &fwidth, &fheight, &rfmt, &malloced);
+			else
+				data = (!gl_load24bit.value || gl_load24bit.value == 2) ? NULL : Image_LoadImage(filename, &fwidth, &fheight, &rfmt, &malloced);
+			if (!data)
+			{
+				q_snprintf(filename, sizeof(filename), "textures/%s", tx->name);
+				if (brushbsp)
+					data = Image_LoadImage(filename, &fwidth, &fheight, &rfmt, &malloced);
+				else
+					data = (!gl_load24bit.value || gl_load24bit.value == 2) ? NULL : Image_LoadImage(filename, &fwidth, &fheight, &rfmt, &malloced);
+			}
+		}
+		else
+		{
+			data = (!gl_load24bit.value || gl_load24bit.value == 2) ? NULL : Image_LoadImage(filename, &fwidth, &fheight, &rfmt, &malloced);
+			if (!data)
+			{
+				q_snprintf (filename, sizeof(filename), "textures/#%s", tx->name + 1);
+				data = (!gl_load24bit.value || gl_load24bit.value == 2) ? NULL : Image_LoadImage (filename, &fwidth, &fheight, &rfmt, &malloced);
+			}
+		}
+
+		//now load whatever we found
+		if (data) //load external image
+		{
+			char filename2[MAX_OSPATH];
+			byte *owned_data;
+			size_t estimate;
+			qboolean batchable;
+
+			Mod_DetectGrassTexture(tx, rfmt, data, fwidth, fheight); // woods #grass
+			batchable = fwidth > 0 && fheight > 0 && (rfmt == SRC_RGBA || rfmt == SRC_INDEXED);
+			if (batchable)
+			{
+				estimate = Mod_TextureBatchEstimate ((unsigned int)fwidth, (unsigned int)fheight, rfmt);
+				Mod_ReserveTextureBatch (batch, 1, estimate);
+				owned_data = Mod_OwnTextureBatchData (data, (unsigned int)fwidth,
+					(unsigned int)fheight, rfmt, &malloced);
+				Mod_AddTextureBatchJob (batch, loadmodel, filename,
+					(unsigned int)fwidth, (unsigned int)fheight, rfmt, owned_data,
+					filename, 0, TEXPREF_MIPMAP | extraflags, &tx->gltexture, true, 0);
+				data = NULL;
+			}
+			else
+			{
+				Mod_FlushTextureBatch (batch);
+				tx->gltexture = TexMgr_LoadImage (loadmodel, filename, fwidth, fheight,
+					rfmt, data, filename, 0, TEXPREF_MIPMAP | extraflags );
+			}
+
+			//now try to load glow/luma image from the same place
+			if (malloced)
+				free(data);
+			data = NULL;
+			malloced = false;
+			Mod_FreeTextureBatchHunkToMark (batch, mark);
+			q_snprintf (filename2, sizeof(filename2), "%s_glow", filename);
+			data = (!gl_load24bit.value || gl_load24bit.value == 2)?NULL:Image_LoadImage (filename2, &fwidth, &fheight, &rfmt, &malloced);
+			if (!data)
+			{
+				q_snprintf (filename2, sizeof(filename2), "%s_luma", filename);
+				data = (!gl_load24bit.value || gl_load24bit.value == 2)?NULL:Image_LoadImage (filename2, &fwidth, &fheight, &rfmt, &malloced);
+			}
+
+			if (data)
+			{
+				batchable = fwidth > 0 && fheight > 0 && (rfmt == SRC_RGBA || rfmt == SRC_INDEXED);
+				if (batchable)
+				{
+					estimate = Mod_TextureBatchEstimate ((unsigned int)fwidth, (unsigned int)fheight, rfmt);
+					Mod_ReserveTextureBatch (batch, 1, estimate);
+					owned_data = Mod_OwnTextureBatchData (data, (unsigned int)fwidth,
+						(unsigned int)fheight, rfmt, &malloced);
+					Mod_AddTextureBatchJob (batch, loadmodel, filename2,
+						(unsigned int)fwidth, (unsigned int)fheight, rfmt, owned_data,
+						filename2, 0, TEXPREF_MIPMAP | extraflags, &tx->fullbright, true, 0);
+					data = NULL;
+				}
+				else
+				{
+					Mod_FlushTextureBatch (batch);
+					tx->fullbright = TexMgr_LoadImage (loadmodel, filename2, fwidth, fheight,
+						rfmt, data, filename2, 0, TEXPREF_MIPMAP | extraflags );
+				}
+			}
+		}
+		else //use the texture from the bsp file
+		{
+			qboolean hasfullbright;
+			size_t estimate, needed_estimate;
+			size_t needed_jobs;
+
+			q_snprintf (texturename, sizeof(texturename), "%s:%s", loadmodel->name, tx->name);
+			Mod_DetectGrassTexture(tx, fmt, (byte *)(tx+1), imgwidth, imgheight); // woods #grass
+			hasfullbright = fmt == SRC_INDEXED && Mod_CheckFullbrights ((byte *)(tx+1), imgpixels);
+
+			if (fmt == SRC_INDEXED)
+			{
+				estimate = Mod_TextureBatchEstimate (imgwidth, imgheight, fmt);
+				needed_jobs = hasfullbright ? 2u : 1u;
+				needed_estimate = estimate;
+				if (hasfullbright)
+				{
+					if (needed_estimate == SIZE_MAX || needed_estimate > SIZE_MAX - estimate)
+						needed_estimate = SIZE_MAX;
+					else
+						needed_estimate += estimate;
+				}
+				Mod_ReserveTextureBatch (batch, needed_jobs, needed_estimate);
+				Mod_AddTextureBatchJob (batch, loadmodel, texturename,
+					imgwidth, imgheight, fmt, (byte *)(tx+1), source_file,
+					offset, TEXPREF_MIPMAP | (hasfullbright ? TEXPREF_NOBRIGHT : 0) | extraflags,
+					&tx->gltexture, false, mark);
+				if (hasfullbright)
+				{
+					q_snprintf (texturename, sizeof(texturename), "%s:%s_glow", loadmodel->name, tx->name);
+					Mod_AddTextureBatchJob (batch, loadmodel, texturename,
+						imgwidth, imgheight, fmt, (byte *)(tx+1), source_file,
+						offset, TEXPREF_MIPMAP | TEXPREF_FULLBRIGHT | extraflags,
+						&tx->fullbright, false, mark);
+				}
+			}
+			else
+			{
+				Mod_FlushTextureBatch (batch);
+				byte *pixels = (byte *)(tx + 1);
+				if (fmt == SRC_RGBA)
+				{
+					size_t bytes = TexMgr_ImageSize (imgwidth, imgheight, fmt);
+					pixels = Hunk_AllocNoFill ((int)bytes);
+					memcpy (pixels, tx + 1, bytes);
+				}
+				tx->gltexture = TexMgr_LoadImage (loadmodel, texturename, imgwidth, imgheight,
+					fmt, pixels, source_file, offset, TEXPREF_MIPMAP | extraflags);
+			}
+		}
+		if (malloced)
+			free(data);
+		Mod_FreeTextureBatchHunkToMark (batch, mark);
+	}
+}
+
 static void Mod_LoadTextures (lump_t *l)
 {
 	int		i, j, k, num, maxanim, altmax;
@@ -2017,14 +2301,8 @@ static void Mod_LoadTextures (lump_t *l)
 	texture_t	*altanims[10];
 	dmiptexlump_t	*m;
 //johnfitz -- more variables
-	char		texturename[64];
 	int			nummiptex;
-	src_offset_t		offset;
-	int			mark, fwidth, fheight;
-	char		filename[MAX_OSPATH], mapname[MAX_OSPATH];
-	byte		*data;
 //johnfitz
-	qboolean malloced;	//spike
 	enum srcformat fmt;	//spike
 	unsigned int imgwidth, imgheight, imgpixels;
 	size_t entryheadersize, entrylen;
@@ -2075,6 +2353,8 @@ static void Mod_LoadTextures (lump_t *l)
 		if (!tx)
 			continue;
 		loadmodel->textures[i] = tx;
+		if (tx->source_offset)
+			tx->source_offset += (uintptr_t)((byte *)mt - mod_base);
 
 		if (!tx->name[0]) // woods (aerowalk.bsp)
 		{
@@ -2098,240 +2378,8 @@ static void Mod_LoadTextures (lump_t *l)
 			q_strlcpy(tx->name, safename, sizeof(tx->name));
 		}
 
-		//johnfitz -- lots of changes
-		if (!isDedicated) //no texture uploading for dedicated server
-		{
-			if (!q_strncasecmp(tx->name,"sky",3)) //sky texture //also note -- was Q_strncmp, changed to match qbsp
-			{
-				Mod_FlushTextureBatch (&texture_batch);
-				if (!gl_load24bit.value || !Sky_LoadExternalTextures(loadmodel, tx)) // woods #extsky
-				{
-					if (loadmodel->bspversion == BSPVERSION_QUAKE64)
-						Sky_LoadTextureQ64 (loadmodel, tx);
-					else
-						Sky_LoadTexture (loadmodel, tx, fmt, imgwidth, imgheight);
-				}
-			}
-			else if (tx->name[0] == '*') //warping texture
-			{
-				Mod_FlushTextureBatch (&texture_batch);
-				enum srcformat rfmt = SRC_RGBA;
-				fwidth = fheight = 0;
-				malloced = false;
-				//external textures -- first look in "textures/mapname/" then look in "textures/"
-				mark = Hunk_LowMark();
-				COM_StripExtension (loadmodel->name + 5, mapname, sizeof(mapname));
-				q_snprintf (filename, sizeof(filename), "textures/%s/#%s", mapname, tx->name+1); //this also replaces the '*' with a '#'
-				
-				if (gl_load24bit.value == 2) // woods #load24bit2
-				{
-					data = /*!gl_load24bit.value ? NULL : */Image_LoadImage(filename, &fwidth, &fheight, &rfmt, &malloced); // woods load water
-					if (!data)
-					{
-						q_snprintf (filename, sizeof(filename), "textures/#%s", tx->name+1);
-						data = /*!gl_load24bit.value ? NULL : */Image_LoadImage (filename, &fwidth, &fheight, &rfmt, &malloced); // woods load water
-					}
-				}
-				else
-				{
-					data = !gl_load24bit.value ? NULL : Image_LoadImage(filename, &fwidth, &fheight, &rfmt, &malloced);
-					if (!data)
-					{
-						q_snprintf (filename, sizeof(filename), "textures/#%s", tx->name + 1);
-						data = !gl_load24bit.value ? NULL : Image_LoadImage (filename, &fwidth, &fheight, &rfmt, &malloced);
-					}
-				}
-
-				/* Generate from the original pixels before a diffuse upload can rescale them. */
-				if (!q_strncasecmp(tx->name, "*tele", 5))
-				{
-					R_TeleportLoadNormal(loadmodel, tx, fmt, (const byte *)(tx + 1), imgwidth, imgheight);
-					if (tx->tele_normal)
-						loadmodel->hasteletextures = true;
-				}
-
-				//now load whatever we found
-				if (data && !r_fastturb.value) //load external image // woods #fastturb
-				{
-					q_strlcpy (texturename, filename, sizeof(texturename));
-					Mod_DetectLiquidTexture(tx, rfmt, data, fwidth, fheight); // woods #autocshift
-					tx->gltexture = TexMgr_LoadImage (loadmodel, texturename, fwidth, fheight,
-						rfmt, data, filename, 0, TEXPREF_MIPMAP); // woods #watermip
-				}
-				else //use the texture from the bsp file
-				{
-					q_snprintf (texturename, sizeof(texturename), "%s:%s", loadmodel->name, tx->name);
-					offset = (src_offset_t)(mt+1) - (src_offset_t)mod_base;
-					Mod_DetectLiquidTexture(tx, fmt, (byte *)(tx+1), imgwidth, imgheight); // woods #autocshift
-					tx->gltexture = TexMgr_LoadImage (loadmodel, texturename, imgwidth, imgheight,
-						fmt, (byte *)(tx+1), loadmodel->name, offset, TEXPREF_MIPMAP); // woods #watermip
-				}
-
-				Hunk_FreeToLowMark (mark);
-				if (malloced)
-					free(data);
-			}
-			else //regular texture
-			{
-				// ericw -- fence textures
-				int	extraflags;
-				enum srcformat rfmt = SRC_RGBA;
-				fwidth = fheight = 0;
-				malloced = false;
-
-				extraflags = 0;
-				if (tx->name[0] == '{')
-					extraflags |= TEXPREF_ALPHA;
-				// ericw
-
-				if (retain_active && Mod_ClaimRetainedTextures (tx))
-					continue;
-
-				//external textures -- first look in "textures/mapname/" then look in "textures/"
-				mark = Hunk_LowMark ();
-				COM_StripExtension (loadmodel->name + 5, mapname, sizeof(mapname));
-				q_snprintf (filename, sizeof(filename), "textures/%s/%s", mapname, tx->name);
-
-				if (gl_load24bit.value == 2) // woods #load24bit2
-				{
-					qboolean brushbsp = isSpecialMap(mapname);
-
-					if (brushbsp)
-						data = Image_LoadImage(filename, &fwidth, &fheight, &rfmt, &malloced);
-					else
-						data = (!gl_load24bit.value || gl_load24bit.value == 2) ? NULL : Image_LoadImage(filename, &fwidth, &fheight, &rfmt, &malloced);
-					if (!data)
-					{
-						q_snprintf(filename, sizeof(filename), "textures/%s", tx->name);
-						if (brushbsp)
-							data = Image_LoadImage(filename, &fwidth, &fheight, &rfmt, &malloced);
-						else
-							data = (!gl_load24bit.value || gl_load24bit.value == 2) ? NULL : Image_LoadImage(filename, &fwidth, &fheight, &rfmt, &malloced);
-					}
-				}
-				else
-				{
-					data = (!gl_load24bit.value || gl_load24bit.value == 2) ? NULL : Image_LoadImage(filename, &fwidth, &fheight, &rfmt, &malloced);
-					if (!data)
-					{
-						q_snprintf (filename, sizeof(filename), "textures/#%s", tx->name + 1);
-						data = (!gl_load24bit.value || gl_load24bit.value == 2) ? NULL : Image_LoadImage (filename, &fwidth, &fheight, &rfmt, &malloced);
-					}
-				}
-
-				//now load whatever we found
-				if (data) //load external image
-				{
-					char filename2[MAX_OSPATH];
-					byte *owned_data;
-					size_t estimate;
-					qboolean batchable;
-
-					Mod_DetectGrassTexture(tx, rfmt, data, fwidth, fheight); // woods #grass
-					batchable = fwidth > 0 && fheight > 0 && (rfmt == SRC_RGBA || rfmt == SRC_INDEXED);
-					if (batchable)
-					{
-						estimate = Mod_TextureBatchEstimate ((unsigned int)fwidth, (unsigned int)fheight, rfmt);
-						Mod_ReserveTextureBatch (&texture_batch, 1, estimate);
-						owned_data = Mod_OwnTextureBatchData (data, (unsigned int)fwidth,
-							(unsigned int)fheight, rfmt, &malloced);
-						Mod_AddTextureBatchJob (&texture_batch, loadmodel, filename,
-							(unsigned int)fwidth, (unsigned int)fheight, rfmt, owned_data,
-							filename, 0, TEXPREF_MIPMAP | extraflags, &tx->gltexture, true, 0);
-						data = NULL;
-					}
-					else
-					{
-						Mod_FlushTextureBatch (&texture_batch);
-						tx->gltexture = TexMgr_LoadImage (loadmodel, filename, fwidth, fheight,
-							rfmt, data, filename, 0, TEXPREF_MIPMAP | extraflags );
-					}
-
-					//now try to load glow/luma image from the same place
-					if (malloced)
-						free(data);
-					data = NULL;
-					malloced = false;
-					Mod_FreeTextureBatchHunkToMark (&texture_batch, mark);
-					q_snprintf (filename2, sizeof(filename2), "%s_glow", filename);
-					data = (!gl_load24bit.value || gl_load24bit.value == 2)?NULL:Image_LoadImage (filename2, &fwidth, &fheight, &rfmt, &malloced);
-					if (!data)
-					{
-						q_snprintf (filename2, sizeof(filename2), "%s_luma", filename);
-						data = (!gl_load24bit.value || gl_load24bit.value == 2)?NULL:Image_LoadImage (filename2, &fwidth, &fheight, &rfmt, &malloced);
-					}
-
-					if (data)
-					{
-						batchable = fwidth > 0 && fheight > 0 && (rfmt == SRC_RGBA || rfmt == SRC_INDEXED);
-						if (batchable)
-						{
-							estimate = Mod_TextureBatchEstimate ((unsigned int)fwidth, (unsigned int)fheight, rfmt);
-							Mod_ReserveTextureBatch (&texture_batch, 1, estimate);
-							owned_data = Mod_OwnTextureBatchData (data, (unsigned int)fwidth,
-								(unsigned int)fheight, rfmt, &malloced);
-							Mod_AddTextureBatchJob (&texture_batch, loadmodel, filename2,
-								(unsigned int)fwidth, (unsigned int)fheight, rfmt, owned_data,
-								filename2, 0, TEXPREF_MIPMAP | extraflags, &tx->fullbright, true, 0);
-							data = NULL;
-						}
-						else
-						{
-							Mod_FlushTextureBatch (&texture_batch);
-							tx->fullbright = TexMgr_LoadImage (loadmodel, filename2, fwidth, fheight,
-								rfmt, data, filename2, 0, TEXPREF_MIPMAP | extraflags );
-						}
-					}
-				}
-				else //use the texture from the bsp file
-				{
-					qboolean hasfullbright;
-					size_t estimate, needed_estimate;
-					size_t needed_jobs;
-
-					q_snprintf (texturename, sizeof(texturename), "%s:%s", loadmodel->name, tx->name);
-					offset = (src_offset_t)(mt+1) - (src_offset_t)mod_base;
-					Mod_DetectGrassTexture(tx, fmt, (byte *)(tx+1), imgwidth, imgheight); // woods #grass
-					hasfullbright = fmt == SRC_INDEXED && Mod_CheckFullbrights ((byte *)(tx+1), imgpixels);
-
-					if (fmt == SRC_INDEXED)
-					{
-						estimate = Mod_TextureBatchEstimate (imgwidth, imgheight, fmt);
-						needed_jobs = hasfullbright ? 2u : 1u;
-						needed_estimate = estimate;
-						if (hasfullbright)
-						{
-							if (needed_estimate == SIZE_MAX || needed_estimate > SIZE_MAX - estimate)
-								needed_estimate = SIZE_MAX;
-							else
-								needed_estimate += estimate;
-						}
-						Mod_ReserveTextureBatch (&texture_batch, needed_jobs, needed_estimate);
-						Mod_AddTextureBatchJob (&texture_batch, loadmodel, texturename,
-							imgwidth, imgheight, fmt, (byte *)(tx+1), loadmodel->name,
-							offset, TEXPREF_MIPMAP | (hasfullbright ? TEXPREF_NOBRIGHT : 0) | extraflags,
-							&tx->gltexture, false, mark);
-						if (hasfullbright)
-						{
-							q_snprintf (texturename, sizeof(texturename), "%s:%s_glow", loadmodel->name, tx->name);
-							Mod_AddTextureBatchJob (&texture_batch, loadmodel, texturename,
-								imgwidth, imgheight, fmt, (byte *)(tx+1), loadmodel->name,
-								offset, TEXPREF_MIPMAP | TEXPREF_FULLBRIGHT | extraflags,
-								&tx->fullbright, false, mark);
-						}
-					}
-					else
-					{
-						Mod_FlushTextureBatch (&texture_batch);
-						tx->gltexture = TexMgr_LoadImage (loadmodel, texturename, imgwidth, imgheight,
-							fmt, (byte *)(tx+1), loadmodel->name, offset, TEXPREF_MIPMAP | extraflags);
-					}
-				}
-				if (malloced)
-					free(data);
-				Mod_FreeTextureBatchHunkToMark (&texture_batch, mark);
-			}
-		}
+		if (!isDedicated)
+			Mod_UploadBrushTexture (tx, &texture_batch, retain_active);
 		//johnfitz
 	}
 	Mod_FlushTextureBatch (&texture_batch);
@@ -5597,7 +5645,7 @@ qboolean Mod_LoadMapDescription(char* desc, size_t maxchars, const char* map)
 
 				// copy map title and clean it up a bit
 				for (j = k = 0; com_token[j] && (size_t)k + 1 < maxchars; j++)
-				{					
+				{
 					char c = com_token[j] & 0x7f;
 					if (c == '\n' || c == '\r') // replace newlines with spaces
 						c = ' ';
@@ -6626,18 +6674,61 @@ does the loading. maxradius accumulates the worst-case corner distance for the
 model bounds.
 =================
 */
+static void Mod_UploadSpriteFrame (mspriteframe_t *pspriteframe, byte *pixels)
+{
+	int width = pspriteframe->width, height = pspriteframe->height;
+	int framenum = pspriteframe->source_framenum;
+	enum srcformat fmt = pspriteframe->source_format, rfmt = SRC_RGBA;
+	char name[64];
+	src_offset_t offset;
+	byte *data = NULL;
+	qboolean malloced = false;
+	int fwidth = 0, fheight = 0, hunkmark;
+	//johnfitz -- image might be padded
+	pspriteframe->smax = (float)width/(float)TexMgr_PadConditional(width);
+	pspriteframe->tmax = (float)height/(float)TexMgr_PadConditional(height);
+	//johnfitz
+
+	if (gl_load24bit.value) // woods #extsprites
+	{
+		hunkmark = Hunk_LowMark();
+		q_snprintf(name, sizeof(name), "%s_%i", loadmodel->name, framenum);
+		data = Image_LoadImage(name, &fwidth, &fheight, &rfmt, &malloced);
+
+		if (data)
+		{
+			pspriteframe->gltexture =
+				TexMgr_LoadImage(loadmodel, name, fwidth, fheight, rfmt,
+					data, name, 0, TEXPREF_PAD | TEXPREF_NOPICMIP | TEXPREF_LINEAR | TEXPREF_ALPHA);
+
+			//the replacement can be any resolution, so the padded texcoords must come
+			//from what we actually uploaded, not from the 8bit original. only matters
+			//where padding kicks in, but it is wrong either way. #spriteharden
+			pspriteframe->smax = (float)fwidth/(float)TexMgr_PadConditional(fwidth);
+			pspriteframe->tmax = (float)fheight/(float)TexMgr_PadConditional(fheight);
+
+			if (malloced)
+				free(data);
+			Hunk_FreeToLowMark(hunkmark);
+
+			return;
+		}
+	}
+
+	q_snprintf (name, sizeof(name), "%s:frame%i", loadmodel->name, framenum);
+	offset = pspriteframe->source_offset;
+	pspriteframe->gltexture =
+		TexMgr_LoadImage (loadmodel, name, width, height, fmt,
+				  pixels, loadmodel->name, offset,
+				  TEXPREF_PAD | TEXPREF_ALPHA | TEXPREF_NOPICMIP); //johnfitz -- TexMgr
+
+}
+
 static void *Mod_LoadSpriteFrame (void * pin, mspriteframe_t **ppframe, int framenum, enum srcformat fmt, float *maxradius)
 {
 	dspriteframe_t		*pinframe;
 	mspriteframe_t		*pspriteframe;
 	int					width, height, size, origin[2];
-	char				name[64];
-	src_offset_t			offset; //johnfitz
-	byte* data = NULL;
-	qboolean malloced = false;
-	int fwidth = 0, fheight = 0;
-	enum srcformat rfmt = SRC_RGBA;
-	int hunkmark;
 
 	pinframe = (dspriteframe_t *)pin;
 
@@ -6674,45 +6765,11 @@ static void *Mod_LoadSpriteFrame (void * pin, mspriteframe_t **ppframe, int fram
 			*maxradius = radius;
 	}
 
-	//johnfitz -- image might be padded
-	pspriteframe->smax = (float)width/(float)TexMgr_PadConditional(width);
-	pspriteframe->tmax = (float)height/(float)TexMgr_PadConditional(height);
-	//johnfitz
-
-	if (gl_load24bit.value) // woods #extsprites
-	{
-		hunkmark = Hunk_LowMark();
-		q_snprintf(name, sizeof(name), "%s_%i", loadmodel->name, framenum);
-		data = Image_LoadImage(name, &fwidth, &fheight, &rfmt, &malloced);
-
-		if (data)
-		{
-			pspriteframe->gltexture =
-				TexMgr_LoadImage(loadmodel, name, fwidth, fheight, rfmt,
-					data, name, 0, TEXPREF_PAD | TEXPREF_NOPICMIP | TEXPREF_LINEAR | TEXPREF_ALPHA);
-
-			//the replacement can be any resolution, so the padded texcoords must come
-			//from what we actually uploaded, not from the 8bit original. only matters
-			//where padding kicks in, but it is wrong either way. #spriteharden
-			pspriteframe->smax = (float)fwidth/(float)TexMgr_PadConditional(fwidth);
-			pspriteframe->tmax = (float)fheight/(float)TexMgr_PadConditional(fheight);
-
-			if (malloced)
-				free(data);
-			Hunk_FreeToLowMark(hunkmark);
-
-			return (void*)((byte*)pinframe + sizeof(dspriteframe_t) + size);
-		}
-	}
-
-	q_snprintf (name, sizeof(name), "%s:frame%i", loadmodel->name, framenum);
-	offset = (src_offset_t)(pinframe+1) - (src_offset_t)mod_base; //johnfitz
-	pspriteframe->gltexture =
-		TexMgr_LoadImage (loadmodel, name, width, height, fmt,
-				  (byte *)(pinframe + 1), loadmodel->name, offset,
-				  TEXPREF_PAD | TEXPREF_ALPHA | TEXPREF_NOPICMIP); //johnfitz -- TexMgr
-
-	return (void *)((byte *)pinframe + sizeof (dspriteframe_t) + size);
+	pspriteframe->source_offset = (uintptr_t)(pinframe+1) - (uintptr_t)mod_base;
+	pspriteframe->source_format = fmt;
+	pspriteframe->source_framenum = framenum;
+	Mod_UploadSpriteFrame (pspriteframe, (byte *)(pinframe + 1));
+	return (void *)((byte *)pinframe + sizeof(dspriteframe_t) + size);
 }
 
 
@@ -6910,6 +6967,148 @@ static void Mod_LoadSpriteModel (qmodel_t *mod, void *buffer)
 	VectorCopy(mod->maxs, mod->clipmaxs);
 
 	mod->type = mod_sprite;
+}
+
+/* Reload only images: BSP/sprite records and all simulation state stay alive. */
+static void Mod_RefreshBrushTextures (qmodel_t *mod)
+{
+	int i;
+	mod_texture_batch_t batch = {0};
+
+	loadmodel = mod;
+	mod->hasteletextures = false;
+	for (i = mod->numtextures - 2; i-- > 0; )
+	{
+		texture_t *tx = mod->textures[i];
+		if (!tx)
+			continue;
+		if (tx->gltexture)
+			TexMgr_FreeTexture (tx->gltexture);
+		if (tx->fullbright)
+			TexMgr_FreeTexture (tx->fullbright);
+		if (tx->tele_normal)
+			TexMgr_FreeTexture (tx->tele_normal);
+		tx->gltexture = tx->fullbright = tx->tele_normal = NULL;
+		Mod_UploadBrushTexture (tx, &batch, false);
+	}
+	Mod_FlushTextureBatch (&batch);
+	mod->retain_signature = Mod_RetainSignature ();
+}
+
+static qboolean Mod_RefreshSpriteFrame (mspriteframe_t *frame, byte *file, size_t filesize)
+{
+	size_t bytes = TexMgr_ImageSize (frame->width, frame->height, frame->source_format);
+	if (frame->source_offset > filesize || bytes > filesize - frame->source_offset)
+	{
+		Con_Warning ("Cannot refresh sprite texture in %s: source changed\n", loadmodel->name);
+		return false;
+	}
+	TexMgr_FreeTexture (frame->gltexture);
+	Mod_UploadSpriteFrame (frame, file + frame->source_offset);
+	return true;
+}
+
+static void Mod_RefreshSpriteTextures (qmodel_t *mod)
+{
+	int i, j;
+	qboolean refreshed = true;
+	msprite_t *sprite = mod->cache.data;
+	byte *file = COM_LoadMallocFile (mod->name, NULL);
+	size_t filesize = file ? (size_t)com_filesize : 0;
+	if (!file)
+		return;
+	loadmodel = mod;
+	for (i = 0; i < sprite->numframes; i++)
+	{
+		if (sprite->frames[i].type == SPR_SINGLE)
+			refreshed &= Mod_RefreshSpriteFrame (sprite->frames[i].frameptr, file, filesize);
+		else
+		{
+			mspritegroup_t *group = (mspritegroup_t *)sprite->frames[i].frameptr;
+			for (j = 0; j < group->numframes; j++)
+				refreshed &= Mod_RefreshSpriteFrame (group->frames[j], file, filesize);
+		}
+	}
+	free (file);
+	if (refreshed)
+		mod->retain_signature = Mod_RetainSignature ();
+}
+
+void Mod_ReloadTextures (void)
+{
+	int i, mode = Mod_RetainSignature ();
+	qboolean refresh_brushes = false;
+	qmodel_t *saved_loadmodel = loadmodel;
+	qboolean saved_loading;
+	if (!mod_texture_reload_pending || isDedicated)
+		return;
+	mod_texture_reload_pending = false;
+	/* Console output during signon can draw a frame. Suppress that until all
+	 * replacement pointers have been published, as VID_Restart does. */
+	saved_loading = scr_disabled_for_loading;
+	scr_disabled_for_loading = true;
+
+	if (mod_model_texture_reload_pending)
+	{
+		mod_model_texture_reload_pending = false;
+		TexturePointer_Reset ();
+		/* The generated axe icon uses model skins even when HUD replacements
+		 * are disabled, so it cannot depend on Draw_RefreshTextures running. */
+		Wheel_ClearIcons ();
+		/* A config change followed by a map load already created images in
+		 * the final mode. Do not decode/upload those freshly loaded models
+		 * again. Cached aliases can independently require a skin refresh. */
+		for (i = 0; i < mod_numknown; i++)
+		{
+			qmodel_t *mod = &mod_known[i];
+			if (!mod->needload && mod->type == mod_brush && mod->name[0] != '*' && mod->retain_signature != mode)
+				refresh_brushes = true;
+		}
+		/* Wait for scene-cache workers before changing texture analysis. Inline
+		 * models share the parent's textures but have their own render caches. */
+		for (i = 0; i < mod_numknown; i++)
+		{
+			qmodel_t *mod = &mod_known[i];
+			if (mod->textures_retained && mod->retain_signature != mode)
+			{
+				TexMgr_FreeTexturesForOwner (mod);
+				mod->textures_retained = false;
+			}
+			if (refresh_brushes && !mod->needload && mod->type == mod_brush)
+			{
+				RSceneCache_Cleanup (mod);
+				R_BModelDrawCache_Cleanup (mod);
+				R_GrassCache_Cleanup (mod);
+			}
+		}
+		if (refresh_brushes)
+			Sky_RefreshTextures ();
+		for (i = 0; i < mod_numknown; i++)
+		{
+			qmodel_t *mod = &mod_known[i];
+			if (mod->needload)
+				continue;
+			if (refresh_brushes && mod->type == mod_brush && mod->name[0] != '*' && mod != cl.worldmodel)
+				Mod_RefreshBrushTextures (mod);
+			else if (mod->type == mod_sprite && mod->cache.data && mod->retain_signature != mode)
+				Mod_RefreshSpriteTextures (mod);
+			else if (mod->type == mod_alias && mod->cache.data && mod->retain_signature != mode)
+			{
+				/* Cached alias headers contain skin and colour-map pointers.
+				 * Reload through the existing loader, preserving the qmodel_t. */
+				Cache_Free (&mod->cache);
+				Mod_Extradata (mod);
+			}
+		}
+		/* The world supplies the global classic-sky layers. Load it last so
+		 * skies on unrelated external brush models cannot override them. */
+		if (refresh_brushes && cl.worldmodel && !cl.worldmodel->needload)
+			Mod_RefreshBrushTextures (cl.worldmodel);
+	}
+	Draw_RefreshTextures ();
+	loadmodel = saved_loadmodel;
+	scr_disabled_for_loading = saved_loading;
+	Con_DPrintf ("Texture mode refreshed (gl_load24bit %g)\n", gl_load24bit.value);
 }
 
 //=============================================================================

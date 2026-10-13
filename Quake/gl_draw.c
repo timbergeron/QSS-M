@@ -224,7 +224,7 @@ void Scrap_Upload (void)
 	{
 		sprintf (name, "scrap%i", i);
 		scrap_textures[i] = TexMgr_LoadImage (NULL, name, BLOCK_WIDTH, BLOCK_HEIGHT, SRC_INDEXED, scrap_texels[i],
-			"", (src_offset_t)scrap_texels[i], (premul_hud?TEXPREF_PREMULTIPLY:0)|TEXPREF_ALPHA | TEXPREF_OVERWRITE | TEXPREF_NOPICMIP);
+			"", (src_offset_t)scrap_texels[i], TEXPREF_UI | (premul_hud?TEXPREF_PREMULTIPLY:0)|TEXPREF_ALPHA | TEXPREF_OVERWRITE | TEXPREF_NOPICMIP);
 	}
 
 	scrap_dirty = false;
@@ -244,7 +244,7 @@ qpic_t *Draw_PicFromWad2 (const char *name, unsigned int texflags)
 	src_offset_t offset; //johnfitz
 	lumpinfo_t *info;
 
-	texflags |= (premul_hud?TEXPREF_PREMULTIPLY:0);
+	texflags |= TEXPREF_UI | (premul_hud?TEXPREF_PREMULTIPLY:0);
 
 	//Spike -- added cachepic stuff here, to avoid glitches if the function is called multiple times with the same image.
 	for (pic=menu_cachepics, i=0 ; i<menu_numcachepics ; pic++, i++)
@@ -276,7 +276,7 @@ qpic_t *Draw_PicFromWad2 (const char *name, unsigned int texflags)
 		gl.th = (texflags&TEXPREF_PAD)?(float)gl.gltexture->source_height/(float)TexMgr_PadConditional(gl.gltexture->source_height):1;
 	}
 	// load little ones into the scrap
-	else if (p->width < 64 && p->height < 64 && texflags==((premul_hud?TEXPREF_PREMULTIPLY:0)|TEXPREF_ALPHA | TEXPREF_PAD | TEXPREF_NOPICMIP))
+	else if (p->width < 64 && p->height < 64 && (texflags & ~TEXPREF_UI)==((premul_hud?TEXPREF_PREMULTIPLY:0)|TEXPREF_ALPHA | TEXPREF_PAD | TEXPREF_NOPICMIP))
 	{
 		int		x, y;
 		int		i, j, k;
@@ -540,7 +540,7 @@ qpic_t *Draw_ExternalPicFromWadBase (const char *base_name, const char *replacem
 	if (base == pic_nul)
 		return NULL;
 
-	texflags |= (premul_hud ? TEXPREF_PREMULTIPLY : 0);
+	texflags |= TEXPREF_UI | (premul_hud ? TEXPREF_PREMULTIPLY : 0);
 	gl.gltexture = TexMgr_LoadImage(NULL, cachename, 0, 0, SRC_EXTERNAL, NULL,
 		va("gfx/%s", replacement_name), 0, texflags | TEXPREF_MIPMAP | TEXPREF_ALLOWMISSING);
 	if (!gl.gltexture)
@@ -689,7 +689,7 @@ static qpic_t	*Draw_TryCachePicEx (const char *cachename, const char *path, unsi
 	size_t		file_size = 0;
 	char newname[MAX_QPATH];
 
-	texflags |= (premul_hud?TEXPREF_PREMULTIPLY:0);
+	texflags |= TEXPREF_UI | (premul_hud?TEXPREF_PREMULTIPLY:0);
 
 	for (pic=menu_cachepics, i=0 ; i<menu_numcachepics ; pic++, i++)
 	{
@@ -946,7 +946,7 @@ void Draw_LoadPics (void)
 	lumpinfo_t *info;
 	extern cvar_t gl_load24bit;
 
-	const unsigned int conchar_texflags = (premul_hud?TEXPREF_PREMULTIPLY:0)|TEXPREF_ALPHA | TEXPREF_NOPICMIP | TEXPREF_CONCHARS;	//Spike - we use nearest with 8bit, but not replacements. replacements also use mipmaps because they're just noise otherwise.
+	const unsigned int conchar_texflags = TEXPREF_UI | (premul_hud?TEXPREF_PREMULTIPLY:0)|TEXPREF_ALPHA | TEXPREF_NOPICMIP | TEXPREF_CONCHARS;	//Spike - we use nearest with 8bit, but not replacements. replacements also use mipmaps because they're just noise otherwise.
 
 	if (gl_load24bit.value > 0 && gl_load24bit_hud.value) // woods #24bithud
 		draw_load24bit = true;
@@ -998,7 +998,7 @@ void Draw_LoadPics (void)
 Draw_NewGame -- johnfitz
 ===============
 */
-void Draw_NewGame (void)
+static void Draw_ResetPics (qboolean newgame)
 {
 	cachepic_t	*pic;
 	int			i;
@@ -1016,8 +1016,11 @@ void Draw_NewGame (void)
 		pic->name[0] = 0;
 	menu_numcachepics = 0;
 	Wheel_ClearIcons ();
-	Draw_InvalidateLevelshots ();	// woods #mapshots
-	Mapshot_NewGame ();				// so resolved-but-now-dead shots reload
+	if (newgame)
+	{
+		Draw_InvalidateLevelshots ();
+		Mapshot_NewGame ();
+	}
 
 	// reload wad pics
 	W_LoadWadFile (); //johnfitz -- filename is now hard-coded for honesty
@@ -1025,6 +1028,20 @@ void Draw_NewGame (void)
 	SCR_LoadPics ();
 	Sbar_InvalidatePics (); // old pic pointers dangle after the wad reload; next draw reloads them
 	PR_ReloadPics(false);
+}
+
+void Draw_NewGame (void)
+{
+	Draw_ResetPics (true);
+}
+
+void Draw_RefreshTextures (void)
+{
+	extern cvar_t gl_load24bit;
+	if (draw_load24bit == (gl_load24bit.value > 0 && gl_load24bit_hud.value != 0))
+		return;
+	TexMgr_FreeTextures (TEXPREF_UI, TEXPREF_UI);
+	Draw_ResetPics (false);
 }
 
 qboolean Draw_ReloadTextures(qboolean force)

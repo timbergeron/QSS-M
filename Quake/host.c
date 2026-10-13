@@ -2608,6 +2608,7 @@ void _Host_Frame (double time)
 	// until the seek completes, then the next host frame draws the result.
 	if (!isDedicated && !CL_DemoSeekActive ())
 	{
+		Mod_ReloadTextures (); // apply texture mode changes between simulation and drawing
 		SCR_UpdateScreen ();
 		Image_PreloadRelease (); /* startup images no longer needed after the first draw */
 		CL_RunParticles (); //johnfitz -- seperated from rendering
