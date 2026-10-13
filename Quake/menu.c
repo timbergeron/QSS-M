@@ -21948,8 +21948,8 @@ static void M_Console_UpdateSearchResults(void)
 
 static int M_Console_GetItemY(int index)
 {
-	// Leave room for the transfer row and footer on the 200-pixel menu canvas.
-	int y = 40 + index * 8;
+	// Start below the text title, leaving room for the footer on the 200-pixel menu canvas.
+	int y = 20 + index * 8;
 
 	if (index >= CONSOLE_CONBACK)
 		y += 8;
@@ -22375,7 +22375,6 @@ static void M_Console_ActivateItem(void)
 
 void M_Console_Draw(void)
 {
-	qpic_t* p;
 	float r;
 	enum console_e i;
 	const char* filter_text;
@@ -22383,11 +22382,8 @@ void M_Console_Draw(void)
 	M_TextField_CheckMouseRelease();
 	console_cursor = (enum console_e)M_Menu_ClampCursorValue((int)console_cursor, CONSOLE_ITEMS);
 
-	p = Draw_CachePic("gfx/p_option.lmp");
-	M_DrawPic((320 - p->width) / 2, 4, p);
-
 	const char* title = "Console Options";
-	M_PrintWhite((320 - 8 * strlen(title)) / 2, 32, title);
+	M_PrintWhite((320 - 8 * strlen(title)) / 2, 4, title);
 
 	M_LivePreview_WantAt (M_Console_LivePreviewId (), M_Console_GetItemY (console_cursor));
 
