@@ -25,6 +25,9 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 #include <errno.h>
 #include <string.h>
 #include <SDL3/SDL.h>
+#ifdef _WIN32
+#include <windows.h>
+#endif
 
 static void IN_ClearDropBatch(void);
 
@@ -1303,6 +1306,91 @@ static void IN_UpdateGrabs_Internal(qboolean forecerelease)
 void IN_UpdateGrabs(void)
 {
 	IN_UpdateGrabs_Internal(false);
+}
+
+/*
+================
+IN_CursorSelfHeal
+
+SDL hides the cursor for relative mode by asking the OS once, when the mode
+turns on. Coming back from another app in windowed mode that request can be
+lost, and the system arrow stays drawn where relative mode parked the pointer,
+in the middle of the window. Nothing redraws it because the pointer never moves
+again, so it stays until the next focus change. On macOS this happens every
+time after Messages -> Claude -> Cmd-Tab back, and the first retry can land
+before the switch settles. Ask the OS whether a cursor is really showing, and if
+it keeps showing while it should be hidden, cycle relative mode so SDL hides the
+cursor again.
+================
+*/
+#define CURSORHEAL_INTERVAL	0.1	// seconds between OS checks
+#define CURSORHEAL_STRIKES	2	// consecutive visible checks before acting
+#define CURSORHEAL_MAXTRIES	5	// repairs per focus gain
+
+static double cursorheal_next;
+static int cursorheal_strikes;
+static int cursorheal_tries;
+
+static qboolean IN_SystemCursorShowing (void)
+{
+#if defined(__APPLE__)
+	// deprecated without a replacement, so look it up rather than link it
+	typedef boolean_t (*CGCursorIsVisibleFn)(void);
+	static CGCursorIsVisibleFn fn = NULL;
+	static qboolean tried = false;
+
+	if (!tried)
+	{
+		fn = (CGCursorIsVisibleFn)dlsym(RTLD_DEFAULT, "CGCursorIsVisible");
+		tried = true;
+	}
+	return fn && fn();
+#elif defined(_WIN32)
+	CURSORINFO info;
+
+	if (GetSystemMetrics(SM_REMOTESESSION))
+		return false;	// SDL keeps a blank cursor over RDP, which reads as showing
+	info.cbSize = sizeof(info);
+	if (!GetCursorInfo(&info))
+		return false;
+	return (info.flags & CURSOR_SHOWING) && info.hCursor;
+#else
+	return false;
+#endif
+}
+
+static void IN_CursorSelfHeal (void)
+{
+	SDL_Window *window = (SDL_Window *)VID_GetWindow();
+
+	if (!windowhasfocus)
+		cursorheal_tries = 0;
+	if (!window || !windowhasfocus || SDL_GetKeyboardFocus() != window ||
+		!SDL_GetWindowRelativeMouseMode(window) || SDL_CursorVisible())
+	{
+		cursorheal_strikes = 0;
+		return;
+	}
+	if (realtime < cursorheal_next)
+		return;
+	cursorheal_next = realtime + CURSORHEAL_INTERVAL;
+
+	// A held button may be a title bar click that is still activating the
+	// window. SDL applies relative mode on release.
+	if (SDL_GetGlobalMouseState(NULL, NULL) || !IN_SystemCursorShowing())
+	{
+		cursorheal_strikes = 0;
+		return;
+	}
+	if (++cursorheal_strikes < CURSORHEAL_STRIKES || cursorheal_tries >= CURSORHEAL_MAXTRIES)
+		return;
+
+	cursorheal_strikes = 0;
+	cursorheal_tries++;
+	Con_DPrintf("IN_CursorSelfHeal: system cursor showing in relative mode, reapplying\n");
+	SDL_SetWindowRelativeMouseMode(window, false);
+	SDL_SetWindowRelativeMouseMode(window, true);
+	SDL_SetCursor(NULL);	// force SDL to redraw (hide) the cursor
 }
 
 // Console command to show mouse input status
@@ -5965,6 +6053,7 @@ void IN_SendKeyEvents (void)
 	}
 
 	IN_UpdateGrabs();
+	IN_CursorSelfHeal();
 
 #ifdef __APPLE__
 	/* IN_Move is not called while disconnected. Discard raw movement there
