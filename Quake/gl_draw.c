@@ -118,6 +118,8 @@ byte pic_crosshair_data[8][8] =
 };
 //johnfitz
 
+/* qpic_t::data may only be four-byte aligned. Copy this metadata into a
+ * local object before reading it; its texture pointer needs eight on 64-bit. */
 typedef struct
 {
 	gltexture_t *gltexture;
@@ -441,16 +443,16 @@ and it inverts correctly for gamma above 1 as well.
 void Draw_Levelshot (int x, int y, int w, int h, qpic_t *pic)
 {
 	extern cvar_t vid_gamma, vid_contrast;
-	glpic_t	*gl;
+	glpic_t storage, *gl = &storage;
 	float	gamma, contrast, k;
 
 	if (!pic)
 		return;
 	if (scrap_dirty)
 		Scrap_Upload ();
-	gl = (glpic_t *)pic->data;
-	if ((uintptr_t)gl < 0x1000)
+	if ((uintptr_t)pic->data < 0x1000)
 		return;
+	memcpy (gl, pic->data, sizeof(*gl));
 
 	gamma = vid_gamma.value;
 	contrast = vid_contrast.value;
@@ -2375,14 +2377,13 @@ void Draw_ScaledPicAlpha (int x, int y, qpic_t* pic, float scale, float alpha)
 	if (!pic)
 		return;
 
-	glpic_t* gl;
+	glpic_t storage, *gl = &storage;
 
 	if (scrap_dirty)
 		Scrap_Upload();
-	gl = (glpic_t*)pic->data;
-
-	if ((uintptr_t)gl < 0x1000)
+	if ((uintptr_t)pic->data < 0x1000)
 		return;
+	memcpy (gl, pic->data, sizeof(*gl));
 
 	float width = pic->width * scale;
 	float height = pic->height * scale;
@@ -2428,14 +2429,13 @@ void Draw_ScaledPic (int x, int y, qpic_t *pic, float scale)
 	if (!pic || scale <= 0.0f)
 		return;
 
-	glpic_t		*gl;
+	glpic_t storage, *gl = &storage;
 
 	if (scrap_dirty)
 		Scrap_Upload ();
-	gl = (glpic_t *)pic->data;
-
-	if ((uintptr_t)gl < 0x1000)
+	if ((uintptr_t)pic->data < 0x1000)
 		return;
+	memcpy (gl, pic->data, sizeof(*gl));
 
 	GL_Bind (gl->gltexture);
 	glBegin (GL_QUADS);
@@ -2459,14 +2459,13 @@ void Draw_Pic (int x, int y, qpic_t *pic)
 {
 	if (!pic) return; // woods (iw) #democontrols
 
-	glpic_t			*gl;
+	glpic_t storage, *gl = &storage;
 
 	if (scrap_dirty)
 		Scrap_Upload ();
-	gl = (glpic_t *)pic->data;
-
-	if ((uintptr_t)gl < 0x1000) // woods (iw) #democontrols
+	if ((uintptr_t)pic->data < 0x1000) // woods (iw) #democontrols
 		return;
+	memcpy (gl, pic->data, sizeof(*gl));
 
 	GL_Bind (gl->gltexture);
 	glBegin (GL_QUADS);
@@ -2491,14 +2490,13 @@ void Draw_PicRGBA (int x, int y, qpic_t *pic, plcolour_t c, float alpha)
 {
 	if (!pic) return;
 
-	glpic_t *gl;
+	glpic_t storage, *gl = &storage;
 
 	if (scrap_dirty)
 		Scrap_Upload ();
-	gl = (glpic_t *)pic->data;
-
-	if ((uintptr_t)gl < 0x1000)
+	if ((uintptr_t)pic->data < 0x1000)
 		return;
+	memcpy (gl, pic->data, sizeof(*gl));
 
 	glEnable (GL_BLEND);
 
@@ -2553,14 +2551,13 @@ void Draw_Pic_RGBA_Outline (int x, int y, qpic_t* pic, plcolour_t c, float alpha
 {
 	if (!pic) return;
 
-	glpic_t* gl;
+	glpic_t storage, *gl = &storage;
 
 	if (scrap_dirty)
 		Scrap_Upload();
-	gl = (glpic_t*)pic->data;
-
-	if ((uintptr_t)gl < 0x1000)
+	if ((uintptr_t)pic->data < 0x1000)
 		return;
+	memcpy (gl, pic->data, sizeof(*gl));
 
 	glEnable(GL_BLEND);
 
@@ -2620,13 +2617,17 @@ void Draw_Pic_RGBA_Outline (int x, int y, qpic_t* pic, plcolour_t c, float alpha
 
 void Draw_SubPic_QW (int x, int y, qpic_t *pic, int ofsx, int ofsy, int w, int h)
 {
-	glpic_t			*gl;
+	glpic_t storage, *gl = &storage;
 	float nsl, ntl, nsh, nth;
 	float oldw, oldh;
 
+	if (!pic)
+		return;
 	if (scrap_dirty)
 		Scrap_Upload ();
-	gl = (glpic_t *)pic->data;
+	if ((uintptr_t)pic->data < 0x1000)
+		return;
+	memcpy (gl, pic->data, sizeof(*gl));
 	GL_Bind (gl->gltexture);
 
     oldw = gl->sh - gl->sl;
@@ -2705,8 +2706,9 @@ void Draw_TransPicTranslate (int x, int y, qpic_t *pic, plcolour_t top, plcolour
 
 	if (!CL_PLColours_Equals(top, oldtop) || !CL_PLColours_Equals(bottom, oldbottom))
 	{
-		glpic_t *p = (glpic_t *)pic->data;
-		gltexture_t *glt = p->gltexture;
+		glpic_t p;
+		memcpy (&p, pic->data, sizeof(p));
+		gltexture_t *glt = p.gltexture;
 		oldtop = top;
 		oldbottom = bottom;
 		TexMgr_ReloadImage (glt, top, bottom);
@@ -2976,9 +2978,9 @@ refresh window.
 */
 void Draw_TileClear (int x, int y, int w, int h)
 {
-	glpic_t	*gl;
+	glpic_t storage, *gl = &storage;
 
-	gl = (glpic_t *)draw_backtile->data;
+	memcpy (gl, draw_backtile->data, sizeof(*gl));
 
 	glColor4f (1,1,1, gl_menu_alpha);
 	GL_Bind (gl->gltexture);
