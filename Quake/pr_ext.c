@@ -8876,8 +8876,9 @@ static void MenuPreview_DrawQuad(GLuint tex, float px, float py, float pw, float
 
 	glBindTexture(GL_TEXTURE_2D, tex);
 	glEnable(GL_TEXTURE_2D);
-	/* Ensure fixed pipeline for simple textured quad */
-	GL_UseProgramFunc(0);
+	/* Ensure fixed pipeline when shader entry points are available. */
+	if (GL_UseProgramFunc)
+		GL_UseProgramFunc(0);
 	glBegin(GL_QUADS);
 	/* Flip vertically: FBO texture origin is lower-left, menu Y grows down */
 	glTexCoord2f(0, 1); glVertex2f(px, py);

@@ -191,7 +191,163 @@ static int r_gamma_texture_width, r_gamma_texture_height;
 static GLuint r_gamma_fbo;
 static GLuint r_gamma_depth_renderbuffer;
 static qboolean r_gamma_fbo_active;	// scene FBO bound for the current frame
-static qboolean r_gamma_fbo_failed;	// creation failed; use the copy path until vid_restart
+static qboolean r_gamma_fbo_failed; // retry after resize, AA change, or video restart
+static qboolean r_gamma_texture_failed;
+static qboolean r_gamma_texture_warned, r_gamma_fbo_warned;
+typedef struct {
+	GLuint fbo, color, depth;
+	int samples;
+} scene_msaa_t;
+static scene_msaa_t r_scene_msaa;
+static qboolean r_scene_msaa_changed = true;
+static qboolean r_scene_msaa_failed, r_scene_msaa_memory_warned;
+static int r_scene_request = -1, r_scene_width, r_scene_height;
+static int r_scene_window_stencilbits;
+
+static void GLSLGamma_DeleteMSAA (scene_msaa_t *target)
+{
+	if (target->fbo)
+		GL_DeleteFramebuffersFunc (1, &target->fbo);
+	if (target->color)
+		GL_DeleteRenderbuffersFunc (1, &target->color);
+	if (target->depth)
+		GL_DeleteRenderbuffersFunc (1, &target->depth);
+	memset (target, 0, sizeof(*target));
+}
+
+static void GLSLGamma_DeleteFBO (void)
+{
+	if (r_gamma_fbo)
+	{
+		GL_BindFramebufferFunc (GL_FRAMEBUFFER, 0);
+		GL_DeleteFramebuffersFunc (1, &r_gamma_fbo);
+		r_gamma_fbo = 0;
+	}
+	if (r_gamma_depth_renderbuffer)
+	{
+		GL_DeleteRenderbuffersFunc (1, &r_gamma_depth_renderbuffer);
+		r_gamma_depth_renderbuffer = 0;
+	}
+}
+
+void GLSLGamma_MSAAChanged (void)
+{
+	r_scene_msaa_changed = true;
+}
+
+int GLSLGamma_MSAASamples (void)
+{
+	return r_scene_msaa.samples;
+}
+
+/* GL_MAX_SAMPLES is an upper bound, not a list of exact supported counts.
+ * Keep conventional requests in the menu; its label also shows driver rounding. */
+int GLSLGamma_NextMSAA (int dir)
+{
+	GLint max_samples = 0;
+	int samples, next = 0;
+	int current = (int)vid_fsaa.value;
+
+	if (gl_msaa_able)
+		glGetIntegerv (GL_MAX_SAMPLES, &max_samples);
+	max_samples = q_min (max_samples, 16);
+	for (samples = 2; samples <= max_samples; samples *= 2)
+	{
+		if (dir > 0 && samples > current)
+			return samples;
+		if (dir < 0 && (current == 0 || samples < current))
+			next = samples;
+	}
+	return next;
+}
+
+static qboolean GLSLGamma_CreateMSAA (scene_msaa_t *target, int samples, int width, int height)
+{
+	GLenum status, error;
+	GLint color_samples = 0, depth_samples = 0;
+
+	while (glGetError () != GL_NO_ERROR) {}
+	GL_GenRenderbuffersFunc (1, &target->color);
+	GL_BindRenderbufferFunc (GL_RENDERBUFFER, target->color);
+	GL_RenderbufferStorageMultisampleFunc (GL_RENDERBUFFER, samples, GL_RGBA8, width, height);
+	GL_GetRenderbufferParameterivFunc (GL_RENDERBUFFER, GL_RENDERBUFFER_SAMPLES, &color_samples);
+	GL_GenRenderbuffersFunc (1, &target->depth);
+	GL_BindRenderbufferFunc (GL_RENDERBUFFER, target->depth);
+	GL_RenderbufferStorageMultisampleFunc (GL_RENDERBUFFER, samples, GL_DEPTH24_STENCIL8, width, height);
+	GL_GetRenderbufferParameterivFunc (GL_RENDERBUFFER, GL_RENDERBUFFER_SAMPLES, &depth_samples);
+	GL_GenFramebuffersFunc (1, &target->fbo);
+	GL_BindFramebufferFunc (GL_FRAMEBUFFER, target->fbo);
+	GL_FramebufferRenderbufferFunc (GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_RENDERBUFFER, target->color);
+	GL_FramebufferRenderbufferFunc (GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_RENDERBUFFER, target->depth);
+	GL_FramebufferRenderbufferFunc (GL_FRAMEBUFFER, GL_STENCIL_ATTACHMENT, GL_RENDERBUFFER, target->depth);
+	status = GL_CheckFramebufferStatusFunc (GL_FRAMEBUFFER);
+	error = glGetError ();
+	GL_BindFramebufferFunc (GL_FRAMEBUFFER, 0);
+	GL_BindRenderbufferFunc (GL_RENDERBUFFER, 0);
+	if (error != GL_NO_ERROR || status != GL_FRAMEBUFFER_COMPLETE || color_samples < 2 || color_samples != depth_samples)
+	{
+		GLSLGamma_DeleteMSAA (target);
+		return false;
+	}
+	target->samples = color_samples;
+	return true;
+}
+
+/* Resolve color only, preserving the scene's depth/stencil for later views. */
+static void GLSLGamma_ResolveMSAA (void)
+{
+	GLint read_fbo, draw_fbo;
+	GLboolean scissor;
+	if (!r_scene_msaa.fbo || !r_gamma_fbo_active)
+		return;
+	glGetIntegerv (GL_READ_FRAMEBUFFER_BINDING, &read_fbo);
+	glGetIntegerv (GL_DRAW_FRAMEBUFFER_BINDING, &draw_fbo);
+	scissor = glIsEnabled (GL_SCISSOR_TEST);
+	glDisable (GL_SCISSOR_TEST);
+	GL_BindFramebufferFunc (GL_READ_FRAMEBUFFER, r_scene_msaa.fbo);
+	GL_BindFramebufferFunc (GL_DRAW_FRAMEBUFFER, r_gamma_fbo);
+	GL_BlitFramebufferFunc (0, 0, glwidth, glheight, 0, 0, glwidth, glheight, GL_COLOR_BUFFER_BIT, GL_NEAREST);
+	GL_BindFramebufferFunc (GL_READ_FRAMEBUFFER, read_fbo);
+	GL_BindFramebufferFunc (GL_DRAW_FRAMEBUFFER, draw_fbo);
+	if (scissor)
+		glEnable (GL_SCISSOR_TEST);
+}
+
+/* Save the previous read target separately: every GLuint object name is valid,
+ * including names whose bit pattern is negative when queried as a GLint. */
+static qboolean GLSLGamma_BeginSceneRead (GLint *read_fbo)
+{
+	if (r_scene_msaa.fbo && r_gamma_fbo_active)
+	{
+		glGetIntegerv (GL_READ_FRAMEBUFFER_BINDING, read_fbo);
+		if ((GLuint)*read_fbo == r_scene_msaa.fbo)
+		{
+			GLSLGamma_ResolveMSAA ();
+			GL_BindFramebufferFunc (GL_READ_FRAMEBUFFER, r_gamma_fbo);
+			return true;
+		}
+	}
+	return false;
+}
+
+/* User-created multisample FBOs cannot be read by CopyTexSubImage or ReadPixels. */
+void GL_CopySceneToTexture (int x, int y, int width, int height)
+{
+	GLint read_fbo;
+	qboolean resolved = GLSLGamma_BeginSceneRead (&read_fbo);
+	glCopyTexSubImage2D (GL_TEXTURE_2D, 0, 0, 0, x, y, width, height);
+	if (resolved)
+		GL_BindFramebufferFunc (GL_READ_FRAMEBUFFER, read_fbo);
+}
+
+void GL_ReadScenePixels (int x, int y, int width, int height, GLenum format, GLenum type, void *pixels)
+{
+	GLint read_fbo;
+	qboolean resolved = GLSLGamma_BeginSceneRead (&read_fbo);
+	glReadPixels (x, y, width, height, format, type, pixels);
+	if (resolved)
+		GL_BindFramebufferFunc (GL_READ_FRAMEBUFFER, read_fbo);
+}
 static GLuint r_softemu_lut_texture;
 static GLuint r_softemu_palette_texture;
 static qboolean r_softemu_lut_built;
@@ -223,19 +379,19 @@ GLSLGamma_DeleteTexture
 */
 void GLSLGamma_DeleteTexture (void)
 {
-	if (r_gamma_fbo)
-	{
-		GL_BindFramebufferFunc (GL_FRAMEBUFFER, 0);
-		GL_DeleteFramebuffersFunc (1, &r_gamma_fbo);
-		r_gamma_fbo = 0;
-	}
-	if (r_gamma_depth_renderbuffer)
-	{
-		GL_DeleteRenderbuffersFunc (1, &r_gamma_depth_renderbuffer);
-		r_gamma_depth_renderbuffer = 0;
-	}
+	if (r_gamma_fbo_active)
+		gl_stencilbits = r_scene_window_stencilbits;
+	GLSLGamma_DeleteMSAA (&r_scene_msaa);
+	r_scene_msaa_changed = true;
+	r_scene_request = -1;
+	r_scene_width = r_scene_height = 0;
+	GLSLGamma_DeleteFBO ();
 	r_gamma_fbo_active = false;
 	r_gamma_fbo_failed = false;
+	r_gamma_texture_failed = false;
+	r_gamma_texture_warned = r_gamma_fbo_warned = false;
+	r_scene_msaa_failed = r_scene_msaa_memory_warned = false;
+	r_gamma_texture_width = r_gamma_texture_height = 0;
 	glDeleteTextures (1, &r_gamma_texture);
 	glDeleteTextures (1, &r_softemu_lut_texture);
 	glDeleteTextures (1, &r_softemu_palette_texture);
@@ -285,6 +441,22 @@ static qboolean GLSLGamma_SoftEmuApplyBlend (void)
 	return v_blend[0] > 0.001f || v_blend[1] > 0.001f || v_blend[2] > 0.001f;
 }
 
+/* Console warnings can redraw while disconnected or signing on. Never allow
+ * that redraw to replace a frame while its postprocessing is in progress. */
+static void GLSLGamma_Warning (const char *format, ...) FUNC_PRINTF(1,2);
+static void GLSLGamma_Warning (const char *format, ...)
+{
+	va_list args;
+	char message[1024];
+	qboolean disabled = scr_disabled_for_loading;
+	va_start (args, format);
+	q_vsnprintf (message, sizeof(message), format, args);
+	va_end (args);
+	scr_disabled_for_loading = true;
+	Con_Warning ("%s", message);
+	scr_disabled_for_loading = disabled;
+}
+
 static qboolean GLSLGamma_EnsureSoftEmuLUT (void)
 {
 	byte *lutdata;
@@ -299,7 +471,7 @@ static qboolean GLSLGamma_EnsureSoftEmuLUT (void)
 	lutdata = (byte *) malloc(SOFTEMU_LUT_TEXWIDTH * SOFTEMU_LUT_TEXHEIGHT);
 	if (!lutdata)
 	{
-		Con_Warning("softemu: couldn't allocate palette LUT\n");
+		GLSLGamma_Warning("softemu: couldn't allocate palette LUT\n");
 		return false;
 	}
 
@@ -575,6 +747,55 @@ static qboolean GLSLGamma_NeedsPostPass (void)
 	return vid_gamma.value != 1 || vid_contrast.value != 1;
 }
 
+/* Publish dimensions only after storage succeeds, including the copy fallback. */
+static qboolean GLSLGamma_CreateTexture (int width, int height)
+{
+	GLenum error;
+
+	if (r_gamma_texture_failed)
+		return false;
+	GL_DisableMultitexture ();
+	if (gl_mtexable)
+		GL_SelectTexture (GL_TEXTURE0_ARB);
+	if (r_gamma_texture && r_gamma_texture_width == width && r_gamma_texture_height == height)
+	{
+		glBindTexture (GL_TEXTURE_2D, r_gamma_texture);
+		return true;
+	}
+	/* The copy fallback can resize color storage while its FBO is inactive.
+	 * Its depth/stencil storage must be recreated before the FBO is reused. */
+	GLSLGamma_DeleteFBO ();
+	while (glGetError () != GL_NO_ERROR) {}
+	if (!r_gamma_texture)
+		glGenTextures (1, &r_gamma_texture);
+	glBindTexture (GL_TEXTURE_2D, r_gamma_texture);
+	glTexImage2D (GL_TEXTURE_2D, 0, GL_RGBA8, width, height, 0, GL_BGRA, GL_UNSIGNED_INT_8_8_8_8_REV, NULL);
+	glTexParameteri (GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+	glTexParameteri (GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+	glTexParameteri (GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+	glTexParameteri (GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+	error = glGetError ();
+	GL_ClearBindings ();
+	if (error != GL_NO_ERROR)
+	{
+		while (glGetError () != GL_NO_ERROR) {}
+		glDeleteTextures (1, &r_gamma_texture);
+		r_gamma_texture = 0;
+		r_gamma_texture_width = r_gamma_texture_height = 0;
+		r_gamma_texture_failed = true;
+		if (!r_gamma_texture_warned)
+		{
+			r_gamma_texture_warned = true;
+			GLSLGamma_Warning ("Scene color texture unavailable (error 0x%x); rendering without postprocessing\n", error);
+		}
+		return false;
+	}
+	r_gamma_texture_warned = false;
+	r_gamma_texture_width = width;
+	r_gamma_texture_height = height;
+	return true;
+}
+
 /*
 =============
 GLSLGamma_CreateFBO -- scene framebuffer whose color attachment is r_gamma_texture
@@ -585,42 +806,24 @@ glCopyTexSubImage2D from the default framebuffer, which stalls Apple's GL.
 */
 static qboolean GLSLGamma_CreateFBO (int width, int height)
 {
-	GLenum status;
+	GLenum status, error;
 
 	if (r_gamma_fbo_failed)
 		return false;
 
 	if (r_gamma_fbo && (r_gamma_texture_width != width || r_gamma_texture_height != height))
-	{
-		GL_BindFramebufferFunc (GL_FRAMEBUFFER, 0);
-		GL_DeleteFramebuffersFunc (1, &r_gamma_fbo);
-		r_gamma_fbo = 0;
-		if (r_gamma_depth_renderbuffer)
-		{
-			GL_DeleteRenderbuffersFunc (1, &r_gamma_depth_renderbuffer);
-			r_gamma_depth_renderbuffer = 0;
-		}
-	}
+		GLSLGamma_DeleteFBO ();
 
 	if (r_gamma_fbo)
 		return true;
 
-	if (!r_gamma_texture)
-		glGenTextures (1, &r_gamma_texture);
+	if (!GLSLGamma_CreateTexture (width, height))
+	{
+		r_gamma_fbo_failed = true;
+		return false;
+	}
 
-	GL_DisableMultitexture ();
-	if (gl_mtexable)
-		GL_SelectTexture (GL_TEXTURE0_ARB);
-	glBindTexture (GL_TEXTURE_2D, r_gamma_texture);
-	glTexImage2D (GL_TEXTURE_2D, 0, GL_RGBA8, width, height, 0, GL_BGRA, GL_UNSIGNED_INT_8_8_8_8_REV, NULL);
-	glTexParameteri (GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-	glTexParameteri (GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
-	glTexParameteri (GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-	glTexParameteri (GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-	r_gamma_texture_width = width;
-	r_gamma_texture_height = height;
-	GL_ClearBindings ();
-
+	while (glGetError () != GL_NO_ERROR) {}
 	GL_GenRenderbuffersFunc (1, &r_gamma_depth_renderbuffer);
 	GL_BindRenderbufferFunc (GL_RENDERBUFFER, r_gamma_depth_renderbuffer);
 	GL_RenderbufferStorageFunc (GL_RENDERBUFFER, GL_DEPTH24_STENCIL8, width, height);
@@ -632,18 +835,23 @@ static qboolean GLSLGamma_CreateFBO (int width, int height)
 	GL_FramebufferRenderbufferFunc (GL_FRAMEBUFFER, GL_STENCIL_ATTACHMENT, GL_RENDERBUFFER, r_gamma_depth_renderbuffer);
 
 	status = GL_CheckFramebufferStatusFunc (GL_FRAMEBUFFER);
-	if (status != GL_FRAMEBUFFER_COMPLETE)
+	error = glGetError ();
+	GL_BindFramebufferFunc (GL_FRAMEBUFFER, 0);
+	GL_BindRenderbufferFunc (GL_RENDERBUFFER, 0);
+	if (status != GL_FRAMEBUFFER_COMPLETE || error != GL_NO_ERROR)
 	{
-		Con_Warning ("GLSL gamma framebuffer incomplete (status 0x%x), using framebuffer copy\n", status);
-		GL_BindFramebufferFunc (GL_FRAMEBUFFER, 0);
-		GL_DeleteFramebuffersFunc (1, &r_gamma_fbo);
-		r_gamma_fbo = 0;
-		GL_DeleteRenderbuffersFunc (1, &r_gamma_depth_renderbuffer);
-		r_gamma_depth_renderbuffer = 0;
+		while (glGetError () != GL_NO_ERROR) {}
+		GLSLGamma_DeleteFBO ();
 		r_gamma_fbo_failed = true;
+		if (!r_gamma_fbo_warned)
+		{
+			r_gamma_fbo_warned = true;
+			GLSLGamma_Warning ("Scene framebuffer unavailable (status 0x%x, error 0x%x), using framebuffer copy\n", status, error);
+		}
 		return false;
 	}
 
+	r_gamma_fbo_warned = false;
 	return true;
 }
 
@@ -651,31 +859,87 @@ static qboolean GLSLGamma_CreateFBO (int width, int height)
 =============
 GLSLGamma_BeginFrame -- called right after GL_BeginRendering
 
-Binds the scene FBO for the whole frame (3D + 2D) when the gamma post-pass
-will run, so GammaCorrect can source it directly instead of copying the
-default framebuffer.
+Binds the scene FBO for the whole frame (3D + 2D) when MSAA or a gamma
+post-pass needs it. MSAA resolves into the gamma texture before presentation.
 =============
 */
 void GLSLGamma_BeginFrame (void)
 {
+	int request = (int)vid_fsaa.value;
+	qboolean rebuild;
+	scene_msaa_t replacement = {0};
+
 	if (r_gamma_fbo_active)	// frame aborted mid-render (Host_Error); restore default target
 	{
 		GL_BindFramebufferFunc (GL_FRAMEBUFFER, 0);
 		r_gamma_fbo_active = false;
+		gl_stencilbits = r_scene_window_stencilbits;
 	}
 
-	if (!gl_fbo_able || !gl_texture_NPOT || !GLSLGamma_NeedsPostPass ())
+	if (glwidth <= 0 || glheight <= 0)
 		return;
+	rebuild = r_scene_msaa_changed || r_scene_request != request || r_scene_width != glwidth || r_scene_height != glheight;
+	if (rebuild)
+	{
+		qboolean failed;
+		double memory;
+		r_scene_msaa_changed = false;
+		r_scene_request = request;
+		r_scene_width = glwidth;
+		r_scene_height = glheight;
+		r_gamma_fbo_failed = false;
+		r_gamma_texture_failed = false;
+		if (request > 1)
+		{
+			if (gl_msaa_able && GLSLGamma_CreateFBO (glwidth, glheight))
+			{
+				GLint max_samples = 0;
+				int samples;
+				glGetIntegerv (GL_MAX_SAMPLES, &max_samples);
+				for (samples = q_min(request, max_samples); samples >= 2; samples = samples > 2 ? q_max(2, samples / 2) : 0)
+					if (GLSLGamma_CreateMSAA (&replacement, samples, glwidth, glheight))
+						break;
+			}
+		}
+		failed = request > 1 && !replacement.samples;
+		if (replacement.samples != r_scene_msaa.samples || failed != r_scene_msaa_failed)
+		{
+			if (failed)
+				GLSLGamma_Warning ("MSAA %dx unavailable; rendering without MSAA\n", request);
+			else if (replacement.samples && replacement.samples != request)
+				Con_SafePrintf ("MSAA: requested %dx, using %dx\n", request, replacement.samples);
+		}
+		r_scene_msaa_failed = failed;
+		GLSLGamma_DeleteMSAA (&r_scene_msaa);
+		r_scene_msaa = replacement;
+		VID_UpdateFSAA (r_scene_msaa.samples);
+		/* RGBA8 plus DEPTH24_STENCIL8, excluding resolves and driver overhead. */
+		memory = (double)glwidth * glheight * r_scene_msaa.samples * 8;
+		if (memory >= 512.0 * 1024 * 1024 && !r_scene_msaa_memory_warned)
+			GLSLGamma_Warning ("MSAA %dx at %dx%d uses about %.0f MiB for color/depth buffers; lower vid_fsaa if it stutters\n",
+				r_scene_msaa.samples, glwidth, glheight, memory / (1024 * 1024));
+		r_scene_msaa_memory_warned = memory >= 512.0 * 1024 * 1024;
+	}
 
+	if (!gl_fbo_able || !gl_texture_NPOT || (!r_scene_msaa.fbo && !GLSLGamma_NeedsPostPass ()))
+		return;
 	if (!GLSLGamma_CreateFBO (glwidth, glheight))
 		return;
 
-	GL_BindFramebufferFunc (GL_FRAMEBUFFER, r_gamma_fbo);
+	GL_BindFramebufferFunc (GL_FRAMEBUFFER, r_scene_msaa.fbo ? r_scene_msaa.fbo : r_gamma_fbo);
+	r_scene_window_stencilbits = gl_stencilbits;
+	gl_stencilbits = 8;
+	if (r_scene_msaa.fbo)
+		glEnable (GL_MULTISAMPLE);
 	glViewport (0, 0, glwidth, glheight);
 	{
 		byte *rgb = (byte *)(d_8to24table + ((int)r_clearcolor.value & 0xFF));
 		glClearColor (rgb[0]/255.0f, rgb[1]/255.0f, rgb[2]/255.0f, 1.0f);
 	}
+	glDisable (GL_SCISSOR_TEST);
+	glColorMask (GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+	glDepthMask (GL_TRUE);
+	glStencilMask (~0u);
 	glClear (GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT);
 	r_gamma_fbo_active = true;
 }
@@ -684,13 +948,13 @@ void GLSLGamma_BeginFrame (void)
 =============
 GLSLGamma_SceneFBO
 
-The render target other post-effects (FXAA, menu previews) must restore
-instead of framebuffer 0 while the gamma scene FBO is active.
+The active scene target (multisample, gamma, or default) that other passes
+such as FXAA and menu previews must restore.
 =============
 */
 GLuint GLSLGamma_SceneFBO (void)
 {
-	return r_gamma_fbo_active ? r_gamma_fbo : 0;
+	return r_gamma_fbo_active ? (r_scene_msaa.fbo ? r_scene_msaa.fbo : r_gamma_fbo) : 0;
 }
 
 /*
@@ -707,63 +971,55 @@ void GLSLGamma_GammaCorrect (void)
 	int softemu_mode;
 	static qboolean softemu_warned;
 	qboolean fbo_active = r_gamma_fbo_active;
+	qboolean shader;
 
+	GLSLGamma_ResolveMSAA ();
 	r_gamma_fbo_active = false;
+	if (fbo_active)
+		gl_stencilbits = r_scene_window_stencilbits;
 
 	softemu_mode = GLSLGamma_SoftEmuMode();
 	if (!gl_glsl_gamma_able)
 	{
 		if (softemu_mode && !softemu_warned)
 		{
-			Con_Warning("r_softemu requires GLSL gamma support\n");
 			softemu_warned = true;
+			GLSLGamma_Warning("r_softemu requires GLSL gamma support\n");
 		}
-		return;
+		softemu_mode = 0;
 	}
 
 	if (softemu_mode && (!gl_mtexable || gl_max_texture_image_units < 3))
 	{
 		if (!softemu_warned)
 		{
-			Con_Warning("r_softemu requires at least 3 shader texture units\n");
 			softemu_warned = true;
+			GLSLGamma_Warning("r_softemu requires at least 3 shader texture units\n");
 		}
 		softemu_mode = 0;
 	}
 
 	// when the scene FBO is active the frame lives in r_gamma_texture and
 	// must be drawn to the default framebuffer regardless of the settings
-	if (!fbo_active && !softemu_mode && vid_gamma.value == 1 && vid_contrast.value == 1)
+	shader = gl_glsl_gamma_able && (softemu_mode || vid_gamma.value != 1 || vid_contrast.value != 1);
+	if (!fbo_active && !shader)
 		return;
 
 // create render-to-texture texture if needed
-	if (!r_gamma_texture)
-	{
-		glGenTextures (1, &r_gamma_texture);
-		r_gamma_texture_width = 0;
-		r_gamma_texture_height = 0;
-	}
-	GL_DisableMultitexture();
-	if (gl_mtexable)
-		GL_SelectTexture(GL_TEXTURE0_ARB);
-	glBindTexture (GL_TEXTURE_2D, r_gamma_texture);
-
 	if (!gl_texture_NPOT)
 	{
 		tw = TexMgr_Pad(tw);
 		th = TexMgr_Pad(th);
 	}
-	if (r_gamma_texture_width != tw || r_gamma_texture_height != th)
+	if (!GLSLGamma_CreateTexture (tw, th))
 	{
-		r_gamma_texture_width = tw;
-		r_gamma_texture_height = th;
-		glTexImage2D (GL_TEXTURE_2D, 0, GL_RGBA8, r_gamma_texture_width, r_gamma_texture_height, 0, GL_BGRA, GL_UNSIGNED_INT_8_8_8_8_REV, NULL);
-		glTexParameteri (GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-		glTexParameteri (GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+		if (fbo_active)
+			GL_BindFramebufferFunc (GL_FRAMEBUFFER, 0);
+		return;
 	}
 
 // create shader if needed
-	if (!r_gamma_program)
+	if (shader && !r_gamma_program)
 	{
 		GLSLGamma_CreateShaders ();
 		if (!r_gamma_program)
@@ -801,16 +1057,33 @@ void GLSLGamma_GammaCorrect (void)
 		glBindTexture(GL_TEXTURE_2D, r_gamma_texture);
 	}
 
-	GL_UseProgramFunc (r_gamma_program);
-	GL_Uniform1fFunc (gammaLoc, gamma_value); // woods #gammaclamp
-	GL_Uniform1fFunc (contrastLoc, contrast_value);
-	GL_Uniform1iFunc (textureLoc, 0); // use texture unit 0
-	GL_Uniform1iFunc (softEmuModeLoc, softemu_mode);
-	GL_Uniform1iFunc (softEmuLUTLoc, 1);
-	GL_Uniform1iFunc (softEmuPaletteLoc, 2);
+	if (shader)
+	{
+		GL_UseProgramFunc (r_gamma_program);
+		GL_Uniform1fFunc (gammaLoc, gamma_value);
+		GL_Uniform1fFunc (contrastLoc, contrast_value);
+		GL_Uniform1iFunc (textureLoc, 0);
+		GL_Uniform1iFunc (softEmuModeLoc, softemu_mode);
+		GL_Uniform1iFunc (softEmuLUTLoc, 1);
+		GL_Uniform1iFunc (softEmuPaletteLoc, 2);
+	}
+	else if (GL_UseProgramFunc)
+		GL_UseProgramFunc (0);
 
 	glDisable (GL_ALPHA_TEST);
 	glDisable (GL_DEPTH_TEST);
+	glDisable (GL_BLEND);
+	glDisable (GL_CULL_FACE);
+	glDisable (GL_SCISSOR_TEST);
+	glEnable (GL_TEXTURE_2D);
+	glTexEnvf (GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_REPLACE);
+	glColor4f (1, 1, 1, 1);
+	glMatrixMode (GL_PROJECTION);
+	glPushMatrix ();
+	glLoadIdentity ();
+	glMatrixMode (GL_MODELVIEW);
+	glPushMatrix ();
+	glLoadIdentity ();
 
 	glViewport (glx, gly, glwidth, glheight);
 
@@ -828,7 +1101,12 @@ void GLSLGamma_GammaCorrect (void)
 	glVertex2f (-1, 1);
 	glEnd ();
 
-	GL_UseProgramFunc (0);
+	glPopMatrix ();
+	glMatrixMode (GL_PROJECTION);
+	glPopMatrix ();
+	glMatrixMode (GL_MODELVIEW);
+	if (GL_UseProgramFunc)
+		GL_UseProgramFunc (0);
 	if (gl_mtexable)
 		GL_SelectTexture(GL_TEXTURE0_ARB);
 
@@ -930,7 +1208,7 @@ void R_RenderSceneBlur(float alpha)
 
 	// Update history texture
 	glBindTexture(GL_TEXTURE_2D, sceneblur_texture);
-	glCopyTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, glx, gly, glwidth, glheight);
+	GL_CopySceneToTexture (glx, gly, glwidth, glheight);
 	GL_ClearBindings();
 }
 
@@ -3830,7 +4108,7 @@ void R_WarpScaleView (void)
 
 	// copy the framebuffer to the texture
 	glBindTexture (GL_TEXTURE_2D, r_warpscale_texture);
-	glCopyTexSubImage2D (GL_TEXTURE_2D, 0, 0, 0, srcx, srcy, srcw, srch);
+	GL_CopySceneToTexture (srcx, srcy, srcw, srch);
 
 	// draw the texture back to the framebuffer
 	glDisable (GL_ALPHA_TEST);

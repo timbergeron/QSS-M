@@ -329,7 +329,7 @@ static void R_BeginTransparentDrawing (float entalpha)
 		glDepthMask (GL_FALSE);
 		glEnable (GL_BLEND);
 		
-		if (vid_fxaa.value > 0 && GL_BlendFuncSeparateFunc) // woods #fxaa use separate alpha blending when FXAA is enabled to preserve transparency info
+		if (FXAA_Enabled () && GL_BlendFuncSeparateFunc) // preserve transparency info for the frame's FXAA mode
 		{
 			// RGB: normal alpha blending, Alpha: copy source alpha
 			GL_BlendFuncSeparateFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA, GL_ONE, GL_ZERO);
@@ -8724,7 +8724,9 @@ static void RSceneCache_Draw(qboolean water)
 				}
 			}
 
-			GL_Uniform1iFunc(useCausticsTexLoc, gl_caustics.value > 0 && underwatertexture && uw);
+			// This location belongs to the world program, not the water/sky shaders.
+			if (lastprog == r_world_program)
+				GL_Uniform1iFunc(useCausticsTexLoc, gl_caustics.value > 0 && underwatertexture && uw);
 
 			GL_SelectTexture (GL_TEXTURE1);
 			if (lm_slot)

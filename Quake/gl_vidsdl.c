@@ -125,6 +125,7 @@ qboolean gl_glsl_water_able = false; //Spoike
 qboolean gl_bmodel_instancing_able = false;
 qboolean gl_occlusion_able = false; // teleporter views skip hidden planes
 qboolean gl_fbo_able = false; // woods #fxaa FXAA framebuffer support
+qboolean gl_msaa_able = false;
 int gl_stencilbits;
 GLint gl_hardware_maxsize;
 
@@ -186,6 +187,9 @@ PFNGLBINDRENDERBUFFERPROC GL_BindRenderbufferFunc = NULL;
 PFNGLRENDERBUFFERSTORAGEPROC GL_RenderbufferStorageFunc = NULL;
 PFNGLFRAMEBUFFERRENDERBUFFERPROC GL_FramebufferRenderbufferFunc = NULL;
 PFNGLDELETERENDERBUFFERSPROC GL_DeleteRenderbuffersFunc = NULL;
+PFNGLRENDERBUFFERSTORAGEMULTISAMPLEPROC GL_RenderbufferStorageMultisampleFunc = NULL;
+PFNGLGETRENDERBUFFERPARAMETERIVPROC GL_GetRenderbufferParameterivFunc = NULL;
+PFNGLBLITFRAMEBUFFERPROC GL_BlitFramebufferFunc = NULL;
 
 PFNGLBLENDFUNCSEPARATEPROC GL_BlendFuncSeparateFunc = NULL; // woods #fxaa Blend function pointer for FXAA transparency fix  
 
@@ -244,8 +248,9 @@ static void VID_Gamma_RestoreNative (void);
 #endif
 
 static qboolean	gammaworks = false;	// whether hw-gamma works
-static int fsaa;
-static int fsaa_obtained;	// samples the context actually got (VID_SetMode)
+static int fsaa_obtained; // samples applied by the scene renderer
+static int vid_depthbits;
+static int vid_startup_fsaa = -1;
 
 static qboolean VID_GLSLGammaAllowed (void)
 {
@@ -258,13 +263,12 @@ static qboolean VID_PreferHardwareGamma (void)
 	// Without an FBO the GLSL gamma pass must copy the default framebuffer,
 	// which stalls Apple's GL and costs a large chunk of the frame.  With one
 	// the pass is effectively free, so only fall back to hardware ramps when
-	// the scene FBO is unavailable (or would silently drop MSAA the context
-	// actually obtained -- a failed MSAA request doesn't count).
+	// the scene FBO is unavailable. MSAA resolves into that FBO as well.
 	if (COM_CheckParm("-glslgamma"))
 		return false;
 	if (COM_CheckParm("-hwgamma"))
 		return true;
-	return !gl_fbo_able || !gl_texture_NPOT || fsaa_obtained > 0;
+	return !gl_fbo_able || !gl_texture_NPOT;
 #else
 	return false;
 #endif
@@ -1211,9 +1215,9 @@ static qboolean VID_SetMode (int width, int height, int refreshrate, int bpp, qb
 	SDL_GL_SetAttribute(SDL_GL_DEPTH_SIZE, depthbits);
 	SDL_GL_SetAttribute(SDL_GL_STENCIL_SIZE, stencilbits);
 
-	/* fsaa */
-	SDL_GL_SetAttribute(SDL_GL_MULTISAMPLEBUFFERS, fsaa > 0 ? 1 : 0);
-	SDL_GL_SetAttribute(SDL_GL_MULTISAMPLESAMPLES, fsaa);
+	/* Scene MSAA belongs to the renderer, so its sample count can change live. */
+	SDL_GL_SetAttribute(SDL_GL_MULTISAMPLEBUFFERS, 0);
+	SDL_GL_SetAttribute(SDL_GL_MULTISAMPLESAMPLES, 0);
 
 	q_snprintf(caption, sizeof(caption), ENGINE_NAME_AND_VER);
 
@@ -1228,11 +1232,6 @@ static qboolean VID_SetMode (int width, int height, int refreshrate, int bpp, qb
 			flags |= SDL_WINDOW_RESIZABLE;
 
 		draw_context = SDL_CreateWindow (caption, width, height, flags);
-		if (!draw_context) { // scale back fsaa
-			SDL_GL_SetAttribute(SDL_GL_MULTISAMPLEBUFFERS, 0);
-			SDL_GL_SetAttribute(SDL_GL_MULTISAMPLESAMPLES, 0);
-			draw_context = SDL_CreateWindow (caption, width, height, flags);
-		}
 		if (!draw_context) { // scale back SDL_GL_DEPTH_SIZE
 			SDL_GL_SetAttribute(SDL_GL_DEPTH_SIZE, 16);
 			draw_context = SDL_CreateWindow (caption, width, height, flags);
@@ -1345,9 +1344,8 @@ EnableDarkModeForSDLWindow(draw_context); // woods #darkmode - apply dark mode t
 	if (!SDL_GL_GetAttribute(SDL_GL_DEPTH_SIZE, &depthbits))
 		depthbits = 0;
 
-// read obtained fsaa samples
-	if (!SDL_GL_GetAttribute(SDL_GL_MULTISAMPLESAMPLES, &fsaa_obtained))
-		fsaa_obtained = 0;
+	vid_depthbits = depthbits;
+	fsaa_obtained = 0; // applied at the next scene frame
 
 // read stencil bits
 	if (!SDL_GL_GetAttribute(SDL_GL_STENCIL_SIZE, &gl_stencilbits))
@@ -1587,6 +1585,17 @@ static void VID_Unlock (void)
 {
 	vid_locked = false;
 	VID_SyncCvars();
+	// Startup scripts run after VID_Init; retain the explicit -fsaa override.
+	if (vid_startup_fsaa >= 0)
+	{
+		if (vid_startup_fsaa > 0 && vid_fxaa.value > 0)
+		{
+			Cvar_SetQuick (&vid_fxaa, "0");
+			Con_SafePrintf ("MSAA enabled: disabling FXAA (vid_fxaa)\n");
+		}
+		Cvar_SetValueQuick (&vid_fsaa, vid_startup_fsaa);
+		vid_startup_fsaa = -1;
+	}
 }
 
 /*
@@ -1672,6 +1681,70 @@ static qboolean GL_ParseExtensionList (const char *list, const char *name)
 		start = terminator;
 	}
 	return false;
+}
+
+/* Proc addresses can be non-NULL even when that entry point is not supported
+ * by the current context. Choose one advertised framebuffer API family. */
+static void GL_CheckFramebufferExtensions (void)
+{
+	qboolean core = gl_version_major >= 3 || GL_ParseExtensionList (gl_extensions, "GL_ARB_framebuffer_object");
+
+	gl_fbo_able = false;
+	gl_msaa_able = false;
+	GL_GenFramebuffersFunc = NULL;
+	GL_BindFramebufferFunc = NULL;
+	GL_FramebufferTexture2DFunc = NULL;
+	GL_CheckFramebufferStatusFunc = NULL;
+	GL_DeleteFramebuffersFunc = NULL;
+	GL_GenRenderbuffersFunc = NULL;
+	GL_BindRenderbufferFunc = NULL;
+	GL_RenderbufferStorageFunc = NULL;
+	GL_FramebufferRenderbufferFunc = NULL;
+	GL_DeleteRenderbuffersFunc = NULL;
+	GL_RenderbufferStorageMultisampleFunc = NULL;
+	GL_GetRenderbufferParameterivFunc = NULL;
+	GL_BlitFramebufferFunc = NULL;
+
+	if (!core && !GL_ParseExtensionList (gl_extensions, "GL_EXT_framebuffer_object"))
+	{
+		Con_Warning ("Framebuffer Objects not supported\n");
+		return;
+	}
+
+#define LOAD_FBO(name, type) GL_##name##Func = (type) SDL_GL_GetProcAddress (core ? "gl" #name : "gl" #name "EXT")
+	LOAD_FBO (GenFramebuffers, PFNGLGENFRAMEBUFFERSPROC);
+	LOAD_FBO (BindFramebuffer, PFNGLBINDFRAMEBUFFERPROC);
+	LOAD_FBO (FramebufferTexture2D, PFNGLFRAMEBUFFERTEXTURE2DPROC);
+	LOAD_FBO (CheckFramebufferStatus, PFNGLCHECKFRAMEBUFFERSTATUSPROC);
+	LOAD_FBO (DeleteFramebuffers, PFNGLDELETEFRAMEBUFFERSPROC);
+	LOAD_FBO (GenRenderbuffers, PFNGLGENRENDERBUFFERSPROC);
+	LOAD_FBO (BindRenderbuffer, PFNGLBINDRENDERBUFFERPROC);
+	LOAD_FBO (RenderbufferStorage, PFNGLRENDERBUFFERSTORAGEPROC);
+	LOAD_FBO (FramebufferRenderbuffer, PFNGLFRAMEBUFFERRENDERBUFFERPROC);
+	LOAD_FBO (DeleteRenderbuffers, PFNGLDELETERENDERBUFFERSPROC);
+	if (!GL_GenFramebuffersFunc || !GL_BindFramebufferFunc || !GL_FramebufferTexture2DFunc ||
+		!GL_CheckFramebufferStatusFunc || !GL_DeleteFramebuffersFunc || !GL_GenRenderbuffersFunc ||
+		!GL_BindRenderbufferFunc || !GL_RenderbufferStorageFunc || !GL_FramebufferRenderbufferFunc ||
+		!GL_DeleteRenderbuffersFunc)
+	{
+		Con_Warning ("Framebuffer Objects not available\n");
+		return;
+	}
+	gl_fbo_able = true;
+	if (cls.state == ca_disconnected)
+		Con_Printf ("FOUND: Framebuffer Objects\n");
+
+	/* EXT framebuffer_object alone does not provide multisampling or resolves. */
+	if (!gl_texture_NPOT || (!core &&
+		(!GL_ParseExtensionList (gl_extensions, "GL_EXT_framebuffer_multisample") ||
+		 !GL_ParseExtensionList (gl_extensions, "GL_EXT_framebuffer_blit") ||
+		 !GL_ParseExtensionList (gl_extensions, "GL_EXT_packed_depth_stencil"))))
+		return;
+	LOAD_FBO (RenderbufferStorageMultisample, PFNGLRENDERBUFFERSTORAGEMULTISAMPLEPROC);
+	LOAD_FBO (GetRenderbufferParameteriv, PFNGLGETRENDERBUFFERPARAMETERIVPROC);
+	LOAD_FBO (BlitFramebuffer, PFNGLBLITFRAMEBUFFERPROC);
+#undef LOAD_FBO
+	gl_msaa_able = GL_RenderbufferStorageMultisampleFunc && GL_BlitFramebufferFunc && GL_GetRenderbufferParameterivFunc;
 }
 
 static void GL_CheckExtensions (void)
@@ -2021,69 +2094,7 @@ static void GL_CheckExtensions (void)
 	// GLSL alias model rendering
 	//
 
-    // woods framebuffer Objects for #fxaa
-
-    if (gl_version_major >= 3 || GL_ParseExtensionList(gl_extensions, "GL_ARB_framebuffer_object") ||
-        GL_ParseExtensionList(gl_extensions, "GL_EXT_framebuffer_object"))
-    {
-        GL_GenFramebuffersFunc = (PFNGLGENFRAMEBUFFERSPROC) SDL_GL_GetProcAddress("glGenFramebuffers");
-        if (!GL_GenFramebuffersFunc)
-            GL_GenFramebuffersFunc = (PFNGLGENFRAMEBUFFERSPROC) SDL_GL_GetProcAddress("glGenFramebuffersEXT");
-            
-        GL_BindFramebufferFunc = (PFNGLBINDFRAMEBUFFERPROC) SDL_GL_GetProcAddress("glBindFramebuffer");
-        if (!GL_BindFramebufferFunc)
-            GL_BindFramebufferFunc = (PFNGLBINDFRAMEBUFFERPROC) SDL_GL_GetProcAddress("glBindFramebufferEXT");
-            
-        GL_FramebufferTexture2DFunc = (PFNGLFRAMEBUFFERTEXTURE2DPROC) SDL_GL_GetProcAddress("glFramebufferTexture2D");
-        if (!GL_FramebufferTexture2DFunc)
-            GL_FramebufferTexture2DFunc = (PFNGLFRAMEBUFFERTEXTURE2DPROC) SDL_GL_GetProcAddress("glFramebufferTexture2DEXT");
-            
-        GL_CheckFramebufferStatusFunc = (PFNGLCHECKFRAMEBUFFERSTATUSPROC) SDL_GL_GetProcAddress("glCheckFramebufferStatus");
-        if (!GL_CheckFramebufferStatusFunc)
-            GL_CheckFramebufferStatusFunc = (PFNGLCHECKFRAMEBUFFERSTATUSPROC) SDL_GL_GetProcAddress("glCheckFramebufferStatusEXT");
-            
-        GL_DeleteFramebuffersFunc = (PFNGLDELETEFRAMEBUFFERSPROC) SDL_GL_GetProcAddress("glDeleteFramebuffers");
-        if (!GL_DeleteFramebuffersFunc)
-            GL_DeleteFramebuffersFunc = (PFNGLDELETEFRAMEBUFFERSPROC) SDL_GL_GetProcAddress("glDeleteFramebuffersEXT");
-            
-        GL_GenRenderbuffersFunc = (PFNGLGENRENDERBUFFERSPROC) SDL_GL_GetProcAddress("glGenRenderbuffers");
-        if (!GL_GenRenderbuffersFunc)
-            GL_GenRenderbuffersFunc = (PFNGLGENRENDERBUFFERSPROC) SDL_GL_GetProcAddress("glGenRenderbuffersEXT");
-            
-        GL_BindRenderbufferFunc = (PFNGLBINDRENDERBUFFERPROC) SDL_GL_GetProcAddress("glBindRenderbuffer");
-        if (!GL_BindRenderbufferFunc)
-            GL_BindRenderbufferFunc = (PFNGLBINDRENDERBUFFERPROC) SDL_GL_GetProcAddress("glBindRenderbufferEXT");
-            
-        GL_RenderbufferStorageFunc = (PFNGLRENDERBUFFERSTORAGEPROC) SDL_GL_GetProcAddress("glRenderbufferStorage");
-        if (!GL_RenderbufferStorageFunc)
-            GL_RenderbufferStorageFunc = (PFNGLRENDERBUFFERSTORAGEPROC) SDL_GL_GetProcAddress("glRenderbufferStorageEXT");
-            
-        GL_FramebufferRenderbufferFunc = (PFNGLFRAMEBUFFERRENDERBUFFERPROC) SDL_GL_GetProcAddress("glFramebufferRenderbuffer");
-        if (!GL_FramebufferRenderbufferFunc)
-            GL_FramebufferRenderbufferFunc = (PFNGLFRAMEBUFFERRENDERBUFFERPROC) SDL_GL_GetProcAddress("glFramebufferRenderbufferEXT");
-            
-        GL_DeleteRenderbuffersFunc = (PFNGLDELETERENDERBUFFERSPROC) SDL_GL_GetProcAddress("glDeleteRenderbuffers");
-        if (!GL_DeleteRenderbuffersFunc)
-            GL_DeleteRenderbuffersFunc = (PFNGLDELETERENDERBUFFERSPROC) SDL_GL_GetProcAddress("glDeleteRenderbuffersEXT");
-            
-        if (GL_GenFramebuffersFunc && GL_BindFramebufferFunc && GL_FramebufferTexture2DFunc &&
-            GL_CheckFramebufferStatusFunc && GL_DeleteFramebuffersFunc && GL_GenRenderbuffersFunc &&
-            GL_BindRenderbufferFunc && GL_RenderbufferStorageFunc && GL_FramebufferRenderbufferFunc &&
-            GL_DeleteRenderbuffersFunc)
-        {
-            if (cls.state == ca_disconnected) // woods #supressvidmsgs
-                Con_Printf("FOUND: Framebuffer Objects\n");
-            gl_fbo_able = true;
-        }
-        else
-        {
-            Con_Warning ("Framebuffer Objects not available\n");
-        }
-    }
-    else
-    {
-        Con_Warning ("Framebuffer Objects not supported\n");
-    }
+	GL_CheckFramebufferExtensions ();
 
 	// GLSL gamma -- decided after FBO detection so VID_PreferHardwareGamma
 	// can require scene-FBO support on macOS
@@ -2359,6 +2370,7 @@ void	VID_Shutdown (void)
 	if (vid_initialized)
 	{
 		R_MotionBlur_DeleteTexture (); // woods #motionblur
+		GLSLGamma_DeleteTexture ();
 		VID_Gamma_Shutdown (); //johnfitz
 		FXAA_Shutdown(); // woods #fxaa
 		R_DeleteBrushModelInstancingBuffers ();
@@ -2430,6 +2442,7 @@ static void VID_DescribeCurrentMode_f (void)
 			VID_GetCurrentBPP(),
 			VID_GetCurrentRefreshRate(),
 			VID_GetFullscreen() ? "fullscreen" : "windowed");
+	Con_Printf ("MSAA: requested %dx, active %dx\n", (int)vid_fsaa.value, GLSLGamma_MSAASamples ());
 }
 
 /*
@@ -2463,14 +2476,30 @@ static void VID_DescribeModes_f (void)
 
 /*
 ===================
-VID_FSAA_f -- ericw -- warn that vid_fsaa requires engine restart
+VID_FSAA_f -- defer scene attachment changes until the next frame
 ===================
 */
 static void VID_FSAA_f (cvar_t *var)
 {
-	// don't print the warning if vid_fsaa is set during startup
-	if (vid_initialized)
-		Con_Printf("%s %d requires engine restart to take effect\n", var->name, (int)var->value);
+	int samples = isfinite(var->value) ? (int)CLAMP(0, var->value, 16) : 0;
+	if (samples == 1)
+		samples = 0;
+	if (var->value != samples)
+		Cvar_SetValueQuick (var, samples);
+	if (vid_initialized && !vid_locked && samples > 0 && vid_fxaa.value > 0)
+	{
+		Cvar_SetQuick (&vid_fxaa, "0");
+		Con_SafePrintf ("MSAA enabled: disabling FXAA (vid_fxaa)\n");
+	}
+	GLSLGamma_MSAAChanged ();
+}
+
+void VID_UpdateFSAA (int samples)
+{
+	fsaa_obtained = samples;
+	q_snprintf (videosetg, sizeof(videosetg), "%dx%dx%d %dHz (%d-bit z-buffer, %dx FSAA)",
+		VID_GetCurrentWidth(), VID_GetCurrentHeight(), VID_GetCurrentBPP(),
+		VID_GetCurrentRefreshRate(), vid_depthbits, samples);
 }
 
 //==========================================================================
@@ -2710,7 +2739,6 @@ void	VID_Init (void)
 	refreshrate = (int)vid_refreshrate.value;
 	bpp = (int)vid_bpp.value;
 	fullscreen = (int)vid_fullscreen.value;
-	fsaa = (int)vid_fsaa.value;
 
 	if (COM_CheckParm("-current"))
 	{
@@ -2756,7 +2784,10 @@ void	VID_Init (void)
 
 	p = COM_CheckParm ("-fsaa");
 	if (p && p < com_argc-1)
-		fsaa = atoi(com_argv[p+1]);
+	{
+		Cvar_SetQuick (&vid_fsaa, com_argv[p+1]);
+		vid_startup_fsaa = (int)vid_fsaa.value;
+	}
 
 	validmode = VID_ValidMode(width, height, refreshrate, bpp, fullscreen);
 	if (!validmode && fullscreen && !vid_desktopfullscreen.value)

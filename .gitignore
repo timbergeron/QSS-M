@@ -22,6 +22,8 @@ out
 /Quake/quakespasm.exe
 /Quake/QSS-M
 /Quake/debug.txt
+/build/live-fsaa/
+/.menu-spacing-push/
 
 # Local game data, captures and runtime output
 /pak[0-9].pak

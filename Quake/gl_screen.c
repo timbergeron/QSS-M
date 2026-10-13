@@ -4836,6 +4836,7 @@ void SCR_DrawCrosshair (void)
 	glEnable(GL_BLEND);
 	glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
 	glDisable(GL_ALPHA_TEST);
+	GLboolean was_multisample = glIsEnabled(GL_MULTISAMPLE);
 	glEnable(GL_MULTISAMPLE);
 	glEnable(GL_LINE_SMOOTH);
 	glHint(GL_LINE_SMOOTH_HINT, GL_NICEST);
@@ -4883,7 +4884,8 @@ void SCR_DrawCrosshair (void)
 	}
 
 	glColor4f(1, 1, 1, 1);
-	glDisable(GL_MULTISAMPLE);
+	if (!was_multisample)
+		glDisable(GL_MULTISAMPLE);
 	glDisable(GL_LINE_SMOOTH);
 	glDisable(GL_POLYGON_SMOOTH);
 	glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
@@ -6942,7 +6944,7 @@ void SCR_ScreenShot_f (void)
 	blocked_sound = S_BlockSound ();
 
 	glPixelStorei (GL_PACK_ALIGNMENT, 1);/* for widths that aren't a multiple of 4 */
-	glReadPixels (glx, gly, glwidth, glheight, GL_RGB, GL_UNSIGNED_BYTE,
+	GL_ReadScenePixels (glx, gly, glwidth, glheight, GL_RGB, GL_UNSIGNED_BYTE,
 		job->pixels);
 	VID_Gamma_ApplyToBuffer(job->pixels, (size_t)glwidth * (size_t)glheight, 3);
 	job->layout = CLIPBOARD_PIXELS_RGB24;
@@ -8442,7 +8444,8 @@ void SCR_UpdateScreen (void)
 
 	GL_BeginRendering (&glx, &gly, &glwidth, &glheight);
 
-	GLSLGamma_BeginFrame (); // render into the scene FBO so gamma needs no backbuffer copy
+	FXAA_ApplySettings (); // snapshot AA settings before allocating or drawing targets
+	GLSLGamma_BeginFrame (); // scene MSAA and gamma share the resolved color texture
 
 	if (cl.worldmodel && cl.qcvm.worldmodel && cl.qcvm.extfuncs.CSQC_UpdateView)
 	{
@@ -8483,7 +8486,7 @@ void SCR_UpdateScreen (void)
 		G_FLOAT(OFS_PARM1) = glheight/s;
 		G_FLOAT(OFS_PARM2) = true;
 
-		if (vid_fxaa.value > 0) // woods #fxaa
+		if (FXAA_Enabled ()) // woods #fxaa
 			FXAA_BeginFrame();
 
 		if (cls.signon == SIGNONS||!cl.qcvm.extfuncs.CSQC_UpdateViewLoading)
@@ -8491,7 +8494,7 @@ void SCR_UpdateScreen (void)
 		else
 			PR_ExecuteProgram(cl.qcvm.extfuncs.CSQC_UpdateViewLoading);
 
-		if (vid_fxaa.value > 0) // woods #fxaa
+		if (FXAA_Enabled ()) // woods #fxaa
 			FXAA_EndFrame();
 
 		PR_SwitchQCVM(NULL);
@@ -8514,12 +8517,12 @@ void SCR_UpdateScreen (void)
 //
 		SCR_SetUpToDrawConsole ();
 
-		if (vid_fxaa.value > 0) // woods #fxaa begin FXAA frame for 3D rendering
+		if (FXAA_Enabled ()) // woods #fxaa begin FXAA frame for 3D rendering
 			FXAA_BeginFrame();
 
 		V_RenderView ();
 
-		if (vid_fxaa.value > 0) // woods #fxaa end FXAA frame for 3D rendering
+		if (FXAA_Enabled ()) // woods #fxaa end FXAA frame for 3D rendering
 			FXAA_EndFrame();
 
 		GL_Set2D ();
@@ -8682,6 +8685,8 @@ void FXAA_Shutdown(void);
 static GLuint FXAA_CreateShader_Simple(void);
 static GLuint FXAA_CreateShader_FTE(void);
 static void FXAA_DeleteFramebuffer(void);
+static int fxaa_frame_level;
+static qboolean fxaa_frame_active;
 static qboolean FXAA_AttemptFramebuffer(int width, int height, const fxaa_color_format_t *color_format, GLenum *status, GLenum *error);
 static qboolean FXAA_CreateFramebuffer(int width, int height);
 void FXAA_VidFxaaChanged(cvar_t *v);
@@ -8722,17 +8727,36 @@ FXAA_VidFxaaChanged
 void FXAA_VidFxaaChanged(cvar_t *v)
 {
     /* clamp to [0‥3] so "vid_fxaa 99" doesn't explode */
-    int lvl = (int)CLAMP(0, v->value, 3);
+    int lvl = isfinite(v->value) ? (int)CLAMP(0, v->value, 3) : 0;
     if (lvl != v->value)
         Cvar_SetValueQuick(v, (float)lvl);
 
-    /* turn resources on/off just like before */
-    // If FXAA was disabled, clean up resources
-    if (lvl == 0 && fxaa.initialized)
-        FXAA_DeleteFramebuffer();
+    if (lvl > 0 && vid_fsaa.value > 0)
+    {
+        Cvar_SetQuick(&vid_fsaa, "0");
+        Con_SafePrintf("FXAA enabled: disabling MSAA (vid_fsaa)\n");
+    }
+    /* No GL work here: QC can change settings while a target is being drawn. */
+}
 
-    /* store current preset in the fxaa struct for fast access */
-    fxaa.current = fxaa_presets[lvl];
+qboolean FXAA_Enabled (void)
+{
+    return fxaa_frame_level > 0;
+}
+
+void FXAA_ApplySettings (void)
+{
+    /* Both values from a startup config retain the historical FXAA preference. */
+    if (vid_fxaa.value > 0 && vid_fsaa.value > 0)
+    {
+        Cvar_SetQuick(&vid_fsaa, "0");
+        Con_SafePrintf("FXAA enabled: disabling MSAA (vid_fsaa)\n");
+    }
+    fxaa_frame_level = isfinite(vid_fxaa.value) ? (int)CLAMP(0, vid_fxaa.value, 3) : 0;
+    fxaa_frame_active = false;
+    if (!fxaa_frame_level && fxaa.framebuffer)
+        FXAA_DeleteFramebuffer();
+    fxaa.current = fxaa_presets[fxaa_frame_level];
 }
 
 /*
@@ -8753,9 +8777,7 @@ FXAA_CvarChanged
 */
 void FXAA_CvarChanged(cvar_t *v)
 {
-    // If FXAA was disabled, clean up resources
-    if (v->value <= 0.0f && fxaa.initialized)
-        FXAA_DeleteFramebuffer();
+    /* Resources follow the settings snapshot at the start of the next frame. */
 }
 
 /*
@@ -8976,12 +8998,12 @@ FXAA_Init
 */
 void FXAA_Init(void)
 {
-    if (vid_fxaa.value <= 0 || !gl_fbo_able || !gl_glsl_able || fxaa.init_attempted)
+    if (!fxaa_frame_level || !gl_fbo_able || !gl_glsl_able || fxaa.init_attempted)
         return;
         
     memset(&fxaa, 0, sizeof(fxaa));
     fxaa.init_attempted = true;
-    fxaa.current = fxaa_presets[(int)CLAMP(0, vid_fxaa.value, 3)];
+    fxaa.current = fxaa_presets[fxaa_frame_level];
     
     fxaa.program_simple = FXAA_CreateShader_Simple();
     if (!fxaa.program_simple) {
@@ -9012,11 +9034,6 @@ void FXAA_Init(void)
     fxaa.initialized = true;
     Con_DPrintf("FXAA initialized\n");
     
-    // Disable MSAA if both are enabled
-    if (vid_fsaa.value > 0 && vid_fxaa.value > 0) {
-        Con_DPrintf("FXAA: Disabling MSAA (vid_fsaa) as FXAA is more efficient\n");
-        Cvar_SetQuick(&vid_fsaa, "0");
-    }
 }
 
 /*
@@ -9175,15 +9192,17 @@ FXAA_BeginFrame
 */
 void FXAA_BeginFrame(void)
 {
-    if (!fxaa.initialized && vid_fxaa.value > 0)
+    fxaa_frame_active = false;
+    if (!fxaa.initialized && fxaa_frame_level > 0)
         FXAA_Init();
-    if (!fxaa.initialized || vid_fxaa.value <= 0 || !gl_fbo_able || !gl_glsl_able)
+    if (!fxaa.initialized || !fxaa_frame_level || !gl_fbo_able || !gl_glsl_able)
         return;
         
     if (!FXAA_CreateFramebuffer(glwidth, glheight))
         return;
         
     GL_BindFramebufferFunc(GL_FRAMEBUFFER, fxaa.framebuffer);
+    fxaa_frame_active = true;
     glViewport(0, 0, glwidth, glheight);
     
     // Clear with alpha = 0 to support transparency detection
@@ -9203,8 +9222,9 @@ FXAA_EndFrame
 */
 void FXAA_EndFrame(void)
 {
-    if (!fxaa.initialized || vid_fxaa.value <= 0 || !fxaa.framebuffer)
+    if (!fxaa_frame_active)
         return;
+    fxaa_frame_active = false;
         
     // Save current state
     GLboolean wasBlend = glIsEnabled(GL_BLEND);
@@ -9244,7 +9264,7 @@ void FXAA_EndFrame(void)
     glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
     
     // Choose shader based on vid_fxaa value
-    GLuint prog = (vid_fxaa.value == 3) ? fxaa.program_fte : fxaa.program_simple;
+    GLuint prog = (fxaa_frame_level == 3) ? fxaa.program_fte : fxaa.program_simple;
     GL_UseProgramFunc(prog);
     
     // Bind texture and set uniforms

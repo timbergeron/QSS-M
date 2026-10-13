@@ -390,6 +390,9 @@ extern PFNGLBINDRENDERBUFFERPROC GL_BindRenderbufferFunc;
 extern PFNGLRENDERBUFFERSTORAGEPROC GL_RenderbufferStorageFunc;
 extern PFNGLFRAMEBUFFERRENDERBUFFERPROC GL_FramebufferRenderbufferFunc;
 extern PFNGLDELETERENDERBUFFERSPROC GL_DeleteRenderbuffersFunc;
+extern PFNGLRENDERBUFFERSTORAGEMULTISAMPLEPROC GL_RenderbufferStorageMultisampleFunc;
+extern PFNGLGETRENDERBUFFERPARAMETERIVPROC GL_GetRenderbufferParameterivFunc;
+extern PFNGLBLITFRAMEBUFFERPROC GL_BlitFramebufferFunc;
 
 extern PFNGLBLENDFUNCSEPARATEPROC GL_BlendFuncSeparateFunc; // woods #fxaa
 
@@ -400,6 +403,7 @@ extern	qboolean	gl_glsl_water_able;
 extern	qboolean	gl_bmodel_instancing_able;
 extern	qboolean	gl_occlusion_able;
 extern	qboolean	gl_fbo_able; // woods #fxaa
+extern qboolean gl_msaa_able;
 // ericw --
 
 //mipmapped warp textures
@@ -729,6 +733,14 @@ void GL_ResetBufferNames (void);
 void GLSLGamma_DeleteTexture (void);
 void GLSLGamma_BeginFrame (void);
 GLuint GLSLGamma_SceneFBO (void);
+void GLSLGamma_MSAAChanged (void);
+int GLSLGamma_MSAASamples (void);
+int GLSLGamma_NextMSAA (int dir);
+void GL_CopySceneToTexture (int x, int y, int width, int height);
+void GL_ReadScenePixels (int x, int y, int width, int height, GLenum format, GLenum type, void *pixels);
+void VID_UpdateFSAA (int samples);
+void FXAA_ApplySettings (void);
+qboolean FXAA_Enabled (void);
 void GLSLGamma_GammaCorrect (void);
 void GLSLGamma_SoftEmuPrecache (void);
 qboolean GLSLGamma_SoftEmuCanRemapBlend (void);

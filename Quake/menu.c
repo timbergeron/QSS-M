@@ -15071,26 +15071,7 @@ static void M_Graphics_AdjustSliders(int dir)
 			break;
 
 		case GRAPHICS_ANTIALIASING:
-		{
-			static const int aa_values[] = { 0, 2, 4, 6, 8, 16 };
-			int current = vid_fsaa.value;
-			int current_index = 0;
-
-			// Find current index
-			for (int i = 0; i < 6; i++) {
-				if (aa_values[i] == current) {
-					current_index = i;
-					break;
-				}
-			}
-
-			// Adjust index
-			current_index += dir;
-			if (current_index < 0) current_index = 5;
-			if (current_index > 5) current_index = 0;
-
-			Cvar_SetValue("vid_fsaa", aa_values[current_index]);
-		}
+			Cvar_SetValue("vid_fsaa", GLSLGamma_NextMSAA(dir));
 		break;
 
 		case GRAPHICS_SOFTEMU:
@@ -15295,7 +15276,15 @@ void M_Graphics_Draw(void)
 			if (vid_fsaa.value == 0)
 				value = "off";
 			else
-				value = va("%ix", (int)vid_fsaa.value);
+			{
+				int samples = GLSLGamma_MSAASamples ();
+				if (!samples)
+					value = "unavailable";
+				else if (samples != (int)vid_fsaa.value)
+					value = va("%ix (%ix)", (int)vid_fsaa.value, samples);
+				else
+					value = va("%ix", samples);
+			}
 			break;
 
 		case GRAPHICS_SOFTEMU:
