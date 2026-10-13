@@ -8448,7 +8448,14 @@ void SCR_UpdateScreen (void)
 	{
 		float s = CLAMP (1.0, scr_sbarscale.value, (float)glwidth / 320.0);
 		SCR_SetUpToDrawConsole ();
+		// Full CSQC may draw its UI before (or without) renderscene. Give it
+		// the same 2D state as CSQC_DrawHud, including translucent primitives.
+		GL_Set2D ();
 		GL_SetCanvas (CANVAS_CSQC);
+		glEnable (GL_BLEND);
+		glDisable (GL_ALPHA_TEST);
+		glBlendFunc (GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+		glTexEnvf (GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_MODULATE);
 
 		PR_SwitchQCVM(&cl.qcvm);
 
@@ -8489,6 +8496,8 @@ void SCR_UpdateScreen (void)
 
 		PR_SwitchQCVM(NULL);
 
+		// A QC clip belongs to this callback, not the engine overlays that follow.
+		glDisable (GL_SCISSOR_TEST);
 		GL_Set2D ();
 	}
 	else

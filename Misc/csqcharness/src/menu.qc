@@ -139,25 +139,23 @@ void() mq_models =
 	local string frame0;
 	local entity ent;
 
-	before = getmodelindex("progs/player.mdl", TRUE);
+	before = getmodelindex("progs/hq_single.mdl", TRUE);
 	st_eqf("model/query-before-precache", before, 0);
 
-	idx = getmodelindex("progs/player.mdl", FALSE);
+	st_eqf("model/truncated-header", getmodelindex("progs/hq_truncated.mdl"), 0);
+	st_eqf("model/unsupported-format", getmodelindex("progs/hq_unsupported.md2"), 0);
+	idx = getmodelindex("progs/hq_single.mdl", FALSE);
 	st_ok("model/getmodelindex-positive", idx > 0);
 
-	after = getmodelindex("progs/player.mdl", TRUE);
+	after = getmodelindex("progs/hq_single.mdl", TRUE);
 	st_eqf("model/query-after-precache", after, idx);
 
-	// round-trip rather than hardcoding an animation name: whatever the shipped
-	// player.mdl calls frame 0, frametoname and frameforname must agree on it.
-	// NOTE: only the md3 and iqm loaders populate frames[].name -- the classic
-	// .mdl loader never copies it, so this is degenerate ("") for player.mdl.
-	// If the mdl loader learns to load frame names, the next check flips and
-	// this round-trip becomes a real test.
+	// Generated MDLs separate named single frames from timed group frames.
 	frame0 = frametoname(idx, 0);
-	st_eqs("model/frametoname-mdl-names-unloaded", frame0, "");
+	st_eqs("model/frametoname-mdl", frame0, "hq_frame");
 	st_eqf("model/frame-name-roundtrip", frameforname(idx, frame0), 0);
-	st_ok("model/frameduration-positive", frameduration(idx, 0) > 0);
+	st_ok("model/frameduration-positive",
+		fabs(frameduration(getmodelindex("progs/hq_group.mdl"), 0) - 0.2) < 0.0001);
 
 	st_poisonf();
 	st_eqf("model/frameforname-invalid-handle", frameforname(99999, frame0), -1);
@@ -167,7 +165,7 @@ void() mq_models =
 	st_eqs("model/frametoname-invalid-handle", frametoname(99999, 0), "");
 
 	ent = spawn();
-	setmodel(ent, "progs/player.mdl");
+	setmodel(ent, "progs/hq_single.mdl");
 	st_eqf("model/setmodel-populates-index", ent.modelindex, idx);
 };
 
@@ -186,11 +184,11 @@ void(float h, string tag) mq_bad_handle =
 
 void() mq_bounds =
 {
-	local float idx = getmodelindex("progs/player.mdl", FALSE);
+	local float idx = getmodelindex("progs/hq_single.mdl", FALSE);
 
 	mq_bad_handle(-1, "negative");
 	mq_bad_handle(0, "zero");
-	mq_bad_handle(idx + 1, "one-past-valid");
+	mq_bad_handle(getmodelindex("progs/hq_group.mdl", TRUE) + 1, "one-past-valid");
 	mq_bad_handle(99999, "far-out-of-range");
 
 	// a fractional handle truncates to the valid one rather than being rejected
@@ -201,9 +199,9 @@ void() mq_bounds =
 	// a negative frame used to alias to frame 0: float->unsigned is undefined
 	// and saturates to 0 on arm64. it must be rejected outright.
 	st_poisonf();
-	st_eqf("bounds/frameduration/frame-negative", frameduration(idx, -1), 0);
+	st_eqf("bounds/frameduration/frame-negative", frameduration(getmodelindex("progs/hq_group.mdl", TRUE), -1), 0);
 	st_ok("bounds/frameduration/frame-negative-differs-from-zero",
-		frameduration(idx, 0) > 0);
+		frameduration(getmodelindex("progs/hq_group.mdl", TRUE), 0) > 0);
 	st_poisonf();
 	st_eqf("bounds/frameduration/frame-far", frameduration(idx, 99999), 0);
 	st_poisons();
@@ -224,6 +222,7 @@ void() mq_bounds =
 void() mq_selftest =
 {
 	st_roundedrect();
+	st_bufstr_find();
 	mq_models();
 	mq_bounds();
 	mq_registercvar();
@@ -266,6 +265,9 @@ void(vector screensize) m_draw =
 		mq_selftest();
 
 	RotPic_DrawTests(screensize);
+	Parity_DrawTests('360 72 0');
+	if (autocvar_hq_menu_selftest && mq_frames == 100)
+		localcmd("screenshot tga\n");
 };
 
 void(float scan, float chr) m_keydown =
@@ -278,5 +280,8 @@ void(float scan, float chr) m_keyup = {};
 
 void() m_init =
 {
+	local strbuf owned = buf_create();
+	bufstr_set(owned, 0, "foreign");
+	cvar_set("hq_foreignbuf", ftos(owned));
 	print("csqcharness: menuqc loaded, ESC/togglemenu shows the test panel\n");
 };

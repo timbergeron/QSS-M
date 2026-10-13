@@ -304,6 +304,7 @@ static qboolean CL_AddIgnoredName(const char *name, int player_slot)
 	q_strlcpy(cl_chat_ignored_names[free_slot], name, sizeof(cl_chat_ignored_names[free_slot]));
 	cl_chat_ignored_slots[free_slot] = player_slot;
 	cl_chat_ignored_active[free_slot] = true;
+	CL_Translate_IgnoreChanged();
 	return true;
 }
 
@@ -321,6 +322,7 @@ static qboolean CL_RemoveIgnoredName(const char *name)
 		cl_chat_ignored_active[i] = false;
 		cl_chat_ignored_slots[i] = -1;
 		cl_chat_ignored_names[i][0] = '\0';
+		CL_Translate_IgnoreChanged();
 		return true;
 	}
 
@@ -330,6 +332,7 @@ static qboolean CL_RemoveIgnoredName(const char *name)
 void CL_ClearIgnoredChats(void)
 {
 	int i;
+	CL_Translate_IgnoreChanged();
 
 	memset(cl_chat_ignored_names, 0, sizeof(cl_chat_ignored_names));
 	for (i = 0; i < MAX_SCOREBOARD; i++)

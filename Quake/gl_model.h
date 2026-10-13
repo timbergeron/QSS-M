@@ -630,6 +630,7 @@ void	Mod_ClearAll (void);
 void	Mod_ResetAll (void); // for gamedir changes (Host_Game_f)
 extern int	mod_generation;	// bumped whenever model data may be freed or replaced
 qmodel_t *Mod_ForName (const char *name, qboolean crash);
+qmodel_t *Mod_TryForName (const char *name);
 void	Mod_ForEachModel(void(*callback)(qmodel_t *mod));
 void	*Mod_Extradata (qmodel_t *mod);	// handles caching
 void	Mod_TouchModel (const char *name);

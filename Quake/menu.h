@@ -54,6 +54,7 @@ enum m_state_e {
 	m_hud,
 	m_crosshair,
 	m_console,
+	m_translate,
 	m_colorpicker,
 	m_extras,
 	m_discord,

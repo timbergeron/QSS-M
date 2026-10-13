@@ -1,22 +1,50 @@
-libmikmod 3.3.14
+libmikmod 3.3.15
 
-x64: mingw-w64-x86_64-libmikmod-3.3.14-1-any.pkg.tar.zst from MSYS2.
-x86: cross-compiled upstream source; MSYS2 no longer publishes this package
+x64: mingw-w64-x86_64-libmikmod-3.3.15-1-any.pkg.tar.zst from MSYS2.
+Package SHA-256: dc328cf49052651dfd9d4e17b8e2460fcecad65db8f56780e8404e9a82902c6c
+x86: built from upstream source; MSYS2 no longer publishes this package
 for mingw32. Both DLLs include DirectSound, WinMM and WASAPI drivers, but
 QSS-M only registers drv_nos and decodes through VC_WriteBytes.
 
-Source: https://downloads.sourceforge.net/mikmod/libmikmod-3.3.14.tar.gz
-SHA-256: dffd82b8f254c3489c32098da831f33eac7136843d1e7ccb802f1254ad5b4219
-The same archive is included in MSYS2's mingw-w64-libmikmod-3.3.14-1.src.tar.zst.
+Source: https://downloads.sourceforge.net/mikmod/libmikmod-3.3.15.tar.gz
+SHA-256: dc27b338154b8f88dc9e6317196d42c6abc13bf63c4e055257a18d4e38e1afa2
+The same archive is included in MSYS2's mingw-w64-libmikmod-3.3.15-1.src.tar.zst.
+During this refresh SourceForge returned HTML; the upstream archive was
+extracted from that MSYS2 source bundle and verified against its PKGBUILD.
 
-From a separate build directory, with MinGW-w64 GCC 13 (win32 threads):
+Toolchain: w64devkit-x86 2.10.0, MinGW-w64 GCC 16.2.0 (POSIX threads).
+URL: https://github.com/skeeto/w64devkit/releases/download/v2.10.0/w64devkit-x86-2.10.0.7z.exe
+SHA-256: 513ff7fc571cf6764a5aedbca92f43c513f8d01085c65df5133a82db13a7e63d
+The toolchain's static runtime plus -static-libgcc avoids shared GCC or
+winpthread dependencies; the stripped DLL's imports were checked with pefile.
 
-../libmikmod-3.3.14/configure --host=i686-w64-mingw32 \
-  --enable-shared --disable-static --disable-sdl --disable-xaudio2 \
-  --disable-openal 'LDFLAGS=-static-libgcc -Wl,--no-insert-timestamp'
-make -j4
-i686-w64-mingw32-strip --strip-unneeded .libs/libmikmod-3.dll
+Windows PowerShell recipe, from a separate build directory next to the
+extracted libmikmod-3.3.15 source. Extract w64devkit to
+%TEMP%/qssm-deps/toolchain/w64devkit. Use a short, space-free absolute toolchain
+path (the refresh host's %TEMP% is a short path). If %TEMP% contains spaces,
+choose another space-free extraction path for $bin.
+
+$bin = "$env:TEMP/qssm-deps/toolchain/w64devkit/bin".Replace([char]92, [char]47)
+$env:PATH = $bin.Substring(2)
+$env:CC = "$bin/gcc.exe"; $env:LD = "$bin/ld.exe"
+$env:CONFIG_SHELL = "$bin/sh.exe"; $env:SHELL = "$bin/sh.exe"
+$env:AWK='awk'; $env:GREP='grep'; $env:EGREP='grep -E'; $env:FGREP='grep -F'; $env:SED='sed'
+$env:AR='ar'; $env:RANLIB='ranlib'; $env:STRIP='strip'; $env:DLLTOOL='dlltool'; $env:OBJDUMP='objdump'; $env:NM='nm'
+$env:lt_cv_deplibs_check_method='pass_all'; $env:lt_cv_prog_gnu_ld='yes'
+& "$bin/sh.exe" ../libmikmod-3.3.15/configure --build=i686-w64-mingw32 --host=i686-w64-mingw32 --enable-shared --disable-static --disable-sdl --disable-xaudio2 --disable-openal 'LDFLAGS=-static-libgcc -Wl,--no-insert-timestamp'
+& "$bin/make.exe" -j4
+& "$bin/i686-w64-mingw32-strip.exe" --strip-unneeded .libs/libmikmod-3.dll
+
+PATH above omits the drive prefix because BusyBox's POSIX PATH uses colon
+separators; it still resolves to the toolchain on the current drive. Explicit
+Unix utility variables avoid BusyBox/Autoconf tool-discovery failures.
+Explicit short-path CC/LD, the w64devkit shell and lt_cv_prog_gnu_ld=yes keep
+libtool on its GNU linker path. The original auto-detected LD path contained
+spaces; configure invokes $LD -v unquoted, so the GNU linker probe failed
+and generated an invalid MSVC-style gcc ... -link -dll command.
+No manual link or generated-libtool patch is needed.
 
 Copy .libs/libmikmod-3.dll into Windows/codecs/x86/. The public mikmod.h
-header matches the MSYS2 x64 package. All old exports are retained, so the
-existing import libraries remain usable.
+header comes from the MSYS2 x64 package. Both DLLs retain all 172 old exports,
+so the existing import libraries remain usable. Both import only KERNEL32,
+msvcrt, DSOUND, WINMM, ole32 and USER32; no new runtime DLL is needed.

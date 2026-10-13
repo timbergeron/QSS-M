@@ -23,6 +23,7 @@ import json
 import os
 import re
 import subprocess
+import struct
 import sys
 import threading
 import time
@@ -32,8 +33,11 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 # builtin numbers that must differ per target -- these are what regressed when
 # pr_dumpplatform emitted documentednumber for every module.
 DUMP_EXPECT = {
-    'qscsextensions.qc':   {'drawfill': 323, 'drawpic': 322, 'drawsubpic': 328},
-    'qsmenuextensions.qc': {'drawfill': 457, 'drawpic': 456, 'drawsubpic': 469,
+    'qscsextensions.qc':   {'getmodelindex': 200, 'getentitytoken': 355,
+                            'bufstr_find': 537, 'drawline': 315,
+                            'drawfill': 323, 'drawpic': 322, 'drawsubpic': 328},
+    'qsmenuextensions.qc': {'bufstr_find': 537, 'drawline': 466,
+                            'drawfill': 457, 'drawpic': 456, 'drawsubpic': 469,
                             'gettime': 67, 'registercvar': 42, 'findflags': 87,
                             'tokenize': 58, 'buf_del': 441,
                             'serverkey': 354, 'serverkeyfloat': 0,
@@ -280,6 +284,7 @@ def grid_pixel(x, y):
 
 # name -> (w, h, pixel fn). Sizes are asserted in pic_tests.qc; keep them in step.
 FIXTURES = {
+    'hq_white.tga': (16, 16, lambda x, y: (255, 255, 255)),
     'hq_direct.tga': (32, 16, quadrants(32, 16)),
     'hq_grid.tga':   (64, 64, grid_pixel),
     # only the omitted-flags check may name this one. that check asks whether a
@@ -290,11 +295,40 @@ FIXTURES = {
 LATE_FIXTURE = ('hq_late.tga', 24, 8, quadrants(24, 8))
 
 
+def write_mdl(path, grouped=False):
+    """Minimal version-6 MDL with a named frame or two timed group poses."""
+    header = struct.pack('<ii10f8if', int.from_bytes(b'IDPO', 'little'), 6,
+                         1,1,1, 0,0,0, 32, 0,0,0,
+                         1,16,16,3,1,1,0,0,1)
+    skin = struct.pack('<i', 0) + bytes([100])*256
+    st = b''.join(struct.pack('<iii', 0, x, y) for x,y in ((0,0),(15,0),(0,15)))
+    tri = struct.pack('<4i', 1,0,1,2)
+    bounds = bytes((0,0,0,0, 16,16,16,0))
+    frame = bounds + b'hq_frame'.ljust(16, b'\0') + bytes((0,0,0,0, 16,0,0,0, 0,16,0,0))
+    if grouped:
+        frames = struct.pack('<ii', 1,2) + bounds + struct.pack('<ff', 0.1,0.2) + frame*2
+    else:
+        frames = struct.pack('<i', 0) + frame
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path + '.tmp', 'wb') as f:
+        f.write(header + skin + st + tri + frames)
+    os.replace(path + '.tmp', path)
+
+
 def stage_fixtures(gamedir):
     written = []
     for name, (w, h, fn) in FIXTURES.items():
         p = os.path.join(gamedir, 'gfx', name)
         write_tga(p, w, h, fn)
+        written.append(p)
+    for name, grouped in (('hq_single.mdl', False), ('hq_group.mdl', True)):
+        p = os.path.join(gamedir, 'progs', name)
+        write_mdl(p, grouped)
+        written.append(p)
+    for name, data in (('hq_truncated.mdl', b'IDPO'), ('hq_unsupported.md2', b'IDP2')):
+        p = os.path.join(gamedir, 'progs', name)
+        with open(p, 'wb') as f:
+            f.write(data)
         written.append(p)
     return written
 
@@ -359,9 +393,9 @@ def main():
         b = run([os.path.join(srcdir, 'build.sh'), args.fteqcc], args.timeout,
                 os.path.join(art, 'build.log'), cwd=srcdir)
         results.append(('build/fteqcc-exit-zero', b.returncode == 0))
-        results.append(('build/both-progs-written',
-                        b.stdout.count('Compile finished') == 2))
-        results.append(('build/no-warnings', b.stdout.count('Done. 0 warnings') == 2))
+        results.append(('build/all-three-progs-written',
+                        b.stdout.count('Compile finished') == 3))
+        results.append(('build/no-warnings', b.stdout.count('Done. 0 warnings') == 3))
         results.append(('build/no-errors', 'error' not in b.stdout.lower()))
     else:
         results.append(('build/progs-rebuilt-this-run (pass --fteqcc)', False))
@@ -389,10 +423,13 @@ def main():
     shot = newest_tga(shots)
 
     strip_test_cvars(args.basedir, args.game)
-    r = engine(['+hq_menu_selftest', '1', '+togglemenu', '1'],
+    r = engine(['+scr_menuscale', '1', '+con_notifytime', '0',
+                '+cl_demoreel', '0', '+hq_menu_selftest', '1', '+togglemenu', '1'],
                'menu-disconnected.log')
     check_process('menu-disconnected', r, results)
     parse_selftest(r, 'menuqc', 'menu-disconnected', results)
+    menu_shot = newest_tga(shots)
+    results.append(('menu-disconnected/screenshot-produced', menu_shot != shot))
 
     # menuqc with a map loaded: constate must flip to active, and the model
     # handles must still be ours rather than cl.model_precache's
@@ -435,7 +472,63 @@ def main():
     parse_selftest(r, 'csqc', 'pic-recovery', results)
     strip_test_cvars(args.basedir, args.game)
 
-    for p in fixtures + [late]:
+    # Distinct actual load failures must not fill the global model-name table.
+    r = engine(['+hq_model_stress', '1', '+map', args.map], 'model-stress.log')
+    check_process('model-stress', r, results)
+    parse_selftest(r, 'csqc', 'model-stress', results)
+    strip_test_cvars(args.basedir, args.game)
+
+    # ---- 4d. A failed model load must be retryable in the same process.
+    late_model = os.path.join(gamedir, 'progs', 'hq_late.mdl')
+    if os.path.exists(late_model):
+        os.remove(late_model)
+    r, staged = run_with_trigger(
+        [args.bin, '-basedir', args.basedir, '-game', args.game,
+         '-window', '-width', '800', '-height', '600',
+         '+hq_model_recovery', '1', '+map', args.map],
+        args.timeout, os.path.join(art, 'model-recovery.log'),
+        'model/late-absent-not-cached', lambda: write_mdl(late_model))
+    results.append(('model-recovery/handshake-fired', staged))
+    check_process('model-recovery', r, results)
+    parse_selftest(r, 'csqc', 'model-recovery', results)
+    strip_test_cvars(args.basedir, args.game)
+
+    # ---- 4e. Server-approved full CSQC, including scale-2 line rasterisation.
+    # Restore the HUD program even if a process fails or the runner is interrupted.
+    cs_path = os.path.join(gamedir, 'csprogs.dat')
+    full_path = os.path.join(gamedir, 'csfull.dat')
+    hud_program = open(cs_path, 'rb').read()
+    full_shots = []
+    try:
+        with open(cs_path, 'wb') as f:
+            f.write(open(full_path, 'rb').read())
+        for scale in (1, 2):
+            previous = {os.path.join(shots, name) for name in os.listdir(shots)
+                        if name.endswith('.tga')} if os.path.isdir(shots) else set()
+            r = run([args.bin, '-basedir', args.basedir, '-game', args.game,
+                     '-window', '-width', '800', '-height', '800',
+                     '+scr_sbarscale', str(scale), '+map', args.map],
+                    args.timeout, os.path.join(art, 'fullcsqc-%d.log' % scale))
+            tag = 'fullcsqc-%d' % scale
+            check_process(tag, r, results)
+            parse_selftest(r, 'fullcsqc', tag, results)
+            created = sorted((os.path.join(shots, name) for name in os.listdir(shots)
+                              if name.endswith('.tga') and os.path.join(shots, name) not in previous),
+                             key=lambda path: (os.stat(path).st_mtime_ns, path)) if os.path.isdir(shots) else []
+            results.append((tag + '/both-screenshots-produced', len(created) == 2))
+            for mode, path in zip(('rendered', 'ui-only'), created):
+                full_shots.append((tag + '-' + mode, path, scale))
+        r = engine(['+hq_vm_restart', '1', '+hq_restart_stage', '0',
+                    '+scr_sbarscale', '1', '+map', args.map], 'vm-reload.log')
+        check_process('vm-reload', r, results)
+        parse_selftest(r, 'fullcsqc', 'vm-reload', results)
+        results.append(('vm-reload/restart-triggered',
+                        'restarting with owned token input' in r.stdout))
+    finally:
+        with open(cs_path, 'wb') as f:
+            f.write(hud_program)
+
+    for p in fixtures + [late, late_model]:
         if os.path.exists(p):
             os.remove(p)
 
@@ -445,12 +538,27 @@ def main():
             rc = run([sys.executable, os.path.join(HERE, 'check_rotpic.py'), shot],
                      args.timeout, os.path.join(art, 'pixels.log'))
             m = re.search(r'(\d+)/(\d+) checks passed', rc.stdout)
-            ok = bool(m) and m.group(1) == m.group(2)
+            ok = rc.returncode == 0 and not rc.timed_out and bool(m) and m.group(1) == m.group(2)
             results.append(('pixels/rotpic-grid', ok))
             if not ok:
                 print(rc.stdout)
         else:
             results.append(('pixels/screenshot-produced', False))
+
+    if not args.skip_pixels:
+        cases = [('hud', shot, (360,72), 1), ('menu', menu_shot, (360,72), 1)]
+        cases += [(tag, path, (24,72), scale) for tag, path, scale in full_shots]
+        for tag, path, origin, scale in cases:
+            if path:
+                rc = run([sys.executable, os.path.join(HERE, 'check_parity.py'), path,
+                          '--origin', str(origin[0]), str(origin[1]), '--scale', str(scale)] +
+                         (['--engine-overlay'] if tag.startswith('fullcsqc') else []),
+                         args.timeout, os.path.join(art, 'pixels-parity-%s.log' % tag))
+                results.append(('pixels/parity-' + tag, rc.returncode == 0 and not rc.timed_out))
+                if rc.returncode != 0:
+                    print(rc.stdout)
+            else:
+                results.append(('pixels/parity-' + tag, False))
 
     # ---- report
     failed = [n for n, ok in results if not ok]
@@ -471,6 +579,7 @@ def main():
             'qscsextensions.qc': sha256(os.path.join(srcdir, 'qscsextensions.qc')),
             'qsmenuextensions.qc': sha256(os.path.join(srcdir, 'qsmenuextensions.qc')),
             'csprogs.dat': sha256(os.path.join(gamedir, 'csprogs.dat')),
+            'csfull.dat': sha256(os.path.join(gamedir, 'csfull.dat')),
             'menu.dat': sha256(os.path.join(gamedir, 'menu.dat')),
         },
     }

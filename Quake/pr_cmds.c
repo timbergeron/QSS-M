@@ -2027,54 +2027,46 @@ static void PF_cl_precache_sound (void)
 
 qmodel_t *PR_CSQC_GetModel(int idx)
 {
-	if (idx < 0)
-	{
-		idx = -idx;
-		if (idx < MAX_MODELS)
-			return cl.model_precache_csqc[idx];
-	}
-	else
-	{
-		if (idx < MAX_MODELS)
-			return cl.model_precache[idx];
-	}
-	return NULL;
+	// Check before negation, including INT_MIN supplied by other callers.
+	if (idx <= -MAX_MODELS || idx >= MAX_MODELS)
+		return NULL;
+	return idx < 0 ? cl.model_precache_csqc[-idx] : cl.model_precache[idx];
 }
-int CL_Precache_Model(const char *name)
+
+int CL_ModelIndexForName(const char *name, qboolean queryonly)
 {
-	int		i;
-	if (!*name)
+	int i;
+	qmodel_t *model;
+
+	if (!name || !*name || strlen(name) >= MAX_QPATH)
 		return 0;
 
-	//if the server precached the model then we don't need to do anything.
-	for (i = 1; i < MAX_MODELS; i++)
-	{
-		if (!*cl.model_name[i])
-			break;	//no more
+	for (i = 1; i < MAX_MODELS && *cl.model_name[i]; i++)
 		if (!strcmp(cl.model_name[i], name))
 			return i;
-	}
 
-	//check if the client precached one, and if not then do it.
-	for (i = 1; i < MAX_MODELS; i++)
-	{
-		if (!*cl.model_name_csqc[i])
-			break;	//no more
+	for (i = 1; i < MAX_MODELS && *cl.model_name_csqc[i]; i++)
 		if (!strcmp(cl.model_name_csqc[i], name))
 			return -i;
-	}
 
-	if (i < MAX_MODELS && strlen(name) < sizeof(cl.model_name_csqc[i]))
-	{
-		strcpy(cl.model_name_csqc[i], name);
-		cl.model_precache_csqc[i] = Mod_ForName (name, false);
-		if (cl.model_precache_csqc[i] && cl.model_precache_csqc[i]->type == mod_brush)
-			lightmaps_latecached=true;
-		return -i;
-	}
+	if (queryonly || i == MAX_MODELS)
+		return 0;
 
-	PR_RunError ("CL_Precache_Model: implementme");
-	return 0;
+	// Publish a handle only after a successful load. A miss must leave the
+	// slot free, and must be retryable if the file appears later.
+	model = Mod_TryForName(name);
+	if (!model)
+		return 0;
+	strcpy(cl.model_name_csqc[i], name);
+	cl.model_precache_csqc[i] = model;
+	if (model->type == mod_brush)
+		lightmaps_latecached = true;
+	return -i;
+}
+
+int CL_Precache_Model(const char *name)
+{
+	return CL_ModelIndexForName(name, false);
 }
 static void PF_cl_precache_model (void)
 {

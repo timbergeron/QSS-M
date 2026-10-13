@@ -348,6 +348,7 @@ typedef struct
 #include "sbar.h"
 #include "q_sound.h"
 #include "client.h"
+#include "cl_translate.h"
 
 #include "gl_model.h"
 #include "world.h"

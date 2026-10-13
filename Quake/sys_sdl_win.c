@@ -2694,7 +2694,7 @@ static qboolean Sys_DIWatchIgnoredName (const wchar_t *name)
 	size_t len = wcslen (name);
 	int i;
 
-	/* Match SDL 3.4.16's Windows gamepad name filters, including Ipega's exception. */
+	/* Match SDL 3.4.18's Windows gamepad name filters, including Ipega's exception. */
 	if (!wcsncmp (name, L"uinput-", 7) || !wcsncmp (name, L"Mouse ", 6) ||
 		(len >= 4 && !wcscmp (name + len - 4, L" Pen")) ||
 		(len >= 7 && !wcscmp (name + len - 7, L" Finger")))

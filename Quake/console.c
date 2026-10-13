@@ -6421,6 +6421,12 @@ void Con_TabComplete (tabcomplete_t mode)
 		while (*c!=' ' && *c!='\"' && *c!=';' && c!=key_lines[edit_line])
 			c--;
 		c++; //start 1 char after the separator we just found
+		/* @player consumes the remainder, including spaces in a name. */
+		{
+			const char *player = CL_Translate_CompletionStart(key_lines[edit_line] + 1);
+			if (player && player < key_lines[edit_line] + key_linepos)
+				c = (char *)player;
+		}
 	}
 	for (i = 0; c + i < key_lines[edit_line] + key_linepos; i++)
 		partial[i] = c[i];

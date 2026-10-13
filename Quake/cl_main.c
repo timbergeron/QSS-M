@@ -45,6 +45,7 @@ void CL_RotateModel_RebuildFromCvar(void); // woods #clmrotate
 void CL_RotateModel_Cvar_Completion_f(cvar_t* cvar, const char* partial); // woods #clmrotate
 void CL_DemoMark_f(void); // woods #demomark
 static void CL_OptionalDownloadCache_ClearPending(void);
+static void CL_DisconnectInternal(const char *transferhost);
 
 // we need to declare some mouse variables here, because the menu system
 // references them even when on a unix system.
@@ -86,6 +87,7 @@ cvar_t	cl_beams_polygons = {"cl_beams_polygons", "0", CVAR_ARCHIVE}; // woods #b
 cvar_t	cl_truelightning = {"cl_truelightning", "0",CVAR_ARCHIVE}; // woods for #truelight
 cvar_t	cl_lightning_zadjust = {"cl_lightning_zadjust", "16", CVAR_ARCHIVE}; // woods for #truelight
 cvar_t	cl_chatmode = {"cl_chatmode","0", CVAR_ARCHIVE}; // woods #ezsay
+cvar_t	cl_announce_transfer = {"cl_announce_transfer", "0", CVAR_ARCHIVE};
 cvar_t  cl_afk = {"cl_afk", "0", CVAR_ARCHIVE }; // woods #smartafk
 cvar_t  cl_idle = {"cl_idle", "0", CVAR_NONE }; // woods #smartafk
 cvar_t  r_rocketlight = {"r_rocketlight", "0", CVAR_ARCHIVE }; // woods #rocketlight
@@ -268,6 +270,7 @@ CL_ClearState
 */
 void CL_ClearState (void)
 {
+	CL_Translate_MapChanged();
 	SCR_ResetTitle ();
 
 	if (cl.qcvm.extfuncs.CSQC_Shutdown)
@@ -661,7 +664,7 @@ qboolean CL_BeginConnect(const char *host)
 		CL_ClearConnectReturnState();
 
 	CL_CancelConnectInternal(false);
-	CL_Disconnect();
+	CL_DisconnectInternal(target);
 	CL_PrintConnectingMessage(target);
 	CL_ConnectTimingBegin();
 
@@ -740,8 +743,55 @@ Sends a disconnect message to the server
 This is also called on Host_Error, so it shouldn't cause any errors
 =====================
 */
-void CL_Disconnect (void)
+static void CL_WriteTransferAnnouncement(const char *host)
 {
+	net_endpoint_t endpoint, connected;
+	char destination[MAX_SERVER_ADDRESS_LEN];
+	char previous[MAX_SERVER_ADDRESS_LEN];
+	char command[MAX_SERVER_ADDRESS_LEN + 32];
+	const char *resolved, *previoushost = lastmphost;
+	const unsigned char *scan;
+
+	if (!cl_announce_transfer.value || !host || !*host ||
+		cls.state != ca_connected || cls.signon != SIGNONS ||
+		cls.demoplayback || !cls.netcon || cl.maxclients <= 1 || sv.active)
+		return;
+
+	host = NET_ResolveCacheName(host);
+	resolved = NET_QSocketGetResolvedAddressString(cls.netcon);
+	// An omitted old port belongs to the live socket, even if "port" has changed.
+	if (NET_ParseEndpoint(resolved, net_hostport, &connected) &&
+		NET_ParseEndpoint(lastmphost, connected.port, &endpoint) &&
+		NET_FormatEndpoint(&endpoint, true, previous, sizeof(previous)))
+		previoushost = previous;
+	if (!q_strcasecmp(host, "local") ||
+		NET_HostnameCache_AddressesMatch(host, previoushost, net_hostport) ||
+		NET_HostnameCache_AddressesMatch(host, resolved, net_hostport))
+		return;
+
+	if (NET_ParseEndpoint(host, net_hostport, &endpoint))
+	{
+		if (!NET_FormatEndpoint(&endpoint, true, destination, sizeof(destination)))
+			return;
+	}
+	else if (NET_WebSocketSchemeLength(host, NULL) && strlen(host) < sizeof(destination))
+		q_strlcpy(destination, host, sizeof(destination));
+	else
+		return;
+
+	// Keep the destination inside a single quoted chat command, including WS paths.
+	for (scan = (const unsigned char *)destination; *scan; scan++)
+		if (*scan < 32 || *scan >= 127 || *scan == '"' || *scan == '\\')
+			return;
+
+	q_snprintf(command, sizeof(command), "say \"moving to %s\"\n", destination);
+	MSG_WriteByte(&cls.message, clc_stringcmd);
+	MSG_WriteString(&cls.message, command);
+}
+
+static void CL_DisconnectInternal(const char *transferhost)
+{
+	CL_Translate_Reset();
 	CL_ConnectTimingCancel();
 	CL_AsyncDownload_Cancel();
 	cl_portpingprobe_pending_host[0] = '\0';
@@ -773,6 +823,8 @@ void CL_Disconnect (void)
 
 		Con_DPrintf ("Sending clc_disconnect\n");
 		SZ_Clear (&cls.message);
+		// One packet makes the server process chat before disconnect, without a wait.
+		CL_WriteTransferAnnouncement(transferhost);
 		MSG_WriteByte (&cls.message, clc_disconnect);
 		NET_SendUnreliableMessage (cls.netcon, &cls.message);
 		SZ_Clear (&cls.message);
@@ -820,6 +872,11 @@ void CL_Disconnect (void)
 	V_ResetEffects ();
 }
 
+void CL_Disconnect (void)
+{
+	CL_DisconnectInternal(NULL);
+}
+
 void CL_Disconnect_f (void)
 {
 	CL_Disconnect ();
@@ -853,7 +910,7 @@ void CL_EstablishConnection (const char *host)
 		return;
 
 	CL_CancelConnectInternal(false);
-	CL_Disconnect ();
+	CL_DisconnectInternal(target);
 	CL_PrintConnectingMessage(target);
 	CL_ConnectTimingBegin();
 
@@ -7437,6 +7494,7 @@ static void CL_UserinfoChanged(scoreboard_t *sb)
 {
 	char tmp[64];
 	Info_GetKey(sb->userinfo, "name", sb->name, sizeof(sb->name));
+	CL_Translate_PlayerChanged((int)(sb - cl.scores), sb->name);
 	Info_GetKey(sb->userinfo, "topcolor", tmp, sizeof(tmp));
 	sb->shirt = CL_PLColours_Parse(*tmp?tmp:"0");
 	Info_GetKey(sb->userinfo, "bottomcolor", tmp, sizeof(tmp));
@@ -7983,6 +8041,7 @@ void CL_Init (void)
 	SZ_Alloc (&cls.message, 1024);
 	cls.download.percent = -1.0f;
 	CL_Demo_Init();
+	CL_Translate_Init();
 	Mapshot_Init();			// before Discord: presence and alerts resolve mapshot URLs
 	Discord_Init();
 
@@ -8042,6 +8101,7 @@ void CL_Init (void)
 	Cvar_RegisterVariable (&cl_lightning_zadjust); // woods for #truelight
 	Cvar_RegisterVariable (&gl_lightning_alpha); // woods for lighting alpha #lightalpha
 	Cvar_RegisterVariable (&cl_chatmode); // woods for #ezsay
+	Cvar_RegisterVariable (&cl_announce_transfer);
 	Cvar_SetCompletion (&cl_chatmode, &CL_ChatMode_Completion_f);
 	Cvar_RegisterVariable (&cl_afk); // woods #smartafk
 	Cvar_RegisterVariable (&cl_idle); // woods #smartafk

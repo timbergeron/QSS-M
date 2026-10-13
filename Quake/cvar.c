@@ -100,6 +100,7 @@ void Cvar_List_f (void)
 	const char 	*partial;
 	int		i, len, count, modified, archived, serverinfo;
 	qboolean	filter_modified, filter_archived, filter_serverinfo;
+	qboolean	changed_only = false, show_defaults = false, wildcard = false;
 
 	partial = NULL;
 	len = 0;
@@ -112,6 +113,42 @@ void Cvar_List_f (void)
 		const char	*arg = Cmd_Argv(i);
 		const char	*c;
 		qboolean	flags_only = (*arg != '\0');
+
+		if (!strcmp(arg, "changed"))
+		{
+			filter_modified = changed_only = true;
+			continue;
+		}
+		if (*arg == '-' && arg[1])
+		{
+			for (c = arg + 1; *c; c++)
+			{
+				switch (*c)
+				{
+				case 'c': filter_modified = changed_only = true; break;
+				case 'v': break; // current values are always displayed
+				case 'd': show_defaults = true; break;
+				case 'f':
+					if (++i >= Cmd_Argc() || strcmp(Cmd_Argv(i), "archive"))
+					{
+						Con_SafePrintf ("cvarlist: -f requires archive\n");
+						return;
+					}
+					filter_archived = true;
+					break;
+				case 'h':
+					Con_SafePrintf ("cvarlist [-cvd] [-f archive] [changed] [! * s] [prefix or wildcard]\n"
+						"  -c, changed: non-default, writable cvars\n"
+						"  -v: current values (always shown); -d: also show defaults\n"
+						"  !: non-default cvars; *: archived; s: serverinfo\n");
+					return;
+				default:
+					Con_SafePrintf ("cvarlist: unknown option -%c; use -h for help\n", *c);
+					return;
+				}
+			}
+			continue;
+		}
 
 		for (c = arg; *c; c++)
 		{
@@ -135,6 +172,7 @@ void Cvar_List_f (void)
 		{
 			partial = arg;
 			len = Q_strlen(partial);
+			wildcard = strchr(partial, '*') || strchr(partial, '?');
 		}
 	}
 
@@ -143,11 +181,12 @@ void Cvar_List_f (void)
 	{
 		qboolean is_modified, is_archived, is_serverinfo;
 
-		if (partial && Q_strncmp(partial, cvar->name, len))
+		if (partial && (wildcard ? !wildcmp(partial, cvar->name) : Q_strncmp(partial, cvar->name, len)))
 		{
 			continue;
 		}
-		is_modified   = (strcmp(cvar->string, cvar->default_string) != 0);
+		is_modified   = cvar->default_string && strcmp(cvar->string, cvar->default_string);
+		if (changed_only && (cvar->flags & CVAR_ROM)) continue;
 		is_archived   = (cvar->flags & CVAR_ARCHIVE) != 0;
 		is_serverinfo = (cvar->flags & CVAR_NOTIFY)  != 0;
 
@@ -155,12 +194,15 @@ void Cvar_List_f (void)
 		if (filter_archived   && !is_archived)   continue;
 		if (filter_serverinfo && !is_serverinfo) continue;
 
-		Con_SafePrintf ("%s%s%s %s \"%s\"\n",
+		Con_SafePrintf ("%s%s%s %s \"%s\"",
 			is_modified  ? "!" : " ",
 			is_archived  ? "*" : " ",
 			is_serverinfo ? "s" : " ",
 			cvar->name,
 			cvar->string);
+		if (show_defaults && cvar->default_string)
+			Con_SafePrintf (", default \"%s\"", cvar->default_string);
+		Con_SafePrintf ("\n");
 		count++;
 		if (is_modified)   modified++;
 		if (is_archived)   archived++;

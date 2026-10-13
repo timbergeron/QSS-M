@@ -163,11 +163,11 @@ removed because SDL 3 has no window gamma API, so those platforms use GLSL gamma
 
 | Item | Value |
 |---|---|
-| Release | SDL 3.4.16, tag `release-3.4.16` of `libsdl-org/SDL` on GitHub |
-| `SDL3-3.4.16.dmg` | SHA-256 `675660a9e457239af615f9e41f788612168d1639b9d2eda2957e8dace26687fd` |
-| `SDL3-devel-3.4.16-VC.zip` | SHA-256 `1a784cb2a5c64d56fe7a62090fe9d242d9865f235e4ea9678f1a6ba4e693e7de` |
-| `SDL3-devel-3.4.16-mingw.zip` | SHA-256 `9828bb735cf8a007bcf0ac5aa9f01f3fcb54b7ca67c932e775c905c5d5053a60` |
-| `macOS/SDL3.framework` | The DMG's `SDL3.xcframework/macos-arm64_x86_64` framework, identical under `diff -r` (binary `546ce8509e3ead9e…`; x86_64 minimum 10.13, arm64 11.0; ad-hoc signed as shipped) |
+| Release | SDL 3.4.18, tag `release-3.4.18` of `libsdl-org/SDL` on GitHub |
+| `SDL3-3.4.18.dmg` | SHA-256 `c1adf3da91108dbc3e4205da5dacebc203085d283fa89e86eb2c889abd03a853` |
+| `SDL3-devel-3.4.18-VC.zip` | SHA-256 `78d84602ae616cfe26b33a73b7d3b9b6b56e8a6650e53d92c9c6ca938f747acd` |
+| `SDL3-devel-3.4.18-mingw.zip` | SHA-256 `cd98158c8d025a816f430a600b4e9526524e6219ee884ec72bd498b80fd3bf58` |
+| `macOS/SDL3.framework` | The DMG's `SDL3.xcframework/macos-arm64_x86_64` framework, identical under `diff -r` (binary `626285366f11d66a70912cc767f00330b985e618b696aee1cfe0ca2f41357f4c`; x86_64 minimum 10.13, arm64 11.0; ad-hoc signed as shipped) |
 | `Windows/SDL3/include` | VC package headers, less the 11 `SDL_test*` headers |
 | `Windows/SDL3/lib/x86`, `lib/x64` | VC `SDL3.dll` and `SDL3.lib` plus MinGW `libSDL3.dll.a`, each byte-identical to its package; the VC and MinGW DLLs export the same 1271 symbols |
 | `Windows/SDL3/LICENSE.txt` | Identical in both Windows packages |

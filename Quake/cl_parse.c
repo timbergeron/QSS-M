@@ -4489,7 +4489,7 @@ if (!strcmp(printtext, "Client ping times:\n") && (cl.expectingpingtimes > realt
 	return false;
 }
 
-static void CL_ParsePrint(const char *msg)
+static void CL_ParsePrint(const char *msg, const char *original)
 {
 	const char *str;
 	char *tmp;
@@ -4529,6 +4529,7 @@ static void CL_ParsePrint(const char *msg)
 			*cl.printbuffer = 0;
 		}
 		Con_Printf ("%s", msg);
+		CL_Translate_Observe(original, msg);
 	}
 }
 
@@ -5166,12 +5167,12 @@ void CL_ParseServerMessage (void)
 				filtered_buffer[sizeof(filtered_buffer) - 1] = '\0';
 
 				if (!CL_ParseProQuakeString(filtered_buffer))
-					CL_ParsePrint(filtered_buffer);
+					CL_ParsePrint(filtered_buffer, s);
 			}
 			else
 			{
 				if (!CL_ParseProQuakeString(s))
-					CL_ParsePrint(s);
+					CL_ParsePrint(s, s);
 			}
 		}
 			break;
@@ -5284,6 +5285,7 @@ void CL_ParseServerMessage (void)
 				cl.scores[i].movementloss = 0;
 			}
 			CL_UpdateIgnoredChatSlot(i, cl.scores[i].name);
+			CL_Translate_PlayerChanged(i, cl.scores[i].name);
 			break;
 
 		case svc_updatefrags:

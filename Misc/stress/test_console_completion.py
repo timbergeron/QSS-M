@@ -45,7 +45,7 @@ static cvar_t vars[] = {{"sensitivity", &vars[1]}, {"scr_conwidth", &vars[2]},
     {"host_maxfps", &vars[3]}, {"r_lerpmodels2"}};
 static cmd_function_t commands[] = {{"connect", src_command, &commands[1]},
     {"say", src_command, &commands[2]}, {"__hidden", src_command, &commands[3]},
-    {"serveronly", src_server}};
+    {"serveronly", src_server, &commands[4]}, {"translate", src_command}};
 static cmdalias_t aliases[] = {{"myalias"}};
 static cmd_function_t *cmd_functions = commands;
 static cmdalias_t *cmd_alias = aliases;
@@ -80,6 +80,7 @@ static void Cbuf_AddText(const char *text) { strcat(submitted, text); }
 static void Con_Printf(const char *fmt, ...) {}
 static qboolean History_SaveHistoryEnabled(void) { return false; }
 static qboolean Key_ConsoleQuitMistype(const char *text) { return false; }
+static qboolean CL_Translate_Console(const char *text) { return false; }
 static void Key_ConsoleUndoReset(void) {}
 static void SCR_UpdateScreen(void) {}
 static void Char_Console2(int ch) {
@@ -135,7 +136,7 @@ int main(void) {
     assert(!Con_TokenIsCommandPrefix(NULL));
     assert(!Con_TokenIsCommandPrefix(""));
     const char *prefixes[] = {"sensi", "scr_con", "host_max", "r_lerpmodels2",
-        "conn", "CONN", "SeNsi", "myal", "MYAL", "sensitivity"};
+        "conn", "CONN", "SeNsi", "myal", "MYAL", "sensitivity", "tran", "TRAN", "translate"};
     for (size_t i = 0; i < sizeof(prefixes)/sizeof(*prefixes); ++i) command(prefixes[i]);
     const char *noncommands[] = {"", " sensi", "  conn", "\tconn", "hi conn",
         "conn ", "conn;", "conn\"", "__hid", "servero", "ensitivity", "connections"};

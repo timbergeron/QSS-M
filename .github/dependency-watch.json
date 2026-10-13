@@ -1,10 +1,10 @@
 [
   {
     "name": "SDL3",
-    "vendored": "3.4.16",
+    "vendored": "3.4.18",
     "dlls": ["Windows/SDL3/lib/x86/SDL3.dll", "Windows/SDL3/lib/x64/SDL3.dll"],
     "packages": [
-      { "repository": "mingw64", "name": "mingw-w64-x86_64-sdl3", "baseline": "3.4.16-1" }
+      { "repository": "mingw64", "name": "mingw-w64-x86_64-sdl3", "baseline": "3.4.18-1" }
     ]
   },
   {
@@ -44,10 +44,10 @@
   },
   {
     "name": "libmikmod",
-    "vendored": "3.3.14",
+    "vendored": "3.3.15",
     "dlls": ["Windows/codecs/x86/libmikmod-3.dll", "Windows/codecs/x64/libmikmod-3.dll"],
     "packages": [
-      { "repository": "mingw64", "name": "mingw-w64-x86_64-libmikmod", "baseline": "3.3.14-1" }
+      { "repository": "mingw64", "name": "mingw-w64-x86_64-libmikmod", "baseline": "3.3.15-1" }
     ]
   },
   {
@@ -102,21 +102,21 @@
   },
   {
     "name": "libxmp",
-    "vendored": "4.7.3",
+    "vendored": "4.7.4",
     "dlls": ["Windows/codecs/x86/libxmp.dll", "Windows/codecs/x64/libxmp.dll"],
     "packages": [
-      { "repository": "mingw32", "name": "mingw-w64-i686-libxmp", "baseline": "4.7.3-1" },
-      { "repository": "mingw64", "name": "mingw-w64-x86_64-libxmp", "baseline": "4.7.3-1" }
+      { "repository": "mingw32", "name": "mingw-w64-i686-libxmp", "baseline": "4.7.4-1" },
+      { "repository": "mingw64", "name": "mingw-w64-x86_64-libxmp", "baseline": "4.7.4-1" }
     ]
   },
   {
     "name": "winpthreads",
-    "vendored": "14.0.0.r375.g9c1abbbf5",
+    "vendored": "14.0.0.r426.g4564ee4b5",
     "cadence": "monthly",
     "dlls": ["Windows/codecs/x86/libwinpthread-1.dll", "Windows/codecs/x64/libwinpthread-1.dll"],
     "packages": [
-      { "repository": "mingw32", "name": "mingw-w64-i686-winpthreads", "baseline": "14.0.0.r375.g9c1abbbf5-1" },
-      { "repository": "mingw64", "name": "mingw-w64-x86_64-winpthreads", "baseline": "14.0.0.r375.g9c1abbbf5-1" }
+      { "repository": "mingw32", "name": "mingw-w64-i686-winpthreads", "baseline": "14.0.0.r426.g4564ee4b5-1" },
+      { "repository": "mingw64", "name": "mingw-w64-x86_64-winpthreads", "baseline": "14.0.0.r426.g4564ee4b5-1" }
     ]
   },
   {
@@ -124,7 +124,7 @@
     "vendored": "16.2.0",
     "dlls": ["Windows/codecs/x86/libgcc_s_dw2-1.dll"],
     "packages": [
-      { "repository": "mingw32", "name": "mingw-w64-i686-gcc-libs", "baseline": "16.2.0-3" }
+      { "repository": "mingw32", "name": "mingw-w64-i686-gcc-libs", "baseline": "16.2.0-5" }
     ]
   }
 ]
