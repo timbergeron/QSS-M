@@ -403,7 +403,7 @@ static void unit_tests (void)
 	scores[3].name[0] |= 0x80;
 	command.completion("@\303ol"); assert(!strcmp(suggestions, "@Colored\n"));
 	memset(scores[3].name, 'N', sizeof(scores[3].name) - 1);
-	scores[3].name[sizeof(scores[3].name) - 2] = '7' | 0x80;
+	scores[3].name[sizeof(scores[3].name) - 2] = (char)('7' | 0x80);
 	scores[3].name[sizeof(scores[3].name) - 1] = 0;
 	char full_name[MAX_SCOREBOARDNAME + 2], expected_name[MAX_SCOREBOARDNAME + 3];
 	q_snprintf(full_name, sizeof(full_name), "@%s", scores[3].name);
@@ -1062,6 +1062,114 @@ static void menu_name_tests (void)
 	M_Translate_Leave(); CL_Translate_Shutdown();
 }
 
+static void saved_name_case_tests (void)
+{
+	FILE *file;
+	unsigned int identity;
+	memset(scores, 0, sizeof(scores)); world(); ignored = false; cl_contentfilter.value = 0;
+	CL_Translate_Init(); CL_Translate_Reset(); identity = tr_id;
+	cls.state = ca_disconnected;
+	CL_Translate_Console("translate spanish save @rasta"); TR_LoadRules();
+	M_Menu_Translate_f(); M_Translate_Draw();
+	world(); CL_Translate_Reset(); CL_Translate_Frame();
+	assert(tr_watch[1] == 2 && tr_rule_count == 1 && !strcmp(tr_rules[0].name, "Rasta"));
+	M_Translate_Draw(); assert(translatemenu.list.cursor == TRANSLATE_PLAYERS_ROW);
+	/* Re-saving another capitalization changes the same rule. */
+	cls.state = ca_disconnected; CL_Translate_Reset();
+	CL_Translate_Console("translate french save @RASTA"); TR_LoadRules();
+	assert(tr_rule_count == 1);
+	world(); CL_Translate_Reset(); CL_Translate_Frame();
+	assert(tr_watch[1] == 4 && !strcmp(tr_rules[0].name, "Rasta"));
+	/* Players differing only by capitalization remain ambiguous. */
+	q_strlcpy(scores[3].name, "rasta", sizeof(scores[3].name));
+	CL_Translate_Reset(); CL_Translate_Frame(); assert(!tr_watch[1] && !tr_watch[3]);
+	scores[3].name[0] = 0;
+	/* Previously valid case-variant rules merge; the later entry wins. */
+	file = fopen(tr_rules_path, "wb"); assert(file);
+	fputs("QSSM_TRANSLATE_RULES 1\nen 7261737461\nes 5261737461\n", file); fclose(file);
+	TR_LoadRules(); assert(tr_rule_count == 1 && tr_rules[0].language == 1);
+	CL_Translate_Reset(); CL_Translate_Frame(); assert(tr_watch[1] == 2);
+	/* Merging must not hide an exact duplicate behind another capitalization. */
+	cls.state = ca_disconnected; CL_Translate_Reset();
+	file = fopen(tr_rules_path, "wb"); assert(file);
+	fputs("QSSM_TRANSLATE_RULES 1\nen 7261737461\nes 5261737461\npt 7261737461\n", file); fclose(file);
+	TR_LoadRules(); assert(!tr_rule_count);
+	assert(tr_id == identity && !tr_thread && !tr_outgoing);
+	M_Translate_Leave(); CL_Translate_MenuStopAll(); CL_Translate_Shutdown();
+}
+
+static void saved_name_formatting_tests (void)
+{
+	const char mixed_name[] = {'M', 'i' | 128, 18, 'X', 0};
+	FILE *file;
+	char path[MAX_OSPATH];
+	unsigned int identity;
+	memset(scores, 0, sizeof(scores)); world(); ignored = false; cl_contentfilter.value = 0;
+	CL_Translate_Init(); CL_Translate_Reset(); identity = tr_id;
+	q_strlcpy(scores[3].name, mixed_name, sizeof(scores[3].name));
+	assert(CL_Translate_MenuWatchSaved(3, scores[3].name, 0));
+	cls.state = ca_disconnected; CL_Translate_Reset();
+	checked_player_name = mixed_name; formatted_name_draws = 0;
+	M_Menu_Translate_f(); drawn[0] = 0; M_Translate_Draw();
+	assert(translatemenu.count == 1 && !strcmp(translatemenu.players[0].name, "Mi0X"));
+	assert(formatted_name_draws == 1 && strstr(drawn, mixed_name));
+	/* Offline edits keep styling; disk reload preserves the exact glyph bytes. */
+	M_Translate_Key(K_RIGHTARROW); M_Translate_Draw();
+	CL_Translate_Shutdown(); CL_Translate_Init(); CL_Translate_Reset();
+	formatted_name_draws = 0; M_Menu_Translate_f(); M_Translate_Draw();
+	assert(formatted_name_draws == 1 && translatemenu.players[0].language == 1);
+	/* Plain console re-saves update the language without discarding real styling. */
+	CL_Translate_Console("translate french save @mi0x");
+	formatted_name_draws = 0; M_Translate_Draw();
+	assert(translatemenu.count == 1 && formatted_name_draws == 1 && translatemenu.players[0].language == 3);
+	TR_LoadRules(); formatted_name_draws = 0; M_Translate_Draw();
+	assert(formatted_name_draws == 1 && translatemenu.players[0].language == 3);
+	M_Translate_Key(K_ENTER); drawn[0] = 0; M_Translate_Draw();
+	assert(strstr(drawn, mixed_name)); M_Translate_Key(K_ESCAPE);
+	/* Offline console names preserve typed markup, including quoted names. */
+	CL_Translate_MenuStopAll(); checked_player_name = "^2EzJack"; formatted_name_draws = 0;
+	CL_Translate_Console("translate spanish save @\"^2EzJack\"");
+	M_Menu_Translate_f(); M_Translate_Draw();
+	assert(formatted_name_draws == 1 && !strcmp(translatemenu.players[0].name, "EzJack"));
+	q_strlcpy(path, tr_rules_path, sizeof(path));
+	q_snprintf(tr_rules_path, sizeof(tr_rules_path), "%s/missing/rules.txt", host_parms->userdir);
+	CL_Translate_Console("translate french save @^3EzJack");
+	formatted_name_draws = 0; M_Translate_Draw();
+	assert(formatted_name_draws == 1 && translatemenu.players[0].language == 1);
+	q_strlcpy(tr_rules_path, path, sizeof(tr_rules_path)); TR_LoadRules();
+	formatted_name_draws = 0; M_Translate_Draw(); assert(formatted_name_draws == 1);
+	/* Native menu drawing treats font byte 9 as a glyph, not a layout tab. */
+	CL_Translate_MenuStopAll(); checked_player_name = "Glyph\tName"; formatted_name_draws = 0;
+	CL_Translate_Console("translate save @Glyph\tName"); M_Menu_Translate_f(); M_Translate_Draw();
+	assert(translatemenu.count == 1 && formatted_name_draws == 1 && !strcmp(translatemenu.players[0].name, "Glyph Name"));
+	TR_LoadRules(); formatted_name_draws = 0; M_Translate_Draw(); assert(formatted_name_draws == 1);
+	/* Legacy readable keys load literally and gain styling from a live roster. */
+	file = fopen(path, "wb"); assert(file);
+	fputs("QSSM_TRANSLATE_RULES 1\nen 4d693058\nen 52615e31737461\n", file); fclose(file);
+	TR_LoadRules(); checked_player_name = "Ra^1sta"; formatted_name_draws = 0;
+	M_Menu_Translate_f(); M_Translate_Draw(); assert(translatemenu.count == 2 && formatted_name_draws == 1);
+	world(); CL_Translate_Reset(); CL_Translate_Frame();
+	assert(tr_watch[3] == 1); /* Match Mi0X despite its high-bit colors and special digit. */
+	cls.state = ca_disconnected; CL_Translate_Reset();
+	CL_Translate_Shutdown(); CL_Translate_Init();
+	checked_player_name = mixed_name; formatted_name_draws = 0;
+	M_Menu_Translate_f(); M_Translate_Draw(); assert(translatemenu.count == 2 && formatted_name_draws == 1);
+	/* Mod-specific &c colors remain valid when loading outside that mod. */
+	file = fopen(path, "wb"); assert(file);
+	fputs("QSSM_TRANSLATE_RULES 2\nen 4d693058 26636630304d693058\n", file); fclose(file);
+	cl.modtype = 0; TR_LoadRules(); checked_player_name = "&cf00Mi0X"; formatted_name_draws = 0;
+	M_Menu_Translate_f(); M_Translate_Draw(); assert(translatemenu.count == 1 && formatted_name_draws == 1);
+	/* Formatted bytes may not change the readable identity or inject invalid markup. */
+	file = fopen(path, "wb"); assert(file);
+	fputs("QSSM_TRANSLATE_RULES 2\nen 4d693058 4f74686572\n", file); fclose(file);
+	TR_LoadRules(); assert(!tr_rule_count);
+	file = fopen(path, "wb"); assert(file);
+	fputs("QSSM_TRANSLATE_RULES 2\nen 4d693058 5e5b4d693058\n", file); fclose(file);
+	TR_LoadRules(); assert(!tr_rule_count);
+	assert(tr_id == identity && !tr_thread && !tr_outgoing);
+	checked_player_name = NULL; M_Translate_Leave(); CL_Translate_MenuStopAll(); CL_Translate_Shutdown();
+}
+
 static void offline_menu_tests (void)
 {
 	cl_translate_player_t players[CL_TRANSLATE_MAX_SELECTIONS];
@@ -1096,7 +1204,7 @@ static void offline_menu_tests (void)
 	translatemenu.player_cursor = 2; M_Translate_Key(K_ENTER); drawn[0] = 0; M_Translate_Draw();
 	assert(!translatemenu.count && !tr_rule_count && strstr(drawn, "No saved players") && !strstr(drawn, "not connected"));
 	/* Canonical saved names must not be parsed as Quake markup a second time. */
-	assert(TR_SaveNamedRule("Ra^1sta", 1));
+	assert(TR_SaveNamedRule("Ra^1sta", 1, NULL));
 	M_Menu_Translate_f(); M_Translate_Draw(); assert(!strcmp(translatemenu.players[0].name, "Ra^1sta"));
 	M_Translate_Key(K_ENTER); translatemenu.player_cursor = 0; M_Translate_Key(K_RIGHTARROW);
 	translatemenu.player_cursor = 2; M_Translate_Key(K_ENTER);
@@ -1106,7 +1214,7 @@ static void offline_menu_tests (void)
 	for (int i = 0; i < TR_RULES; i++)
 	{
 		char name[32]; q_snprintf(name, sizeof(name), "Saved player %d", i);
-		assert(TR_UpdateNamedRule(name, i % CL_Translate_LanguageCount()));
+		assert(TR_UpdateNamedRule(name, i % CL_Translate_LanguageCount(), NULL));
 	}
 	assert(TR_WriteRules());
 	M_Menu_Translate_f(); M_Translate_Draw(); assert(translatemenu.count == TR_RULES);
@@ -1115,6 +1223,94 @@ static void offline_menu_tests (void)
 	M_Translate_Key(K_ENTER); drawn[0] = 0; M_Translate_Draw();
 	assert(!tr_rule_count && !translatemenu.count && tr_id == identity && !tr_thread && !tr_outgoing);
 	M_Translate_Leave(); CL_Translate_Shutdown();
+}
+
+static void offline_console_save_tests (void)
+{
+	char path[MAX_OSPATH];
+	unsigned int identity;
+	memset(scores, 0, sizeof(scores)); world(); ignored = false; cl_contentfilter.value = 0;
+	CL_Translate_Init(); CL_Translate_Reset(); identity = tr_id;
+	cls.state = ca_disconnected; cls.signon = 0; cl.scores = NULL; cl.maxclients = 0;
+	cls.message.cursize = 0;
+	/* Direct console saving needs no live roster or network request. */
+	argc_stub = 4; argv_stub[1] = "spanish"; argv_stub[2] = "save"; argv_stub[3] = "@Tim";
+	command.function(); assert(!tr_rule_count); argc_stub = 1;
+	output[0] = 0;
+	assert(CL_Translate_Console("translate spanish save @Tim"));
+	M_Menu_Translate_f(); drawn[0] = 0; M_Translate_Draw();
+	assert(translatemenu.count == 1 && !strcmp(translatemenu.players[0].name, "Tim"));
+	assert(translatemenu.players[0].slot == -1 && translatemenu.players[0].language == 1 && translatemenu.players[0].remembered);
+	assert(strstr(drawn, "Tim") && !strstr(drawn, "No saved players") && strstr(output, "Saved"));
+	assert(tr_id == identity && !tr_thread && !tr_outgoing && !cls.message.cursize);
+	/* Restart reloads the rule; repeating a name updates rather than duplicates it. */
+	CL_Translate_Shutdown(); CL_Translate_Init(); CL_Translate_Reset();
+	M_Menu_Translate_f(); M_Translate_Draw();
+	assert(translatemenu.count == 1 && translatemenu.players[0].language == 1);
+	/* An explicit new save also authorizes rules after Remove All paused them. */
+	CL_Translate_MenuStopAll(); CL_Translate_Console("translate spanish save @Tim");
+	CL_Translate_Console("translate portuguese save @Tim"); M_Translate_Draw();
+	assert(translatemenu.count == 1 && translatemenu.players[0].language == 2);
+	CL_Translate_Console("translate save @\"Other Player\"");
+	CL_Translate_Console("translate portuguese save @^1Rasta");
+	CL_Translate_Console("translate portuguese save @Ra^^1sta");
+	M_Translate_Draw();
+	assert(translatemenu.count == 4 && TR_ExactRuleName("Other Player") >= 0 && TR_ExactRuleName("Rasta") >= 0 && TR_ExactRuleName("Ra^1sta") >= 0);
+	/* Invalid/oversized names and offline @everyone cannot create rules. */
+	CL_Translate_Console("translate save @"); CL_Translate_Console("translate save @\"\"");
+	CL_Translate_Console("translate save @^1");
+	CL_Translate_Console("translate save @PlayerNameThatIsMuchTooLongForTheScoreboard");
+	CL_Translate_Console("translate save @everyone");
+	CL_Translate_Console("translate @Tim"); CL_Translate_Console("translate spanish hola");
+	assert(tr_rule_count == 4 && tr_id == identity && !tr_thread && !tr_outgoing && !cls.message.cursize);
+	/* Storage failure preserves existing rules, including the previous language. */
+	q_strlcpy(path, tr_rules_path, sizeof(path));
+	q_snprintf(tr_rules_path, sizeof(tr_rules_path), "%s/missing/rules.txt", host_parms->userdir);
+	output[0] = 0; CL_Translate_Console("translate french save @Tim");
+	CL_Translate_Console("translate save @New Player"); M_Translate_Draw();
+	assert(strstr(output, "Could not save") && translatemenu.count == 4 && translatemenu.players[0].language == 2);
+	q_strlcpy(tr_rules_path, path, sizeof(tr_rules_path)); TR_LoadRules();
+	assert(tr_rule_count == 4 && tr_rules[TR_ExactRuleName("Tim")].language == 2);
+	/* Saved full names restore eligible watches once a multiplayer roster exists. */
+	world(); CL_Translate_Frame(); M_Translate_Draw();
+	assert(tr_watch[1] == 3 && tr_watch[2] == 1 && translatemenu.count == 4 && !tr_watch[0]);
+	assert(tr_id == identity && !tr_thread && !tr_outgoing && !cls.message.cursize);
+	M_Translate_Leave(); CL_Translate_MenuStopAll(); CL_Translate_Shutdown();
+}
+
+static void absent_console_save_tests (void)
+{
+	const char tim[] = {'T' | 128, 'i', 'm', 0};
+	char path[MAX_OSPATH];
+	unsigned int identity;
+	memset(scores, 0, sizeof(scores)); world(); ignored = false; cl_contentfilter.value = 0;
+	CL_Translate_Init(); CL_Translate_Reset(); identity = tr_id; cls.message.cursize = 0;
+	/* An absent name can be saved while connected without watching anyone else. */
+	CL_Translate_Console("translate spanish save @tim");
+	M_Menu_Translate_f(); M_Translate_Draw();
+	assert(translatemenu.count == 1 && translatemenu.players[0].slot == -1 && translatemenu.players[0].language == 1);
+	CL_Translate_Console("translate french save @TIM");
+	CL_Translate_Console("translate portuguese save @\"Absent Player\"");
+	TR_LoadRules(); M_Translate_Draw();
+	assert(translatemenu.count == 2 && tr_rules[TR_ExactRuleName("Tim")].language == 3);
+	assert(!tr_watch[0] && !tr_watch[1] && !tr_watch[2] && tr_id == identity && !tr_thread && !tr_outgoing && !cls.message.cursize);
+	/* The later roster supplies the actual capitalization and glyphs. */
+	q_strlcpy(scores[3].name, tim, sizeof(scores[3].name)); CL_Translate_PlayerChanged(3, scores[3].name);
+	CL_Translate_Frame(); M_Translate_Draw();
+	assert(tr_watch[3] == 4 && !strcmp(tr_rules[TR_ExactRuleName("Tim")].name, "Tim") && translatemenu.count == 2);
+	/* Re-saving that absent name retains its styling, even on a live server. */
+	scores[3].name[0] = 0; CL_Translate_PlayerChanged(3, ""); CL_Translate_Frame();
+	CL_Translate_Console("translate spanish save @tim"); TR_LoadRules();
+	checked_player_name = tim; formatted_name_draws = 0; M_Translate_Draw();
+	assert(formatted_name_draws == 1 && !tr_watch[3] && tr_rules[TR_ExactRuleName("Tim")].language == 1);
+	q_strlcpy(path, tr_rules_path, sizeof(path));
+	q_snprintf(tr_rules_path, sizeof(tr_rules_path), "%s/missing/rules.txt", host_parms->userdir);
+	output[0] = 0; CL_Translate_Console("translate german save @tim");
+	CL_Translate_Console("translate save @Another Missing Player");
+	assert(strstr(output, "Could not save") && tr_rule_count == 2 && tr_rules[TR_ExactRuleName("Tim")].language == 1);
+	q_strlcpy(tr_rules_path, path, sizeof(tr_rules_path));
+	assert(tr_id == identity && !tr_thread && !tr_outgoing && !cls.message.cursize);
+	checked_player_name = NULL; M_Translate_Leave(); CL_Translate_MenuStopAll(); CL_Translate_Shutdown();
 }
 
 static void console_save_tests (void)
@@ -1195,13 +1391,13 @@ static void persistence_tests (void)
 	CL_Translate_Shutdown(); memset(tr_rules, 0, sizeof(tr_rules)); tr_rule_count = 0;
 	CL_Translate_Init(); CL_Translate_Reset(); CL_Translate_Frame();
 	assert(tr_rule_count == 1 && tr_watch[1] == 3 && !tr_thread && tr_id == identity);
-	/* Full, case-sensitive names survive slot changes and color changes. */
+	/* Full names survive capitalization, slot changes and color changes. */
 	SDL_strlcpy(scores[1].name, "Raster", sizeof(scores[1].name)); CL_Translate_PlayerChanged(1, scores[1].name);
 	CL_Translate_Frame(); assert(!tr_watch[1]);
 	SDL_strlcpy(scores[3].name, "^1Rasta", sizeof(scores[3].name)); CL_Translate_PlayerChanged(3, scores[3].name);
 	CL_Translate_Frame(); assert(tr_watch[3] == 3 && !tr_watch[1]);
 	SDL_strlcpy(scores[3].name, "rasta", sizeof(scores[3].name)); CL_Translate_PlayerChanged(3, scores[3].name);
-	CL_Translate_Frame(); assert(!tr_watch[3]);
+	CL_Translate_Frame(); assert(tr_watch[3] == 3);
 	SDL_strlcpy(scores[1].name, "Rasta", sizeof(scores[1].name));
 	SDL_strlcpy(scores[3].name, "Rasta", sizeof(scores[3].name));
 	CL_Translate_Reset(); CL_Translate_Frame(); assert(!tr_watch[1] && !tr_watch[3]);
@@ -1259,7 +1455,7 @@ int main (void)
 	assert(curl_global_init(CURL_GLOBAL_DEFAULT) == CURLE_OK);
 	world(); CL_Translate_Init();
 	assert(Cmd_FindCommand("translate") && command.completion);
-	unit_tests(); everyone_tests(); integration_tests(); menu_tests(); menu_card_tests(); menu_name_tests(); offline_menu_tests(); console_save_tests(); persistence_tests();
+	unit_tests(); everyone_tests(); integration_tests(); menu_tests(); menu_card_tests(); menu_name_tests(); saved_name_case_tests(); saved_name_formatting_tests(); offline_menu_tests(); offline_console_save_tests(); absent_console_save_tests(); console_save_tests(); persistence_tests();
 	curl_global_cleanup(); SDL_Quit();
 	puts("Translation client and menu: opt-in, identity, navigation, drafts, send and lifecycle checks passed.");
 	return 0;

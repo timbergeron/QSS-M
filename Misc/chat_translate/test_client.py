@@ -70,7 +70,8 @@ async def main(sanitize=False):
         layout = "\n".join(line for line in menu.splitlines()
                            if line.startswith(("#define MENU_VALUE_X ", "#define MENU_CURSOR_X ",
                                                "#define CONTROLLER_DIM_ALPHA")))
-        (directory / "translation-menu.inc").write_text(layout + "\n" + menu[start:end])
+        (directory / "translation-menu.inc").write_text(layout + "\n" +
+            function(menu, "static void M_DrawCountHeader(") + menu[start:end])
         commands = (ROOT / "Quake/cmd.c").read_text()
         completion = function(commands, "cmd_function_t* Cmd_FindCommand (")
         (directory / "translation-completion.inc").write_text(completion)

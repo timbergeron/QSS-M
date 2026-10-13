@@ -23,6 +23,7 @@ typedef struct
 	int slot, language; /* slot: -1 = saved name; language: -1 = off */
 	char name[MAX_SCOREBOARDNAME]; /* raw identity, checked again on activation */
 	char display[MAX_SCOREBOARDNAME * 2 + 1];
+	char formatted[MAX_SCOREBOARDNAME]; /* glyphs/colors, separate from identity */
 	qboolean selectable, remembered;
 	const char *reason;
 } cl_translate_player_t;

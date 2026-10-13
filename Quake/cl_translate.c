@@ -97,6 +97,7 @@ static int tr_watch[MAX_SCOREBOARD]; /* zero = off, language index + 1 otherwise
 typedef struct
 {
 	char name[MAX_SCOREBOARDNAME + 1]; /* Exact readable name, without colors. */
+	char formatted[MAX_SCOREBOARDNAME];
 	int language;
 } tr_rule_t;
 static tr_rule_t tr_rules[TR_RULES];
@@ -162,7 +163,7 @@ static qboolean TR_Hex (char c)
 
 /* Decode known Quake formatting before clearing its high-bit color. Unknown
  * Unicode/link markup is excluded rather than uploaded as a fabricated body. */
-static qboolean TR_Readable (char *out, size_t size, const char *text, size_t length)
+static qboolean TR_ReadableText (char *out, size_t size, const char *text, size_t length, qboolean alternate_colors)
 {
 	size_t i, used = 0;
 	if (!size) return false;
@@ -182,7 +183,7 @@ static qboolean TR_Readable (char *out, size_t size, const char *text, size_t le
 				(TR_Hex(text[i+2]) || text[i+2] == '-') &&
 				(TR_Hex(text[i+3]) || text[i+3] == '-')) { i += 3; continue; }
 		}
-		if ((cl.modtype == 4 || cl.modtype == 5) && c == '&' && i + 4 < length &&
+		if (alternate_colors && c == '&' && i + 4 < length &&
 			text[i+1] == 'c' && TR_Hex(text[i+2]) && TR_Hex(text[i+3]) && TR_Hex(text[i+4]))
 		{ i += 4; continue; }
 		if (c == '\r' || c == '\n' || c == '\t') c = ' ';
@@ -196,6 +197,11 @@ static qboolean TR_Readable (char *out, size_t size, const char *text, size_t le
 	while (used && out[used-1] == ' ') used--;
 	out[used] = 0;
 	return true;
+}
+
+static qboolean TR_Readable (char *out, size_t size, const char *text, size_t length)
+{
+	return TR_ReadableText(out, size, text, length, cl.modtype == 4 || cl.modtype == 5);
 }
 
 /* Output is literal text. Escaping carets prevents color and link interpretation.
@@ -368,7 +374,7 @@ static int TR_ExactRuleName (const char *name)
 {
 	int i;
 	if (!name) return -1;
-	for (i = 0; i < tr_rule_count; i++) if (!strcmp(name, tr_rules[i].name)) return i;
+	for (i = 0; i < tr_rule_count; i++) if (!q_strcasecmp(name, tr_rules[i].name)) return i;
 	return -1;
 }
 
@@ -379,43 +385,85 @@ static int TR_RuleForName (const char *raw)
 	return TR_ExactRuleName(name);
 }
 
+static qboolean TR_RuleFormattingValid (const char *name, const char *formatted)
+{
+	char readable[MAX_SCOREBOARDNAME + 1];
+	size_t length = strlen(formatted);
+	if (!length || length >= sizeof(tr_rules[0].formatted)) return false;
+	/* Plain legacy keys are drawn literally, including any caret characters. */
+	if (!q_strcasecmp(name, formatted)) return true;
+	/* Saved styling may come from another mod. Validate both known color
+	 * conventions without changing the current mod's live-name matching. */
+	return (TR_ReadableText(readable, sizeof(readable), formatted, length, false) && !q_strcasecmp(name, readable)) ||
+		(TR_ReadableText(readable, sizeof(readable), formatted, length, true) && !q_strcasecmp(name, readable));
+}
+
+static qboolean TR_DecodeRuleName (char *out, size_t size, const char *hex, qboolean readable)
+{
+	size_t i, bytes = strlen(hex);
+	if (!bytes || (bytes & 1) || bytes / 2 >= size) return false;
+	for (i = 0; i < bytes / 2; i++)
+	{
+		unsigned int c;
+		if (!TR_Hex(hex[i*2]) || !TR_Hex(hex[i*2+1]) || sscanf(hex + i*2, "%2x", &c) != 1 ||
+			!c || (readable && (c < 32 || c > 126))) return false;
+		out[i] = (char)c;
+	}
+	out[bytes / 2] = 0;
+	return true;
+}
+
 /* Read a fixed local preferences file directly, never from packs/search paths
  * or executable configs. Hex names cannot turn preferences into commands. */
 static void TR_LoadRules (void)
 {
-	tr_rule_t loaded[TR_RULES];
-	char line[MAX_SCOREBOARDNAME * 2 + 32];
+	tr_rule_t loaded[TR_RULES] = {0};
+	char line[MAX_SCOREBOARDNAME * 4 + 32];
 	int count = 0, i;
 	FILE *file;
 	qboolean valid = true;
+	qboolean formatted = false;
 	tr_rule_count = 0;
 	if (!*tr_rules_path || !(file = fopen(tr_rules_path, "rb"))) return;
-	if (!fgets(line, sizeof(line), file) || strcmp(line, "QSSM_TRANSLATE_RULES 1\n")) valid = false;
+	if (!fgets(line, sizeof(line), file)) valid = false;
+	else if (!strcmp(line, "QSSM_TRANSLATE_RULES 2\n")) formatted = true;
+	else if (strcmp(line, "QSSM_TRANSLATE_RULES 1\n")) valid = false;
 	while (valid && fgets(line, sizeof(line), file))
 	{
 		char *hex = strchr(line, ' ');
-		size_t n = strlen(line), bytes;
+		char *style;
+		size_t n = strlen(line);
 		if (!hex || !n || line[n - 1] != '\n' || count == TR_RULES) { valid = false; break; }
 		line[n - 1] = 0; *hex++ = 0;
-		bytes = strlen(hex);
+		style = strchr(hex, ' ');
+		if (style) *style++ = 0;
 		loaded[count].language = TR_Language(line);
-		if (loaded[count].language < 0 || !bytes || (bytes & 1) || bytes / 2 >= MAX_SCOREBOARDNAME)
+		if (loaded[count].language < 0 || !TR_DecodeRuleName(loaded[count].name, MAX_SCOREBOARDNAME, hex, true) ||
+			(formatted ? !style : style != NULL))
 		{ valid = false; break; }
-		for (i = 0; i < (int)bytes / 2; i++)
+		if (formatted)
 		{
-			unsigned int c;
-			if (!TR_Hex(hex[i*2]) || !TR_Hex(hex[i*2+1]) || sscanf(hex + i*2, "%2x", &c) != 1 || c < 32 || c > 126)
+			if (!TR_DecodeRuleName(loaded[count].formatted, sizeof(loaded[count].formatted), style, false) ||
+				!TR_RuleFormattingValid(loaded[count].name, loaded[count].formatted))
 			{ valid = false; break; }
-			loaded[count].name[i] = (char)c;
 		}
-		loaded[count].name[bytes / 2] = 0;
-		if (!valid) break;
+		else q_strlcpy(loaded[count].formatted, loaded[count].name, sizeof(loaded[count].formatted));
 		for (i = 0; i < count; i++) if (!strcmp(loaded[i].name, loaded[count].name)) valid = false;
 		count++;
 	}
 	if (ferror(file)) valid = false;
 	fclose(file);
-	if (valid) { memcpy(tr_rules, loaded, (size_t)count * sizeof(*loaded)); tr_rule_count = count; }
+	if (valid)
+	{
+		/* Validate every original spelling first. Older case-variant rules
+		 * can then merge using the later entry without hiding exact duplicates. */
+		for (i = 0; i < count; i++)
+		{
+			int rule = TR_ExactRuleName(loaded[i].name);
+			if (rule < 0) rule = tr_rule_count++;
+			tr_rules[rule] = loaded[i];
+		}
+	}
 	else Con_Printf("Saved translation rules could not be read; none were enabled.\n");
 }
 
@@ -428,12 +476,15 @@ static qboolean TR_WriteRules (void)
 	if (!*tr_rules_path || (size_t)q_snprintf(temporary, sizeof(temporary), "%s.tmp", tr_rules_path) >= sizeof(temporary)) return false;
 	file = fopen(temporary, "wb");
 	if (!file) return false;
-	if (fprintf(file, "QSSM_TRANSLATE_RULES 1\n") < 0) ok = false;
+	if (fprintf(file, "QSSM_TRANSLATE_RULES 2\n") < 0) ok = false;
 	for (i = 0; i < tr_rule_count && ok; i++)
 	{
 		if (fprintf(file, "%s ", tr_codes[tr_rules[i].language]) < 0) ok = false;
 		for (j = 0; tr_rules[i].name[j] && ok; j++)
 			if (fprintf(file, "%02x", (unsigned char)tr_rules[i].name[j]) < 0) ok = false;
+		if (fputc(' ', file) == EOF) ok = false;
+		for (j = 0; tr_rules[i].formatted[j] && ok; j++)
+			if (fprintf(file, "%02x", (unsigned char)tr_rules[i].formatted[j]) < 0) ok = false;
 		if (fputc('\n', file) == EOF) ok = false;
 	}
 	if (fclose(file) != 0) ok = false;
@@ -449,7 +500,7 @@ static qboolean TR_WriteRules (void)
 	return ok;
 }
 
-static qboolean TR_UpdateNamedRule (const char *name, int language)
+static qboolean TR_UpdateNamedRule (const char *name, int language, const char *formatted)
 {
 	int i = TR_ExactRuleName(name);
 	if (language < 0)
@@ -458,12 +509,16 @@ static qboolean TR_UpdateNamedRule (const char *name, int language)
 		return true;
 	}
 	if (!name || !*name || strlen(name) >= MAX_SCOREBOARDNAME) return false;
+	if (formatted && !TR_RuleFormattingValid(name, formatted)) return false;
 	if (i < 0)
 	{
 		if (tr_rule_count == TR_RULES) return false;
 		i = tr_rule_count++;
+		q_strlcpy(tr_rules[i].name, name, sizeof(tr_rules[i].name));
+		q_strlcpy(tr_rules[i].formatted, name, sizeof(tr_rules[i].formatted));
 	}
 	q_strlcpy(tr_rules[i].name, name, sizeof(tr_rules[i].name));
+	if (formatted) q_strlcpy(tr_rules[i].formatted, formatted, sizeof(tr_rules[i].formatted));
 	tr_rules[i].language = language;
 	return true;
 }
@@ -471,15 +526,15 @@ static qboolean TR_UpdateNamedRule (const char *name, int language)
 static qboolean TR_UpdateRule (const char *raw, int language)
 {
 	char name[MAX_SCOREBOARDNAME + 1];
-	return raw && TR_Readable(name, sizeof(name), raw, strlen(raw)) && TR_UpdateNamedRule(name, language);
+	return raw && TR_Readable(name, sizeof(name), raw, strlen(raw)) && TR_UpdateNamedRule(name, language, raw);
 }
 
-static qboolean TR_SaveNamedRule (const char *name, int language)
+static qboolean TR_SaveNamedRule (const char *name, int language, const char *formatted)
 {
 	tr_rule_t previous[TR_RULES];
 	int count = tr_rule_count;
 	memcpy(previous, tr_rules, sizeof(previous));
-	if (TR_UpdateNamedRule(name, language) && TR_WriteRules()) { tr_rules_dirty = true; return true; }
+	if (TR_UpdateNamedRule(name, language, formatted) && TR_WriteRules()) { tr_rules_dirty = true; return true; }
 	memcpy(tr_rules, previous, sizeof(previous)); tr_rule_count = count;
 	return false;
 }
@@ -487,7 +542,7 @@ static qboolean TR_SaveNamedRule (const char *name, int language)
 static qboolean TR_SaveRule (const char *raw, int language)
 {
 	char name[MAX_SCOREBOARDNAME + 1];
-	return raw && TR_Readable(name, sizeof(name), raw, strlen(raw)) && TR_SaveNamedRule(name, language);
+	return raw && TR_Readable(name, sizeof(name), raw, strlen(raw)) && TR_SaveNamedRule(name, language, raw);
 }
 
 static qboolean TR_Append (char *out, size_t size, const char *text)
@@ -1159,8 +1214,8 @@ void CL_Translate_Frame (void)
 static void TR_Help (void)
 {
 	Con_Printf("^mtranslate @Rasta^m  - listen in English\n\n"
-		"^mtranslate save @Rasta^m  - remember this player in English\n\n"
-		"^mtranslate spanish save @Rasta^m  - remember this player in Spanish\n\n"
+		"^mtranslate save @Rasta^m  - remember a name in English (works offline)\n\n"
+		"^mtranslate spanish save @Rasta^m  - remember a name in Spanish (works offline)\n\n"
 		"^mtranslate @everyone^m  - listen to all current players in English\n\n"
 		"^mtranslate save @everyone^m  - remember the current player names\n\n"
 		"^mtranslate spanish @Rasta^m  - listen in a selected language\n\n"
@@ -1208,11 +1263,17 @@ static void TR_Command (void)
 
 enum { TR_PLAYER_NOT_FOUND = -1, TR_PLAYER_AMBIGUOUS = -2 };
 
+static size_t TR_PlayerNameSpan (const char **target)
+{
+	size_t length = strlen(*target);
+	while (length && ((*target)[length-1] == ' ' || (*target)[length-1] == '\t')) length--;
+	if (length >= 2 && (*target)[0] == '"' && (*target)[length-1] == '"') { (*target)++; length -= 2; }
+	return length;
+}
+
 static qboolean TR_PlayerQuery (char *wanted, size_t size, const char *target)
 {
-	size_t length = strlen(target);
-	while (length && (target[length-1] == ' ' || target[length-1] == '\t')) length--;
-	if (length >= 2 && target[0] == '"' && target[length-1] == '"') { target++; length -= 2; }
+	size_t length = TR_PlayerNameSpan(&target);
 	return length && TR_Readable(wanted, size, target, length) && *wanted;
 }
 
@@ -1299,6 +1360,7 @@ int CL_Translate_MenuPlayers (cl_translate_player_t *players, int capacity)
 		memset(player, 0, sizeof(*player));
 		player->slot = i;
 		q_strlcpy(player->name, cl.scores[i].name, sizeof(player->name));
+		q_strlcpy(player->formatted, player->name, sizeof(player->formatted));
 		player->language = !strcmp(tr_names[i], player->name) ? tr_watch[i] - 1 : -1;
 		player->remembered = TR_RuleForName(player->name) >= 0;
 		player->reason = "";
@@ -1346,6 +1408,7 @@ int CL_Translate_MenuSelections (cl_translate_player_t *players, int capacity)
 			player->remembered = true; player->reason = "saved";
 			q_strlcpy(player->name, tr_rules[i].name, sizeof(player->name));
 			q_strlcpy(player->display, tr_rules[i].name, sizeof(player->display));
+			q_strlcpy(player->formatted, tr_rules[i].formatted, sizeof(player->formatted));
 		}
 	return count;
 }
@@ -1462,7 +1525,8 @@ qboolean CL_Translate_MenuWatchSaved (int slot, const char *expected_name, int l
 	if (i == count)
 	{ TR_MenuNotice("That player's chat cannot be selected."); return false; }
 	rule = TR_RuleForName(expected_name);
-	if ((rule < 0 || tr_rules[rule].language != language) && !TR_SaveRule(expected_name, language))
+	if ((rule < 0 || tr_rules[rule].language != language || strcmp(tr_rules[rule].formatted, expected_name)) &&
+		!TR_SaveRule(expected_name, language))
 	{ TR_MenuNotice("Could not save the translation rule."); return false; }
 	return TR_SetWatch(slot, expected_name, language, false);
 }
@@ -1490,7 +1554,7 @@ qboolean CL_Translate_MenuEditPlayer (int slot, const char *expected_name, int l
 	if (slot == -1)
 	{
 		/* Saved names are already readable keys; do not dequake them again. */
-		if (!TR_SaveNamedRule(expected_name, remember ? language : -1))
+		if (!TR_SaveNamedRule(expected_name, remember ? language : -1, NULL))
 		{ TR_MenuNotice("Could not save the translation rule."); return false; }
 		TR_MenuNotice(remember ? "Saved translation rule updated." : "Saved translation rule removed.");
 		return true;
@@ -1524,6 +1588,12 @@ static void TR_ApplyRules (void)
 	for (i = 0; i < count; i++)
 	{
 		int rule = TR_RuleForName(players[i].name);
+		/* Refresh legacy/plain styling from the eligible player's actual name.
+		 * Failure to write cosmetic data must not disable an existing rule. */
+		if (rule >= 0 && players[i].selectable &&
+			(strcmp(tr_rules[rule].formatted, players[i].name) || strcmp(tr_rules[rule].name, players[i].display)) &&
+			!TR_SaveRule(players[i].name, tr_rules[rule].language))
+			Con_Printf("Could not update saved player formatting.\n");
 		if (rule >= 0 && players[i].selectable && players[i].language < 0)
 			TR_SetWatch(players[i].slot, players[i].name, tr_rules[rule].language, true);
 	}
@@ -1719,6 +1789,25 @@ qboolean CL_Translate_Console (const char *line)
 	}
 	if (save && (*p != '@' || !p[1]))
 	{ Con_Printf("Use translate save @player, or translate <language> save @player.\n"); return true; }
+	if (save && !TR_Everyone(p + 1) &&
+		(!TR_Live() || TR_FindPlayer(p + 1) == TR_PLAYER_NOT_FOUND))
+	{
+		char name[MAX_SCOREBOARDNAME + 1], formatted[MAX_SCOREBOARDNAME], message[160];
+		const char *raw = p + 1;
+		size_t length = TR_PlayerNameSpan(&raw);
+		/* With no matching live player, save the full typed name as a local rule.
+		 * Do not resolve a slot or start a watch/request until it appears later. */
+		if (length >= sizeof(formatted) || !TR_PlayerQuery(name, sizeof(name), p + 1) || strlen(name) >= MAX_SCOREBOARDNAME)
+		{ Con_Printf("Enter a readable full player name within the scoreboard name limit.\n"); return true; }
+		memcpy(formatted, raw, length); formatted[length] = 0;
+		/* Plain typed text changes the target without replacing known glyphs. */
+		if (!TR_SaveNamedRule(name, target, strcmp(name, formatted) ? formatted : NULL))
+		{ TR_MenuNotice("Could not save the translation rule."); return true; }
+		tr_rules_paused = false;
+		q_snprintf(message, sizeof(message), "Saved player name for translation to %s.", tr_languages[target]);
+		TR_MenuNotice(message);
+		return true;
+	}
 	if (!TR_Live()) { Con_Printf("%s\n", CL_Translate_UnavailableReason()); return true; }
 	if (!*p) { TR_Status(); return true; }
 	if (*p == '@')

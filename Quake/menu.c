@@ -22975,7 +22975,7 @@ static void M_Translate_RefreshPlayers (void)
 			if ((translatemenu.players[i].slot == previous.slot && !strcmp(translatemenu.players[i].name, previous.name)) ||
 				(!translatemenu.adding && previous.remembered && translatemenu.players[i].remembered &&
 				 (translatemenu.players[i].slot == -1 || translatemenu.players[i].selectable) &&
-				 !strcmp(translatemenu.players[i].display, previous.display))) break;
+				 !q_strcasecmp(translatemenu.players[i].display, previous.display))) break;
 		translatemenu.list.cursor = i < translatemenu.count ? i + (translatemenu.adding ? TRANSLATE_CHOOSE_PLAYERS_ROW : TRANSLATE_PLAYERS_ROW) : 0;
 	}
 	else if (translatemenu.adding) translatemenu.list.cursor = everyone ? M_Translate_EveryoneRow() : CLAMP(0, translatemenu.list.cursor, 1);
@@ -23123,7 +23123,7 @@ static void M_Translate_OpenPlayerCard (void)
 static void M_Translate_DrawPlayerCard (void)
 {
 	char filtered[MAX_SCOREBOARDNAME];
-	const char *name = translatemenu.edit_player.name;
+	const char *name = translatemenu.edit_player.formatted;
 	static const int rows[] = {86, 114, 138};
 	if (cl_contentfilter.value == 2 && WordFilter_Check(name, filtered, sizeof(filtered))) name = filtered;
 	/* The same field boxes, checkbox and Accept Changes button as Bookmarks. */
@@ -23377,7 +23377,7 @@ static void M_Translate_Draw (void)
 		{
 			/* Draw the same glyph bytes as the scoreboard, without a uniform
 			 * mask. Readable names remain separate for matching/completion. */
-			label = translatemenu.players[i - (translatemenu.adding ? TRANSLATE_CHOOSE_PLAYERS_ROW : TRANSLATE_PLAYERS_ROW)].name;
+			label = translatemenu.players[i - (translatemenu.adding ? TRANSLATE_CHOOSE_PLAYERS_ROW : TRANSLATE_PLAYERS_ROW)].formatted;
 			if (cl_contentfilter.value == 2 && WordFilter_Check(label, filtered_name, sizeof(filtered_name)))
 				label = filtered_name;
 		}

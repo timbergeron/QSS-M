@@ -20,11 +20,16 @@ Delete on that player's row to stop translating them.
 added. Pick **Translate to**, then Enter or click a name to add it and return to
 the menu. **Remember by name** defaults to **No**. Choose **Yes** to save the
 player's language and restore translation when their full name appears in later
-games, including after restarting QSS-M. Matching is case-sensitive, ignores
+games, including after restarting QSS-M. Matching ignores capitalization and
 Quake name colors, and still excludes your own name, ignored players, and
 ambiguous names. Names identify the rule; they do not authenticate a person.
 Saved names remain in the main menu while disconnected or absent from the current
-server. Their language, Remember checkbox, and removal controls work offline;
+server. Saved rows and edit cards retain the original Quake name glyphs and colors,
+independently of the readable name used for matching. Older plain-name rules still
+load and pick up formatting when that player next appears in an eligible live roster.
+Case variants share one saved rule. Older files with separate case variants merge
+them using the later entry's settings. A live match updates the stored capitalization.
+Their language, Remember checkbox, and removal controls work offline;
 editing those preferences makes no translation request. Add Player and Send
 remain disabled outside multiplayer.
 Changing a saved player's language updates their rule. Removing the player
@@ -94,6 +99,14 @@ English, and `translate spanish save @Rasta` saves Spanish. `translate save
 @everyone` (or `translate portuguese save @everyone`) saves the currently eligible
 names, including players already selected, using that target. Later arrivals
 are not selected automatically. Tab completes **save** and then the player name.
+Individual **save** commands also work when the player is absent, including offline:
+`translate spanish save @Tim` saves the full name **Tim** and immediately lists it
+in the menu. Live lookup still accepts a unique partial name; if no player matches,
+the full name you typed is saved for later. Quotes may surround multiword names.
+Re-saving a plain name updates the language and retains any known Quake formatting.
+Saving an absent name makes no translation request; the rule restores translation
+when that full readable name appears, ignoring capitalization, in a supported
+multiplayer game. **@everyone** still requires a live roster to save particular names.
 Without **save**, a new watch lasts for the current connection; changing an
 already remembered player's language also updates their existing rule.
 Hold Ctrl while submitting the
