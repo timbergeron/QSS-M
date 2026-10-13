@@ -28,7 +28,8 @@ static int fail_at, lookups, creates, uses, uniforms;
 cvar_t gl_zfix, r_telestyle;
 client_state_t cl;
 client_static_t cls;
-qboolean gl_glsl_water_able, gl_fbo_able, gl_texture_NPOT;
+qboolean gl_glsl_water_able, gl_fbo_able, gl_texture_NPOT, gl_occlusion_able;
+QS_PFNGLDELETEQUERIESPROC GL_DeleteQueriesFunc;
 qboolean scr_disabled_for_loading;
 void Con_Warning(const char *fmt, ...) {}
 GLuint GL_CreateProgram(const GLchar *vs, const GLchar *fs, int n, const glsl_attrib_binding_t *bindings) {
