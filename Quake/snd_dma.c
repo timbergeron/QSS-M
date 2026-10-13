@@ -37,6 +37,7 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 */
 
 #include "quakedef.h"
+#include "cfgfile.h"
 #include "snd_codec.h"
 #include "bgmusic.h"
 
@@ -717,6 +718,7 @@ S_Init
 */
 void S_Init (void)
 {
+	static const char *read_vars[] = { "snd_mixspeed", "snd_surround" };
 	int i;
 
 	if (snd_initialized)
@@ -759,6 +761,14 @@ void S_Init (void)
 	Cmd_AddCommand("snd_restart", S_Restart_f);
 	Cmd_AddCommand("mute", Sound_Toggle_Mute_f); // woods #usermute
 
+	/* Open at the saved settings instead of reopening when config.cfg runs
+	 * on the first frame. Match video startup's early config/override reads. */
+	if (CFG_OpenConfig ("config.cfg") == 0)
+	{
+		CFG_ReadCvars (read_vars, countof(read_vars));
+		CFG_CloseConfig ();
+	}
+
 	i = COM_CheckParm("-sndspeed");
 	if (i && i < com_argc-1)
 	{
@@ -770,6 +780,7 @@ void S_Init (void)
 	{
 		Cvar_SetQuick (&snd_mixspeed, com_argv[i + 1]);
 	}
+	CFG_ReadCvarOverrides (read_vars, countof(read_vars));
 
 	if (host_parms->memsize < 0x800000)
 	{
