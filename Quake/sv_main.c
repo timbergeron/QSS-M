@@ -1497,7 +1497,7 @@ void SV_BuildEntityState(client_t *client, edict_t *ent, entity_state_t *state)
 	{
 		state->solidsize = CLAMP(0, (int)-ent->v.mins[0], 255);
 		state->solidsize |= CLAMP(0, (int)-ent->v.mins[2], 255)<<8;
-		state->solidsize |= CLAMP(0, (int)((ent->v.maxs[2]+32768)), 65535)<<16;	/*up can be negative*/
+		state->solidsize |= (unsigned int)CLAMP(0, (int)((ent->v.maxs[2]+32768)), 65535)<<16;	/*up can be negative*/
 		if (state->solidsize == 0x80000000)
 			state->solidsize = ES_SOLID_NOT;	//point sized stuff should just be non-solid. you'll thank me for splitscreens.
 	}

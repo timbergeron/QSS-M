@@ -262,7 +262,7 @@ static int MSG_ReadSize16 (sizebuf_t *sb)
 		return ssolid;
 	else
 	{
-		int solid = (((ssolid>>7) & 0x1F8) - 32+32768)<<16;	/*up can be negative*/
+		int solid = (unsigned int)(((ssolid>>7) & 0x1F8) - 32+32768)<<16;	/*up can be negative*/
 		solid|= ((ssolid & 0x1F)<<3);
 		solid|= ((ssolid & 0x3E0)<<6);
 		return solid;
@@ -5053,7 +5053,7 @@ void CL_ParseServerMessage (void)
 			if (cl.items != cl.stats[STAT_ITEMS])
 			{
 				for (i = 0; i < 32; i++)
-					if ( (cl.stats[STAT_ITEMS] & (1<<i)) && !(cl.items & (1<<i)))
+					if ( (cl.stats[STAT_ITEMS] & (1u<<i)) && !(cl.items & (1u<<i)))
 						cl.item_gettime[i] = cl.time;
 				cl.items = cl.stats[STAT_ITEMS];
 			}
