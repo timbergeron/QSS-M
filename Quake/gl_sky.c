@@ -1773,8 +1773,10 @@ void Sky_LoadTexture (qmodel_t *mod, texture_t *mt, enum srcformat fmt, unsigned
 	columns = (width+bw-1) / bw;
 	rows = (height+bh-1) / bh;
 
-	front_data = Hunk_AllocName (bb*columns*rows*2, "skytex");
-	back_data = front_data+bb*columns*rows;
+	front_data = (byte *)malloc ((size_t)bb*columns*rows);
+	back_data = (byte *)malloc ((size_t)bb*columns*rows);
+	if (!front_data || !back_data)
+		Sys_Error ("Sky_LoadTexture: out of memory");
 
 	src = (byte *)(mt+1);
 
@@ -1783,7 +1785,7 @@ void Sky_LoadTexture (qmodel_t *mod, texture_t *mt, enum srcformat fmt, unsigned
 		memcpy(back_data+bb*i*columns, src+bb*(i*columns*2 + columns), columns*bb);
 
 	q_snprintf(texturename, sizeof(texturename), "%s:%s_back", mod->name, mt->name);
-	mt->gltexture = solidskytexture = TexMgr_LoadImage (mod, texturename, width, height, fmt, back_data, "", (src_offset_t)back_data, TEXPREF_NONE);
+	mt->gltexture = solidskytexture = TexMgr_LoadImage (mod, texturename, width, height, fmt, back_data, "", (src_offset_t)back_data, TEXPREF_MALLOCSOURCE);
 
 // extract front layer and upload
 	for (i=0 ; i<rows ; i++)
@@ -1797,7 +1799,7 @@ void Sky_LoadTexture (qmodel_t *mod, texture_t *mt, enum srcformat fmt, unsigned
 		}
 	}
 	q_snprintf(texturename, sizeof(texturename), "%s:%s_front", mod->name, mt->name);
-	mt->fullbright = alphaskytexture = TexMgr_LoadImage (mod, texturename, width, height, fmt, front_data, "", (src_offset_t)front_data, TEXPREF_ALPHA);
+	mt->fullbright = alphaskytexture = TexMgr_LoadImage (mod, texturename, width, height, fmt, front_data, "", (src_offset_t)front_data, TEXPREF_ALPHA | TEXPREF_MALLOCSOURCE);
 
 	// average opaque front pixels using the raw miptex (the in-place 0->255
 	// remap above destroyed transparency in front_data for SRC_INDEXED)
@@ -1834,7 +1836,9 @@ void Sky_LoadTextureQ64 (qmodel_t *mod, texture_t *mt)
 	halfheight = mt->height / 2;
 	front = (byte *)(mt+1);
 	back = (byte *)(mt+1) + mt->width*halfheight;
-	front_rgba = (byte *) Hunk_AllocName (4*mt->width*halfheight, "q64_skytex");
+	front_rgba = (byte *)malloc ((size_t)4*mt->width*halfheight);
+	if (!front_rgba)
+		Sys_Error ("Sky_LoadTextureQ64: out of memory");
 
 	// Normal indexed texture for the back layer
 	q_snprintf(texturename, sizeof(texturename), "%s:%s_back", mod->name, mt->name);
@@ -1862,7 +1866,7 @@ void Sky_LoadTextureQ64 (qmodel_t *mod, texture_t *mt)
 	}
 
 	q_snprintf(texturename, sizeof(texturename), "%s:%s_front", mod->name, mt->name);
-	mt->fullbright = alphaskytexture = TexMgr_LoadImage (mod, texturename, mt->width, halfheight, SRC_RGBA, front_rgba, "", (src_offset_t)front_rgba, TEXPREF_ALPHA);
+	mt->fullbright = alphaskytexture = TexMgr_LoadImage (mod, texturename, mt->width, halfheight, SRC_RGBA, front_rgba, "", (src_offset_t)front_rgba, TEXPREF_ALPHA | TEXPREF_MALLOCSOURCE);
 
 	if (count > 0)
 		Sky_SetFlatColorAverage ((float)r/(count*255), (float)g/(count*255), (float)b/(count*255));
@@ -2588,6 +2592,14 @@ static void Sky_ClearInternal (qboolean purge_skybox)
 	}
 
 	Cvar_SetQuick (&r_skyfog, r_skyfog.default_string);
+}
+
+/* Keep the selected skybox, wind, fog and skyroom during a live refresh. */
+void Sky_RefreshTextures (void)
+{
+	solidskytexture = alphaskytexture = NULL;
+	externalskyloaded = false;
+	Sky_InvalidateFlatColorAverage ();
 }
 
 void Sky_ClearAll (void)

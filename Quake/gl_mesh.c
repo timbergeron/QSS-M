@@ -395,6 +395,14 @@ void GLMesh_LoadVertexBuffer (qmodel_t *m, aliashdr_t *mainhdr)
 	}
 	hdr = NULL;
 
+	/* A cache eviction or live skin change can rebuild an existing model.
+	 * The client-array fallback owns these buffers just as the VBO path
+	 * owns its GL buffers; release them before publishing the new mesh. */
+	free (m->meshvboptr);
+	free (m->meshindexesvboptr);
+	m->meshvboptr = NULL;
+	m->meshindexesvboptr = NULL;
+
 	if (gl_vbo_able)
 	{
 		// upload indexes buffer

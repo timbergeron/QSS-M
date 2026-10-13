@@ -1130,7 +1130,7 @@ float TexMgr_FrameUsage (void)
 TexMgr_FindTexture
 ================
 */
-gltexture_t *TexMgr_FindTexture (qmodel_t *owner, const char *name)
+gltexture_t *TexMgr_FindTextureWithFlags (qmodel_t *owner, const char *name, unsigned int flags, unsigned int mask)
 {
 	gltexture_t	*glt;
 
@@ -1138,12 +1138,17 @@ gltexture_t *TexMgr_FindTexture (qmodel_t *owner, const char *name)
 	{
 		for (glt = active_gltextures; glt; glt = glt->next)
 		{
-			if (glt->owner == owner && !strcmp (glt->name, name))
+			if (glt->owner == owner && !strcmp (glt->name, name) && (glt->flags & mask) == (flags & mask))
 				return glt;
 		}
 	}
 
 	return NULL;
+}
+
+gltexture_t *TexMgr_FindTexture (qmodel_t *owner, const char *name)
+{
+	return TexMgr_FindTextureWithFlags (owner, name, 0, 0);
 }
 
 /* Group shades of the same hue together, so a shaded colored item wins over
@@ -3531,11 +3536,17 @@ static gltexture_t *TexMgr_LoadImage_impl (qmodel_t *owner, const char *name, in
 			return glt;
 	}
 
+	/* Include file decoding in the temporary allocation scope. TGA and LMP
+	 * decoders use the hunk; repeated HUD refreshes must release those pixels. */
+	mark = Hunk_LowMark();
 	if (format == SRC_EXTERNAL)
 	{
 		data = Image_LoadImage (source_file, &width, &height, &fmt, &malloced); //simple file
 		if (!data && (flags & TEXPREF_ALLOWMISSING))
+		{
+			Hunk_FreeToLowMark(mark);
 			return NULL;	//don't allocate anything.
+		}
 	}
 
 	if (!glt)
@@ -3559,8 +3570,6 @@ static gltexture_t *TexMgr_LoadImage_impl (qmodel_t *owner, const char *name, in
 	glt->source_crc = crc;
 
 	//upload it
-	mark = Hunk_LowMark();
-
 	switch (glt->source_format)
 	{
 	case SRC_INDEXED:

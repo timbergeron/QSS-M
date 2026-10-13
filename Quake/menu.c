@@ -15112,7 +15112,6 @@ static void M_Graphics_AdjustSliders(int dir)
 
 	case GRAPHICS_EXTERNALTEX:
 		Cvar_SetValueQuick(&gl_load24bit, !gl_load24bit.value);
-		Cbuf_AddText("flush\n");
 		break;
 
 	case GRAPHICS_REPLACEMENTMODELS:

@@ -102,6 +102,7 @@ qboolean Draw_GetCanvasTransform(canvastype canvas, vrect_t *bounds, vrect_t *vi
 qboolean Draw_WindowToCanvas(canvastype canvas, int win_x, int win_y, int *canvas_x, int *canvas_y);
 void Draw_GetMenuTransform(vrect_t* bounds, vrect_t* viewport); // woods #mousemenu (iw)
 qboolean Draw_ReloadTextures(qboolean force);
+void Draw_RefreshTextures (void);
 plcolour_t Draw_GetConcharsAccentColor(void); // woods #goldtext
 plcolour_t Draw_GetConcharsCursorColor(void); // woods #cursorcolor
 plcolour_t Draw_GetConcharsCursorColorByIndex(int index); // woods #nadecount

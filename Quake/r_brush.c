@@ -2054,7 +2054,7 @@ void R_BuildLightMapForState (qmodel_t *model, msurface_t *surf, byte *dest, int
 					}
 					scale = pow(2, e-9);
 					scale *= identity;
-					*(unsigned int *)dest = ((e+15)<<27) |
+					*(unsigned int *)dest = ((unsigned int)(e+15)<<27) |
 											CLAMP(0, (int)(bl[0]/scale + 0.5), 0x1ff)<<0 |
 											CLAMP(0, (int)(bl[1]/scale + 0.5), 0x1ff)<<9 |
 											CLAMP(0, (int)(bl[2]/scale + 0.5), 0x1ff)<<18;

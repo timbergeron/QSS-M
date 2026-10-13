@@ -65,7 +65,9 @@ end = model.index("static void Q1BSPX_Reset", start)
 source += model[start:end]
 source += function(model, "static texture_t *Mod_LoadMipTex(")
 start = model.rindex("typedef struct", 0, model.index("} miptexbound_t;"))
-source += model[start:model.index("static void Mod_LoadTextures", start)]
+source += model[start:model.index("static int Mod_CompareMiptexBounds", start)]
+source += function(model, "static int Mod_CompareMiptexBounds (")
+source += function(model, "static size_t *Mod_LoadMiptexBounds (")
 source += function(model, "static qboolean Mod_BSPLumpValid (")
 source += function(model, "static qboolean Mod_BSPTextureName (")
 
@@ -99,13 +101,14 @@ static void check_pixels(void) {
     for (int i = 0; i < 2; i++) {
         tx = readmip(data + 1, 296, &format, &copied);
         assert(tx && format == SRC_INDEXED && copied == 256);
+        assert(tx->source_format == SRC_INDEXED && tx->source_width == 16 && tx->source_height == 16 && tx->source_offset == 40);
         assert(tx->width == 16 && tx->height == 16 && strlen(tx->name) == 15);
         for (int p = 0; p < 256; p++) assert(((byte *)(tx + 1))[p] == 7);
         free(tx);
         assert(!memcmp(before, data, sizeof(data))); /* shared header remains raw */
     }
     tx = readmip(data + 1, 168, &format, &copied);
-    assert(tx && copied == 128);
+    assert(tx && copied == 128 && tx->source_offset == 0);
     for (int p = 0; p < 256; p++) assert(((byte *)(tx + 1))[p] == (p < 128 ? 7 : 0));
     free(tx);
     assert(!readmip(data + 1, 39, &format, &copied));
@@ -166,6 +169,7 @@ static void check_pixels(void) {
     memset(data + 44, 9, 256);
     tx = readmip(data, 300, &format, &copied);
     assert(tx && tx->shift == 2 && copied == 256 && ((byte *)(tx + 1))[0] == 9);
+    assert(tx->source_offset == 44);
     free(tx);
     model.bspversion = BSPVERSION;
     puts("PASS: indexed/truncated/missing pixels, shared and unaligned headers, dimensions, RGBA extensions, Quake64");
@@ -280,7 +284,7 @@ with tempfile.TemporaryDirectory(prefix="qssm-miptex-") as tmp:
     flags = shlex.split(subprocess.check_output(["pkg-config", "--cflags", "sdl3"], text=True))
     subprocess.run([os.environ.get("CC", "cc"), "-O1", "-g", "-std=gnu11",
                     "-fsanitize=address,undefined", "-fno-sanitize-recover=all",
-                    "-Wall", "-Wextra", "-Werror", "-Wno-missing-field-initializers",
+                    "-Wall", "-Wextra", "-Werror", "-Wno-missing-field-initializers", "-Wno-type-limits",
                     "-I", str(ROOT / "Quake"), str(path / "test.c"), "-o", str(path / "test"),
                     *flags, "-lm"], check=True)
     subprocess.run([str(path / "test")], check=True, timeout=30)

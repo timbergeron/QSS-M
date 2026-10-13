@@ -137,8 +137,9 @@ static void copy64(uint32 *M, const unsigned char *in)
 {
 	int i;
 
+	/* Shift the high byte as unsigned so its sign bit is representable. */
 	for (i=0;i<16;i++)
-		M[i] = (in[i*4+3]<<24) | (in[i*4+2]<<16) |
+		M[i] = ((uint32)in[i*4+3]<<24) | (in[i*4+2]<<16) |
 			(in[i*4+1]<<8) | (in[i*4+0]<<0);
 }
 

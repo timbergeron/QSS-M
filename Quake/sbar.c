@@ -1749,7 +1749,7 @@ void Sbar_DrawInventory (void)
 		if (!cls.demoplayback) // woods #demopercent (Baker Fitzquake Mark V) -- make room for demo %
 		for (i = 0; i < 4; i++)
 		{
-			if (cl.items & (1<<(28+i)))
+			if (cl.items & (1u<<(28+i)))
 			{
 				time = q_max (cl.item_gettime[28+i], cl.spawntime);
 				if (time && time > cl.time - 2 && flashon)

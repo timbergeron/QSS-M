@@ -118,6 +118,8 @@ byte pic_crosshair_data[8][8] =
 };
 //johnfitz
 
+/* qpic_t::data may only be four-byte aligned. Copy this metadata into a
+ * local object before reading it; its texture pointer needs eight on 64-bit. */
 typedef struct
 {
 	gltexture_t *gltexture;
@@ -222,7 +224,7 @@ void Scrap_Upload (void)
 	{
 		sprintf (name, "scrap%i", i);
 		scrap_textures[i] = TexMgr_LoadImage (NULL, name, BLOCK_WIDTH, BLOCK_HEIGHT, SRC_INDEXED, scrap_texels[i],
-			"", (src_offset_t)scrap_texels[i], (premul_hud?TEXPREF_PREMULTIPLY:0)|TEXPREF_ALPHA | TEXPREF_OVERWRITE | TEXPREF_NOPICMIP);
+			"", (src_offset_t)scrap_texels[i], TEXPREF_UI | (premul_hud?TEXPREF_PREMULTIPLY:0)|TEXPREF_ALPHA | TEXPREF_OVERWRITE | TEXPREF_NOPICMIP);
 	}
 
 	scrap_dirty = false;
@@ -242,7 +244,7 @@ qpic_t *Draw_PicFromWad2 (const char *name, unsigned int texflags)
 	src_offset_t offset; //johnfitz
 	lumpinfo_t *info;
 
-	texflags |= (premul_hud?TEXPREF_PREMULTIPLY:0);
+	texflags |= TEXPREF_UI | (premul_hud?TEXPREF_PREMULTIPLY:0);
 
 	//Spike -- added cachepic stuff here, to avoid glitches if the function is called multiple times with the same image.
 	for (pic=menu_cachepics, i=0 ; i<menu_numcachepics ; pic++, i++)
@@ -274,7 +276,7 @@ qpic_t *Draw_PicFromWad2 (const char *name, unsigned int texflags)
 		gl.th = (texflags&TEXPREF_PAD)?(float)gl.gltexture->source_height/(float)TexMgr_PadConditional(gl.gltexture->source_height):1;
 	}
 	// load little ones into the scrap
-	else if (p->width < 64 && p->height < 64 && texflags==((premul_hud?TEXPREF_PREMULTIPLY:0)|TEXPREF_ALPHA | TEXPREF_PAD | TEXPREF_NOPICMIP))
+	else if (p->width < 64 && p->height < 64 && (texflags & ~TEXPREF_UI)==((premul_hud?TEXPREF_PREMULTIPLY:0)|TEXPREF_ALPHA | TEXPREF_PAD | TEXPREF_NOPICMIP))
 	{
 		int		x, y;
 		int		i, j, k;
@@ -441,16 +443,16 @@ and it inverts correctly for gamma above 1 as well.
 void Draw_Levelshot (int x, int y, int w, int h, qpic_t *pic)
 {
 	extern cvar_t vid_gamma, vid_contrast;
-	glpic_t	*gl;
+	glpic_t storage, *gl = &storage;
 	float	gamma, contrast, k;
 
 	if (!pic)
 		return;
 	if (scrap_dirty)
 		Scrap_Upload ();
-	gl = (glpic_t *)pic->data;
-	if ((uintptr_t)gl < 0x1000)
+	if ((uintptr_t)pic->data < 0x1000)
 		return;
+	memcpy (gl, pic->data, sizeof(*gl));
 
 	gamma = vid_gamma.value;
 	contrast = vid_contrast.value;
@@ -538,7 +540,7 @@ qpic_t *Draw_ExternalPicFromWadBase (const char *base_name, const char *replacem
 	if (base == pic_nul)
 		return NULL;
 
-	texflags |= (premul_hud ? TEXPREF_PREMULTIPLY : 0);
+	texflags |= TEXPREF_UI | (premul_hud ? TEXPREF_PREMULTIPLY : 0);
 	gl.gltexture = TexMgr_LoadImage(NULL, cachename, 0, 0, SRC_EXTERNAL, NULL,
 		va("gfx/%s", replacement_name), 0, texflags | TEXPREF_MIPMAP | TEXPREF_ALLOWMISSING);
 	if (!gl.gltexture)
@@ -687,7 +689,7 @@ static qpic_t	*Draw_TryCachePicEx (const char *cachename, const char *path, unsi
 	size_t		file_size = 0;
 	char newname[MAX_QPATH];
 
-	texflags |= (premul_hud?TEXPREF_PREMULTIPLY:0);
+	texflags |= TEXPREF_UI | (premul_hud?TEXPREF_PREMULTIPLY:0);
 
 	for (pic=menu_cachepics, i=0 ; i<menu_numcachepics ; pic++, i++)
 	{
@@ -944,7 +946,7 @@ void Draw_LoadPics (void)
 	lumpinfo_t *info;
 	extern cvar_t gl_load24bit;
 
-	const unsigned int conchar_texflags = (premul_hud?TEXPREF_PREMULTIPLY:0)|TEXPREF_ALPHA | TEXPREF_NOPICMIP | TEXPREF_CONCHARS;	//Spike - we use nearest with 8bit, but not replacements. replacements also use mipmaps because they're just noise otherwise.
+	const unsigned int conchar_texflags = TEXPREF_UI | (premul_hud?TEXPREF_PREMULTIPLY:0)|TEXPREF_ALPHA | TEXPREF_NOPICMIP | TEXPREF_CONCHARS;	//Spike - we use nearest with 8bit, but not replacements. replacements also use mipmaps because they're just noise otherwise.
 
 	if (gl_load24bit.value > 0 && gl_load24bit_hud.value) // woods #24bithud
 		draw_load24bit = true;
@@ -996,7 +998,7 @@ void Draw_LoadPics (void)
 Draw_NewGame -- johnfitz
 ===============
 */
-void Draw_NewGame (void)
+static void Draw_ResetPics (qboolean newgame)
 {
 	cachepic_t	*pic;
 	int			i;
@@ -1014,8 +1016,11 @@ void Draw_NewGame (void)
 		pic->name[0] = 0;
 	menu_numcachepics = 0;
 	Wheel_ClearIcons ();
-	Draw_InvalidateLevelshots ();	// woods #mapshots
-	Mapshot_NewGame ();				// so resolved-but-now-dead shots reload
+	if (newgame)
+	{
+		Draw_InvalidateLevelshots ();
+		Mapshot_NewGame ();
+	}
 
 	// reload wad pics
 	W_LoadWadFile (); //johnfitz -- filename is now hard-coded for honesty
@@ -1023,6 +1028,20 @@ void Draw_NewGame (void)
 	SCR_LoadPics ();
 	Sbar_InvalidatePics (); // old pic pointers dangle after the wad reload; next draw reloads them
 	PR_ReloadPics(false);
+}
+
+void Draw_NewGame (void)
+{
+	Draw_ResetPics (true);
+}
+
+void Draw_RefreshTextures (void)
+{
+	extern cvar_t gl_load24bit;
+	if (draw_load24bit == (gl_load24bit.value > 0 && gl_load24bit_hud.value != 0))
+		return;
+	TexMgr_FreeTextures (TEXPREF_UI, TEXPREF_UI);
+	Draw_ResetPics (false);
 }
 
 qboolean Draw_ReloadTextures(qboolean force)
@@ -2375,14 +2394,13 @@ void Draw_ScaledPicAlpha (int x, int y, qpic_t* pic, float scale, float alpha)
 	if (!pic)
 		return;
 
-	glpic_t* gl;
+	glpic_t storage, *gl = &storage;
 
 	if (scrap_dirty)
 		Scrap_Upload();
-	gl = (glpic_t*)pic->data;
-
-	if ((uintptr_t)gl < 0x1000)
+	if ((uintptr_t)pic->data < 0x1000)
 		return;
+	memcpy (gl, pic->data, sizeof(*gl));
 
 	float width = pic->width * scale;
 	float height = pic->height * scale;
@@ -2428,14 +2446,13 @@ void Draw_ScaledPic (int x, int y, qpic_t *pic, float scale)
 	if (!pic || scale <= 0.0f)
 		return;
 
-	glpic_t		*gl;
+	glpic_t storage, *gl = &storage;
 
 	if (scrap_dirty)
 		Scrap_Upload ();
-	gl = (glpic_t *)pic->data;
-
-	if ((uintptr_t)gl < 0x1000)
+	if ((uintptr_t)pic->data < 0x1000)
 		return;
+	memcpy (gl, pic->data, sizeof(*gl));
 
 	GL_Bind (gl->gltexture);
 	glBegin (GL_QUADS);
@@ -2459,14 +2476,13 @@ void Draw_Pic (int x, int y, qpic_t *pic)
 {
 	if (!pic) return; // woods (iw) #democontrols
 
-	glpic_t			*gl;
+	glpic_t storage, *gl = &storage;
 
 	if (scrap_dirty)
 		Scrap_Upload ();
-	gl = (glpic_t *)pic->data;
-
-	if ((uintptr_t)gl < 0x1000) // woods (iw) #democontrols
+	if ((uintptr_t)pic->data < 0x1000) // woods (iw) #democontrols
 		return;
+	memcpy (gl, pic->data, sizeof(*gl));
 
 	GL_Bind (gl->gltexture);
 	glBegin (GL_QUADS);
@@ -2491,14 +2507,13 @@ void Draw_PicRGBA (int x, int y, qpic_t *pic, plcolour_t c, float alpha)
 {
 	if (!pic) return;
 
-	glpic_t *gl;
+	glpic_t storage, *gl = &storage;
 
 	if (scrap_dirty)
 		Scrap_Upload ();
-	gl = (glpic_t *)pic->data;
-
-	if ((uintptr_t)gl < 0x1000)
+	if ((uintptr_t)pic->data < 0x1000)
 		return;
+	memcpy (gl, pic->data, sizeof(*gl));
 
 	glEnable (GL_BLEND);
 
@@ -2553,14 +2568,13 @@ void Draw_Pic_RGBA_Outline (int x, int y, qpic_t* pic, plcolour_t c, float alpha
 {
 	if (!pic) return;
 
-	glpic_t* gl;
+	glpic_t storage, *gl = &storage;
 
 	if (scrap_dirty)
 		Scrap_Upload();
-	gl = (glpic_t*)pic->data;
-
-	if ((uintptr_t)gl < 0x1000)
+	if ((uintptr_t)pic->data < 0x1000)
 		return;
+	memcpy (gl, pic->data, sizeof(*gl));
 
 	glEnable(GL_BLEND);
 
@@ -2620,13 +2634,17 @@ void Draw_Pic_RGBA_Outline (int x, int y, qpic_t* pic, plcolour_t c, float alpha
 
 void Draw_SubPic_QW (int x, int y, qpic_t *pic, int ofsx, int ofsy, int w, int h)
 {
-	glpic_t			*gl;
+	glpic_t storage, *gl = &storage;
 	float nsl, ntl, nsh, nth;
 	float oldw, oldh;
 
+	if (!pic)
+		return;
 	if (scrap_dirty)
 		Scrap_Upload ();
-	gl = (glpic_t *)pic->data;
+	if ((uintptr_t)pic->data < 0x1000)
+		return;
+	memcpy (gl, pic->data, sizeof(*gl));
 	GL_Bind (gl->gltexture);
 
     oldw = gl->sh - gl->sl;
@@ -2705,8 +2723,9 @@ void Draw_TransPicTranslate (int x, int y, qpic_t *pic, plcolour_t top, plcolour
 
 	if (!CL_PLColours_Equals(top, oldtop) || !CL_PLColours_Equals(bottom, oldbottom))
 	{
-		glpic_t *p = (glpic_t *)pic->data;
-		gltexture_t *glt = p->gltexture;
+		glpic_t p;
+		memcpy (&p, pic->data, sizeof(p));
+		gltexture_t *glt = p.gltexture;
 		oldtop = top;
 		oldbottom = bottom;
 		TexMgr_ReloadImage (glt, top, bottom);
@@ -2976,9 +2995,9 @@ refresh window.
 */
 void Draw_TileClear (int x, int y, int w, int h)
 {
-	glpic_t	*gl;
+	glpic_t storage, *gl = &storage;
 
-	gl = (glpic_t *)draw_backtile->data;
+	memcpy (gl, draw_backtile->data, sizeof(*gl));
 
 	glColor4f (1,1,1, gl_menu_alpha);
 	GL_Bind (gl->gltexture);

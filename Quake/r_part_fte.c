@@ -1377,7 +1377,9 @@ static void P_LoadTexture(part_type_t *ptype, qboolean warn)
 		char *texname = va("%s%s%s", ptype->texname, ptype->looks.premul?"_premul":"", ptype->looks.nearest?"_nearest":"");
 		qboolean malloced = false;
 		
-		ptype->looks.texture = TexMgr_FindTexture(NULL, texname);
+		/* UI records are freed by live HUD refreshes. Particles must use
+		 * their own surviving record even when the image name matches. */
+		ptype->looks.texture = TexMgr_FindTextureWithFlags(NULL, texname, 0, TEXPREF_UI);
 		if (!ptype->looks.texture)
 		{
 			hunkmark = Hunk_LowMark();
