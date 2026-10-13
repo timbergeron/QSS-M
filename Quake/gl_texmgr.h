@@ -138,6 +138,7 @@ void TexMgr_Shutdown (void);
 int TexMgr_GetTextureMode(void);	//for menu use.
 void TexMgr_SoftEmu_f (cvar_t *var);
 void TexMgr_DeleteTextureObjects (void);
+void TexMgr_ReloadTextureSettings (void);
 enum srcformat TexMgr_FormatForCode (const char *code);	//returns SRC_EXTERNAL when not known.
 enum srcformat TexMgr_FormatForName (const char *name);	//returns SRC_EXTERNAL when not known.
 size_t TexMgr_ImageSize (int width, int height, enum srcformat format);

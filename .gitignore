@@ -41,5 +41,6 @@ out
 /audio-recovery.patch
 
 # python bytecode from the harness runner
+/build/live-settings/
 __pycache__/
 *.pyc

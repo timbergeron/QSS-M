@@ -62,6 +62,9 @@ int		max_channels;
 
 static int	snd_blocked = 0;
 static qboolean	snd_initialized = false;
+static qboolean snd_settings_pending;
+static double snd_mixspeed_deadline;
+static int snd_time_buffers, snd_oldsamplepos;
 
 static dma_t	sn;
 volatile dma_t	*shm = NULL;
@@ -517,12 +520,23 @@ static void SND_Callback_snd_filterquality (cvar_t *var)
 	}
 }
 
-static void SND_Callback_snd_surround (cvar_t *var)
+static void SND_SettingsChanged (cvar_t *var)
 {
-	(void) var;
-
-	if (sound_started)
-		Con_Printf ("snd_surround will take effect after snd_restart\n");
+	if (var == &snd_mixspeed)
+	{
+		snd_mixspeed_deadline = 0;
+		float rate = var->value;
+		if (!isfinite(rate))
+			rate = 44100;
+		rate = (int)CLAMP(8000, rate, 192000);
+		if (rate != var->value)
+		{
+			Cvar_SetValueQuick (var, rate);
+			return;
+		}
+	}
+	if (snd_initialized)
+		snd_settings_pending = true;
 }
 
 /*
@@ -532,6 +546,8 @@ S_BackendStarted
 */
 static void S_BackendStarted (void)
 {
+	snd_time_buffers = snd_oldsamplepos = 0;
+	soundtime = paintedtime = 0;
 	if (!sound_started)
 	{
 		Con_Printf("Failed initializing sound\n");
@@ -566,6 +582,8 @@ void S_Restart_f(void)
 
 	if (!snd_initialized)
 		return;
+	snd_settings_pending = false;
+	snd_mixspeed_deadline = 0;
 	S_SoundPreview_Release();
 
 	oldspeed = shm ? shm->speed : 0;
@@ -613,6 +631,51 @@ void S_Restart_f(void)
 				Cache_Free(&s->cache);
 		}
 	}
+}
+
+/* Menu arrows can cycle several rates quickly. Console changes still apply
+ * on the next frame, and an explicit snd_restart always applies immediately. */
+void S_DeferMixRate (void)
+{
+	snd_mixspeed_deadline = Sys_DoubleTime () + 0.25;
+}
+
+void S_ApplySettings (void)
+{
+	int oldrate;
+	qboolean saved_loading, oldsurround;
+	if (!snd_settings_pending || snd_blocked)
+		return;
+	snd_settings_pending = false;
+	if (!sound_started || !shm)
+		return;
+	oldrate = shm->speed;
+	oldsurround = SNDDMA_GetSurround ();
+	if (oldrate != (int)snd_mixspeed.value)
+	{
+		if (Sys_DoubleTime () < snd_mixspeed_deadline)
+		{
+			if (oldsurround != (snd_surround.value > 0))
+				SNDDMA_DeviceChanged ();
+			snd_settings_pending = true;
+			return;
+		}
+		/* The mixer and cached WAVs use the requested rate. Reopen only audio,
+		 * once per command batch, before music submits its next raw samples. */
+		saved_loading = scr_disabled_for_loading;
+		scr_disabled_for_loading = true;
+		S_Restart_f ();
+		if (!sound_started)
+		{
+			Cvar_SetValueQuick (&snd_mixspeed, oldrate);
+			Cvar_SetValueQuick (&snd_surround, oldsurround);
+			S_Restart_f ();
+		}
+		scr_disabled_for_loading = saved_loading;
+	}
+	else
+		SNDDMA_DeviceChanged ();
+	snd_settings_pending = false;
 }
 
 void BGM_Volume_Callback_f (cvar_t* var) // woods #usermute #mute
@@ -716,7 +779,9 @@ void S_Init (void)
 
 	Cvar_SetCallback(&sfxvolume, SND_Callback_sfxvolume);
 	Cvar_SetCallback(&snd_filterquality, &SND_Callback_snd_filterquality);
-	Cvar_SetCallback(&snd_surround, &SND_Callback_snd_surround);
+	Cvar_SetCallback(&snd_surround, SND_SettingsChanged);
+	Cvar_SetCallback(&snd_mixspeed, SND_SettingsChanged);
+	SND_SettingsChanged (&snd_mixspeed); // validate command-line rates before opening audio
 
 	SND_InitScaletable ();
 
@@ -1484,8 +1549,6 @@ void S_Update (vec3_t origin, vec3_t forward, vec3_t right, vec3_t up)
 static void GetSoundtime (void)
 {
 	int		samplepos;
-	static	int		buffers;
-	static	int		oldsamplepos;
 	int		fullsamples;
 
 	fullsamples = shm->samples / shm->channels;
@@ -1494,20 +1557,20 @@ static void GetSoundtime (void)
 // calls to S_Update.  Oh well.
 	samplepos = SNDDMA_GetDMAPos();
 
-	if (samplepos < oldsamplepos)
+	if (samplepos < snd_oldsamplepos)
 	{
-		buffers++;	// buffer wrapped
+		snd_time_buffers++;	// buffer wrapped
 
 		if (paintedtime > 0x40000000)
 		{	// time to chop things off to avoid 32 bit limits
-			buffers = 0;
+			snd_time_buffers = 0;
 			paintedtime = fullsamples;
 			S_StopAllSounds (true, true);
 		}
 	}
-	oldsamplepos = samplepos;
+	snd_oldsamplepos = samplepos;
 
-	soundtime = buffers*fullsamples + samplepos/shm->channels;
+	soundtime = snd_time_buffers*fullsamples + samplepos/shm->channels;
 }
 
 void S_ExtraUpdate (void)

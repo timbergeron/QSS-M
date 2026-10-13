@@ -70,7 +70,7 @@ typedef struct aliaslight_cache_s
     qboolean                valid;
     struct qmodel_s            *worldmodel;
     struct msurface_s        *worldsurfaces;
-    byte                    *worldlightdata;
+    unsigned int            lighting_generation;
     struct qmodel_s            *model;
     vec3_t                    origin;
     aliaslight_sample_t        base;

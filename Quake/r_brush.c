@@ -33,6 +33,27 @@ cvar_t r_lightmap_format = {"r_lightmap_format","", CVAR_ARCHIVE};
 int		gl_lightmap_format;
 int		lightmap_bytes;
 qboolean lightmaps_latecached;
+static qboolean lightmap_settings_pending;
+
+void R_LightmapFormatChanged (cvar_t *var)
+{
+	if (host_initialized && !isDedicated)
+		lightmap_settings_pending = true;
+}
+
+void R_ApplyLightmapSettings (void)
+{
+	qboolean saved_loading;
+	if (!lightmap_settings_pending || !cl.worldmodel || cls.signon != SIGNONS)
+		return;
+	lightmap_settings_pending = false;
+	saved_loading = scr_disabled_for_loading;
+	scr_disabled_for_loading = true;
+	GL_BuildLightmaps ();
+	GL_BuildBModelVertexBuffer ();
+	lightmaps_latecached = false;
+	scr_disabled_for_loading = saved_loading;
+}
 qboolean lightmaps_skipupdates;
 
 #define MAX_SANITY_LIGHTMAPS (1u<<20)
@@ -1264,9 +1285,14 @@ BuildSurfaceDisplayList -- called at level load time
 */
 static glpoly_t *AllocSurfacePoly (msurface_t *fa)
 {
-	glpoly_t *poly = (glpoly_t *) Hunk_Alloc (sizeof(glpoly_t) + (fa->numedges-4) * VERTEXSIZE*sizeof(float));
-	poly->next = fa->polys;
-	fa->polys = poly;
+	glpoly_t *poly = fa->polys;
+	/* Rebuilding lighting does not change geometry. Keep both the base polygon
+	 * and any legacy water subdivisions rather than appending hunk allocations. */
+	if (!poly)
+	{
+		poly = (glpoly_t *) Hunk_Alloc (sizeof(glpoly_t) + (fa->numedges-4) * VERTEXSIZE*sizeof(float));
+		fa->polys = poly;
+	}
 	poly->numverts = fa->numedges;
 	return poly;
 }
@@ -1372,7 +1398,7 @@ static void BuildSurfaceDisplayList (msurface_t *fa)
 	BuildSurfaceVerts (currentmodel, fa, poly);
 
 	//oldwater is lame. subdivide it now.
-	if ((fa->flags & SURF_DRAWTURB) && !gl_glsl_water_able)
+	if ((fa->flags & SURF_DRAWTURB) && !gl_glsl_water_able && !poly->next)
 		GL_SubdivideSurface (fa);
 }
 
@@ -1389,6 +1415,11 @@ void GL_BuildModel (qmodel_t *m)
 	for (i=0 ; i<m->numsurfaces ; i++)
 	{
 		msurface_t *surf = m->surfaces + i;
+		/* Rebuild static lighting first. Old marks must not collide with the
+		 * next rendered frame or contribute through a stale currententity. */
+		surf->dlightframe = -1;
+		memset (surf->dlightbits, 0, sizeof(surf->dlightbits));
+		surf->cached_dlight = false;
 		//johnfitz -- rewritten to use SURF_DRAWTILED instead of the sky/water flags
 		GL_CreateSurfaceLightmap (m, surf);
 		if (lm_defer_fill && !((surf->flags & SURF_DRAWTURB) && !gl_glsl_water_able))
@@ -1427,6 +1458,7 @@ void GL_BuildLightmaps (void)
 	size_t	full_upload_bytes, occupied_upload_bytes, transferred_upload_bytes;
 	int		partial_upload_count;
 
+	lightmap_settings_pending = false;
 	RSceneCache_Shutdown();	//make sure there's nothing poking them off-thread.
 
 	if (!lm_dirty_mutex)
@@ -1448,8 +1480,6 @@ void GL_BuildLightmaps (void)
 	partial_uploads_enabled = !COM_CheckParm ("-nofastlightmapupload");
 	full_upload_bytes = occupied_upload_bytes = transferred_upload_bytes = 0;
 	partial_upload_count = 0;
-
-	r_framecount = 1; // no dlightcache
 
 	//Spike -- wipe out all the lightmap data (johnfitz -- the gltexture objects were already freed by Mod_ClearAll)
 	for (i=0; i < lightmap_count; i++)
@@ -1622,8 +1652,8 @@ void GL_BuildLightmaps (void)
 			occupied_upload_bytes / (1024.0 * 1024.0), full_upload_bytes / (1024.0 * 1024.0),
 			transferred_upload_bytes / (1024.0 * 1024.0), partial_upload_count, lightmap_count,
 			partial_uploads_enabled ? "" : ", disabled");
-		Con_DPrintf ("GL_BuildLightmaps: build %.1fms upload %.1fms (%d lightmaps)\n",
-			(t_built-t_start)*1000.0, (t_uploaded-t_built)*1000.0, lightmap_count);
+		Con_DPrintf ("GL_BuildLightmaps: build %.1fms upload %.1fms (%d lightmaps, frame %d)\n",
+			(t_built-t_start)*1000.0, (t_uploaded-t_built)*1000.0, lightmap_count, r_framecount);
 	}
 }
 

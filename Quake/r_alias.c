@@ -2807,6 +2807,7 @@ void R_SetupAliasFrame (aliashdr_t *paliashdr, entity_t *e, lerpdata_t *lerpdata
 {
 	int frame = e->frame;
 	int				posenum, numposes;
+	int totalposes = paliashdr->numboneposes ? paliashdr->numboneposes : paliashdr->nummorphposes;
 
 	if ((frame >= paliashdr->numframes) || (frame < 0))
 	{
@@ -2839,11 +2840,10 @@ void R_SetupAliasFrame (aliashdr_t *paliashdr, entity_t *e, lerpdata_t *lerpdata
 			posenum = (int)frac;
 			lerpdata->blend = (frac - posenum);
 
-			posenum += paliashdr->frames[frame].firstpose;
 			numposes = paliashdr->frames[frame].numposes;
 
-			lerpdata->pose1 = (posenum)%numposes;
-			lerpdata->pose2 = (posenum+1)%numposes;
+			lerpdata->pose1 = paliashdr->frames[frame].firstpose + posenum % numposes;
+			lerpdata->pose2 = paliashdr->frames[frame].firstpose + (posenum + 1) % numposes;
 		}
 		else
 		{
@@ -2853,11 +2853,16 @@ void R_SetupAliasFrame (aliashdr_t *paliashdr, entity_t *e, lerpdata_t *lerpdata
 			lerpdata->pose1 += (unsigned int)(e->lerp.snap.time[0]/paliashdr->frames[frame].interval) % paliashdr->frames[frame].numposes;
 
 			lerpdata->pose2 = paliashdr->frames[frame2].firstpose;
-			lerpdata->pose2 += (unsigned int)(e->lerp.snap.time[1]/paliashdr->frames[frame2].interval) % paliashdr->frames[frame].numposes;
+			lerpdata->pose2 += (unsigned int)(e->lerp.snap.time[1]/paliashdr->frames[frame2].interval) % paliashdr->frames[frame2].numposes;
 		}
 	}
 	else
 	{
+		/* A cache flush or replacement can retain entity state from a model
+		 * with more poses. Reset before the old pose reaches the renderer. */
+		if ((unsigned int)e->lerp.state.previouspose >= (unsigned int)totalposes ||
+			(unsigned int)e->lerp.state.currentpose >= (unsigned int)totalposes)
+			e->lerpflags |= LERP_RESETANIM;
 		posenum = paliashdr->frames[frame].firstpose;
 		numposes = paliashdr->frames[frame].numposes;
 

@@ -42,15 +42,54 @@ static void Q1BSPX_Reset (void);
 
 static void Mod_Print (void);
 static int Mod_RetainSignature (void);
+extern cvar_t r_fastturb;
+extern cvar_t gl_picmip, gl_max_size;
 static qboolean mod_texture_reload_pending, mod_model_texture_reload_pending;
+static qboolean mod_texture_policy_pending, mod_replacement_reload_pending;
+static qboolean mod_lighting_reload_pending;
+static unsigned int mod_lighting_generation;
+static unsigned int mod_texture_changes;
+enum { MOD_CHANGE_24BIT = 1, MOD_CHANGE_HUD = 2, MOD_CHANGE_FASTTURB = 4,
+	MOD_CHANGE_SIZE = 8, MOD_CHANGE_REPLACEMENTS = 16 };
+static void Mod_LightingChanged (cvar_t *var)
+{
+	if (host_initialized && !isDedicated)
+		mod_lighting_reload_pending = true;
+}
 static void Mod_TextureModeChanged (cvar_t *var)
 {
 	extern cvar_t gl_load24bit;
 	if (host_initialized && !isDedicated)
 	{
 		mod_texture_reload_pending = true;
-		if (var == &gl_load24bit)
+		mod_texture_changes |= var == &gl_load24bit ? MOD_CHANGE_24BIT :
+			var == &r_fastturb ? MOD_CHANGE_FASTTURB : MOD_CHANGE_HUD;
+		if (var == &gl_load24bit || var == &r_fastturb)
 			mod_model_texture_reload_pending = true;
+	}
+}
+
+void Mod_TexturePolicyChanged (cvar_t *var)
+{
+	if (host_initialized && !isDedicated)
+	{
+		if (var == &r_fastturb)
+			Mod_TextureModeChanged (var);
+		else
+		{
+			mod_texture_policy_pending = true;
+			mod_texture_changes |= MOD_CHANGE_SIZE;
+			mod_texture_reload_pending = mod_model_texture_reload_pending = true;
+		}
+	}
+}
+
+static void Mod_ReplacementModelsChanged (cvar_t *var)
+{
+	if (host_initialized && !isDedicated)
+	{
+		mod_replacement_reload_pending = true;
+		mod_texture_changes |= MOD_CHANGE_REPLACEMENTS;
 	}
 }
 
@@ -72,8 +111,6 @@ void Cache_Flush_f (cvar_t* var); // woods #loadskins
 
 cvar_t	scr_concolor = {"scr_concolor", "", CVAR_ARCHIVE}; // woods #concolor
 cvar_t	scr_conback = {"scr_conback", "", CVAR_ARCHIVE}; // woods #conback
-
-extern cvar_t	r_fastturb; // woods #fastturb
 
 int		mod_generation;
 static byte	*mod_novis;
@@ -149,13 +186,16 @@ void Mod_Init (void)
 	Cvar_RegisterVariable (&external_ents);
 	Cvar_RegisterVariable (&external_ents_dir);
 	Cvar_RegisterVariable (&external_lits_dir); // woods #litdir
+	Cvar_SetCallback (&external_lits_dir, Mod_LightingChanged);
 	Cvar_RegisterVariable (&gl_load24bit);
 	Cvar_SetCallback (&gl_load24bit, Mod_TextureModeChanged);
 	Cvar_RegisterVariable (&mod_retain_textures);
 	Cvar_RegisterVariable (&r_replacemodels);
+	Cvar_SetCallback (&r_replacemodels, Mod_ReplacementModelsChanged);
 	Cvar_SetCompletion (&r_replacemodels, &R_ReplaceModels_Completion_f); // woods #iwtabcomplete
 	Cvar_RegisterVariable (&mod_ignorelmscale);
 	Cvar_RegisterVariable (&gl_loadlitfiles); // woods #loadlits
+	Cvar_SetCallback (&gl_loadlitfiles, Mod_LightingChanged);
 	Cvar_RegisterVariable (&gl_load24bit_skins); // woods #loadskins
 	Cvar_SetCallback (&gl_load24bit_skins, Cache_Flush_f); // woods #loadskins
 	Cvar_RegisterVariable (&gl_load24bit_hud); // woods #24bithud
@@ -426,7 +466,8 @@ the rest.  Returns true if the model's textures were kept.
 static int Mod_RetainSignature (void)
 {
 	/* Compare image selection, not numeric spelling or preparation policy. */
-	return !gl_load24bit.value ? 0 : gl_load24bit.value == 2 ? 2 : 1;
+	return (!gl_load24bit.value ? 0 : gl_load24bit.value == 2 ? 2 : 1) |
+		(r_fastturb.value ? 4 : 0);
 }
 
 static qboolean Mod_RetainTextures (qmodel_t *mod)
@@ -484,6 +525,9 @@ void Mod_ClearAll (void)
 			R_BModelDrawCache_Cleanup(mod);
 			R_GrassCache_Cleanup(mod);
 			R_HullDebug_Cleanup(mod);
+			if (mod->name[0] != '*')
+				free (mod->lightdata_owned);
+			mod->lightdata_owned = NULL;
 		}
 	}
 
@@ -510,6 +554,8 @@ void Mod_ResetAll (void)
 			R_GrassCache_Cleanup(mod);
 			R_HullDebug_Cleanup(mod);
 		}
+		if (mod->name[0] != '*')
+			free (mod->lightdata_owned);
 		memset(mod, 0, sizeof(qmodel_t));
 	}
 	mod_numknown = 0;
@@ -2512,17 +2558,57 @@ static void Mod_LoadTextures (lump_t *l)
 Mod_LoadLighting -- johnfitz -- replaced with lit support code via lordhavoc
 =================
 */
-static void Mod_LoadLighting (lump_t *l)
+typedef struct mod_lightingsource_s
+{
+	int rawsize, hdrsize, rgbsize;
+	byte *raw, *hdr, *rgb;
+} mod_lightingsource_t;
+
+static void Mod_CaptureLightingSource (lump_t *l)
+{
+	mod_lightingsource_t *source = Hunk_AllocName (sizeof(*source), loadname);
+	byte *data;
+	int size;
+	loadmodel->lighting_source = source;
+	source->rawsize = l->filelen;
+	if (l->filelen)
+	{
+		source->raw = Hunk_AllocNameNoFill (l->filelen, loadname);
+		memcpy (source->raw, mod_base + l->fileofs, l->filelen);
+	}
+	/* Retain only lighting lumps from this validated BSP. Live toggles then
+	 * use the same inputs as its geometry, without rereading/checksumming it. */
+	data = Q1BSPX_FindLump ("LIGHTING_E5BGR9", &size);
+	if (data && size > 0 && !(size % 4) && (!l->filelen || (size_t)size == (size_t)l->filelen * 4))
+	{
+		source->hdrsize = size;
+		source->hdr = Hunk_AllocNameNoFill (size, loadname);
+		memcpy (source->hdr, data, size);
+	}
+	data = Q1BSPX_FindLump ("RGBLIGHTING", &size);
+	if (data && size > 0 && !(size % 3) && (!l->filelen || (size_t)size == (size_t)l->filelen * 3))
+	{
+		source->rgbsize = size;
+		source->rgb = Hunk_AllocNameNoFill (size, loadname);
+		memcpy (source->rgb, data, size);
+	}
+}
+
+static void Mod_LoadLighting (const mod_lightingsource_t *source)
 {
 	int i, mark;
 	byte *in, *out, *data;
 	byte d, q64_b0, q64_b1;
 	char litfilename[MAX_OSPATH];
 	unsigned int path_id;
-	int	bspxsize;
+	unsigned int rawsize = source->rawsize;
 
 	loadmodel->flags &= ~MOD_HDRLIGHTING; //just in case.
 	loadmodel->lightdata = NULL;
+	loadmodel->lightdatasamples = 0;
+	loadmodel->lighting_generation = ++mod_lighting_generation;
+	loadmodel->lighting_mode = gl_loadlitfiles.value;
+	q_strlcpy (loadmodel->lighting_dir, external_lits_dir.string, sizeof(loadmodel->lighting_dir));
 	// LordHavoc: check for a .lit file
 	q_strlcpy(litfilename, loadmodel->name, sizeof(litfilename));
 	COM_StripExtension(litfilename, litfilename, sizeof(litfilename));
@@ -2568,35 +2654,35 @@ static void Mod_LoadLighting (lump_t *l)
 			Con_DPrintf("ignored %s from a gamedir with lower priority\n", litfilename);
 		}
 		else
-		if (data[0] == 'Q' && data[1] == 'L' && data[2] == 'I' && data[3] == 'T')
+		if (com_filesize >= 8 && data[0] == 'Q' && data[1] == 'L' && data[2] == 'I' && data[3] == 'T')
 		{
 			i = LittleLong(((int *)data)[1]);
 			if (i == 1)
 			{
-				if (8+l->filelen*3 == com_filesize)
+				if (8+(size_t)rawsize*3 == (size_t)com_filesize)
 				{
 					Con_DPrintf2("%s loaded (ldr)\n", litfilename);
 					loadmodel->lightdata = data + 8;
-					loadmodel->lightdatasamples = l->filelen;
+					loadmodel->lightdatasamples = rawsize;
 					return;
 				}
 				Hunk_FreeToLowMark(mark);
-				Con_Printf("Outdated .lit file (%s should be %u bytes, not %u)\n", litfilename, 8+l->filelen*3, (unsigned)com_filesize);
+				Con_Printf("Outdated .lit file (%s should be %u bytes, not %u)\n", litfilename, 8+(unsigned)rawsize*3, (unsigned)com_filesize);
 			}
 			else if (i == 0x10001)
 			{
-				if (8+l->filelen*4 == com_filesize)
+				if (8+(size_t)rawsize*4 == (size_t)com_filesize)
 				{
 					Con_DPrintf2("%s loaded (hdr)\n", litfilename);
 					loadmodel->lightdata = data + 8;
-					loadmodel->lightdatasamples = l->filelen;
+					loadmodel->lightdatasamples = rawsize;
 					loadmodel->flags |= MOD_HDRLIGHTING;
-					for (i = 0; i < loadmodel->lightdatasamples; i++)
-						((int*)loadmodel->lightdata)[i] = LittleLong(((int*)loadmodel->lightdata)[i]);
+					for (size_t sample = 0; sample < loadmodel->lightdatasamples; sample++)
+						((int*)loadmodel->lightdata)[sample] = LittleLong(((int*)loadmodel->lightdata)[sample]);
 					return;
 				}
 				Hunk_FreeToLowMark(mark);
-				Con_Printf("Outdated .lit file (%s should be %u bytes, not %u)\n", litfilename, 8+l->filelen*4, (unsigned)com_filesize);
+				Con_Printf("Outdated .lit file (%s should be %u bytes, not %u)\n", litfilename, 8+(unsigned)rawsize*4, (unsigned)com_filesize);
 			}
 			else
 			{
@@ -2613,17 +2699,17 @@ static void Mod_LoadLighting (lump_t *l)
 	// LordHavoc: no .lit found, expand the white lighting data to color
 
 	// Quake64 bsp lighmap data
-	if (loadmodel->bspversion == BSPVERSION_QUAKE64 && l->filelen)
+	if (loadmodel->bspversion == BSPVERSION_QUAKE64 && rawsize)
 	{
 		// RGB lightmap samples are packed in 16bits.
 		// RRRRR GGGGG BBBBBB
 
-		loadmodel->lightdata = (byte *) Hunk_AllocNameNoFill ( (l->filelen / 2)*3, litfilename);
-		loadmodel->lightdatasamples = (l->filelen / 2);
-		in = mod_base + l->fileofs;
+		loadmodel->lightdata = (byte *) Hunk_AllocNameNoFill ( (rawsize / 2)*3, litfilename);
+		loadmodel->lightdatasamples = (rawsize / 2);
+		in = source->raw;
 		out = loadmodel->lightdata;
 
-		for (unsigned int i = 0;i < (l->filelen / 2) ;i++)
+		for (unsigned int i = 0;i < (rawsize / 2) ;i++)
 		{
 			q64_b0 = *in++;
 			q64_b1 = *in++;
@@ -2637,24 +2723,24 @@ static void Mod_LoadLighting (lump_t *l)
 
 	if (gl_loadlitfiles.value > 0) // woods #loadlits
 	{
-		in = Q1BSPX_FindLump("LIGHTING_E5BGR9", &bspxsize);
-		if (in && (!l->filelen || (bspxsize && bspxsize == l->filelen * 4)))
+		in = source->hdr;
+		if (in)
 		{
-			loadmodel->lightdata = (byte*)Hunk_AllocName(bspxsize, litfilename);
-			loadmodel->lightdatasamples = bspxsize / 4;
-			memcpy(loadmodel->lightdata, in, bspxsize);
+			loadmodel->lightdata = (byte*)Hunk_AllocName(source->hdrsize, litfilename);
+			loadmodel->lightdatasamples = source->hdrsize / 4;
+			memcpy(loadmodel->lightdata, in, source->hdrsize);
 			loadmodel->flags |= MOD_HDRLIGHTING;
 			Con_DPrintf("bspx hdr lighting loaded\n");
-			for (i = 0; i < loadmodel->lightdatasamples; i++)    // native endian...
-				((int*)loadmodel->lightdata)[i] = LittleLong(((int*)loadmodel->lightdata)[i]);
+			for (size_t sample = 0; sample < loadmodel->lightdatasamples; sample++)    // native endian...
+				((int*)loadmodel->lightdata)[sample] = LittleLong(((int*)loadmodel->lightdata)[sample]);
 			return;
 		}
-		in = Q1BSPX_FindLump("RGBLIGHTING", &bspxsize);
-		if (in && (!l->filelen || (bspxsize && bspxsize == l->filelen * 3)))
+		in = source->rgb;
+		if (in)
 		{
-			loadmodel->lightdata = (byte*)Hunk_AllocName(bspxsize, litfilename);
-			loadmodel->lightdatasamples = bspxsize / 3;
-			memcpy(loadmodel->lightdata, in, bspxsize);
+			loadmodel->lightdata = (byte*)Hunk_AllocName(source->rgbsize, litfilename);
+			loadmodel->lightdatasamples = source->rgbsize / 3;
+			memcpy(loadmodel->lightdata, in, source->rgbsize);
 			Con_DPrintf("bspx ldr lighting loaded\n");
 			return;
 		}
@@ -2663,14 +2749,13 @@ static void Mod_LoadLighting (lump_t *l)
 		Con_DPrintf2("gl_loadlitfiles 0: ignoring BSPX colored lighting lumps\n");
 	}
 
-	if (l->filelen)
+	if (rawsize)
 	{
-		loadmodel->lightdata = (byte *) Hunk_AllocNameNoFill ( l->filelen*3, litfilename);
-		loadmodel->lightdatasamples = l->filelen;
-		in = loadmodel->lightdata + l->filelen*2; // place the file at the end, so it will not be overwritten until the very last write
+		loadmodel->lightdata = (byte *) Hunk_AllocNameNoFill ( rawsize*3, litfilename);
+		loadmodel->lightdatasamples = rawsize;
+		in = source->raw;
 		out = loadmodel->lightdata;
-		memcpy (in, mod_base + l->fileofs, l->filelen);
-		for (unsigned int i = 0;i < l->filelen;i++)
+		for (unsigned int i = 0;i < rawsize;i++)
 		{
 			d = *in++;
 			*out++ = d;
@@ -3451,12 +3536,13 @@ static void Mod_LoadFaces (lump_t *l, qboolean bsp2)
 		surface_area = Mod_CalcSurfaceBoundsAndArea (out, calc_surface_area); //johnfitz -- for per-surface frustum culling
 
 	// lighting info
-		if (loadmodel->bspversion == BSPVERSION_QUAKE64)
+		if (loadmodel->bspversion == BSPVERSION_QUAKE64 && lofs >= 0)
 			lofs /= 2; // Q64 samples are 16bits instead 8 in normal Quake 
 
 		for (facestyles = 0 ; facestyles<MAXLIGHTMAPS && out->styles[facestyles] != INVALID_LIGHTSTYLE ; facestyles++)
 			;	//count the styles so we can bound-check properly.
-		if (lofs == -1)
+		out->lightofs = lofs;
+		if (lofs < 0 || !loadmodel->lightdata)
 			out->samples = NULL;
 		else if (lofs+facestyles*((out->extents[0])+1)*((out->extents[1])+1) > loadmodel->lightdatasamples)
 			out->samples = NULL; //corrupt...
@@ -5371,7 +5457,8 @@ static void Mod_LoadBrushModel (qmodel_t *mod, void *buffer)
 				(double)(tp1.source_bytes-tp0.source_bytes)/(1024.0*1024.0),
 				(double)(tp1.prepared_bytes-tp0.prepared_bytes)/(1024.0*1024.0));
 	}
-	Mod_LoadLighting (&header->lumps[LUMP_LIGHTING]);
+	Mod_CaptureLightingSource (&header->lumps[LUMP_LIGHTING]);
+	Mod_LoadLighting (loadmodel->lighting_source);
 	if (profile)
 		t_light = Sys_DoubleTime ();
 	Mod_LoadPlanes (&header->lumps[LUMP_PLANES]);
@@ -7034,19 +7121,167 @@ static void Mod_RefreshSpriteTextures (qmodel_t *mod)
 		mod->retain_signature = Mod_RetainSignature ();
 }
 
+static qboolean Mod_RefreshLighting (qmodel_t *mod)
+{
+	qmodel_t replacement = *mod;
+	byte *pixels = NULL;
+	size_t bytes;
+	int i, mark;
+	if (!mod->lighting_source)
+		return false;
+	loadmodel = &replacement;
+	COM_FileBase (mod->name, loadname, sizeof(loadname));
+	mark = Hunk_LowMark ();
+	Mod_LoadLighting (mod->lighting_source);
+	bytes = replacement.lightdatasamples * ((replacement.flags & MOD_HDRLIGHTING) ? 4 : 3);
+	if (bytes)
+	{
+		pixels = malloc (bytes);
+		if (pixels)
+			memcpy (pixels, replacement.lightdata, bytes);
+	}
+	Hunk_FreeToLowMark (mark);
+	if (bytes && !pixels)
+	{
+		Con_Warning ("Cannot allocate live lighting for %s\n", mod->name);
+		return false;
+	}
+
+	/* Workers have stopped, and no renderer can observe partially replaced
+	 * sample pointers. Invalidate caches independently of allocator reuse. */
+	free (mod->lightdata_owned);
+	mod->lightdata_owned = mod->lightdata = pixels;
+	mod->lightdatasamples = replacement.lightdatasamples;
+	mod->lighting_generation = replacement.lighting_generation;
+	mod->flags = (mod->flags & ~MOD_HDRLIGHTING) | (replacement.flags & MOD_HDRLIGHTING);
+	mod->lighting_mode = replacement.lighting_mode;
+	q_strlcpy (mod->lighting_dir, replacement.lighting_dir, sizeof(mod->lighting_dir));
+	for (i = 0; i < mod->numsurfaces; i++)
+	{
+		msurface_t *surf = &mod->surfaces[i];
+		size_t count;
+		int styles;
+		for (styles = 0; styles < MAXLIGHTMAPS && surf->styles[styles] != INVALID_LIGHTSTYLE; styles++)
+			;
+		count = (size_t)styles * (surf->extents[0] + 1) * (surf->extents[1] + 1);
+		if (surf->lightofs < 0 || !pixels || (size_t)surf->lightofs > mod->lightdatasamples ||
+			count > mod->lightdatasamples - (size_t)surf->lightofs)
+			surf->samples = NULL;
+		else
+			surf->samples = pixels + (size_t)surf->lightofs * ((mod->flags & MOD_HDRLIGHTING) ? 4 : 3);
+		if (surf->flags & SURF_NOTEXTURE)
+		{
+			if (surf->samples)
+				surf->flags &= ~SURF_DRAWTILED;
+			else
+				surf->flags |= SURF_DRAWTILED;
+		}
+	}
+	/* Inline models share samples, but keep their own HDR flags. */
+	for (i = 0; i < mod_numknown; i++)
+	{
+		qmodel_t *child = &mod_known[i];
+		if (child == mod || child->needload || child->type != mod_brush || child->surfaces != mod->surfaces)
+			continue;
+		child->lightdata = pixels;
+		child->lightdata_owned = NULL;
+		child->lightdatasamples = mod->lightdatasamples;
+		child->lighting_generation = mod->lighting_generation;
+		child->flags = (child->flags & ~MOD_HDRLIGHTING) | (mod->flags & MOD_HDRLIGHTING);
+	}
+	return true;
+}
+
+void Mod_ReloadLighting (void)
+{
+	qmodel_t *saved_loadmodel = loadmodel;
+	byte *saved_base = mod_base;
+	char saved_loadname[sizeof(loadname)];
+	qofs_t saved_filesize = com_filesize;
+	qboolean saved_loading, changed = false, cache_stopped = false;
+	int i;
+	if (!mod_lighting_reload_pending || isDedicated || cls.signon != SIGNONS || !cl.worldmodel)
+		return;
+	mod_lighting_reload_pending = false;
+	memcpy (saved_loadname, loadname, sizeof(loadname));
+	saved_loading = scr_disabled_for_loading;
+	scr_disabled_for_loading = true;
+	for (i = 0; i < mod_numknown; i++)
+	{
+		qmodel_t *mod = &mod_known[i];
+		if (!mod->needload && mod->type == mod_brush && mod->name[0] != '*' &&
+			(mod->lighting_mode != gl_loadlitfiles.value || strcmp(mod->lighting_dir, external_lits_dir.string)))
+		{
+			if (!cache_stopped)
+			{
+				RSceneCache_Shutdown ();
+				cache_stopped = true;
+			}
+			changed |= Mod_RefreshLighting (mod);
+		}
+	}
+	loadmodel = saved_loadmodel;
+	mod_base = saved_base;
+	memcpy (loadname, saved_loadname, sizeof(loadname));
+	com_filesize = saved_filesize;
+	if (changed)
+		R_LightmapFormatChanged (NULL);
+	scr_disabled_for_loading = saved_loading;
+}
+
+static void Mod_RefreshReplacementModels (void)
+{
+	int i, count = 0;
+	qmodel_t *reload[MAX_MOD_KNOWN];
+	/* Snapshot before reloading: allocating one model can evict another.
+	 * Keep unrelated cached sounds alive while changing model formats. */
+	for (i = 0; i < mod_numknown; i++)
+		if (mod_known[i].type == mod_alias && mod_known[i].cache.data)
+		{
+			reload[count++] = &mod_known[i];
+			Cache_Free (&mod_known[i].cache);
+		}
+	Wheel_ClearIcons ();
+	for (i = 0; i < count; i++)
+		Mod_Extradata (reload[i]);
+	/* The new format can have a different pose layout, even when both old
+	 * pose indices would fit. Do not blend across model replacements.
+	 * Changed model bounds also invalidate the raised lighting sample. */
+	for (i = 0; i < cl.num_entities; i++)
+	{
+		cl.entities[i].lerpflags |= LERP_RESETANIM;
+		cl.entities[i].aliaslightcache.valid = false;
+	}
+	for (i = 0; i < cl.num_statics; i++)
+	{
+		cl.static_entities[i].ent->lerpflags |= LERP_RESETANIM;
+		cl.static_entities[i].ent->aliaslightcache.valid = false;
+	}
+	cl.viewent.lerpflags |= LERP_RESETANIM;
+	cl.viewent.aliaslightcache.valid = false;
+}
+
 void Mod_ReloadTextures (void)
 {
 	int i, mode = Mod_RetainSignature ();
+	unsigned int changes = mod_texture_changes;
 	qboolean refresh_brushes = false;
+	qboolean policy_changed = mod_texture_policy_pending;
 	qmodel_t *saved_loadmodel = loadmodel;
 	qboolean saved_loading;
-	if (!mod_texture_reload_pending || isDedicated)
+	if (isDedicated || (!mod_texture_reload_pending && !mod_texture_policy_pending && !mod_replacement_reload_pending))
 		return;
 	mod_texture_reload_pending = false;
+	mod_texture_changes = 0;
 	/* Console output during signon can draw a frame. Suppress that until all
 	 * replacement pointers have been published, as VID_Restart does. */
 	saved_loading = scr_disabled_for_loading;
 	scr_disabled_for_loading = true;
+	if (mod_replacement_reload_pending)
+	{
+		mod_replacement_reload_pending = false;
+		Mod_RefreshReplacementModels ();
+	}
 
 	if (mod_model_texture_reload_pending)
 	{
@@ -7061,7 +7296,7 @@ void Mod_ReloadTextures (void)
 		for (i = 0; i < mod_numknown; i++)
 		{
 			qmodel_t *mod = &mod_known[i];
-			if (!mod->needload && mod->type == mod_brush && mod->name[0] != '*' && mod->retain_signature != mode)
+			if (!mod->needload && mod->type == mod_brush && mod->name[0] != '*' && (policy_changed || mod->retain_signature != mode))
 				refresh_brushes = true;
 		}
 		/* Wait for scene-cache workers before changing texture analysis. Inline
@@ -7069,7 +7304,7 @@ void Mod_ReloadTextures (void)
 		for (i = 0; i < mod_numknown; i++)
 		{
 			qmodel_t *mod = &mod_known[i];
-			if (mod->textures_retained && mod->retain_signature != mode)
+			if (mod->textures_retained && (policy_changed || mod->retain_signature != mode))
 			{
 				TexMgr_FreeTexturesForOwner (mod);
 				mod->textures_retained = false;
@@ -7090,9 +7325,9 @@ void Mod_ReloadTextures (void)
 				continue;
 			if (refresh_brushes && mod->type == mod_brush && mod->name[0] != '*' && mod != cl.worldmodel)
 				Mod_RefreshBrushTextures (mod);
-			else if (mod->type == mod_sprite && mod->cache.data && mod->retain_signature != mode)
+			else if (mod->type == mod_sprite && mod->cache.data && (policy_changed || mod->retain_signature != mode))
 				Mod_RefreshSpriteTextures (mod);
-			else if (mod->type == mod_alias && mod->cache.data && mod->retain_signature != mode)
+			else if (mod->type == mod_alias && mod->cache.data && (policy_changed || mod->retain_signature != mode))
 			{
 				/* Cached alias headers contain skin and colour-map pointers.
 				 * Reload through the existing loader, preserving the qmodel_t. */
@@ -7105,10 +7340,24 @@ void Mod_ReloadTextures (void)
 		if (refresh_brushes && cl.worldmodel && !cl.worldmodel->needload)
 			Mod_RefreshBrushTextures (cl.worldmodel);
 	}
-	Draw_RefreshTextures ();
+	Draw_RefreshTextures (policy_changed);
+	if (mod_texture_policy_pending)
+	{
+		mod_texture_policy_pending = false;
+		TexMgr_ReloadTextureSettings ();
+	}
 	loadmodel = saved_loadmodel;
 	scr_disabled_for_loading = saved_loading;
-	Con_DPrintf ("Texture mode refreshed (gl_load24bit %g)\n", gl_load24bit.value);
+	if (changes & MOD_CHANGE_24BIT)
+		Con_DPrintf ("Textures refreshed: gl_load24bit %g\n", gl_load24bit.value);
+	if (changes & MOD_CHANGE_HUD)
+		Con_DPrintf ("Textures refreshed: gl_load24bit_hud %g\n", gl_load24bit_hud.value);
+	if (changes & MOD_CHANGE_FASTTURB)
+		Con_DPrintf ("Textures refreshed: r_fastturb %g\n", r_fastturb.value);
+	if (changes & MOD_CHANGE_SIZE)
+		Con_DPrintf ("Textures refreshed: gl_picmip %g, gl_max_size %g\n", gl_picmip.value, gl_max_size.value);
+	if (changes & MOD_CHANGE_REPLACEMENTS)
+		Con_DPrintf ("Models refreshed: r_replacemodels \"%s\"\n", r_replacemodels.string);
 }
 
 //=============================================================================

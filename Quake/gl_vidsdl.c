@@ -84,6 +84,8 @@ static SDL_GLContext	gl_context;
 
 static qboolean	vid_locked = false; //johnfitz
 static qboolean	vid_changed = false;
+static qboolean vid_vsync_pending;
+static qboolean vid_vsync_applied;
 static qboolean	game_shaders_pending;
 
 static void VID_Menu_Init (void); //johnfitz
@@ -838,7 +840,9 @@ static qboolean VID_GetVSync (void)
 {
 	int interval = 0;
 
-	return SDL_GL_GetSwapInterval(&interval) && interval == 1;
+	if (SDL_GL_GetSwapInterval (&interval))
+		vid_vsync_applied = interval != 0;
+	return vid_vsync_applied;
 }
 
 /*
@@ -1332,6 +1336,14 @@ EnableDarkModeForSDLWindow(draw_context); // woods #darkmode - apply dark mode t
 	gl_swap_control = true;
 	if (!SDL_GL_SetSwapInterval ((vid_vsync.value) ? 1 : 0))
 		gl_swap_control = false;
+	{
+		int interval;
+		if (SDL_GL_GetSwapInterval (&interval))
+			vid_vsync_applied = interval != 0;
+		else if (gl_swap_control)
+			vid_vsync_applied = vid_vsync.value != 0;
+	}
+	vid_vsync_pending = false;
 
 	SDL_GetWindowSizeInPixels(draw_context, &vid.width, &vid.height);
 
@@ -1398,6 +1410,39 @@ VID_Changed_f -- kristian -- notify us that a value has changed that requires a 
 static void VID_Changed_f (cvar_t *var)
 {
 	vid_changed = true;
+}
+
+static void VID_VSyncChanged (cvar_t *var)
+{
+	vid_vsync_pending = true;
+}
+
+static void VID_ApplyVSync (void)
+{
+	int interval, actual;
+	if (!vid_vsync_pending || !gl_context)
+		return;
+	vid_vsync_pending = false;
+	interval = vid_vsync.value ? 1 : 0;
+	if (SDL_GL_GetSwapInterval (&actual))
+		vid_vsync_applied = actual != 0;
+	if (!SDL_GL_SetSwapInterval (interval))
+	{
+		Con_SafePrintf ("Unable to apply vid_vsync: %s\n", SDL_GetError ());
+		Cvar_SetQuick (&vid_vsync, vid_vsync_applied ? "1" : "0");
+	}
+	else if (SDL_GL_GetSwapInterval (&actual))
+	{
+		vid_vsync_applied = actual != 0;
+		if (actual != interval)
+		{
+			Con_SafePrintf ("Driver did not apply vid_vsync; keeping %s\n", vid_vsync_applied ? "on" : "off");
+			Cvar_SetQuick (&vid_vsync, vid_vsync_applied ? "1" : "0");
+		}
+	}
+	else
+		vid_vsync_applied = interval != 0;
+	vid_vsync_pending = false;
 }
 
 /*
@@ -1528,17 +1573,6 @@ static void VID_Restart (void)
 		S_UnblockSound ();
 
 	scr_disabled_for_loading = scr_was_disabled;
-}
-
-/*
-===================
-VID_ChangedRestart_f -- woods #vidrestart
-===================
-*/
-void VID_ChangedRestart_f (cvar_t* var)
-{
-	vid_changed = true;
-	VID_Restart();
 }
 
 /*
@@ -2318,6 +2352,7 @@ GL_BeginRendering -- sets values of glx, gly, glwidth, glheight
 */
 void GL_BeginRendering (int *x, int *y, int *width, int *height)
 {
+	VID_ApplyVSync ();
 	if (vid.resized)
 	{
 		cvar_t *conscale;
@@ -2677,6 +2712,8 @@ void	VID_Init (void)
 		{
 			if (strcmp(read_vars[i], "vid_fsaa") == 0)
 				Cvar_SetCallback (v, VID_FSAA_f);
+			else if (v == &vid_vsync)
+				Cvar_SetCallback (v, VID_VSyncChanged);
 			else
 				Cvar_SetCallback (v, VID_Changed_f);
 		}
@@ -2921,7 +2958,8 @@ void VID_SyncCvars (void)
 		Cvar_SetQuick (&vid_fullscreen, VID_GetFullscreen() ? "1" : "0");
 		// don't sync vid_desktopfullscreen, it's a user preference that
 		// should persist even if we are in windowed mode.
-		Cvar_SetQuick (&vid_vsync, VID_GetVSync() ? "1" : "0");
+		if (!vid_vsync_pending)
+			Cvar_SetQuick (&vid_vsync, VID_GetVSync() ? "1" : "0");
 	}
 
 	vid_changed = false;

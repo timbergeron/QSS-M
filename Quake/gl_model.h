@@ -182,6 +182,7 @@ typedef struct msurface_s
 	int			cached_light[MAXLIGHTMAPS];	// values currently used in lightmap
 	qboolean	cached_dlight;				// true if dynamic light in cache
 	void		*samples;		// [numstyles*surfsize]
+	int			lightofs;		// sample index, independent of RGB/HDR storage
 } msurface_t;
 
 typedef struct mnode_s
@@ -571,6 +572,11 @@ typedef struct qmodel_s
 	int			visdata_size;
 	void		*lightgrid;
 	byte		*lightdata;
+	byte		*lightdata_owned;	// live replacement; only the parent model frees it
+	unsigned int lighting_generation;
+	struct mod_lightingsource_s *lighting_source;	// map-lifetime BSP lighting inputs
+	float		lighting_mode;
+	char		lighting_dir[MAX_QPATH];
 	size_t		lightdatasamples;
 	char		*entities;
 	unsigned int bsp_checksum; // Com_BlockChecksum of the entire original BSP file
@@ -639,6 +645,8 @@ qmodel_t *Mod_ForName (const char *name, qboolean crash);
 qmodel_t *Mod_TryForName (const char *name);
 void	Mod_ForEachModel(void(*callback)(qmodel_t *mod));
 void Mod_ReloadTextures (void);
+void Mod_TexturePolicyChanged (cvar_t *var);
+void Mod_ReloadLighting (void);
 void	*Mod_Extradata (qmodel_t *mod);	// handles caching
 void	Mod_TouchModel (const char *name);
 qboolean Mod_CalcBSPFileSurfaceAreas (const char *path, map_surface_areas_t *areas);

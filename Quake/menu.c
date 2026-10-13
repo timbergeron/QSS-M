@@ -15097,7 +15097,6 @@ static void M_Graphics_AdjustSliders(int dir)
 
 	case GRAPHICS_REPLACEMENTMODELS:
 		Cvar_SetQuick(&r_replacemodels, *r_replacemodels.string ? "" : "iqm md5mesh md3");
-		Cbuf_AddText("flush\n");
 		break;
 
 	case GRAPHICS_ROCKETLIGHT:
@@ -17440,7 +17439,6 @@ static void M_Sound_AdjustSliders(int dir)
 				Cvar_SetValueQuick(&snd_mixspeed, 48000);
 			else
 				Cvar_SetValueQuick(&snd_mixspeed, 11025);
-			Cbuf_AddText("\nsnd_restart\n");
 		}
 		else {
 			// Going down: 11025<-22050<-44100<-48000<-11025
@@ -17453,11 +17451,11 @@ static void M_Sound_AdjustSliders(int dir)
 			else
 				Cvar_SetValueQuick(&snd_mixspeed, 48000);
 		}
+		S_DeferMixRate ();
 		break;
 
 	case SOUND_SURROUND:
 		Cvar_SetValueQuick(&snd_surround, snd_surround.value > 0 ? 0 : 1);
-		Cbuf_AddText("\nsnd_restart\n");
 		break;
 
 	case SOUND_WATERFX:

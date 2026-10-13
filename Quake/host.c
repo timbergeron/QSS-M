@@ -2609,6 +2609,8 @@ void _Host_Frame (double time)
 	if (!isDedicated && !CL_DemoSeekActive ())
 	{
 		Mod_ReloadTextures (); // apply texture mode changes between simulation and drawing
+		Mod_ReloadLighting ();
+		R_ApplyLightmapSettings ();
 		SCR_UpdateScreen ();
 		Image_PreloadRelease (); /* startup images no longer needed after the first draw */
 		CL_RunParticles (); //johnfitz -- seperated from rendering
@@ -2621,6 +2623,7 @@ void _Host_Frame (double time)
 // update audio
 	if (!isDedicated)
 	{
+		S_ApplySettings ();
 		BGM_Update();	// adds music raw samples and/or advances midi driver
 		if (cl.listener_defined)
 		{

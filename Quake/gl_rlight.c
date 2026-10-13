@@ -1064,7 +1064,7 @@ int R_LightPointCachedAlias (entity_t *e, vec3_t p, float raise)
     if (!cache->valid
         || cache->worldmodel != cl.worldmodel
         || cache->worldsurfaces != cl.worldmodel->surfaces
-        || cache->worldlightdata != cl.worldmodel->lightdata
+        || cache->lighting_generation != cl.worldmodel->lighting_generation
         || cache->model != e->model
         || !VectorCompare (cache->origin, p))
     {
@@ -1072,7 +1072,7 @@ int R_LightPointCachedAlias (entity_t *e, vec3_t p, float raise)
         cache->valid = true;
         cache->worldmodel = cl.worldmodel;
         cache->worldsurfaces = cl.worldmodel->surfaces;
-        cache->worldlightdata = cl.worldmodel->lightdata;
+        cache->lighting_generation = cl.worldmodel->lighting_generation;
         cache->model = e->model;
         VectorCopy (p, cache->origin);
         // A miss (no lit surface below) is cached as ambient-only, like the

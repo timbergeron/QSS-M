@@ -48,7 +48,21 @@ cvar_t	gl_max_size = {"gl_max_size", "0", CVAR_NONE}; // woods remove static for
 cvar_t	gl_picmip = {"gl_picmip", "0", CVAR_NONE}; // woods remove static for #f_config
 cvar_t	r_fastturb = {"r_fastturb", "0", CVAR_ARCHIVE}; // woods #fastturb
 
-void VID_ChangedRestart_f (cvar_t* var); // woods #vidrestart
+static void TexMgr_SizeChanged (cvar_t *var)
+{
+	float value = var->value;
+	/* Bound shifts and float-to-int conversions before an upload uses them. */
+	if (!isfinite(value))
+		value = 0;
+	value = var == &gl_picmip ? CLAMP(0, value, 30) : CLAMP(-1048576, value, 1048576);
+	value = (int)value;
+	if (var->value != value)
+	{
+		Cvar_SetValueQuick (var, value);
+		return;
+	}
+	Mod_TexturePolicyChanged (var);
+}
 
 static int numgltextures;
 static gltexture_t	*active_gltextures, *free_gltextures;
@@ -1674,10 +1688,11 @@ void TexMgr_Init (void)
 	TexMgr_LoadPalette ();
 
 	Cvar_RegisterVariable (&gl_max_size);
-	Cvar_SetCallback (&gl_max_size, VID_ChangedRestart_f); // woods #vidrestart
+	Cvar_SetCallback (&gl_max_size, TexMgr_SizeChanged);
 	Cvar_RegisterVariable (&gl_picmip);
-	Cvar_SetCallback (&gl_picmip, VID_ChangedRestart_f); // woods #vidrestart
+	Cvar_SetCallback (&gl_picmip, TexMgr_SizeChanged);
 	Cvar_RegisterVariable (&r_fastturb); // woods #fastturb
+	Cvar_SetCallback (&r_fastturb, Mod_TexturePolicyChanged);
 	Cvar_RegisterVariable (&tex_parallel);
 	Cvar_RegisterVariable (&tex_workers);
 	Cvar_RegisterVariable (&tex_verify);
@@ -3747,11 +3762,58 @@ invalid_source:
 	Hunk_FreeToLowMark(mark);
 }
 
-/*
-================
-TexMgr_ReloadImages -- reloads all texture images. called only by vid_restart
-================
-*/
+/* Models and UI are refreshed by their owners so padded UVs stay in sync.
+ * Other texture users retain their managed records and GL names. */
+static qboolean TexMgr_TextureSizeChanged (const gltexture_t *glt)
+{
+	int width = glt->source_width, height = glt->source_height;
+	int mipwidth, mipheight, picmip;
+	/* Map textures also have a grayscale policy. Always refresh those, even
+	 * when toggling its sign leaves their upload dimensions unchanged. */
+	if (strstr (glt->name, "maps"))
+		return true;
+	if ((glt->flags & TEXPREF_NOPICMIP) && !(glt->flags & TEXPREF_PAD))
+		return false;
+	/* External/packed files need decoding to know their upload format and
+	 * available mip levels. Keep the conservative path for those records. */
+	if (glt->source_format != SRC_INDEXED && glt->source_format != SRC_RGBA)
+		return true;
+	if (glt->source_format == SRC_INDEXED && (glt->flags & TEXPREF_PAD))
+	{
+		width = TexMgr_PadConditional (width);
+		height = TexMgr_PadConditional (height);
+	}
+	if (!gl_texture_NPOT)
+	{
+		width = TexMgr_Pad (width);
+		height = TexMgr_Pad (height);
+	}
+	picmip = (glt->flags & TEXPREF_NOPICMIP) ? 0 : (int)gl_picmip.value;
+	mipwidth = TexMgr_SafeTextureSize2 (width >> picmip);
+	mipheight = TexMgr_SafeTextureSize2 (height >> picmip);
+	if (strstr (glt->name, "*") && r_fastturb.value)
+		mipwidth = mipheight = 1;
+	while (width > mipwidth)
+		width >>= 1;
+	while (height > mipheight)
+		height >>= 1;
+	return (unsigned int)width != glt->width || (unsigned int)height != glt->height;
+}
+
+void TexMgr_ReloadTextureSettings (void)
+{
+	gltexture_t *glt;
+	TexMgr_ColormapTexture_Free (NULL);
+	/* Only ownerless records are reloaded here. Cache eviction can remove
+	 * model textures from the list, but cannot free the current record.
+	 * Let it release those textures instead of orphaning their GL objects. */
+	for (glt = active_gltextures; glt; glt = glt->next)
+		if (!glt->owner && glt->source_format != SRC_LIGHTMAP && !(glt->flags & TEXPREF_UI) &&
+			TexMgr_TextureSizeChanged (glt))
+			TexMgr_ReloadImage (glt, plcolour_none, plcolour_none);
+}
+
+/* Reload all images after video restart has discarded their GL objects. */
 void TexMgr_ReloadImages (void)
 {
 	gltexture_t *glt;

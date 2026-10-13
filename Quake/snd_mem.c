@@ -348,13 +348,12 @@ static short GetLittleShort (void)
 
 static int GetLittleLong (void)
 {
-	int val = 0;
-	val = *data_p;
-	val = val + (*(data_p+1)<<8);
-	val = val + (*(data_p+2)<<16);
-	val = val + (*(data_p+3)<<24);
+	unsigned int val = (unsigned int)data_p[0] |
+		((unsigned int)data_p[1] << 8) |
+		((unsigned int)data_p[2] << 16) |
+		((unsigned int)data_p[3] << 24);
 	data_p += 4;
-	return val;
+	return (int)val;
 }
 
 static void FindNextChunk (const char *name)

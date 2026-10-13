@@ -133,6 +133,8 @@ void S_StopSound (int entnum, int entchannel);
 void S_StopAllSounds (qboolean clear, qboolean keep_statics);
 void S_ClearBuffer (void);
 void S_Update (vec3_t origin, vec3_t forward, vec3_t right, vec3_t up);
+void S_ApplySettings (void);
+void S_DeferMixRate (void);
 void S_ExtraUpdate (void);
 int S_GetMasterVolumeScale (void);
 void S_SetMasterVolumeScale (float scale);
@@ -199,6 +201,7 @@ void SNDDMA_UnblockSound(void);
 const char *SNDDMA_GetDeviceName(void);
 /* re-reads the output device after SDL reports a playback device change */
 void SNDDMA_DeviceChanged (void);
+qboolean SNDDMA_GetSurround (void);
 /* opens an SDL audio stream with a best-effort device period; main thread only */
 SDL_AudioStream *SND_OpenAudioStream (SDL_AudioDeviceID device, const SDL_AudioSpec *spec,
 	SDL_AudioStreamCallback callback, void *userdata, int sample_frames);

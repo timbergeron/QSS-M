@@ -1035,10 +1035,10 @@ void Draw_NewGame (void)
 	Draw_ResetPics (true);
 }
 
-void Draw_RefreshTextures (void)
+void Draw_RefreshTextures (qboolean force)
 {
 	extern cvar_t gl_load24bit;
-	if (draw_load24bit == (gl_load24bit.value > 0 && gl_load24bit_hud.value != 0))
+	if (!force && draw_load24bit == (gl_load24bit.value > 0 && gl_load24bit_hud.value != 0))
 		return;
 	TexMgr_FreeTextures (TEXPREF_UI, TEXPREF_UI);
 	Draw_ResetPics (false);

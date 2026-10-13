@@ -37,6 +37,7 @@ static int	buffersize;
  * speakers (e.g. 4.0/5.1/7.1), we up-mix stereo to that layout in the
  * stream callback so every speaker is driven. */
 static int	device_channels = 2;
+static qboolean sdl_surround_applied;
 
 static SDL_AudioStream	*sdl_stream;
 static Uint8		*sdl_scratch;		/* one callback chunk of device frames */
@@ -458,6 +459,7 @@ static qboolean SND_PrepareInit (dma_t *dma)
 	if (snd_surround.value > 0)
 		spec.channels = SND_GetPreferredOutputChannels (SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK);
 	device_channels = spec.channels;
+	sdl_surround_applied = snd_surround.value > 0;
 	period_frames = SND_PeriodFrames (spec.freq);
 
 	memset ((void *) dma, 0, sizeof(dma_t));
@@ -661,9 +663,9 @@ void SNDDMA_UnblockSound (void)
 SNDDMA_DeviceChanged
 
 The default-output stream follows device changes on its own, converting our
-frames for whatever device is current, so nothing is reopened here. With
-surround on, refresh the up-mix layout to the current device's channel count;
-the scratch buffer is resized outside the stream lock. Main thread only.
+frames for whatever device is current, so nothing is reopened here. Apply
+surround changes and refresh the layout after output-device changes. The
+scratch buffer is resized outside the stream lock. Main thread only.
 ================
 */
 void SNDDMA_DeviceChanged (void)
@@ -671,42 +673,62 @@ void SNDDMA_DeviceChanged (void)
 	SDL_AudioSpec	spec;
 	Uint8	*scratch;
 	int	bps, frames, channels, bytes;
+	qboolean applied;
 
 	if (!shm || !sdl_stream)
 		return;
 	SND_UpdateDeviceName ();
-	if (snd_surround.value <= 0)
-		return;
-
-	channels = SND_GetPreferredOutputChannels (SDL_GetAudioStreamDevice (sdl_stream));
+	channels = snd_surround.value > 0 ?
+		SND_GetPreferredOutputChannels (SDL_GetAudioStreamDevice (sdl_stream)) : SND_MIX_CHANNELS;
 	if (channels == device_channels)
+	{
+		/* A stereo output can still retain the user's surround preference. */
+		sdl_surround_applied = snd_surround.value > 0;
 		return;
+	}
 
 	bps = shm->samplebits / 8;
 	frames = sdl_scratch_bytes / (device_channels * bps);
 	bytes = frames * channels * bps;
 	scratch = (Uint8 *) malloc (bytes);
 	if (!scratch)
+	{
+		Con_SafePrintf ("Unable to allocate surround audio buffer; keeping the previous setting\n");
+		Cvar_SetValueQuick (&snd_surround, sdl_surround_applied);
 		return;
+	}
 
 	spec.format = (shm->samplebits == 8) ? (shm->signed8 ? SDL_AUDIO_S8 : SDL_AUDIO_U8) : SDL_AUDIO_S16;
 	spec.channels = channels;
 	spec.freq = shm->speed;
 
 	SDL_LockAudioStream (sdl_stream);
-	if (SDL_SetAudioStreamFormat (sdl_stream, &spec, NULL))
+	applied = SDL_SetAudioStreamFormat (sdl_stream, &spec, NULL);
+	if (applied)
 	{
 		Uint8 *old = sdl_scratch;
 
 		sdl_scratch = scratch;
 		sdl_scratch_bytes = bytes;
 		device_channels = channels;
+		sdl_surround_applied = snd_surround.value > 0;
 		scratch = old;
 	}
 	SDL_UnlockAudioStream (sdl_stream);
 	free (scratch);
+	if (!applied)
+	{
+		Con_SafePrintf ("Unable to apply snd_surround: %s\n", SDL_GetError ());
+		Cvar_SetValueQuick (&snd_surround, sdl_surround_applied);
+		return;
+	}
 
-	Con_DPrintf ("SDL audio: up-mixing to %d channels for %s\n", device_channels, sdl_devicename);
+	Con_DPrintf ("SDL audio: %d output channels for %s\n", device_channels, sdl_devicename);
+}
+
+qboolean SNDDMA_GetSurround (void)
+{
+	return sdl_surround_applied;
 }
 
 const char *SNDDMA_GetDeviceName (void)
@@ -715,4 +737,3 @@ const char *SNDDMA_GetDeviceName (void)
 		SND_UpdateDeviceName ();
 	return sdl_devicename[0] ? sdl_devicename : "System default";
 }
-

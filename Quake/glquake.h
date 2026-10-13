@@ -475,6 +475,8 @@ extern overflowtimes_t dev_overflows; //this stores the last time overflow messa
 //johnfitz -- moved here from r_brush.c
 extern int gl_lightmap_format, lightmap_bytes;
 extern qboolean lightmaps_latecached;	//we need to rebuild lightmaps and model vbos before rendering.
+void R_LightmapFormatChanged (cvar_t *var);
+void R_ApplyLightmapSettings (void);
 extern int LMBLOCK_WIDTH, LMBLOCK_HEIGHT;	//FIXME: use texture arrays.
 
 typedef struct glRect_s {

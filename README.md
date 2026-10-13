@@ -7,6 +7,7 @@ Documentation:
 - 📖 [**Build QSS-M from source**](https://raw.githack.com/timbergeron/QSS-M/qsrebase/BUILDING.html) — step-by-step for Linux, macOS & Windows
 - [Chunked download bandwidth settings and tests](Misc/stress/chunked_downloads.md)
 - [Live MSAA behavior and compatibility notes](Misc/live-vid-fsaa-release-notes.md)
+- [Live graphics, lighting and audio settings](Misc/live-settings.md)
 - [All QSS-M Commands & Variables (Google Sheets)](https://docs.google.com/spreadsheets/d/1ubOuromaXpZonfL-eJ-KA7q-xSRiBBuSvxahzF-uFOY/edit?usp=sharing)
 
 Credits:
