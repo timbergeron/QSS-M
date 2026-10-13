@@ -21863,6 +21863,7 @@ Console Menu
 */
 
 extern cvar_t scr_conscale, scr_consize, scr_conspeed, scr_conalpha, cl_contentfilter, con_typing, con_autohint, con_clear_input_on_toggle, scr_conback, scr_concolor;
+extern cvar_t cl_announce_transfer;
 
 static enum console_e
 {
@@ -21875,6 +21876,7 @@ static enum console_e
 	CONSOLE_CONTENTFILTER,
 	CONSOLE_TRANSLATE,
 	CONSOLE_TYPING,
+	CONSOLE_ANNOUNCE_TRANSFER,
 	CONSOLE_AUTOHINT,
 	CONSOLE_CLEAR_ON_TOGGLE,
 	CONSOLE_SAVE_HISTORY,
@@ -21887,7 +21889,6 @@ static enum console_e
 #define CONSOLE_CONBACK_BOX_X 178
 #define CONSOLE_CONBACK_BOX_WIDTH 14
 #define CONSOLE_CONBACK_TEXT_X (CONSOLE_CONBACK_BOX_X + 8)
-#define CONSOLE_SEARCH_BOX_Y 176
 int numberOfConsoleItems = CONSOLE_ITEMS;
 
 static struct
@@ -21947,7 +21948,8 @@ static void M_Console_UpdateSearchResults(void)
 
 static int M_Console_GetItemY(int index)
 {
-	int y = 48 + index * 8;
+	// Leave room for the transfer row and footer on the 200-pixel menu canvas.
+	int y = 40 + index * 8;
 
 	if (index >= CONSOLE_CONBACK)
 		y += 8;
@@ -21955,6 +21957,11 @@ static int M_Console_GetItemY(int index)
 		y += 8;
 
 	return y;
+}
+
+static int M_Console_SearchBoxY(void)
+{
+	return M_Console_GetItemY(CONSOLE_CLEAR_HISTORY) + 8;
 }
 
 static int M_Console_GetItemAtY(int cy)
@@ -22163,6 +22170,8 @@ static const char* M_Console_GetItemText(int index)
 		return "Chat Translation";
 	case CONSOLE_TYPING:
 		return "Typing Status";
+	case CONSOLE_ANNOUNCE_TRANSFER:
+		return "Announce Transfer";
 	case CONSOLE_AUTOHINT:
 		return "Auto Hints";
 	case CONSOLE_CLEAR_ON_TOGGLE:
@@ -22191,6 +22200,7 @@ static cvar_t *M_Console_GetItemCvar(int index)
 	case CONSOLE_CONCOLOR:		return &scr_concolor;
 	case CONSOLE_CONTENTFILTER:	return &cl_contentfilter;
 	case CONSOLE_TYPING:			return &con_typing;
+	case CONSOLE_ANNOUNCE_TRANSFER: return &cl_announce_transfer;
 	case CONSOLE_AUTOHINT:		return &con_autohint;
 	case CONSOLE_CLEAR_ON_TOGGLE:	return &con_clear_input_on_toggle;
 	case CONSOLE_SAVE_HISTORY:	return Cvar_FindVar("con_savehistory");
@@ -22319,6 +22329,9 @@ static void M_Console_AdjustSliders(int dir)
 
 	case CONSOLE_TYPING:
 		Cvar_SetValue("con_typing", !con_typing.value);
+		break;
+	case CONSOLE_ANNOUNCE_TRANSFER:
+		Cvar_SetValue("cl_announce_transfer", !cl_announce_transfer.value);
 		break;
 	case CONSOLE_AUTOHINT:
 		Cvar_SetValue("con_autohint", !con_autohint.value);
@@ -22464,6 +22477,11 @@ void M_Console_Draw(void)
 			if (!show_cvar_hint)
 				M_DrawCheckbox(MENU_VALUE_X, y, con_typing.value != 0);
 			break;
+		case CONSOLE_ANNOUNCE_TRANSFER:
+			text = "Announce Transfer";
+			if (!show_cvar_hint)
+				M_DrawCheckbox(MENU_VALUE_X, y, cl_announce_transfer.value != 0);
+			break;
 		case CONSOLE_AUTOHINT:
 			text = "      Auto Hints";
 			if (!show_cvar_hint)
@@ -22534,7 +22552,7 @@ void M_Console_Draw(void)
 	}
 
 	// Position the hint below the last menu item so it doesn't overlap
-	int hint_y = M_Console_GetItemY(CONSOLE_CLEAR_HISTORY) + 18;
+	int hint_y = M_Console_SearchBoxY() + 8;
 	if (console_field_editing)
 	{
 		const char* hint = "Enter applies, Esc cancels";
@@ -22542,19 +22560,24 @@ void M_Console_Draw(void)
 	}
 	else if (consolemenu.search.len == 0 && console_cursor == CONSOLE_CONCOLOR)
 		M_PrintRGBA(74, hint_y, "+shift for RGB colors", CL_PLColours_Parse("0xffffff"), 0.6f, false);
+	else if (consolemenu.search.len == 0 && console_cursor == CONSOLE_ANNOUNCE_TRANSFER)
+	{
+		M_PrintRGBA(44, hint_y, "Tell players your destination", CL_PLColours_Parse("0xffffff"), 0.6f, false);
+		M_PrintRGBA(68, hint_y + 8, "when switching servers.", CL_PLColours_Parse("0xffffff"), 0.6f, false);
+	}
 
 	// Draw search box if search is active
 	if (consolemenu.search.len > 0)
 	{
-		M_DrawTextBox(16, CONSOLE_SEARCH_BOX_Y, 32, 1);
-		M_PrintHighlight(24, CONSOLE_SEARCH_BOX_Y + 8, consolemenu.search.text,
+		M_DrawTextBox(16, M_Console_SearchBoxY(), 32, 1);
+		M_PrintHighlight(24, hint_y, consolemenu.search.text,
 			consolemenu.search.text,
 			consolemenu.search.len);
 		int cursor_x = 24 + 8 * consolemenu.search.len;
 		if (numberOfConsoleItems == 0)
-			M_DrawCharacter(cursor_x, CONSOLE_SEARCH_BOX_Y + 8, 11 ^ 128);
+			M_DrawCharacter(cursor_x, hint_y, 11 ^ 128);
 		else
-			M_DrawCharacter(cursor_x, CONSOLE_SEARCH_BOX_Y + 8, 10 + ((int)(realtime * 4) & 1));
+			M_DrawCharacter(cursor_x, hint_y, 10 + ((int)(realtime * 4) & 1));
 	}
 }
 
@@ -22715,7 +22738,7 @@ void M_Console_Key(int k)
 	case K_MOUSE1:
 		m_entersound = true;
 
-		if (consolemenu.search.len > 0 && m_mousey >= CONSOLE_SEARCH_BOX_Y)
+		if (consolemenu.search.len > 0 && m_mousey >= M_Console_SearchBoxY())
 			break;
 
 		{
@@ -22836,7 +22859,7 @@ void M_Console_Mousemove(int cx, int cy)
 	}
 
 	// Don't process mouse movement if it's in the search box area
-	if (consolemenu.search.len > 0 && cy >= CONSOLE_SEARCH_BOX_Y)
+	if (consolemenu.search.len > 0 && cy >= M_Console_SearchBoxY())
 		return;
 
 	// Calculate which menu item the mouse is over
@@ -23800,7 +23823,7 @@ static const char * const menusearch_hud_labels[] = {
 };
 static const char * const menusearch_console_labels[] = {
 	"Font Size", "Console Height", "Down/Up Speed", "Transparency", "Background Image",
-	"Background Color", "Content Filter", "Chat Translation", "Typing Status", "Auto Hints", "Clear On Toggle",
+	"Background Color", "Content Filter", "Chat Translation", "Typing Status", "Announce Transfer", "Auto Hints", "Clear On Toggle",
 	"Save History", "Clear Console", "Clear History"
 };
 /* Main Menu has no label table here: m_main_items owns its rows. */
@@ -24214,6 +24237,7 @@ static const char *MenuSearch_ConsoleKeywords(int index)
 	case CONSOLE_CONTENTFILTER: return "profanity language censor mature filter";
 	case CONSOLE_TRANSLATE: return "translate translation chat language english spanish player incoming outgoing";
 	case CONSOLE_TYPING: return "chat input status indicator";
+	case CONSOLE_ANNOUNCE_TRANSFER: return "chat announce transfer destination server switch connect follow";
 	case CONSOLE_AUTOHINT: return "autocomplete suggestions commands help";
 	case CONSOLE_CLEAR_ON_TOGGLE: return "input erase reset close open";
 	case CONSOLE_SAVE_HISTORY: return "command history persist remember";
