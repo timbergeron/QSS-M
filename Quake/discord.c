@@ -1720,7 +1720,7 @@ cvar_t con_notifydiscord = {"con_notifydiscord", "", CVAR_ARCHIVE}; // woods #di
 #define DISCORD_ALERT_RESPONSE_MAX 4096
 #define DISCORD_ALERT_RETRY_MAX_SECONDS 60.0
 #define DISCORD_ALERT_FAILURE_WARNING_INTERVAL 30.0
-#define DISCORD_ALERT_FOLLOWUP_WINDOW 90.0
+#define DISCORD_ALERT_FOLLOWUP_WINDOW 300.0
 
 typedef enum
 {
@@ -1734,6 +1734,8 @@ typedef struct
 	discord_alert_kind_t kind;
 	qboolean is_test;
 	qboolean compact;
+	qboolean map_changed;
+	qboolean mode_changed;
 	char sender[MAX_SCOREBOARDNAME];
 	char message[1024];
 	char server[128];
@@ -1749,8 +1751,6 @@ typedef struct
 typedef struct
 {
 	qboolean valid;
-	discord_alert_kind_t kind;
-	char sender[MAX_SCOREBOARDNAME];
 	char server[128];
 	char map[MAX_QPATH];
 	char mode[96];
@@ -2351,23 +2351,17 @@ static qboolean DiscordAlert_IsFollowup(const discord_alert_t *alert)
 {
 	if (!discord_followup_context.valid ||
 		alert->kind == DISCORD_ALERT_TEST ||
+		!alert->server[0] ||
 		realtime < discord_followup_context.last_alert_time ||
 		realtime - discord_followup_context.last_alert_time >
 			DISCORD_ALERT_FOLLOWUP_WINDOW)
 		return false;
-	return alert->kind == discord_followup_context.kind &&
-		!strcmp(alert->sender, discord_followup_context.sender) &&
-		!strcmp(alert->server, discord_followup_context.server) &&
-		!strcmp(alert->map, discord_followup_context.map) &&
-		!strcmp(alert->mode, discord_followup_context.mode);
+	return !strcmp(alert->server, discord_followup_context.server);
 }
 
 static void DiscordAlert_RecordFollowupContext(const discord_alert_t *alert)
 {
 	discord_followup_context.valid = true;
-	discord_followup_context.kind = alert->kind;
-	q_strlcpy(discord_followup_context.sender, alert->sender,
-		sizeof(discord_followup_context.sender));
 	q_strlcpy(discord_followup_context.server, alert->server,
 		sizeof(discord_followup_context.server));
 	q_strlcpy(discord_followup_context.map, alert->map,
@@ -2421,6 +2415,11 @@ static qboolean DiscordAlert_BuildSnapshot(discord_alert_t *alert,
 	if (kind != DISCORD_ALERT_TEST)
 	{
 		alert->compact = DiscordAlert_IsFollowup(alert);
+		if (alert->compact)
+		{
+			alert->map_changed = strcmp(alert->map, discord_followup_context.map) != 0;
+			alert->mode_changed = strcmp(alert->mode, discord_followup_context.mode) != 0;
+		}
 		DiscordAlert_RecordFollowupContext(alert);
 	}
 	if (!alert->compact)
@@ -2517,7 +2516,7 @@ static qboolean DiscordAlert_BuildPayload(const discord_alert_t *alert,
 {
 	discord_alert_json_writer_t writer;
 	char author[MAX_SCOREBOARDNAME + 64];
-	char message[2048];
+	char message[2560], context_line[256];
 	char server[256], map[2 * MAX_QPATH], mode[192];
 	char color[16];
 	qboolean have_field = false;
@@ -2531,7 +2530,22 @@ static qboolean DiscordAlert_BuildPayload(const discord_alert_t *alert,
 	DiscordAlert_EscapeMarkdown(mode, sizeof(mode), alert->mode);
 	if (alert->compact)
 	{
-		q_strlcpy(author, alert->sender, sizeof(author));
+		if (alert->kind == DISCORD_ALERT_DIRECT_MESSAGE)
+			q_snprintf(author, sizeof(author), "%s - direct message", alert->sender);
+		else
+			q_strlcpy(author, alert->sender, sizeof(author));
+		if (alert->map_changed)
+		{
+			q_snprintf(context_line, sizeof(context_line), "\n\n*Map changed to %s*",
+				map[0] ? map : "unknown");
+			q_strlcat(message, context_line, sizeof(message));
+		}
+		if (alert->mode_changed)
+		{
+			q_snprintf(context_line, sizeof(context_line), "%s*Mode changed to %s*",
+				alert->map_changed ? "\n" : "\n\n", mode[0] ? mode : "unknown");
+			q_strlcat(message, context_line, sizeof(message));
+		}
 		embed_color = alert->kind == DISCORD_ALERT_DIRECT_MESSAGE ?
 			10181046 : 5793266;
 	}
@@ -2665,21 +2679,23 @@ static void DiscordAlert_PromoteFirstCompact(void)
 			continue;
 		if (discord_alert_queue[i].compact)
 			DiscordAlert_PrepareFullCard(&discord_alert_queue[i]);
-		break;
+		return;
 	}
+	DiscordAlert_ResetFollowup();
 }
 
 static qboolean DiscordAlert_Enqueue(const discord_alert_t *alert)
 {
 	if (discord_alert_queue_count >= DISCORD_ALERT_QUEUE_MAX)
 	{
-		qboolean dropped_full = !discord_alert_queue[0].is_test &&
-			!discord_alert_queue[0].compact;
+		qboolean dropped_context = !discord_alert_queue[0].is_test &&
+			(!discord_alert_queue[0].compact || discord_alert_queue[0].map_changed ||
+				discord_alert_queue[0].mode_changed);
 
 		if (discord_alert_queue[0].is_test)
 			DiscordTest_SetResult(DISCORD_TEST_TRANSPORT_ERROR, 0);
 		DiscordAlert_RemoveFirst();
-		if (dropped_full)
+		if (dropped_context)
 			DiscordAlert_PromoteFirstCompact();
 		Con_DWarning("Discord alert queue full; dropped oldest alert\n");
 	}
@@ -2724,7 +2740,7 @@ static void DiscordAlerts_Frame(void)
 	{
 		discord_alert_t *alert = &discord_alert_queue[0];
 		discord_alert_send_result_t result;
-		qboolean dropped_full;
+		qboolean dropped_context;
 
 		if (!alert->mapshot_url[0] && alert->map[0] &&
 			realtime < alert->mapshot_deadline)
@@ -2737,12 +2753,12 @@ static void DiscordAlerts_Frame(void)
 		result = DiscordAlert_StartJob(alert);
 		if (result == DISCORD_ALERT_SEND_RETRY)
 			break;
-		dropped_full = result == DISCORD_ALERT_SEND_DROPPED &&
-			!alert->is_test && !alert->compact;
+		dropped_context = result == DISCORD_ALERT_SEND_DROPPED &&
+			!alert->is_test && (!alert->compact || alert->map_changed || alert->mode_changed);
 		if (result == DISCORD_ALERT_SEND_DROPPED && alert->is_test)
 			DiscordTest_SetResult(DISCORD_TEST_TRANSPORT_ERROR, 0);
 		DiscordAlert_RemoveFirst();
-		if (dropped_full)
+		if (dropped_context)
 			DiscordAlert_PromoteFirstCompact();
 	}
 }
