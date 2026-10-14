@@ -153,7 +153,6 @@ typedef struct
 	GLint shellColorLoc; // woods #powershell
 	GLint shellAlphaLoc; // woods #powershell
 	GLint shellModeLoc; // woods #powershell
-	GLint shellGlowFalloffLoc; // woods #powershell
 	GLint shellTimeLoc; // woods #powershell
 	GLint shellWaveParamsLoc; // woods #powershell
 	GLint fogModeLoc;
@@ -290,7 +289,6 @@ void GLAlias_CreateShaders (void)
 		"uniform float ClTime;\n" // woods #powershell
 		"varying vec2 ShellCoord;\n" // woods #powershell
 		"varying vec2 ShellCoord2;\n" // woods #powershell
-		"varying float ShellRim;\n" // woods #powershell
 		"\n"
 		"uniform int shellMode;\n"      // 0=normal, 1=outline, 2=shell
 		"uniform float shellTime;\n"    // Time for animation
@@ -436,24 +434,6 @@ void GLAlias_CreateShaders (void)
 		"#else\n"
 		"	gl_Position = gl_ModelViewProjectionMatrix * lerpedVert;\n"
 		"#endif\n"
-		"	ShellRim = 1.0;\n" // woods #powershell
-		"	if (shellMode == 2)\n" // woods #powershell
-		"	{\n" // woods #powershell
-		"#ifdef INSTANCED\n" // woods #powershell
-		"		// Cofactor columns give the inverse-transpose normal direction, including nonuniform scale.\n" // woods #powershell
-		"		// Normalization and abs(dot) remove the determinant magnitude and sign.\n" // woods #powershell
-		"		mat3 instanceNormalMatrix = mat3(\n" // woods #powershell
-		"			cross(InstanceMatrix[1].xyz, InstanceMatrix[2].xyz),\n" // woods #powershell
-		"			cross(InstanceMatrix[2].xyz, InstanceMatrix[0].xyz),\n" // woods #powershell
-		"			cross(InstanceMatrix[0].xyz, InstanceMatrix[1].xyz));\n" // woods #powershell
-		"		vec3 eyeNormal = normalize(gl_NormalMatrix * instanceNormalMatrix * lerpedNormal);\n" // woods #powershell
-		"		vec3 eyePosition = (gl_ModelViewMatrix * InstanceMatrix * lerpedVert).xyz;\n" // woods #powershell
-		"#else\n" // woods #powershell
-		"		vec3 eyeNormal = normalize(gl_NormalMatrix * lerpedNormal);\n" // woods #powershell
-		"		vec3 eyePosition = (gl_ModelViewMatrix * lerpedVert).xyz;\n" // woods #powershell
-		"#endif\n" // woods #powershell
-		"		ShellRim = abs(dot(eyeNormal, normalize(-eyePosition)));\n" // woods #powershell
-		"	}\n" // woods #powershell
 		"	FogFragCoord = gl_Position.w;\n"
 		"	gl_FrontColor = AliasLightColor * vec4(vec3(dot1), 1.0);\n"
 		"#ifdef SKELETAL\n"
@@ -474,7 +454,6 @@ void GLAlias_CreateShaders (void)
 			"uniform vec3 ShellColor;\n" // woods #powershell
 			"uniform float ShellAlpha;\n" // woods #powershell
 			"uniform float shellTime;\n" // woods #powershell
-			"uniform float shellGlowFalloff;\n" // woods #powershell
 			"\n"
 			"uniform bool UseFullbrightTex;\n"
 			"uniform bool UseOverbright;\n"
@@ -486,7 +465,6 @@ void GLAlias_CreateShaders (void)
 			"\n"
 			"varying vec2 ShellCoord;\n" // woods #powershell
 			"varying vec2 ShellCoord2;\n" // woods #powershell
-			"varying float ShellRim;\n" // woods #powershell
 			"\n"
 			"varying float FogFragCoord;\n"
 			"\n"
@@ -512,7 +490,7 @@ void GLAlias_CreateShaders (void)
 			"\n"
 			"void main()\n"
 			"{\n"
-			"if (isOutlinePass == 1)\n"
+			"if (isOutlinePass == 1 || isOutlinePass == 3)\n" // woods #powershell -- flat outline or glow
 			"    {\n"
 			"        // Render the outline with a solid color\n"
 			"        gl_FragColor = outlineColor;\n"
@@ -523,10 +501,7 @@ void GLAlias_CreateShaders (void)
 			"        // Create a complex shell effect with animated patterns\n"
 			"        float pattern = sin(gl_TexCoord[0].x * 10.0 + shellTime) * \n"
 			"                       sin(gl_TexCoord[0].y * 10.0 + shellTime) * 0.25 + 0.75;\n"
-			"        float alpha = outlineColor.a;\n" // woods #powershell
-			"        if (shellGlowFalloff > 0.0)\n" // woods #powershell
-			"            alpha *= pow(clamp(ShellRim, 0.0, 1.0), shellGlowFalloff);\n" // woods #powershell
-			"        gl_FragColor = vec4(outlineColor.rgb * pattern, alpha);\n" // woods #powershell
+			"        gl_FragColor = vec4(outlineColor.rgb * pattern, outlineColor.a);\n"
 			"        return;\n"
 			"    }\n"
 			"\n"
@@ -627,7 +602,6 @@ void GLAlias_CreateShaders (void)
 			glsl->shellColorLoc = GL_GetUniformLocation (&glsl->program, "ShellColor");
 			glsl->shellAlphaLoc = GL_GetUniformLocation (&glsl->program, "ShellAlpha");
 			glsl->shellModeLoc = GL_GetUniformLocation(&glsl->program, "shellMode");
-			glsl->shellGlowFalloffLoc = GL_GetUniformLocation(&glsl->program, "shellGlowFalloff"); // woods #powershell
 			glsl->shellTimeLoc = GL_GetUniformLocation(&glsl->program, "shellTime");
 			glsl->shellWaveParamsLoc = GL_GetUniformLocation(&glsl->program, "shellWaveParams");
 			glsl->fogModeLoc = GL_GetUniformLocation(&glsl->program, "FogMode");
@@ -642,7 +616,6 @@ void GLAlias_CreateShaders (void)
 			GL_Uniform1iFunc (glsl->isOutlinePassLoc, 0); // woods #routline
 			GL_Uniform1iFunc (glsl->shellTexLoc, ALIAS_UPPER_TEXTURE_UNIT_INDEX);  // woods #powershell
 			GL_Uniform1iFunc(glsl->shellModeLoc, 0);  // woods #powershell
-			GL_Uniform1fFunc(glsl->shellGlowFalloffLoc, 0.0f); // woods #powershell
 			GL_Uniform1fFunc(glsl->shellTimeLoc, 0.0f);  // woods #powershell
 			GL_Uniform4fFunc(glsl->shellWaveParamsLoc, 0.1f, 4.0f, 0.0f, 0.0f);  // woods #powershell
 			GL_UseProgramFunc (0);
@@ -679,7 +652,6 @@ void GLAlias_CreateShaders (void)
 			glsl->shellColorLoc = GL_GetUniformLocation (&glsl->program, "ShellColor");
 			glsl->shellAlphaLoc = GL_GetUniformLocation (&glsl->program, "ShellAlpha");
 			glsl->shellModeLoc = GL_GetUniformLocation (&glsl->program, "shellMode");
-			glsl->shellGlowFalloffLoc = GL_GetUniformLocation (&glsl->program, "shellGlowFalloff"); // woods #powershell
 			glsl->shellTimeLoc = GL_GetUniformLocation (&glsl->program, "shellTime");
 			glsl->shellWaveParamsLoc = GL_GetUniformLocation (&glsl->program, "shellWaveParams");
 			glsl->fogModeLoc = GL_GetUniformLocation (&glsl->program, "FogMode");
@@ -693,7 +665,6 @@ void GLAlias_CreateShaders (void)
 			GL_Uniform1iFunc (glsl->isOutlinePassLoc, 0);
 			GL_Uniform1iFunc (glsl->shellTexLoc, ALIAS_UPPER_TEXTURE_UNIT_INDEX);
 			GL_Uniform1iFunc (glsl->shellModeLoc, 0);
-			GL_Uniform1fFunc (glsl->shellGlowFalloffLoc, 0.0f); // woods #powershell
 			GL_Uniform1iFunc (glsl->useShellTexLoc, 0);
 			GL_Uniform1fFunc (glsl->shellTimeLoc, 0.0f);
 			GL_Uniform4fFunc (glsl->shellWaveParamsLoc, 0.1f, 4.0f, 0.0f, 0.0f);
@@ -1847,35 +1818,38 @@ void R_DrawAliasModelOutline(aliasglsl_t* glsl, aliashdr_t* paliashdr, lerpdata_
 
 static void R_DrawPowerupShellGlow(aliasglsl_t* glsl, aliashdr_t* paliashdr, entity_t* e, float shellScale, const float* color, float baseAlpha) // woods #powershell
 {
-	enum { POWERUP_SHELL_GLOW_LAYERS = 3 };
-	static const float glow_width_multipliers[POWERUP_SHELL_GLOW_LAYERS] = { 1.3f, 1.6f, 2.0f };
-	// Boost the old layer alphas by 1.75x to offset the rim fade without changing their relative weights. // woods #powershell
-	static const float glow_alpha_multipliers[POWERUP_SHELL_GLOW_LAYERS] = { 0.7875f, 0.4375f, 0.21f }; // woods #powershell
-	static const float glow_falloff = 1.5f; // woods #powershell
+	enum { POWERUP_SHELL_GLOW_LAYERS = 12 };
+	static const float glow_outer_scale = 4.0f;
 	static const float glow_min_alpha = 0.0001f;
 	float glow = CLAMP(0.0f, gl_powerupshells_glow.value, 1.0f);
-	float alpha;
+	float inner, outer, alpha;
 	int i;
 
 	if (glow <= 0.0f || baseAlpha * glow <= glow_min_alpha)
 		return;
 
-	GL_Uniform1fFunc(glsl->shellGlowFalloffLoc, glow_falloff); // woods #powershell
+	// Use flat color for the halo; the core shell keeps its animated pattern.
+	GL_Uniform1iFunc(glsl->isOutlinePassLoc, 3);
 
 	// Inherit the rim's blend, depth and stencil state, including the laser mask. // woods #powershell
 	for (i = 0; i < POWERUP_SHELL_GLOW_LAYERS; i++)
 	{
-		alpha = baseAlpha * glow * glow_alpha_multipliers[i];
+		inner = 1.0f - (float)i / POWERUP_SHELL_GLOW_LAYERS;
+		outer = 1.0f - (float)(i + 1) / POWERUP_SHELL_GLOW_LAYERS;
+		// Overlapping layers sum to a quadratic fade with distance outside the
+		// core rim. A normal/view-angle fade instead erases grazing silhouettes.
+		alpha = baseAlpha * glow * (inner * inner - outer * outer);
 		if (alpha <= glow_min_alpha)
 			continue;
 
-		GL_Uniform1fFunc(glsl->outlineWidthLoc, shellScale * glow_width_multipliers[i]);
+		GL_Uniform1fFunc(glsl->outlineWidthLoc,
+			shellScale * (1.0f + (glow_outer_scale - 1.0f) * (1.0f - outer)));
 		GL_Uniform4fFunc(glsl->outlineColorLoc, color[0], color[1], color[2], alpha);
 		glDrawElements(GL_TRIANGLES, paliashdr->numindexes, GL_UNSIGNED_SHORT,
 			e->model->meshindexesvboptr + paliashdr->eboofs);
 	}
 
-	GL_Uniform1fFunc(glsl->shellGlowFalloffLoc, 0.0f); // woods #powershell
+	GL_Uniform1iFunc(glsl->isOutlinePassLoc, 2);
 	GL_Uniform1fFunc(glsl->outlineWidthLoc, shellScale);
 	GL_Uniform4fFunc(glsl->outlineColorLoc, color[0], color[1], color[2], baseAlpha);
 }
@@ -1985,7 +1959,6 @@ void R_DrawViewmodelShell(aliasglsl_t* glsl, aliashdr_t* paliashdr, lerpdata_t* 
 	// Reset shader uniforms
 	GL_Uniform1iFunc(glsl->isOutlinePassLoc, 0);
 	GL_Uniform1iFunc(glsl->shellModeLoc, 0);
-	GL_Uniform1fFunc(glsl->shellGlowFalloffLoc, 0.0f); // woods #powershell
 }
 
 static qboolean R_AliasShellTextureUnit(struct skintextures_s tex, int *unit)
@@ -2101,7 +2074,6 @@ static void R_DrawPowerupPickupShell(aliasglsl_t* glsl, aliashdr_t* paliashdr, l
 
 	GL_Uniform1iFunc(glsl->isOutlinePassLoc, 0);
 	GL_Uniform1iFunc(glsl->shellModeLoc, 0);
-	GL_Uniform1fFunc(glsl->shellGlowFalloffLoc, 0.0f); // woods #powershell
 }
 
 static qboolean R_ApplyPowerupShellEffect(aliasglsl_t* glsl, entity_t* e, struct skintextures_s tex, int *shell_unit) // -- woods #powershell
@@ -2498,7 +2470,6 @@ static void GL_DrawAliasFrame_GLSL (aliasglsl_t *glsl, aliashdr_t *paliashdr, le
 				GL_Uniform1fFunc(glsl->outlineWidthLoc, 0.0f);
 				GL_Uniform1iFunc(glsl->isOutlinePassLoc, 0);
 				GL_Uniform1iFunc(glsl->shellModeLoc, 0);
-				GL_Uniform1fFunc(glsl->shellGlowFalloffLoc, 0.0f); // woods #powershell
 				GL_Uniform1iFunc(glsl->useShellTexLoc, 0);
 				glColorMask(GL_FALSE, GL_FALSE, GL_FALSE, GL_FALSE);
 				glStencilFunc(GL_ALWAYS,
@@ -3732,7 +3703,6 @@ static void R_AliasInst_DrawRun (const alias_inst_rec_t *rec, int first,
 	GL_Uniform1fFunc (glsl->outlineWidthLoc, 0.0f);
 	GL_Uniform1iFunc (glsl->isOutlinePassLoc, 0);
 	GL_Uniform1iFunc (glsl->shellModeLoc, 0);
-	GL_Uniform1fFunc (glsl->shellGlowFalloffLoc, 0.0f); // woods #powershell
 	GL_Uniform1iFunc (glsl->useShellTexLoc, 0);
 
 	GL_DrawElementsInstancedFunc (GL_TRIANGLES, hdr->numindexes, GL_UNSIGNED_SHORT,
@@ -4625,7 +4595,6 @@ static void GL_DrawAliasShadow_GLSL (aliasglsl_t *glsl, aliashdr_t *paliashdr, l
 	GL_Uniform1iFunc (glsl->isOutlinePassLoc, 0);
 	GL_Uniform1iFunc (glsl->useShellTexLoc, 0);
 	GL_Uniform1iFunc (glsl->shellModeLoc, 0);
-	GL_Uniform1fFunc (glsl->shellGlowFalloffLoc, 0.0f); // woods #powershell
 
 	glDrawElements (GL_TRIANGLES, paliashdr->numindexes, GL_UNSIGNED_SHORT, e->model->meshindexesvboptr+paliashdr->eboofs);
 
@@ -5182,7 +5151,6 @@ static void R_DrawShadowQueueRuns (int level, int nruns)
 			GL_Uniform1fFunc (glsl->outlineWidthLoc, 0.0f);
 			GL_Uniform1iFunc (glsl->isOutlinePassLoc, 0);
 			GL_Uniform1iFunc (glsl->shellModeLoc, 0);
-			GL_Uniform1fFunc (glsl->shellGlowFalloffLoc, 0.0f); // woods #powershell
 			GL_Uniform1iFunc (glsl->useShellTexLoc, 0);
 			bound = true;
 		}
