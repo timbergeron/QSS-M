@@ -7084,9 +7084,66 @@ static void RSceneCache_AddTeleportSurface(struct rscenecache_s *cache, msurface
 		cache->teleportscomplete = false; // keep the ordinary water batches as a fallback
 }
 
+// woods #dlightskip -- the light set the last dlight job baked into the shared
+// lightmaps. A persistent glow (quad/pent, glowing items) used to relight and
+// re-upload every surface it touched on every rendered frame even while it sat
+// still; frames whose lights all match this snapshot now leave the lightmaps
+// alone. Moving a light by one unit changes a texel by at most one light level,
+// so smaller drifts accumulate until they cross that and are then rebuilt.
+#define RSCENECACHE_DLIGHT_EPSILON 1.0f
+static struct
+{
+	qboolean valid;
+	struct rscenecache_s *cache;	//its baked submodels were the ones lit
+	qmodel_t *worldmodel;
+	double time;
+	qboolean flashblend;
+	int lightmaprebuilds;
+	dlight_t dlights[countof(cl_dlights)];
+} rscenecache_lastdlights;
+static dlight_t rscenecache_dlightsnapshot[countof(cl_dlights)];	//main thread scratch
+
+static qboolean RSceneCache_DlightLive (const dlight_t *l, double time)
+{	//same test the worker applies before marking a light
+	return !(l->die < time) && l->radius;
+}
+
+static qboolean RSceneCache_DlightsMatchLastJob (const struct rscenecache_s *cache, const dlight_t *lights, double time)
+{
+	const float eps = RSCENECACHE_DLIGHT_EPSILON;
+	size_t i;
+
+	if (!rscenecache_lastdlights.valid ||
+		rscenecache_lastdlights.cache != cache ||
+		rscenecache_lastdlights.worldmodel != cl.worldmodel ||
+		rscenecache_lastdlights.flashblend != !!gl_flashblend.value ||
+		rscenecache_lastdlights.lightmaprebuilds != lightmap_rebuilds)
+		return false;
+
+	for (i = 0; i < countof(cl_dlights); i++)
+	{
+		const dlight_t *cur = &lights[i], *old = &rscenecache_lastdlights.dlights[i];
+		qboolean live = RSceneCache_DlightLive (cur, time);
+		vec3_t delta;
+
+		if (live != RSceneCache_DlightLive (old, rscenecache_lastdlights.time))
+			return false;
+		if (!live)
+			continue;
+		VectorSubtract (cur->origin, old->origin, delta);
+		if (DotProduct (delta, delta) > eps * eps ||
+			fabs (cur->radius - old->radius) > eps ||
+			cur->minlight != old->minlight ||
+			!VectorCompare (cur->color, old->color))
+			return false;
+	}
+	return true;
+}
+
 static void RSceneCache_ResetDlightTracking (qmodel_t *mod)
 {	//main thread. surf pointers die with their model, so drop them before the
 	//model does - but only once the worker can't be touching the list.
+	rscenecache_lastdlights.valid = false;	// woods #dlightskip -- its cache pointer may be freed
 	if (rscenecache.thread)
 	{
 		SDL_LockMutex(rscenecache.mutex);
@@ -7450,7 +7507,10 @@ static qboolean RSceneCache_QueueDlightUpdate (struct rscenecache_s *cache, qboo
 	qboolean active = false;
 
 	if (!cache || cache->worldmodel != cl.worldmodel || !r_dynamic.value || !rscenecache.thread)
+	{
+		rscenecache_lastdlights.valid = false;	// woods #dlightskip -- nothing tracks the lights meanwhile
 		return false;
+	}
 	if (lastframe == host_framecount)
 		return false;	//skyrooms/splitscreen queue several scenes per frame; once is enough.
 	lastframe = host_framecount;
@@ -7473,6 +7533,11 @@ static qboolean RSceneCache_QueueDlightUpdate (struct rscenecache_s *cache, qboo
 
 	if (!active && !stylechanged && !SDL_GetAtomicInt(&rscenecache.haslitsurfs))
 		return false;	//nothing to light, nothing to clear.
+
+	// woods #dlightskip -- the lightmaps already hold these lights
+	RSceneCache_CopyDlights (rscenecache_dlightsnapshot, cl_dlights, countof(cl_dlights));
+	if (!stylechanged && RSceneCache_DlightsMatchLastJob (cache, rscenecache_dlightsnapshot, cl.time))
+		return false;
 
 	SDL_LockMutex(rscenecache.mutex);
 	if (!rscenecache.processing && !rscenecache.dlightjob.cache)
@@ -7510,7 +7575,7 @@ static qboolean RSceneCache_QueueDlightUpdate (struct rscenecache_s *cache, qboo
 			}
 		}
 
-		RSceneCache_CopyDlights (rscenecache.dlightjob.dlights, cl_dlights, countof(cl_dlights));
+		memcpy (rscenecache.dlightjob.dlights, rscenecache_dlightsnapshot, sizeof(rscenecache.dlightjob.dlights));
 		rscenecache.dlightjob.time = cl.time;
 		rscenecache.dlightjob.framecount = r_framecount;
 		rscenecache.dlightjob.styles = stylechanged;
@@ -7523,6 +7588,15 @@ static qboolean RSceneCache_QueueDlightUpdate (struct rscenecache_s *cache, qboo
 		rscenecache.dlightjob.cache = cache;
 		SDL_SignalCondition(rscenecache.wt_cond);
 		queued = true;
+
+		// woods #dlightskip -- what the worker is about to bake
+		rscenecache_lastdlights.valid = true;
+		rscenecache_lastdlights.cache = cache;
+		rscenecache_lastdlights.worldmodel = cl.worldmodel;
+		rscenecache_lastdlights.time = cl.time;
+		rscenecache_lastdlights.flashblend = !!gl_flashblend.value;
+		rscenecache_lastdlights.lightmaprebuilds = lightmap_rebuilds;
+		memcpy (rscenecache_lastdlights.dlights, rscenecache_dlightsnapshot, sizeof(rscenecache_lastdlights.dlights));
 	}
 	//tb -- if the worker is busy we simply do not queue. The style comparison in
 	//RSceneCache_Queue has not been advanced, so the next frame re-offers the job
@@ -8057,6 +8131,7 @@ static qboolean RSceneCache_Queue(byte *vis)
 		unsigned int oldestage = 3, a;
 
 		queuedbuild = true;	// woods #scenecachedlights -- worker will own surf dlight state this frame
+		rscenecache_lastdlights.valid = false;	// woods #dlightskip -- the build relights from its own snapshot
 		//tb -- a rebuild deliberately does NOT consume a pending lightstyle
 		//tick. It relights the surfaces *it* visits; another live cache -- a
 		//skyroom especially -- draws from the same shared lightmaps and would
@@ -8928,6 +9003,7 @@ void RSceneCache_Shutdown(void)
 	rscenecache_litsurfs = NULL;
 	rscenecache_numlitsurfs = rscenecache_maxlitsurfs = 0;
 	rscenecache_litsurfs_model = NULL;
+	rscenecache_lastdlights.valid = false;	// woods #dlightskip
 	rscenecache.drawing = NULL;
 	rscenecache.teleportmain = NULL;
 	skipsubmodels = NULL;

@@ -595,6 +595,7 @@ void GLMesh_LoadVertexBuffers (void);
 void GLMesh_DeleteVertexBuffers (void);
 void GLMesh_LoadVertexBuffer (qmodel_t *m, aliashdr_t *hdr);
 void R_RebuildAllLightmaps (void);
+extern int lightmap_rebuilds; // woods #dlightskip -- bumped whenever every lightmap is rebuilt from scratch
 
 int R_LightPoint (vec3_t p);
 int R_LightPointCachedAlias (entity_t *e, vec3_t p, float raise);

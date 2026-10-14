@@ -74,6 +74,7 @@ static SDL_Mutex *lm_dirty_mutex; // woods #lmrect -- guards modified/rectchange
 // lightmap when nothing was flagged since the last one.
 static SDL_AtomicInt lm_dirty_serial;
 static int lm_uploaded_serial = -1;
+int lightmap_rebuilds; // woods #dlightskip -- lets the scenecache tell its baked dlights were wiped
 
 static void R_TexSubImageLightmap (int x, int t, int w, int h, const GLvoid *src);
 
@@ -1460,6 +1461,7 @@ void GL_BuildLightmaps (void)
 
 	lightmap_settings_pending = false;
 	RSceneCache_Shutdown();	//make sure there's nothing poking them off-thread.
+	lightmap_rebuilds++; // woods #dlightskip
 
 	if (!lm_dirty_mutex)
 		lm_dirty_mutex = SDL_CreateMutex(); // woods #lmrect -- safe here: worker just shut down, so first use is single-threaded
@@ -2399,6 +2401,8 @@ void R_RebuildAllLightmaps (void)
 
 	if (!cl.worldmodel) // is this the correct test?
 		return;
+
+	lightmap_rebuilds++; // woods #dlightskip -- drops dlights the scenecache worker baked in
 
 	//for each surface in each model, rebuild lightmap with new scale
 	for (i=1; i<MAX_MODELS; i++)
