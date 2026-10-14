@@ -1816,6 +1816,36 @@ void R_DrawAliasModelOutline(aliasglsl_t* glsl, aliashdr_t* paliashdr, lerpdata_
 	glDisable(GL_BLEND);
 }
 
+static void R_DrawPowerupShellGlow(aliasglsl_t* glsl, aliashdr_t* paliashdr, entity_t* e, float shellScale, const float* color, float baseAlpha) // woods #powershell
+{
+	enum { POWERUP_SHELL_GLOW_LAYERS = 3 };
+	static const float glow_width_multipliers[POWERUP_SHELL_GLOW_LAYERS] = { 1.3f, 1.6f, 2.0f };
+	static const float glow_alpha_multipliers[POWERUP_SHELL_GLOW_LAYERS] = { 0.45f, 0.25f, 0.12f };
+	static const float glow_min_alpha = 0.0001f;
+	float glow = CLAMP(0.0f, gl_powerupshells_glow.value, 1.0f);
+	float alpha;
+	int i;
+
+	if (glow <= 0.0f || baseAlpha * glow <= glow_min_alpha)
+		return;
+
+	// Inherit the rim's blend, depth and stencil state, including the laser mask. // woods #powershell
+	for (i = 0; i < POWERUP_SHELL_GLOW_LAYERS; i++)
+	{
+		alpha = baseAlpha * glow * glow_alpha_multipliers[i];
+		if (alpha <= glow_min_alpha)
+			continue;
+
+		GL_Uniform1fFunc(glsl->outlineWidthLoc, shellScale * glow_width_multipliers[i]);
+		GL_Uniform4fFunc(glsl->outlineColorLoc, color[0], color[1], color[2], alpha);
+		glDrawElements(GL_TRIANGLES, paliashdr->numindexes, GL_UNSIGNED_SHORT,
+			e->model->meshindexesvboptr + paliashdr->eboofs);
+	}
+
+	GL_Uniform1fFunc(glsl->outlineWidthLoc, shellScale);
+	GL_Uniform4fFunc(glsl->outlineColorLoc, color[0], color[1], color[2], baseAlpha);
+}
+
 /*
 =============
 R_DrawViewmodelShell -- woods #powershell
@@ -1914,6 +1944,7 @@ void R_DrawViewmodelShell(aliasglsl_t* glsl, aliashdr_t* paliashdr, lerpdata_t* 
 	// Draw the shell
 	glDrawElements(GL_TRIANGLES, paliashdr->numindexes, GL_UNSIGNED_SHORT,
 		e->model->meshindexesvboptr + paliashdr->eboofs);
+	R_DrawPowerupShellGlow(glsl, paliashdr, e, shellScale, shellColor, shellAlpha); // woods #powershell
 
 	glPopAttrib();
 
@@ -2029,6 +2060,7 @@ static void R_DrawPowerupPickupShell(aliasglsl_t* glsl, aliashdr_t* paliashdr, l
 
 	glDrawElements(GL_TRIANGLES, paliashdr->numindexes, GL_UNSIGNED_SHORT,
 		e->model->meshindexesvboptr + paliashdr->eboofs);
+	R_DrawPowerupShellGlow(glsl, paliashdr, e, shellScale, shellColor, shellAlpha); // woods #powershell
 
 	glPopAttrib();
 
