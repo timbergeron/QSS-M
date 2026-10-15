@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Render MDL/MD3/MD5 viewmodels and prove hidden geometry cannot affect opacity.
+"""Render MDL/MD3/MD5 weapons/chase bodies and check surface-only opacity.
 
 Usage: python3 Misc/stress/test_viewmodel_opacity.py --bin /path/to/QSS-M
 Uses disposable basedirs, original id1 PAKs, and localhost RCON.
@@ -21,10 +21,14 @@ import qssm_stress as S
 import alias_visual_probe as V
 
 ROOT = Path(__file__).resolve().parents[2]
+CHASE_FIXTURE = False
 TRIS = ((0, 1, 2), (0, 2, 3), (2, 1, 0), (3, 2, 0))
 
 
 def vertices(back=False):
+    if CHASE_FIXTURE:
+        return [(8 if back else 0, y, z)
+                for y, z in ((-16, -16), (16, -16), (16, 40), (-16, 40))]
     scale = 1.5 if back else 1
     return [(16 * scale, y * scale, z * scale)
             for y, z in ((-4, -9), (4, -9), (4, -3), (-4, -3))]
@@ -32,15 +36,16 @@ def vertices(back=False):
 
 def make_mdl(layers):
     points = [p for back in range(layers) for p in vertices(back)]
+    scale, yoffset = (.25, 32) if CHASE_FIXTURE else (.125, 8)
     header = struct.pack('<4si3f3ff3f8if', b'IDPO', 6,
-                         .125, .125, .125, 0, -8, -16, 64, 0, 0, 0,
+                         scale, scale, scale, 0, -yoffset, -16, 64, 0, 0, 0,
                          1, 16, 16, len(points), len(TRIS) * layers, 1, 0, 0, 1)
     skin = struct.pack('<i', 0) + bytes([100]) * 256
     uv = struct.pack('<3i', 0, 8, 8) * len(points)
     indices = b''.join(struct.pack('<4i', 1, *(i + back * 4 for i in tri))
                        for back in range(layers) for tri in TRIS)
-    packed = b''.join(struct.pack('<4B', round(x * 8), round((y + 8) * 8),
-                                 round((z + 16) * 8), 0) for x, y, z in points)
+    packed = b''.join(struct.pack('<4B', round(x / scale), round((y + yoffset) / scale),
+                                 round((z + 16) / scale), 0) for x, y, z in points)
     frame = struct.pack('<i4B4B16s', 0, 0, 0, 0, 0, 255, 255, 255, 0, b'idle') + packed
     return header + skin + uv + indices + frame
 
@@ -84,7 +89,7 @@ def install(game, fmt, layers):
     # The same fixture replaces the axe and shotgun so QC weapon selection
     # cannot accidentally select an ordinary model instead of our fixture.
     data = {'mdl': make_mdl, 'md3': make_md3, 'md5mesh': make_md5}[fmt](layers)
-    for name in ('v_shot', 'v_axe'):
+    for name in (('player',) if CHASE_FIXTURE else ('v_shot', 'v_axe')):
         (progs / f'{name}.{fmt}').write_bytes(data)
         if fmt == 'md5mesh':
             (progs / f'{name}.md5anim').write_text(
@@ -102,15 +107,21 @@ def capture(cfg, work, fmt, layers, legacy, port):
     S.Sandbox(work / 'base', cfg.paks, autoexec_extra=[
         'cl_web_download_url ""', 'cl_web_download_url2 ""',
         f'r_replacemodels "{fmt if fmt != "mdl" else ""}"',
+        f'chase_active {int(CHASE_FIXTURE)}', 'chase_up 0',
         'listen 1', 'cl_bob 0', 'v_idlescale 0', 'r_particles 0', 'r_dynamic 0',
         'r_drawworld 0', 'gl_clear 1', 'r_clearcolor 2', 'showpause 0',
-        'r_outline 0', 'gl_powerupshells 0', 'cl_damagehue 0', 'r_fastsky 1',
+        'r_drawflame 0', 'r_outline 0', 'gl_powerupshells 0', 'cl_damagehue 0', 'r_fastsky 1',
         'viewsize 120', 'crosshair 0', 'scr_showfps 0', 'scr_clock 0',
         'con_notifytime 0', 'r_waterwarp 0',
-        'rcon_password opacitytest', 'vid_vsync 0', 'host_maxfps 72',
+        'rcon_password opacitytest', 'vid_vsync 0', 'host_maxfps 72', f'vid_fsaa {cfg.fsaa}',
     ]).build()
     (work / 'base/id1/quake.rc').write_text(S.QUAKE_RC + 'stuffcmds\n')
     install(work / 'base/id1', fmt, layers)
+    if CHASE_FIXTURE:
+        maps = work / 'base/id1/maps'
+        maps.mkdir(exist_ok=True)
+        (maps / 'start.pts').write_text(''.join(
+            f'{x} 300 {z}\n' for x in range(536, 553, 2) for z in range(46, 65, 2)))
     eng = S.Engine(cfg, work, port, extra_args=['-condebug'] + (['-noglslalias'] if legacy else []))
     images = {}
 
@@ -129,7 +140,7 @@ def capture(cfg, work, fmt, layers, legacy, port):
             new = set(directory.glob('*.tga')) - before
             if new and all(p.stat().st_size >= 640 * 480 * 3 + 18 for p in new):
                 image = V.read_tga(next(iter(new)))
-                cropped, _ = V.crop_image(image, (.4, .65, .2, .25))
+                cropped, _ = V.crop_image(image, (.45, .4, .1, .2) if CHASE_FIXTURE else (.4, .65, .2, .25))
                 (work / 'visuals').mkdir(exist_ok=True)
                 V.write_tga(work / 'visuals' / (mode + '.tga'), cropped)
                 return cropped
@@ -147,18 +158,32 @@ def capture(cfg, work, fmt, layers, legacy, port):
             raise AssertionError(f'could not spawn: {eng.logpath}')
         send('god; setpos 544 288 32 0 90 0')
         time.sleep(.25)
-        for mode, command in (('opaque', 'r_drawviewmodel 1'),
+        modes = [('opaque', 'r_drawviewmodel 1'),
                               ('faded', 'r_drawviewmodel .5'),
                               ('faded-sort0', 'r_alphasort 0; r_drawviewmodel .5'),
                               ('fullbright-faded', 'r_alphasort 1; r_fullbright 1; r_drawviewmodel .5'),
-                              ('hidden', 'r_drawviewmodel 0')):
+                              ('hidden', 'r_drawviewmodel 0')]
+        if CHASE_FIXTURE:
+            modes = [('opaque', 'chase_active 1; chase_back 90'),
+                     ('faded', 'chase_back 250'),
+                     ('faded-sort0', 'r_alphasort 0'),
+                     ('fullbright-faded', 'r_alphasort 1; r_fullbright 1'),
+                     ('particle-free', 'r_fullbright 0; r_particles 0'),
+                     ('particles', 'r_particles 1; pointfile'),
+                     ('hidden', 'r_particles 0; chase_active 0; r_drawviewmodel 0')]
+        if CHASE_FIXTURE and getattr(cfg, 'restart', False):
+            modes.insert(-2, ('after-restart', 'vid_unlock; vid_restart'))
+        for mode, command in modes:
             send(command)
             time.sleep(.2)
             images[mode] = screenshot(mode)
+            if CHASE_FIXTURE:
+                (work / (mode + '-viewpos.txt')).write_text(send('viewpos'))
         # Exercise the real ring -> viewent alpha path as well as explicit opacity.
-        send('r_fullbright 0; r_drawviewmodel 1; give ring')
-        time.sleep(.45)
-        images['ring'] = screenshot('ring')
+        if not CHASE_FIXTURE:
+            send('r_fullbright 0; r_drawviewmodel 1; give ring')
+            time.sleep(.45)
+            images['ring'] = screenshot('ring')
         return images
     finally:
         eng.kill()
@@ -168,36 +193,55 @@ def capture(cfg, work, fmt, layers, legacy, port):
 
 
 def main():
+    global CHASE_FIXTURE
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--bin', type=Path, default=ROOT / 'macOS/build/Debug/QSS-M.app/Contents/MacOS/QSS-M')
     parser.add_argument('--paks', default=str(Path.home() / 'Desktop/qssm/id1/paks'))
     parser.add_argument('--results', type=Path, default=ROOT / '.codex-build/viewmodel-opacity')
     parser.add_argument('--formats', nargs='+', default=['mdl', 'md3', 'md5mesh'])
     parser.add_argument('--legacy', action='store_true')
+    parser.add_argument('--chase', action='store_true', help='test the chase camera player proximity fade')
+    parser.add_argument('--fsaa', type=int, default=0, help='scene MSAA sample request')
+    parser.add_argument('--restart', action='store_true', help='recreate the chase depth cache through vid_restart')
     args = parser.parse_args()
+    CHASE_FIXTURE = args.chase
     args.results = args.results.resolve()
     args.results.mkdir(parents=True, exist_ok=True)
     args.results = Path(tempfile.mkdtemp(prefix='legacy-' if args.legacy else 'glsl-', dir=args.results))
     print(f'Artifacts: {args.results}', flush=True)
     cfg = S.Config(binary=args.bin.resolve(), paks=S.find_paks(args.paks), nosound=True,
-                   rcon_password="opacitytest", hang_timeout=15, hang_retries=1, memory_limit_mb=0, cpu_limit=120)
+                   rcon_password="opacitytest", hang_timeout=15, hang_retries=1, memory_limit_mb=0, cpu_limit=120, fsaa=args.fsaa, restart=args.restart)
     print(json.dumps(S.binary_provenance(cfg.binary)), flush=True)
     report = []
     for fmt in args.formats:
         captures = [capture(cfg, args.results / f'{fmt}-{layers}', fmt, layers,
                             args.legacy, 29000 + secrets.randbelow(2000)) for layers in (1, 2)]
+        if CHASE_FIXTURE:
+            for index, shots in enumerate(captures):
+                particles, _ = V.compare_images(shots['particle-free'], shots['particles'], 2, 1)
+                assert particles['changed_pixels'] > 100, (fmt, index, 'background particles hidden by player depth', particles)
+                print(fmt, index + 1, particles['changed_pixels'], 'background particle pixels', flush=True)
+                if args.restart:
+                    restarted, _ = V.compare_images(shots['particle-free'], shots['after-restart'], 2, 1)
+                    assert restarted['changed_pixels'] <= 20, (fmt, index, 'opacity changed after video restart', restarted)
         # Ensure the fixture really drew, including the faded state. Otherwise
         # a skipped/failed model could make hidden-layer equality pass vacuously.
-        for mode in ('opaque', 'faded', 'faded-sort0', 'fullbright-faded', 'ring'):
+        modes = ['opaque', 'faded', 'faded-sort0', 'fullbright-faded']
+        if not CHASE_FIXTURE:
+            modes.append('ring')
+        elif args.restart:
+            modes.append('after-restart')
+        for mode in modes:
             visible, _ = V.compare_images(captures[0][mode], captures[0]['hidden'], 2, 1)
-            assert visible['changed_pixels'] > 500, (fmt, mode, 'fixture not visible', visible)
+            assert visible['changed_pixels'] > (50 if CHASE_FIXTURE else 500), (fmt, mode, 'fixture not visible', visible)
             diff, _ = V.compare_images(captures[0][mode], captures[1][mode], 2, 1)
             report.append({'format': fmt, 'mode': mode, **diff})
             print(fmt, mode, diff['changed_pixels'], 'changed pixels', flush=True)
     (args.results / 'report.json').write_text(json.dumps(report, indent=2))
     failures = [r for r in report if r['changed_pixels'] > 20]
     assert not failures, f'hidden geometry changed the viewmodel: {[(r["format"], r["mode"], r["changed_pixels"]) for r in failures]}'
-    print('PASS: hidden geometry does not affect opaque, faded, or ring viewmodels (both alpha sorts and fullbright)')
+    print('PASS: hidden geometry does not affect chase opacity; background particles remain visible' if CHASE_FIXTURE else
+          'PASS: hidden geometry does not affect opaque, faded, or ring viewmodels (both alpha sorts and fullbright)')
 
 
 if __name__ == '__main__':

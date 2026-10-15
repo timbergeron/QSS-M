@@ -126,6 +126,7 @@ qboolean gl_glsl_alias_able = false; //ericw
 qboolean gl_glsl_water_able = false; //Spoike
 qboolean gl_bmodel_instancing_able = false;
 qboolean gl_occlusion_able = false; // teleporter views skip hidden planes
+qboolean gl_fbo_arb = false; // core/ARB framebuffer attachment queries
 qboolean gl_fbo_able = false; // woods #fxaa FXAA framebuffer support
 qboolean gl_msaa_able = false;
 int gl_stencilbits;
@@ -183,6 +184,7 @@ PFNGLGENFRAMEBUFFERSPROC GL_GenFramebuffersFunc = NULL;
 PFNGLBINDFRAMEBUFFERPROC GL_BindFramebufferFunc = NULL;
 PFNGLFRAMEBUFFERTEXTURE2DPROC GL_FramebufferTexture2DFunc = NULL;
 PFNGLCHECKFRAMEBUFFERSTATUSPROC GL_CheckFramebufferStatusFunc = NULL;
+PFNGLGETFRAMEBUFFERATTACHMENTPARAMETERIVPROC GL_GetFramebufferAttachmentParameterivFunc = NULL;
 PFNGLDELETEFRAMEBUFFERSPROC GL_DeleteFramebuffersFunc = NULL;
 PFNGLGENRENDERBUFFERSPROC GL_GenRenderbuffersFunc = NULL;
 PFNGLBINDRENDERBUFFERPROC GL_BindRenderbufferFunc = NULL;
@@ -1724,11 +1726,13 @@ static void GL_CheckFramebufferExtensions (void)
 	qboolean core = gl_version_major >= 3 || GL_ParseExtensionList (gl_extensions, "GL_ARB_framebuffer_object");
 
 	gl_fbo_able = false;
+	gl_fbo_arb = false;
 	gl_msaa_able = false;
 	GL_GenFramebuffersFunc = NULL;
 	GL_BindFramebufferFunc = NULL;
 	GL_FramebufferTexture2DFunc = NULL;
 	GL_CheckFramebufferStatusFunc = NULL;
+	GL_GetFramebufferAttachmentParameterivFunc = NULL;
 	GL_DeleteFramebuffersFunc = NULL;
 	GL_GenRenderbuffersFunc = NULL;
 	GL_BindRenderbufferFunc = NULL;
@@ -1750,6 +1754,7 @@ static void GL_CheckFramebufferExtensions (void)
 	LOAD_FBO (BindFramebuffer, PFNGLBINDFRAMEBUFFERPROC);
 	LOAD_FBO (FramebufferTexture2D, PFNGLFRAMEBUFFERTEXTURE2DPROC);
 	LOAD_FBO (CheckFramebufferStatus, PFNGLCHECKFRAMEBUFFERSTATUSPROC);
+	LOAD_FBO (GetFramebufferAttachmentParameteriv, PFNGLGETFRAMEBUFFERATTACHMENTPARAMETERIVPROC);
 	LOAD_FBO (DeleteFramebuffers, PFNGLDELETEFRAMEBUFFERSPROC);
 	LOAD_FBO (GenRenderbuffers, PFNGLGENRENDERBUFFERSPROC);
 	LOAD_FBO (BindRenderbuffer, PFNGLBINDRENDERBUFFERPROC);
@@ -1765,6 +1770,7 @@ static void GL_CheckFramebufferExtensions (void)
 		return;
 	}
 	gl_fbo_able = true;
+	gl_fbo_arb = core;
 	if (cls.state == ca_disconnected)
 		Con_Printf ("FOUND: Framebuffer Objects\n");
 

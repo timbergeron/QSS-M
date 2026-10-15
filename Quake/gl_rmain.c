@@ -332,6 +332,131 @@ static qboolean GLSLGamma_BeginSceneRead (GLint *read_fbo)
 	return false;
 }
 
+// A chase player's self-occlusion depth is temporary: later alpha entities and
+// particles must still test against world depth. Keep its existing alpha order.
+static struct {
+	GLuint fbo, depth;
+	GLint width, height, samples, format;
+	GLint read_fbo, draw_fbo, viewport[4];
+} r_alias_fade_depth;
+
+static void R_DeleteAliasFadeDepth (void)
+{
+	if (r_alias_fade_depth.fbo)
+		GL_DeleteFramebuffersFunc(1, &r_alias_fade_depth.fbo);
+	if (r_alias_fade_depth.depth)
+		GL_DeleteRenderbuffersFunc(1, &r_alias_fade_depth.depth);
+	memset(&r_alias_fade_depth, 0, sizeof(r_alias_fade_depth));
+}
+
+static void R_CopyAliasFadeDepth (qboolean restore)
+{
+	GLint *v = r_alias_fade_depth.viewport;
+	GLboolean scissor = glIsEnabled(GL_SCISSOR_TEST);
+	glDisable(GL_SCISSOR_TEST);
+	GL_BindFramebufferFunc(GL_READ_FRAMEBUFFER, restore ? r_alias_fade_depth.fbo : r_alias_fade_depth.draw_fbo);
+	GL_BindFramebufferFunc(GL_DRAW_FRAMEBUFFER, restore ? r_alias_fade_depth.draw_fbo : r_alias_fade_depth.fbo);
+	if (restore)
+		GL_BlitFramebufferFunc(0, 0, v[2], v[3], v[0], v[1], v[0]+v[2], v[1]+v[3], GL_DEPTH_BUFFER_BIT, GL_NEAREST);
+	else
+		GL_BlitFramebufferFunc(v[0], v[1], v[0]+v[2], v[1]+v[3], 0, 0, v[2], v[3], GL_DEPTH_BUFFER_BIT, GL_NEAREST);
+	GL_BindFramebufferFunc(GL_READ_FRAMEBUFFER, r_alias_fade_depth.read_fbo);
+	GL_BindFramebufferFunc(GL_DRAW_FRAMEBUFFER, r_alias_fade_depth.draw_fbo);
+	if (scissor)
+		glEnable(GL_SCISSOR_TEST);
+}
+
+qboolean R_SaveAliasFadeDepth (void)
+{
+	GLint read_fbo, draw_fbo, renderbuffer, viewport[4], samples, format;
+	GLint type, name, bits, stencilbits;
+	GLenum status;
+
+	if (!gl_fbo_able || !GL_BlitFramebufferFunc || !GL_GetRenderbufferParameterivFunc ||
+		!GL_GetFramebufferAttachmentParameterivFunc)
+		return false;
+	glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &read_fbo);
+	glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &draw_fbo);
+	glGetIntegerv(GL_RENDERBUFFER_BINDING, &renderbuffer);
+	glGetIntegerv(GL_VIEWPORT, viewport);
+	glGetIntegerv(GL_SAMPLES, &samples);
+	if (viewport[2] <= 0 || viewport[3] <= 0)
+		return false;
+
+	if (draw_fbo)
+	{
+		GL_GetFramebufferAttachmentParameterivFunc(GL_DRAW_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_FRAMEBUFFER_ATTACHMENT_OBJECT_TYPE, &type);
+		if (type != GL_RENDERBUFFER)
+			return false;
+		GL_GetFramebufferAttachmentParameterivFunc(GL_DRAW_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_FRAMEBUFFER_ATTACHMENT_OBJECT_NAME, &name);
+		GL_BindRenderbufferFunc(GL_RENDERBUFFER, name);
+		GL_GetRenderbufferParameterivFunc(GL_RENDERBUFFER, GL_RENDERBUFFER_INTERNAL_FORMAT, &format);
+		GL_BindRenderbufferFunc(GL_RENDERBUFFER, renderbuffer);
+	}
+	else
+	{
+		glGetIntegerv(GL_DEPTH_BITS, &bits);
+		glGetIntegerv(GL_STENCIL_BITS, &stencilbits);
+		if (bits == 16)
+			format = GL_DEPTH_COMPONENT16;
+		else if (bits == 24)
+			format = stencilbits ? GL_DEPTH24_STENCIL8 : GL_DEPTH_COMPONENT24;
+		else if (bits == 32)
+		{
+			// EXT_framebuffer_object cannot query default framebuffer attachments.
+			type = GL_UNSIGNED_NORMALIZED;
+			if (gl_fbo_arb)
+				GL_GetFramebufferAttachmentParameterivFunc(GL_DRAW_FRAMEBUFFER, GL_DEPTH, GL_FRAMEBUFFER_ATTACHMENT_COMPONENT_TYPE, &type);
+			format = type == GL_FLOAT ? (stencilbits ? GL_DEPTH32F_STENCIL8 : GL_DEPTH_COMPONENT32F) : GL_DEPTH_COMPONENT32;
+		}
+		else
+			return false;
+	}
+	if (glGetError() != GL_NO_ERROR)
+		return false;
+
+	if (!r_alias_fade_depth.fbo || r_alias_fade_depth.width != viewport[2] ||
+		r_alias_fade_depth.height != viewport[3] || r_alias_fade_depth.samples != samples ||
+		r_alias_fade_depth.format != format)
+	{
+		R_DeleteAliasFadeDepth();
+		GL_GenFramebuffersFunc(1, &r_alias_fade_depth.fbo);
+		GL_GenRenderbuffersFunc(1, &r_alias_fade_depth.depth);
+		GL_BindRenderbufferFunc(GL_RENDERBUFFER, r_alias_fade_depth.depth);
+		if (samples)
+			GL_RenderbufferStorageMultisampleFunc(GL_RENDERBUFFER, samples, format, viewport[2], viewport[3]);
+		else
+			GL_RenderbufferStorageFunc(GL_RENDERBUFFER, format, viewport[2], viewport[3]);
+		GL_BindFramebufferFunc(GL_FRAMEBUFFER, r_alias_fade_depth.fbo);
+		GL_FramebufferRenderbufferFunc(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_RENDERBUFFER, r_alias_fade_depth.depth);
+		glDrawBuffer(GL_NONE);
+		glReadBuffer(GL_NONE);
+		status = GL_CheckFramebufferStatusFunc(GL_FRAMEBUFFER);
+		GL_BindRenderbufferFunc(GL_RENDERBUFFER, renderbuffer);
+		GL_BindFramebufferFunc(GL_READ_FRAMEBUFFER, read_fbo);
+		GL_BindFramebufferFunc(GL_DRAW_FRAMEBUFFER, draw_fbo);
+		if (status != GL_FRAMEBUFFER_COMPLETE || glGetError() != GL_NO_ERROR)
+		{
+			R_DeleteAliasFadeDepth();
+			return false;
+		}
+		r_alias_fade_depth.width = viewport[2];
+		r_alias_fade_depth.height = viewport[3];
+		r_alias_fade_depth.samples = samples;
+		r_alias_fade_depth.format = format;
+	}
+	r_alias_fade_depth.read_fbo = read_fbo;
+	r_alias_fade_depth.draw_fbo = draw_fbo;
+	memcpy(r_alias_fade_depth.viewport, viewport, sizeof(viewport));
+	R_CopyAliasFadeDepth(false);
+	return glGetError() == GL_NO_ERROR;
+}
+
+void R_RestoreAliasFadeDepth (void)
+{
+	R_CopyAliasFadeDepth(true);
+}
+
 /* User-created multisample FBOs cannot be read by CopyTexSubImage or ReadPixels. */
 void GL_CopySceneToTexture (int x, int y, int width, int height)
 {
@@ -383,6 +508,7 @@ void GLSLGamma_DeleteTexture (void)
 {
 	if (r_gamma_fbo_active)
 		gl_stencilbits = r_scene_window_stencilbits;
+	R_DeleteAliasFadeDepth();
 	GLSLGamma_DeleteMSAA (&r_scene_msaa);
 	r_scene_msaa_changed = true;
 	r_scene_request = -1;

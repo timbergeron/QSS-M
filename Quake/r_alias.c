@@ -2219,7 +2219,7 @@ Supports optional overbright, optional fullbright pixels.
 Based on code by MH from RMQEngine
 =============
 */
-static void GL_DrawAliasFrame_GLSL (aliasglsl_t *glsl, aliashdr_t *paliashdr, lerpdata_t lerpdata, struct skintextures_s tex, entity_t *e, qboolean depthonly)
+static void GL_DrawAliasFrame_GLSL (aliasglsl_t *glsl, aliashdr_t *paliashdr, lerpdata_t lerpdata, struct skintextures_s tex, entity_t *e, qboolean depthonly, qboolean surfacefade)
 {
 	GLfloat	tints[3][4];
 	float	blend;
@@ -2455,7 +2455,7 @@ static void GL_DrawAliasFrame_GLSL (aliasglsl_t *glsl, aliashdr_t *paliashdr, le
 	else if (r_alias_outline_phase == ALIAS_OUTLINE_PHASE_NORMAL)
 	{
 		R_BeginAliasOutlineRendering(glsl); // woods #routline
-		if ((e->eflags & EFLAGS_VIEWMODEL) && entalpha < 1 && !(e->effects & EF_ADDITIVE))
+		if (surfacefade)
 			glDepthFunc(GL_EQUAL); // Only shade the surface selected by the depth prepass.
 
 		applied_shell = R_ApplyPowerupShellEffect(glsl, e, tex, &shell_unit); // woods #powershell
@@ -3899,6 +3899,7 @@ static void R_DrawAliasModelPrepared (entity_t *e, const lerpdata_t *prepared, q
 	struct skintextures_s tex;
 	lerpdata_t	lerpdata;
 	qboolean	alphatest = !!(e->model->flags & MF_HOLEY);
+	qboolean	surfacefade = false, saved_depth = false;
 	int surf;
 	float		fovscale = 1.0f;
 	qmodel_t* clmodel = e->model;   // woods lightning alpha #lightalpha & doubleeyes
@@ -3917,25 +3918,39 @@ static void R_DrawAliasModelPrepared (entity_t *e, const lerpdata_t *prepared, q
 		R_SetupEntityTransform (e, &lerpdata);
 	}
 
+	// Cull before saving world depth: a culled chase model must not leave a
+	// depth snapshot pending or draw an unnecessary prepass.
+	if (!(e->eflags & EFLAGS_VIEWMODEL) && !prepared &&
+		R_CullModelForEntityTransform(e, lerpdata.origin, lerpdata.angles))
+		return;
+
 	glsl = &r_alias_glsl[(paliashdr->poseverttype==PV_IQM&&lerpdata.bonestate)?ALIAS_GLSL_SKELETAL:ALIAS_GLSL_BASIC];
 
-	// Fade the visible weapon surface as a whole. Without this prepass, hidden
+	// Fade the visible model surface as a whole. Without this prepass, hidden
 	// triangles blend through it. Finish every mesh before any color is drawn,
 	// so separate MD3/MD5 surfaces occlude one another too. Reuse the prepared
 	// animation/transform so both passes have exactly the same depth values.
-	if (!depthonly && (e->eflags & EFLAGS_VIEWMODEL) &&
+	if (!depthonly && ((e->eflags & EFLAGS_VIEWMODEL) ||
+		(chase_active.value && cl.entities && cl.viewentity > 0 && cl.viewentity < cl.num_entities &&
+		 e == &cl.entities[cl.viewentity])) &&
 		!(e->effects & EF_ADDITIVE) && !r_drawflat_cheatsafe && !r_lightmap_cheatsafe &&
 		r_alias_outline_phase == ALIAS_OUTLINE_PHASE_NORMAL &&
 		ENTALPHA_DECODE(e->alpha) > 0 && ENTALPHA_DECODE(e->alpha) < 1)
 	{
-		glPushAttrib(GL_ENABLE_BIT | GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT);
-		glColorMask(GL_FALSE, GL_FALSE, GL_FALSE, GL_FALSE);
-		glEnable(GL_DEPTH_TEST);
-		glDepthFunc(GL_LESS);
-		glDepthMask(GL_TRUE);
-		glDisable(GL_BLEND);
-		R_DrawAliasModelPrepared(e, &lerpdata, true);
-		glPopAttrib();
+		if (!(e->eflags & EFLAGS_VIEWMODEL))
+			saved_depth = R_SaveAliasFadeDepth();
+		surfacefade = (e->eflags & EFLAGS_VIEWMODEL) || saved_depth;
+		if (surfacefade)
+		{
+			glPushAttrib(GL_ENABLE_BIT | GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT);
+			glColorMask(GL_FALSE, GL_FALSE, GL_FALSE, GL_FALSE);
+			glEnable(GL_DEPTH_TEST);
+			glDepthFunc(GL_LESS);
+			glDepthMask(GL_TRUE);
+			glDisable(GL_BLEND);
+			R_DrawAliasModelPrepared(e, &lerpdata, true);
+			glPopAttrib();
+		}
 	}
 
 	if (e->eflags & EFLAGS_VIEWMODEL)
@@ -3957,12 +3972,6 @@ static void R_DrawAliasModelPrepared (entity_t *e, const lerpdata_t *prepared, q
 	}
 	else
 	{
-		//
-		// cull it
-		//
-		if (!prepared && R_CullModelForEntityTransform(e, lerpdata.origin, lerpdata.angles))
-			return;
-
 		//
 		// transform it
 		//
@@ -4036,7 +4045,7 @@ static void R_DrawAliasModelPrepared (entity_t *e, const lerpdata_t *prepared, q
 	}
 	else if (alphatest)
 		glEnable (GL_ALPHA_TEST);
-	if (!depthonly && (e->eflags & EFLAGS_VIEWMODEL) && entalpha < 1 && !(e->effects & EF_ADDITIVE))
+	if (surfacefade)
 		glDepthFunc(GL_EQUAL);
 	if (e->effects & EF_ADDITIVE)
 	{
@@ -4151,7 +4160,7 @@ static void R_DrawAliasModelPrepared (entity_t *e, const lerpdata_t *prepared, q
 		{
 			// Match the color path: fullbright debug rendering uses CPU vertices.
 			if (!r_fullbright_cheatsafe && glsl->program != 0 && (paliashdr->numbones <= glsl->maxbones || !lerpdata.bonestate))
-				GL_DrawAliasFrame_GLSL(glsl, paliashdr, lerpdata, tex, e, true);
+				GL_DrawAliasFrame_GLSL(glsl, paliashdr, lerpdata, tex, e, true, false);
 			else
 			{
 				GL_Bind(tex.base);
@@ -4164,7 +4173,7 @@ static void R_DrawAliasModelPrepared (entity_t *e, const lerpdata_t *prepared, q
 		else if (r_alias_outline_phase != ALIAS_OUTLINE_PHASE_NORMAL)
 		{
 			if (glsl->program != 0 && (paliashdr->numbones <= glsl->maxbones || !lerpdata.bonestate))
-				GL_DrawAliasFrame_GLSL(glsl, paliashdr, lerpdata, tex, e, false);
+				GL_DrawAliasFrame_GLSL(glsl, paliashdr, lerpdata, tex, e, false, surfacefade);
 		}
 		else if (r_drawflat_cheatsafe)
 		{
@@ -4207,7 +4216,7 @@ static void R_DrawAliasModelPrepared (entity_t *e, const lerpdata_t *prepared, q
 	// r_alias_program will be 0.
 		else if (glsl->program != 0 && (paliashdr->numbones <= glsl->maxbones||!lerpdata.bonestate))
 		{
-			GL_DrawAliasFrame_GLSL (glsl, paliashdr, lerpdata, tex, e, false);
+			GL_DrawAliasFrame_GLSL (glsl, paliashdr, lerpdata, tex, e, false, surfacefade);
 		}
 		else if (e->effects & EF_FULLBRIGHT)
 		{
@@ -4388,10 +4397,11 @@ cleanup:
 		glDisable (GL_ALPHA_TEST);
 	glColor3f(1,1,1);
 	if (e->eflags & EFLAGS_VIEWMODEL)
-	{
 		glDepthRange (0, 1);
+	if (surfacefade || (e->eflags & EFLAGS_VIEWMODEL))
 		glDepthFunc(GL_LEQUAL);
-	}
+	if (saved_depth)
+		R_RestoreAliasFadeDepth();
 	if (e->effects & EF_ADDITIVE)
 		glBlendFunc (GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
 	glPopMatrix ();

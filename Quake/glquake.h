@@ -386,6 +386,7 @@ extern PFNGLGENFRAMEBUFFERSPROC GL_GenFramebuffersFunc;
 extern PFNGLBINDFRAMEBUFFERPROC GL_BindFramebufferFunc;
 extern PFNGLFRAMEBUFFERTEXTURE2DPROC GL_FramebufferTexture2DFunc;
 extern PFNGLCHECKFRAMEBUFFERSTATUSPROC GL_CheckFramebufferStatusFunc;
+extern PFNGLGETFRAMEBUFFERATTACHMENTPARAMETERIVPROC GL_GetFramebufferAttachmentParameterivFunc;
 extern PFNGLDELETEFRAMEBUFFERSPROC GL_DeleteFramebuffersFunc;
 extern PFNGLGENRENDERBUFFERSPROC GL_GenRenderbuffersFunc;
 extern PFNGLBINDRENDERBUFFERPROC GL_BindRenderbufferFunc;
@@ -404,6 +405,7 @@ extern	qboolean	gl_glsl_alias_able;
 extern	qboolean	gl_glsl_water_able;
 extern	qboolean	gl_bmodel_instancing_able;
 extern	qboolean	gl_occlusion_able;
+extern qboolean gl_fbo_arb;
 extern	qboolean	gl_fbo_able; // woods #fxaa
 extern qboolean gl_msaa_able;
 // ericw --
@@ -572,6 +574,8 @@ void R_UpdateWarpTextures (void);
 
 void R_DrawWorld (void);
 void R_DrawAliasModel (entity_t *e);
+qboolean R_SaveAliasFadeDepth (void);
+void R_RestoreAliasFadeDepth (void);
 #define MAX_ALIAS_INSTANCES 1024
 qboolean R_AliasInst_Eligible (entity_t *e);
 void R_DrawAliasModelsInstanced (entity_t **ents, int count);
