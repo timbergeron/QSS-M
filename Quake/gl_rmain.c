@@ -1974,6 +1974,8 @@ void R_DrawEntitiesOnList (qboolean alphapass) //johnfitz -- added parameter
 
 			if (!R_ShouldDrawEntity(currententity, true))
 				continue;
+			if (currententity->eflags & EFLAGS_VIEWMODEL)
+				continue; // Composite faded weapons after translucent world effects.
 
 			// Store entity and distance for sorting
 			sorted_ents[num_sorted].ent = currententity;
@@ -2026,6 +2028,8 @@ void R_DrawEntitiesOnList (qboolean alphapass) //johnfitz -- added parameter
 			if (!r_drawflame.value) // woods
 				if (!strcmp(currententity->model->name, "progs/flame.mdl") || !strcmp(currententity->model->name, "progs/flame2.mdl"))
 					continue;
+			if (alphapass && (currententity->eflags & EFLAGS_VIEWMODEL))
+				continue;
 
 			// The expanded viewmodel powerup shell writes color but not depth. Hold
 			// the opaque default viewmodel until every opaque world fill and deferred
@@ -3897,6 +3901,20 @@ void R_RenderScene (void)
 #ifdef PSET_SCRIPT
 			PScript_DrawParticles();
 #endif
+		}
+	}
+
+	// Translucent weapons need a depth prepass to hide their internal surfaces.
+	// Draw them after world transparency and particles, so that weapon depth
+	// cannot reject background effects that should remain visible through them.
+	if (r_drawentities.value)
+	{
+		int i;
+		for (i = 0; i < cl_numvisedicts; ++i)
+		{
+			currententity = cl_visedicts[i];
+			if ((currententity->eflags & EFLAGS_VIEWMODEL) && R_ShouldDrawEntity(currententity, true))
+				R_DrawEntityModel(currententity);
 		}
 	}
 

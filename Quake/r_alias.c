@@ -2219,7 +2219,7 @@ Supports optional overbright, optional fullbright pixels.
 Based on code by MH from RMQEngine
 =============
 */
-static void GL_DrawAliasFrame_GLSL (aliasglsl_t *glsl, aliashdr_t *paliashdr, lerpdata_t lerpdata, struct skintextures_s tex, entity_t *e)
+static void GL_DrawAliasFrame_GLSL (aliasglsl_t *glsl, aliashdr_t *paliashdr, lerpdata_t lerpdata, struct skintextures_s tex, entity_t *e, qboolean depthonly)
 {
 	GLfloat	tints[3][4];
 	float	blend;
@@ -2442,9 +2442,21 @@ static void GL_DrawAliasFrame_GLSL (aliasglsl_t *glsl, aliashdr_t *paliashdr, le
 	GL_Uniform4fvFunc(glsl->colorTintLoc, countof(tints), tints[0]);	//colourmapping and glowmod.
 	GL_Uniform1iFunc (glsl->fogModeLoc, Fog_GetMode());
 
-	if (r_alias_outline_phase == ALIAS_OUTLINE_PHASE_NORMAL)
+	if (depthonly)
+	{
+		// Use the same pose, skin cutouts and projection, without shell/outline effects.
+		GL_Uniform1fFunc(glsl->outlineWidthLoc, 0.0f);
+		GL_Uniform1iFunc(glsl->isOutlinePassLoc, 0);
+		GL_Uniform1iFunc(glsl->shellModeLoc, 0);
+		GL_Uniform1iFunc(glsl->useShellTexLoc, 0);
+		glDrawElements(GL_TRIANGLES, paliashdr->numindexes, GL_UNSIGNED_SHORT,
+			currententity->model->meshindexesvboptr + paliashdr->eboofs);
+	}
+	else if (r_alias_outline_phase == ALIAS_OUTLINE_PHASE_NORMAL)
 	{
 		R_BeginAliasOutlineRendering(glsl); // woods #routline
+		if ((e->eflags & EFLAGS_VIEWMODEL) && entalpha < 1 && !(e->effects & EF_ADDITIVE))
+			glDepthFunc(GL_EQUAL); // Only shade the surface selected by the depth prepass.
 
 		applied_shell = R_ApplyPowerupShellEffect(glsl, e, tex, &shell_unit); // woods #powershell
 
@@ -3426,7 +3438,7 @@ static int r_alias_inst_draw_order[MAX_ALIAS_INSTANCES];
 static alias_inst_run_t r_alias_inst_runs[MAX_ALIAS_INSTANCES];
 static GLuint r_alias_inst_vbos[3];
 static unsigned int r_alias_inst_ring;
-static void R_DrawAliasModelPrepared (entity_t *e, const lerpdata_t *prepared);
+static void R_DrawAliasModelPrepared (entity_t *e, const lerpdata_t *prepared, qboolean depthonly);
 
 static qboolean R_AliasInst_SpecialModel (const char *name)
 {
@@ -3799,7 +3811,7 @@ void R_DrawAliasModelsInstanced (entity_t **ents, int count)
 				break;
 		if (j - i < 2)
 		{
-			R_DrawAliasModelPrepared(first->ent, &first->lerp);
+			R_DrawAliasModelPrepared(first->ent, &first->lerp, false);
 		}
 		else
 		{
@@ -3843,7 +3855,7 @@ void R_DrawAliasModelsInstanced (entity_t **ents, int count)
 		for (i = 0; i < ndata; ++i)
 		{
 			alias_inst_rec_t *rec = &r_alias_inst_recs[r_alias_inst_draw_order[i]];
-			R_DrawAliasModelPrepared(rec->ent, &rec->lerp);
+			R_DrawAliasModelPrepared(rec->ent, &rec->lerp, false);
 		}
 		currententity = saved;
 		return;
@@ -3879,7 +3891,7 @@ void R_DeleteAliasModelInstancingBuffers (void)
 R_DrawAliasModel -- johnfitz -- almost completely rewritten
 =================
 */
-static void R_DrawAliasModelPrepared (entity_t *e, const lerpdata_t *prepared)
+static void R_DrawAliasModelPrepared (entity_t *e, const lerpdata_t *prepared, qboolean depthonly)
 {
 	aliasglsl_t *glsl;
 	aliashdr_t	*paliashdr;
@@ -3906,6 +3918,25 @@ static void R_DrawAliasModelPrepared (entity_t *e, const lerpdata_t *prepared)
 	}
 
 	glsl = &r_alias_glsl[(paliashdr->poseverttype==PV_IQM&&lerpdata.bonestate)?ALIAS_GLSL_SKELETAL:ALIAS_GLSL_BASIC];
+
+	// Fade the visible weapon surface as a whole. Without this prepass, hidden
+	// triangles blend through it. Finish every mesh before any color is drawn,
+	// so separate MD3/MD5 surfaces occlude one another too. Reuse the prepared
+	// animation/transform so both passes have exactly the same depth values.
+	if (!depthonly && (e->eflags & EFLAGS_VIEWMODEL) &&
+		!(e->effects & EF_ADDITIVE) && !r_drawflat_cheatsafe && !r_lightmap_cheatsafe &&
+		r_alias_outline_phase == ALIAS_OUTLINE_PHASE_NORMAL &&
+		ENTALPHA_DECODE(e->alpha) > 0 && ENTALPHA_DECODE(e->alpha) < 1)
+	{
+		glPushAttrib(GL_ENABLE_BIT | GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT);
+		glColorMask(GL_FALSE, GL_FALSE, GL_FALSE, GL_FALSE);
+		glEnable(GL_DEPTH_TEST);
+		glDepthFunc(GL_LESS);
+		glDepthMask(GL_TRUE);
+		glDisable(GL_BLEND);
+		R_DrawAliasModelPrepared(e, &lerpdata, true);
+		glPopAttrib();
+	}
 
 	if (e->eflags & EFLAGS_VIEWMODEL)
 	{
@@ -3991,7 +4022,7 @@ static void R_DrawAliasModelPrepared (entity_t *e, const lerpdata_t *prepared)
 	//
 	// set up for alpha blending
 	//
-	if (r_drawflat_cheatsafe || r_lightmap_cheatsafe) //no alpha in drawflat or lightmap mode
+	if (depthonly || r_drawflat_cheatsafe || r_lightmap_cheatsafe) //no alpha in depth, drawflat or lightmap mode
 		entalpha = 1;
 	else
 		entalpha = ENTALPHA_DECODE(e->alpha);
@@ -4005,6 +4036,8 @@ static void R_DrawAliasModelPrepared (entity_t *e, const lerpdata_t *prepared)
 	}
 	else if (alphatest)
 		glEnable (GL_ALPHA_TEST);
+	if (!depthonly && (e->eflags & EFLAGS_VIEWMODEL) && entalpha < 1 && !(e->effects & EF_ADDITIVE))
+		glDepthFunc(GL_EQUAL);
 	if (e->effects & EF_ADDITIVE)
 	{
 		glBlendFunc (GL_SRC_ALPHA, GL_ONE);
@@ -4114,10 +4147,24 @@ static void R_DrawAliasModelPrepared (entity_t *e, const lerpdata_t *prepared)
 		//
 		// draw it
 		//
-		if (r_alias_outline_phase != ALIAS_OUTLINE_PHASE_NORMAL)
+		if (depthonly)
+		{
+			// Match the color path: fullbright debug rendering uses CPU vertices.
+			if (!r_fullbright_cheatsafe && glsl->program != 0 && (paliashdr->numbones <= glsl->maxbones || !lerpdata.bonestate))
+				GL_DrawAliasFrame_GLSL(glsl, paliashdr, lerpdata, tex, e, true);
+			else
+			{
+				GL_Bind(tex.base);
+				glTexEnvf(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_REPLACE);
+				shading = false;
+				glColor4f(1, 1, 1, 1);
+				GL_DrawAliasFrame(paliashdr, lerpdata);
+			}
+		}
+		else if (r_alias_outline_phase != ALIAS_OUTLINE_PHASE_NORMAL)
 		{
 			if (glsl->program != 0 && (paliashdr->numbones <= glsl->maxbones || !lerpdata.bonestate))
-				GL_DrawAliasFrame_GLSL(glsl, paliashdr, lerpdata, tex, e);
+				GL_DrawAliasFrame_GLSL(glsl, paliashdr, lerpdata, tex, e, false);
 		}
 		else if (r_drawflat_cheatsafe)
 		{
@@ -4160,7 +4207,7 @@ static void R_DrawAliasModelPrepared (entity_t *e, const lerpdata_t *prepared)
 	// r_alias_program will be 0.
 		else if (glsl->program != 0 && (paliashdr->numbones <= glsl->maxbones||!lerpdata.bonestate))
 		{
-			GL_DrawAliasFrame_GLSL (glsl, paliashdr, lerpdata, tex, e);
+			GL_DrawAliasFrame_GLSL (glsl, paliashdr, lerpdata, tex, e, false);
 		}
 		else if (e->effects & EF_FULLBRIGHT)
 		{
@@ -4341,7 +4388,10 @@ cleanup:
 		glDisable (GL_ALPHA_TEST);
 	glColor3f(1,1,1);
 	if (e->eflags & EFLAGS_VIEWMODEL)
+	{
 		glDepthRange (0, 1);
+		glDepthFunc(GL_LEQUAL);
+	}
 	if (e->effects & EF_ADDITIVE)
 		glBlendFunc (GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
 	glPopMatrix ();
@@ -4349,7 +4399,7 @@ cleanup:
 
 void R_DrawAliasModel (entity_t *e)
 {
-	R_DrawAliasModelPrepared (e, NULL);
+	R_DrawAliasModelPrepared (e, NULL, false);
 }
 
 /*
