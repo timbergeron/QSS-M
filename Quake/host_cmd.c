@@ -7641,27 +7641,81 @@ static size_t BuildNetQuakePingQuery(unsigned char* buffer, size_t bufsize) // w
 	}
 
 	return (size_t)(out - buffer);
-	}
+}
+
+enum
+{
+	PING_REPLY_NETQUAKE = 1,
+	PING_REPLY_INFO = 2,
+	PING_REPLY_STATUS = 4,
+	PING_REPLY_CHALLENGE = 8
+};
 
 typedef struct ping_query_s // woods #udplist
 {
 	const unsigned char* payload;
 	size_t payload_len;
 	const char* label;
+	unsigned int reply_type;
 } ping_query_t;
 
-static int NormalizePingResult(int ping_ms) // woods #udplist
+static qboolean PingReplyAddressMatches(const struct sockaddr* target,
+	const struct sockaddr_storage* from, socklen_t fromlen)
 {
-	const int normalization_bias = 14;
+	if (target->sa_family != from->ss_family)
+		return false;
+	if (target->sa_family == AF_INET && (size_t)fromlen >= sizeof(struct sockaddr_in))
+	{
+		const struct sockaddr_in* a = (const struct sockaddr_in*)target;
+		const struct sockaddr_in* b = (const struct sockaddr_in*)from;
+		return a->sin_port == b->sin_port && a->sin_addr.s_addr == b->sin_addr.s_addr;
+	}
+	if (target->sa_family == AF_INET6 && (size_t)fromlen >= sizeof(struct sockaddr_in6))
+	{
+		const struct sockaddr_in6* a = (const struct sockaddr_in6*)target;
+		const struct sockaddr_in6* b = (const struct sockaddr_in6*)from;
+		return a->sin6_port == b->sin6_port && a->sin6_scope_id == b->sin6_scope_id &&
+			!memcmp(&a->sin6_addr, &b->sin6_addr, sizeof(a->sin6_addr));
+	}
+	return false;
+}
 
-	if (ping_ms < 0)
-		return ping_ms;
+static unsigned int PingReplyType(const unsigned char* data, int length)
+{
+	unsigned int control;
+	static const struct
+	{
+		const char* prefix;
+		unsigned int type;
+	} replies[] = {
+		{"infoResponse\n", PING_REPLY_INFO},
+		{"statusResponse\n", PING_REPLY_STATUS},
+		{"challenge ", PING_REPLY_CHALLENGE},
+	};
 
-	ping_ms -= normalization_bias;
-	if (ping_ms < 0)
-		ping_ms = 0;
-
-	return ping_ms;
+	if (length < 5)
+		return 0;
+	memcpy(&control, data, sizeof(control));
+	control = (unsigned int)BigLong((int)control);
+	if ((control & ~NETFLAG_LENGTH_MASK) == NETFLAG_CTL)
+		return (control & NETFLAG_LENGTH_MASK) == (unsigned int)length &&
+			data[4] == CCREP_SERVER_INFO ? PING_REPLY_NETQUAKE : 0;
+	if (control != 0xffffffffu)
+		return 0;
+	for (size_t i = 0; i < Q_COUNTOF(replies); ++i)
+	{
+		size_t prefix_length = strlen(replies[i].prefix);
+		if ((size_t)length > 4 + prefix_length &&
+			!memcmp(data + 4, replies[i].prefix, prefix_length))
+			return replies[i].type;
+	}
+	/* QuakeWorld uses A2C_PRINT ('n') for status and S2C_CHALLENGE ('c'). */
+	if (length > 5 && data[4] == 'n' && (data[5] == '\\' || data[5] == '\n'))
+		return PING_REPLY_STATUS;
+	if (length > 5 && data[4] == 'c' &&
+		(data[5] == '-' || (data[5] >= '0' && data[5] <= '9')))
+		return PING_REPLY_CHALLENGE;
+	return 0;
 }
 
 static qboolean SendPingPacket(sys_socket_t sock, const struct sockaddr* addr, socklen_t addrlen, const ping_query_t* query, qboolean is_retry) // woods #udplist
@@ -7670,7 +7724,7 @@ static qboolean SendPingPacket(sys_socket_t sock, const struct sockaddr* addr, s
 		return false;
 
 	for (;;)
-{
+	{
 		if (sendto(sock, (const char*)query->payload, (int)query->payload_len, 0, addr, addrlen) != SOCKET_ERROR)
 			return true;
 
@@ -7709,6 +7763,184 @@ static void FormatResolvedServerAddress(const struct sockaddr* addr, socklen_t a
 		q_snprintf(out, outsize, "%s:%d", numeric, port);
 }
 
+/* Each attempt owns a socket until the query ends. Late/duplicate replies
+ * cannot become a fast sample on a newer attempt or reuse its source port. */
+static int Socket_Ping_Address(const struct addrinfo* address,
+	const ping_query_t* queries, size_t query_count)
+{
+	enum { MAX_SAMPLES = 3, MAX_QUERIES = 4 };
+	struct
+	{
+		sys_socket_t socket;
+		double sent_time[MAX_QUERIES];
+		unsigned int sent_types;
+		qboolean complete;
+	} samples[MAX_SAMPLES] = {0};
+	int attempts = 0;
+	int preferred_query = -1;
+	int best_ping = -1;
+	double deadline = Sys_DoubleTime() + 1.5;
+	double next_sample_time = 0.0;
+
+	if (query_count > MAX_QUERIES)
+		return -1;
+	for (int i = 0; i < MAX_SAMPLES; ++i)
+		samples[i].socket = INVALID_SOCKET;
+
+	while (!SDL_GetAtomicInt(&server_queries_abort))
+	{
+		double now = Sys_DoubleTime();
+		double remaining = deadline - now;
+		fd_set readfds;
+		struct timeval timeout;
+		sys_socket_t max_socket = 0;
+		int pending = 0;
+		int selected;
+
+		if (remaining <= 0 || (attempts == MAX_SAMPLES &&
+			samples[attempts - 1].sent_types && samples[attempts - 1].complete))
+			break;
+		if (attempts < MAX_SAMPLES && now >= next_sample_time)
+		{
+			int index = attempts++;
+			sys_socket_t sock = socket(address->ai_family, address->ai_socktype, address->ai_protocol);
+			samples[index].socket = sock;
+			samples[index].complete = true;
+			next_sample_time = now + 0.5;
+			if (sock == INVALID_SOCKET)
+			{
+				Con_DPrintf("ping socket() failed: %s\n", socketerror(SOCKETERRNO));
+				continue;
+			}
+#ifndef _WIN32
+			if (sock >= FD_SETSIZE)
+			{
+				closesocket(sock);
+				samples[index].socket = INVALID_SOCKET;
+				continue;
+			}
+#endif
+			for (size_t i = 0; i < query_count && !SDL_GetAtomicInt(&server_queries_abort); ++i)
+			{
+				/* After discovery, avoid sending three unsupported protocols again. */
+				if (preferred_query >= 0 && (int)i != preferred_query)
+					continue;
+				samples[index].sent_time[i] = Sys_DoubleTime();
+				if (SendPingPacket(sock, address->ai_addr, (socklen_t)address->ai_addrlen,
+					&queries[i], index != 0))
+				{
+					samples[index].sent_types |= queries[i].reply_type;
+					samples[index].complete = false;
+				}
+			}
+		}
+
+		FD_ZERO(&readfds);
+		for (int i = 0; i < attempts; ++i)
+		{
+			if (samples[i].complete)
+				continue;
+			FD_SET(samples[i].socket, &readfds);
+			if (samples[i].socket > max_socket)
+				max_socket = samples[i].socket;
+			pending++;
+		}
+		if (!pending)
+		{
+			if (attempts == MAX_SAMPLES)
+				break;
+			next_sample_time = 0.0;
+			continue;
+		}
+
+		now = Sys_DoubleTime();
+		remaining = deadline - now;
+		if (attempts < MAX_SAMPLES)
+			remaining = q_min(remaining, next_sample_time - now);
+		if (remaining <= 0)
+			continue;
+		/* Preserve prompt cancellation without overshooting the next attempt. */
+		remaining = q_min(remaining, 0.05);
+		timeout.tv_sec = 0;
+		timeout.tv_usec = (int)(remaining * 1000000.0);
+		if (timeout.tv_usec <= 0)
+			timeout.tv_usec = 1;
+#ifdef _WIN32
+		selected = selectsocket(0, &readfds, NULL, NULL, &timeout);
+#else
+		selected = selectsocket((int)(max_socket + 1), &readfds, NULL, NULL, &timeout);
+#endif
+		if (selected == SOCKET_ERROR)
+		{
+			int err = SOCKETERRNO;
+#ifdef _WIN32
+			if (err == WSAEINTR)
+#else
+			if (err == EINTR)
+#endif
+				continue;
+			Con_DPrintf("ping select() failed: %s\n", socketerror(err));
+			break;
+		}
+		if (!selected)
+			continue;
+
+		for (int i = 0; i < attempts; ++i)
+		{
+			unsigned char buffer[8192];
+			struct sockaddr_storage from;
+			socklen_t fromlen = sizeof(from);
+			unsigned int reply_type;
+			int received;
+
+			if (samples[i].complete || !FD_ISSET(samples[i].socket, &readfds))
+				continue;
+			received = recvfrom(samples[i].socket, (char*)buffer, sizeof(buffer), 0,
+				(struct sockaddr*)&from, &fromlen);
+			if (received == SOCKET_ERROR)
+			{
+				int err = SOCKETERRNO;
+#ifdef _WIN32
+				if (err == WSAEINTR)
+#else
+				if (err == EINTR)
+#endif
+					continue;
+				Con_DPrintf("ping recvfrom() failed: %s\n", socketerror(err));
+				/* An oversized datagram (WSAEMSGSIZE) or a queued UDP error
+				 * must not discard a valid reply that is still in flight. */
+				continue;
+			}
+			if (!received || !PingReplyAddressMatches(address->ai_addr, &from, fromlen))
+				continue;
+			reply_type = PingReplyType(buffer, received);
+			if (!(reply_type & samples[i].sent_types))
+				continue;
+			for (size_t query = 0; query < query_count; ++query)
+			{
+				if (queries[query].reply_type == reply_type)
+				{
+					double elapsed = (Sys_DoubleTime() - samples[i].sent_time[query]) * 1000.0;
+					int ping = (int)(q_max(0.0, elapsed) + 0.5);
+					if (best_ping < 0 || ping < best_ping)
+						best_ping = ping;
+					if (preferred_query < 0)
+						preferred_query = (int)query;
+					samples[i].complete = true;
+					/* Successful samples can follow immediately; loss waits 500 ms. */
+					next_sample_time = 0.0;
+					break;
+				}
+			}
+		}
+	}
+
+	for (int i = 0; i < attempts; ++i)
+		if (samples[i].socket != INVALID_SOCKET)
+			closesocket(samples[i].socket);
+	return SDL_GetAtomicInt(&server_queries_abort) ? -1 : best_ping;
+}
+
 static int Socket_Ping_HostResolved(const char* host, int port, char* resolved, size_t resolvedsize)
 {
 	struct addrinfo hints;
@@ -7732,10 +7964,14 @@ static int Socket_Ping_HostResolved(const char* host, int port, char* resolved, 
 	hints.ai_socktype = SOCK_DGRAM;
 	hints.ai_protocol = IPPROTO_UDP;
 	hints.ai_family = AF_UNSPEC;
-
 	q_snprintf(portstr, sizeof(portstr), "%d", port);
-
 	nq_query_len = BuildNetQuakePingQuery(nq_query, sizeof(nq_query));
+	const ping_query_t queries[] = {
+		{nq_query, nq_query_len, "netquake", PING_REPLY_NETQUAKE},
+		{qw_getinfo, sizeof(qw_getinfo), "getinfo", PING_REPLY_INFO},
+		{qw_status, sizeof(qw_status), "status", PING_REPLY_STATUS},
+		{dp_getchallenge, sizeof(dp_getchallenge), "getchallenge", PING_REPLY_CHALLENGE},
+	};
 
 	ret = getaddrinfo(host, portstr, &hints, &res);
 	if (ret != 0)
@@ -7750,149 +7986,10 @@ static int Socket_Ping_HostResolved(const char* host, int port, char* resolved, 
 
 	for (rp = res; rp && !SDL_GetAtomicInt(&server_queries_abort); rp = rp->ai_next)
 	{
-		sys_socket_t sock = socket(rp->ai_family, rp->ai_socktype, rp->ai_protocol);
 		if (resolved && resolvedsize && !resolved[0])
 			FormatResolvedServerAddress(rp->ai_addr, (socklen_t)rp->ai_addrlen,
 				port, resolved, resolvedsize);
-		if (sock == INVALID_SOCKET)
-		{
-			Con_DPrintf("socket() failed: %s\n", socketerror(SOCKETERRNO));
-			continue;
-		}
-
-		{
-			const ping_query_t base_queries[] = {
-				{qw_getinfo,      sizeof(qw_getinfo),      "getinfo"},
-				{qw_status,       sizeof(qw_status),       "status"},
-				{dp_getchallenge, sizeof(dp_getchallenge), "getchallenge"},
-			};
-			ping_query_t queries[Q_COUNTOF(base_queries) + 1];
-			size_t   query_count = 0;
-			qboolean sent_any = false;
-			double   start_time = 0.0;
-			double   next_resend_time = 0.0;
-			const double resend_interval = 0.5;
-			const double max_wait_time = 1.5;
-
-			if (nq_query_len > 0)
-			{
-				queries[query_count].payload = nq_query;
-				queries[query_count].payload_len = nq_query_len;
-				queries[query_count].label = "netquake";
-				++query_count;
-			}
-
-			for (size_t i = 0; i < Q_COUNTOF(base_queries); ++i)
-				queries[query_count++] = base_queries[i];
-
-			for (size_t i = 0; i < query_count; ++i)
-	{ 
-				if (SendPingPacket(sock, rp->ai_addr, (socklen_t)rp->ai_addrlen, &queries[i], false))
-				{
-					if (!sent_any)
-					{
-						start_time = Sys_DoubleTime();
-						next_resend_time = start_time + resend_interval;
-						sent_any = true;
-					}
-				}
-			}
-
-			if (sent_any)
-			{
-				double deadline = start_time + max_wait_time; // allow a little longer for servers to answer
-
-				while (ping_result < 0 && !SDL_GetAtomicInt(&server_queries_abort))
-				{
-					double now = Sys_DoubleTime();
-					double remaining = deadline - now;
-					fd_set readfds;
-					struct timeval tv;
-					int sel;
-
-					if (remaining <= 0)
-			break;
-
-					if (now >= next_resend_time && now < deadline)
-					{
-						for (size_t i = 0; i < query_count; ++i)
-							SendPingPacket(sock, rp->ai_addr, (socklen_t)rp->ai_addrlen, &queries[i], true);
-
-						next_resend_time = now + resend_interval;
-						continue;
-					}
-
-					FD_ZERO(&readfds);
-					FD_SET(sock, &readfds);
-
-					/* Keep the full query deadline, but check quit every 50 ms. */
-					remaining = q_min(remaining, 0.05);
-					tv.tv_sec = 0;
-					tv.tv_usec = (int)(remaining * 1000000.0);
-					if (tv.tv_usec <= 0)
-						tv.tv_usec = 1000;
-
-#ifdef _WIN32
-					sel = selectsocket(0, &readfds, NULL, NULL, &tv);
-#else
-					sel = selectsocket((int)(sock + 1), &readfds, NULL, NULL, &tv);
-#endif
-					if (sel > 0 && FD_ISSET(sock, &readfds))
-					{
-						unsigned char buffer[2048];
-						struct sockaddr_storage from;
-						socklen_t fromlen = sizeof(from);
-						int received;
-
-						for (;;)
-						{
-							received = recvfrom(sock, (char*)buffer, sizeof(buffer), 0, (struct sockaddr*)&from, &fromlen);
-							if (received >= 0)
-								break;
-
-							{
-								int err = SOCKETERRNO;
-#ifdef _WIN32
-								if (err == WSAEINTR)
-#else
-								if (err == EINTR)
-#endif
-									continue; // interrupted, try again immediately
-
-								Con_DPrintf("recvfrom() failed: %s\n", socketerror(err));
-							}
-							break;
-	}
-
-						if (received > 0)
-						{
-							double elapsed = (Sys_DoubleTime() - start_time) * 1000.0;
-							if (elapsed < 0)
-								elapsed = 0;
-
-							ping_result = NormalizePingResult((int)(elapsed + 0.5));
-							break;
-	}
-}
-					else if (sel == SOCKET_ERROR)
-					{
-						int err = SOCKETERRNO;
-#ifdef _WIN32
-						if (err == WSAEINTR)
-#else
-						if (err == EINTR)
-#endif
-							continue; // interrupted, keep waiting within the deadline
-
-						Con_DPrintf("select() failed: %s\n", socketerror(err));
-						break;
-					}
-				}
-			}
-		}
-
-		closesocket(sock);
-
+		ping_result = Socket_Ping_Address(rp, queries, Q_COUNTOF(queries));
 		if (ping_result >= 0)
 		{
 			FormatResolvedServerAddress(rp->ai_addr, (socklen_t)rp->ai_addrlen,

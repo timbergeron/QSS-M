@@ -1,12 +1,13 @@
 """Exercise real browser UDP queries against delayed and silent local servers.
 
-Run with python3 Misc/stress/test_quit_udp.py (requires cc and SDL3).
+Run with python3 Misc/stress/test_quit_udp.py (cc + SDL3, or Visual Studio on Windows).
 Checks normal deadlines, delayed replies, and cancellation of concurrent queries.
 """
 
 from pathlib import Path
 import os
 import shlex
+import shutil
 import socketserver
 import struct
 import subprocess
@@ -16,14 +17,21 @@ import time
 
 ROOT = Path(__file__).resolve().parents[2]
 host = (ROOT / "Quake/host_cmd.c").read_text()
+common = (ROOT / "Quake/common.c").read_text()
+compare_start = common.index("int q_strcasecmp(")
+compare = common[compare_start:common.index("\n}", compare_start) + 2]
 start = host.index("static SDL_AtomicInt server_queries_abort;")
 end = host.index("\n}\n", host.index("char *UDP_QueryPlayers(", start)) + 3
 
-SOURCE = r'''
+QUERY_SOURCE = r'''
 #include "quakedef.h"
 #include "arch_def.h"
 #include "net_sys.h"
 #include "net_defs.h"
+#include "q_ctype.h"
+#ifdef _WIN32
+#include "wsaerror.h"
+#endif
 #include <assert.h>
 int net_hostport = 26000, DEFAULTnet_hostport = 26000;
 double Sys_DoubleTime(void) {
@@ -36,7 +44,9 @@ int q_snprintf(char *out, size_t size, const char *fmt, ...) {
 }
 static int network_order(int value) { return (int)htonl((unsigned int)value); }
 int (*BigLong)(int) = network_order;
-''' + host[start:end] + r'''
+''' + compare + "\n" + host[start:end]
+
+SOURCE = QUERY_SOURCE + r'''
 
 typedef struct {
     const char *address;
@@ -56,6 +66,10 @@ static int query_worker(void *data) {
 
 int main(int argc, char **argv) {
     assert(argc == 4);
+#ifdef _WIN32
+    WSADATA winsock;
+    assert(WSAStartup(MAKEWORD(2, 2), &winsock) == 0);
+#endif
     assert(SDL_Init(0));
     double start = Sys_DoubleTime();
     assert(UDP_Ping_Host(argv[1]) == -1);
@@ -126,8 +140,12 @@ class Handler(socketserver.BaseRequestHandler):
         if mode == "silent":
             return
         if mode == "ping":
+            if len(packet) < 5 or packet[4] != 2:
+                return
             time.sleep(0.12)
-            sock.sendto(b"reply", self.client_address)
+            body = b"\x83fixture:26000\0fixture\0start\0" + bytes([0, 16, 3])
+            sock.sendto(struct.pack("!I", 0x80000000 | (len(body) + 4)) + body,
+                        self.client_address)
         elif len(packet) >= 6 and packet[4] == 3:
             slot = packet[5]
             if slot > 1:
@@ -139,17 +157,45 @@ class Handler(socketserver.BaseRequestHandler):
                         self.client_address)
 
 
-def main():
-    flags = shlex.split(subprocess.check_output(["pkg-config", "--cflags", "--libs", "sdl3"], text=True))
-    with tempfile.TemporaryDirectory(prefix="qssm-quit-udp-test-") as tmp:
-        path = Path(tmp)
-        source, binary = path / "test.c", path / "test"
-        source.write_text(SOURCE)
+def compile_query_test(source_text, path):
+    source = path / "test.c"
+    binary = path / ("test.exe" if os.name == "nt" else "test")
+    source.write_text(source_text)
+    if os.name == "nt":
+        vs = Path(os.environ.get("ProgramFiles", r"C:\Program Files")) / "Microsoft Visual Studio"
+        devcmds = sorted(vs.glob("*/*/Common7/Tools/VsDevCmd.bat"))
+        if not devcmds:
+            raise RuntimeError("Visual Studio C compiler not found")
+        build = path / "build.cmd"
+        build.write_text(
+            '@echo off\n'
+            f'call "{devcmds[-1]}" -arch=x64 -host_arch=x64 >nul\n'
+            'if errorlevel 1 exit /b %errorlevel%\n'
+            f'cl /nologo /O2 /Gy /std:c11 /W3 /D_CRT_SECURE_NO_WARNINGS /D_CRT_NONSTDC_NO_DEPRECATE '
+            f'/I"{ROOT / "Quake"}" /I"{ROOT / "Windows/SDL3/include"}" '
+            f'"{source}" "{ROOT / "Quake/net_address.c"}" "{ROOT / "Quake/strlcpy.c"}" '
+            f'/Fe:"{binary}" /link /OPT:REF /LIBPATH:"{ROOT / "Windows/SDL3/lib/x64"}" SDL3.lib ws2_32.lib\n'
+        )
+        subprocess.run([os.environ.get("COMSPEC", "cmd.exe"), "/d", "/c", str(build)],
+                       cwd=path, check=True)
+        shutil.copy2(ROOT / "Windows/SDL3/lib/x64/SDL3.dll", path / "SDL3.dll")
+    else:
+        flags = shlex.split(subprocess.check_output(["pkg-config", "--cflags", "--libs", "sdl3"], text=True))
         subprocess.run([os.environ.get("CC", "cc"), "-O2", "-std=gnu11",
                         "-Wall", "-Wextra", "-Werror", "-Wno-unused-function",
                         "-ffunction-sections", "-Wl,--gc-sections", "-I", str(ROOT / "Quake"),
                         str(source), str(ROOT / "Quake/net_address.c"),
                         str(ROOT / "Quake/strlcpy.c"), "-o", str(binary), *flags], check=True)
+    return binary
+
+
+def main():
+    build_root = ROOT / ".codex-build"
+    build_root.mkdir(exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix="quit-udp-", dir=build_root) as tmp:
+        path = Path(tmp).resolve()
+        assert path.is_relative_to(build_root.resolve())
+        binary = compile_query_test(SOURCE, path)
         servers = []
         try:
             for mode in ("silent", "ping", "players"):

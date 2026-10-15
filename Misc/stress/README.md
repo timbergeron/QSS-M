@@ -6,6 +6,18 @@ covers the things a player actually does -- connecting to a server, changing
 maps, playing, walking the menus, replaying demos -- plus argument fuzzing over
 every registered console command and cvar.
 
+## Standalone server-browser ping tests
+
+`python Misc/stress/test_browser_ping.py` compiles the production UDP query
+functions and checks retry timing, three-sample minimum RTT, protocol fallback,
+late and duplicate replies, reply validation, IPv6, and the existing timeout.
+All traffic stays on loopback; no game assets are needed. Run
+`python Misc/stress/test_quit_udp.py` alongside it to check player-query deadlines
+and cancellation of concurrent browser workers during shutdown.
+
+These tests require a C compiler and SDL3 on Unix. On Windows they find Visual
+Studio automatically and use the repository's bundled SDL3 headers and library.
+
 ## Requirements
 
 For chunked download pacing and standalone regression tests, see
