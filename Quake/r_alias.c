@@ -1952,7 +1952,9 @@ void R_DrawViewmodelShell(aliasglsl_t* glsl, aliashdr_t* paliashdr, lerpdata_t* 
 	// Draw the shell
 	glDrawElements(GL_TRIANGLES, paliashdr->numindexes, GL_UNSIGNED_SHORT,
 		e->model->meshindexesvboptr + paliashdr->eboofs);
-	R_DrawPowerupShellGlow(glsl, paliashdr, e, shellScale, shellColor, shellAlpha); // woods #powershell
+	// Damage keeps its original thin rim; the outer halo is for powerups.
+	if (!damage_hue_active)
+		R_DrawPowerupShellGlow(glsl, paliashdr, e, shellScale, shellColor, shellAlpha); // woods #powershell
 
 	glPopAttrib();
 
