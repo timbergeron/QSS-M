@@ -2855,6 +2855,23 @@ void R_SetupAliasFrame (aliashdr_t *paliashdr, entity_t *e, lerpdata_t *lerpdata
 		frame = 0;
 	}
 
+	if (e == &cl.viewent && r_lerpmodels.value == 3 &&
+		!(e->lerpflags & LERP_EXPLICIT) && paliashdr->numframes == 9 &&
+		!strcmp(e->model->name, "progs/v_nail2.mdl"))
+	{
+		// Start the eight-pose firing cycle on the top barrel, aligned with
+		// idle. A tap then recoils without spinning; held fire still rotates.
+		if (frame > 0)
+			frame = (frame + 2) % 8 + 1;
+
+		// Idle and the top shot look aligned, but their vertex/bone identities
+		// are half a turn apart. Blending them would twist the barrel cluster.
+		if ((frame == 4 && ((e->lerpflags & LERP_WRESET) ||
+			e->lerp.state.currentpose == paliashdr->frames[0].firstpose)) ||
+			(frame == 0 && e->lerp.state.currentpose == paliashdr->frames[4].firstpose))
+			e->lerpflags |= LERP_RESETANIM;
+	}
+
 	if (e->lerpflags & LERP_EXPLICIT)
 	{
 		int frame2 = e->lerp.snap.frame2;
