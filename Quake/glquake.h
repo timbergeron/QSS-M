@@ -245,6 +245,7 @@ extern	cvar_t	gl_laserpoint_alpha; // woods #laser
 extern	cvar_t	gl_powerupshells; // woods #powershell
 extern	cvar_t	gl_powerupshells_alpha; // woods #powershell
 extern	cvar_t	gl_powerupshells_glow; // woods #powershell
+extern	cvar_t	gl_powerupshells_width; // woods #powershell
 extern	cvar_t	gl_motion_blur; // woods #motionblur
 extern	cvar_t	gl_finish;
 extern	cvar_t	gl_bmodel_instancing;

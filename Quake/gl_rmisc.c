@@ -655,6 +655,7 @@ void R_Init (void)
 	Cvar_SetCompletion (&gl_powerupshells, &GL_PowerupShells_Completion_f); // woods #iwtabcomplete #powershell
 	Cvar_RegisterVariable (&gl_powerupshells_alpha); // woods #powershell
 	Cvar_RegisterVariable (&gl_powerupshells_glow); // woods #powershell
+	Cvar_RegisterVariable (&gl_powerupshells_width); // woods #powershell
 	Cvar_RegisterVariable (&gl_caustics); // woods #caustics
 	Cvar_RegisterVariable (&r_grass); // woods #grass
 	Cvar_RegisterVariable (&r_grass_tex); // woods #grass

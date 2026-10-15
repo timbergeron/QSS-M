@@ -104,6 +104,7 @@ cvar_t	gl_laserpoint_alpha = { "gl_laserpoint_alpha",".3", CVAR_ARCHIVE }; // wo
 cvar_t	gl_powerupshells = {"gl_powerupshells","1",CVAR_ARCHIVE}; // woods #powershell
 cvar_t  gl_powerupshells_alpha = {"gl_powerupshells_alpha", "0.3"}; // woods #powershell
 cvar_t	gl_powerupshells_glow = {"gl_powerupshells_glow", "0.5", CVAR_ARCHIVE}; // woods #powershell
+cvar_t	gl_powerupshells_width = {"gl_powerupshells_width", "1", CVAR_ARCHIVE}; // woods #powershell
 cvar_t	gl_motion_blur = {"gl_motion_blur", "0", CVAR_ARCHIVE}; // woods #motionblur
 
 //johnfitz -- new cvars

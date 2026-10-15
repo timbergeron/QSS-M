@@ -382,17 +382,15 @@ void GLAlias_CreateShaders (void)
 		"	// Transform the vertex position\n" // woods #routline
 		"	vec4 basePos = (vec4(Pose1Vert.xyz, 1.0) * wmat);\n"
 		"	vec3 transformedNormal = normalize((vec4(Pose1Normal.xyz, 0.0) * wmat).xyz);\n"
-		"   lerpedNormal = transformedNormal; // initialise for later use\n"
+		"	// MD5 normals point inward, so flip them for the outline and powerup shell expansion\n" // woods #routline #powershell
+		"	float weightSum = BoneWeight.x + BoneWeight.y + BoneWeight.z + BoneWeight.w;\n"
+		"	lerpedNormal = abs(weightSum - 1.0) < 0.001 ? -transformedNormal : transformedNormal;\n"
 		"\n"
 		"	float outlineScale = 1.0;\n"
 		"	if (isOutlinePass == 1 && outlineWidth > 0.0)\n"
 		"	{\n"
 		"		// Add the scaled normal for outline\n"
-			"		float weightSum = BoneWeight.x + BoneWeight.y + BoneWeight.z + BoneWeight.w;\n"
-			"		if (abs(weightSum - 1.0) < 0.001)\n"
-			"			lerpedVert = basePos + vec4(-transformedNormal * outlineWidth * outlineScale, 0.0);\n"
-			"		else\n"
-			"			lerpedVert = basePos + vec4(transformedNormal * outlineWidth * outlineScale, 0.0);\n"
+		"		lerpedVert = basePos + vec4(lerpedNormal * outlineWidth * outlineScale, 0.0);\n"
 		"	}\n"
 		"	else\n"
 		"	{\n"
@@ -1816,6 +1814,46 @@ void R_DrawAliasModelOutline(aliasglsl_t* glsl, aliashdr_t* paliashdr, lerpdata_
 	glDisable(GL_BLEND);
 }
 
+/*
+=============
+R_PowerupShellWidth -- woods #powershell
+
+The shader expands the shell in mesh units, which hdr->scale turns into world
+units: an MDL's 0..255 quantization steps, 1/64 for MD3, 1 for MD5/IQM. The
+look was tuned on MDLs, so other formats get the world width an MDL with the
+same bounds would get, converted back into their own mesh units. MDLs get a
+small boost on top: their anisotropic scale squashes the sideways expansion
+that dominates a viewmodel's silhouette.
+=============
+*/
+static float R_PowerupShellWidth(aliashdr_t* paliashdr, entity_t* e, lerpdata_t* lerpdata)
+{
+	static const float mdl_width_boost = 1.3f;
+	float radius, width, mdlstep, meshunit;
+
+	if (paliashdr->poseverttype != PV_QUAKE3 && paliashdr->poseverttype != PV_IQM)
+		radius = R_CalculateAliasModelRadius(paliashdr, e, lerpdata, NULL);
+	else
+		radius = q_max(e->model->rmaxs[0], 1.0f); // whole-model radius, like an MDL's boundingradius
+
+	width = CLAMP(0.08f, 14.0f * pow(15.0f / radius, 1.6f), 8.0f);
+
+	if (paliashdr->poseverttype == PV_QUAKE3 || paliashdr->poseverttype == PV_IQM)
+	{
+		mdlstep = ((e->model->maxs[0] - e->model->mins[0]) +
+			(e->model->maxs[1] - e->model->mins[1]) +
+			(e->model->maxs[2] - e->model->mins[2])) / (3.0f * 255.0f);
+		meshunit = (paliashdr->scale[0] + paliashdr->scale[1] + paliashdr->scale[2]) / 3.0f;
+		if (mdlstep > 0.0f && meshunit > 0.0f)
+			width *= mdlstep / meshunit;
+	}
+	else
+		width *= mdl_width_boost;
+
+	// User multiplier last, so every format scales together.
+	return width * CLAMP(0.25f, gl_powerupshells_width.value, 3.0f);
+}
+
 static void R_DrawPowerupShellGlow(aliasglsl_t* glsl, aliashdr_t* paliashdr, entity_t* e, float shellScale, const float* color, float baseAlpha) // woods #powershell
 {
 	enum { POWERUP_SHELL_GLOW_LAYERS = 12 };
@@ -1876,14 +1914,7 @@ void R_DrawViewmodelShell(aliasglsl_t* glsl, aliashdr_t* paliashdr, lerpdata_t* 
 		return;
 	}
 
-	qboolean isMD5Model = false;
-	float modelRadius = R_CalculateAliasModelRadius(paliashdr, e, lerpdata, &isMD5Model);
-
-	float baseScale = 14.0f;
-	float inverseScale = baseScale * pow(15.0f / modelRadius, 1.6f);
-	float shellScale = CLAMP(0.08f, inverseScale, 8.0f);
-	if (isMD5Model)
-		shellScale *= 1.30f;
+	float shellScale = R_PowerupShellWidth(paliashdr, e, lerpdata);
 
 	glPushAttrib(GL_ENABLE_BIT | GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT);
 
@@ -2029,19 +2060,14 @@ static float R_PowerupShellTextureAlpha(void) // -- woods #powershell
 static void R_DrawPowerupPickupShell(aliasglsl_t* glsl, aliashdr_t* paliashdr, lerpdata_t* lerpdata, entity_t* e) // -- woods #powershell
 {
 	vec3_t shellColor;
-	qboolean isMD5Model = false;
-	float modelRadius, inverseScale, shellScale, shellAlpha;
+	float shellScale, shellAlpha;
 	const float kmax = 5.0f;
 	float alpha_knob, k;
 
 	if (!r_coloredpowerupglow.value || !gl_stencilbits || !R_GetPowerupPickupShellColor(e, shellColor))
 		return; // woods #powershell -- no stencil buffer means no rim mask; skip rather than flood the whole model
 
-	modelRadius = R_CalculateAliasModelRadius(paliashdr, e, lerpdata, &isMD5Model);
-	inverseScale = 14.0f * pow(15.0f / modelRadius, 1.6f);
-	shellScale = CLAMP(0.08f, inverseScale, 8.0f);
-	if (isMD5Model)
-		shellScale *= 1.30f;
+	shellScale = R_PowerupShellWidth(paliashdr, e, lerpdata);
 
 	alpha_knob = CLAMP(0.0f, gl_powerupshells_alpha.value, 1.0f);
 	k = alpha_knob * kmax;
