@@ -337,6 +337,7 @@ typedef struct
 	trivertx_t			bboxmax;
 //	int					frame;	//spike - this was redundant.
 	char				name[16];
+	float				outline_radius; // lazily cached MDL/MD3 radius; zero until first use
 } maliasframedesc_t;
 
 typedef struct

@@ -1226,10 +1226,24 @@ R_CalculateAliasModelRadius
 static float R_CalculateAliasModelRadius(aliashdr_t *paliashdr, entity_t *e, lerpdata_t *lerpdata, qboolean *isMD5Model)
 {
 	float radius = 0.0f;
-	maliasframedesc_t *frame = &paliashdr->frames[e->frame];
+	int framenum = e->frame;
+	maliasframedesc_t *frame;
+	qboolean cacheable = paliashdr->poseverttype == PV_QUAKE1 || paliashdr->poseverttype == PV_QUAKE3;
 
 	if (isMD5Model)
 		*isMD5Model = false;
+
+	// Match R_SetupAliasFrame's fallback without indexing an invalid network frame.
+	if (framenum < 0 || framenum >= paliashdr->numframes)
+		framenum = 0;
+	frame = &paliashdr->frames[framenum];
+
+	// Frame descriptors are zeroed with the model's hunk allocation and travel
+	// with its cache block. Each surface owns its radius, so reloads and cache
+	// relocation need no pointer-keyed invalidation. Skeletal radii depend on
+	// the live blended bone pose and must always be recalculated.
+	if (cacheable && frame->outline_radius > 0.0f)
+		return frame->outline_radius;
 
 	switch (paliashdr->poseverttype)
 	{
@@ -1345,7 +1359,10 @@ static float R_CalculateAliasModelRadius(aliashdr_t *paliashdr, entity_t *e, ler
 	}
 	}
 
-	return q_max(radius, 1.0f);
+	radius = q_max(radius, 1.0f);
+	if (cacheable)
+		frame->outline_radius = radius;
+	return radius;
 }
 
 /*
