@@ -66,11 +66,12 @@ VARIANTS.update(BISECT)
 # that setting applied for everything after it -- which silently turned shadows
 # off for most of an earlier bisect and made it look like no single feature
 # mattered.
-_ENT_DEFAULTS = ["r_drawentities 1", "r_shadows 0.1", "gl_powerupshells 2",
+_ENT_DEFAULTS = ["r_drawentities 1", "r_shadows 0.125", "gl_powerupshells 1",
                  "r_lerpmodels 3", "r_lerpmove 1", "r_drawviewmodel 1",
                  "r_grass 1", "r_particles 1", "r_alias_skip 0",
                  "r_shadows_maxdist 0", "r_shadows_bmodels 1",
-                 "r_shadows_buffered 1"]
+                 "r_shadows_buffered 1", "r_outline 5",
+                 "gl_alias_instancing 1", "r_outline_minpixels 1"]
 
 def _entvariant(**overrides):
     cmds = []
@@ -90,6 +91,12 @@ ENTBISECT = {
     "e_noparts":  _entvariant(r_particles="0"),
     "e_nolight":  _entvariant(r_alias_skip="1"),
     "e_noents":   _entvariant(r_drawentities="0"),
+    "e_nooutline": _entvariant(r_outline="0"),
+    "e_mp4":       _entvariant(r_outline_minpixels="4"),
+    "e_mp8":       _entvariant(r_outline_minpixels="8"),
+    "e_mp16":      _entvariant(r_outline_minpixels="16"),
+    "e_noinst":    _entvariant(gl_alias_instancing="0"),
+    "e_nolerp2":   _entvariant(r_lerpmodels="0", r_lerpmove="0"),
     # shadow distance cull, off by default
     "e_sdist512":  _entvariant(r_shadows_maxdist="512"),
     "e_sdist1024": _entvariant(r_shadows_maxdist="1024"),
@@ -197,6 +204,25 @@ class LiveClient:
         if self.cores:
             set_affinity(self.proc.pid, self.cores)
         self.wait_for("STRESS_READY", 30)
+        # main_sdl.c sleeps 16ms per frame while the window lacks input focus,
+        # which pins any measurement at ~58fps regardless of render cost.
+        self.focus()
+
+    def focus(self):
+        """Bring the client window forward so it is not frame-throttled."""
+        try:
+            import focusutil
+        except ImportError:
+            try:
+                sys.path.insert(0, str(Path(__file__).resolve().parent))
+                import focusutil
+            except ImportError:
+                return False
+        for _ in range(20):
+            if focusutil.focus(self.proc.pid):
+                return True
+            time.sleep(0.25)
+        return False
 
     def alive(self):
         return self.proc is not None and self.proc.poll() is None
@@ -368,7 +394,15 @@ def run(args):
     try:
         client.start()
         # No r_speeds: its per-frame Con_Printf is itself a confounder here.
-        client.send("host_maxfps 0", "vid_vsync 0", "r_speeds 0",
+        # host_maxfps 0 is NOT uncapped for measurement: Host_FrameInterval
+        # returns 0, so Host_Throttle falls into SDL_Delay(1) once per frame.
+        # On Windows timer granularity that is ~15ms, pinning the client near
+        # 58fps and measuring the sleep instead of the renderer. A positive
+        # value takes the SDL_DelayPrecise path; 5000 is the engine's clamp.
+        # sys_throttle -1 disables main_sdl.c's 16ms unfocused sleep. Without it
+        # an unfocused probe window is pinned at ~58fps whatever the renderer
+        # costs, and every measurement is of SDL_Delay rather than the frame.
+        client.send("sys_throttle -1", "host_maxfps 5000", "vid_vsync 0", "r_speeds 0",
                     "map {}".format(args.map))
         client.wait_spawned(args.map_timeout)
         client.settle(args.settle)
