@@ -491,7 +491,7 @@ static cvar_t r_part_cullbehind = {"r_part_cullbehind", "1"};
 static cvar_t r_lightflicker = {"r_lightflicker", "1"};
 extern cvar_t r_particles; // woods (vk)
 
-static float particletime;
+static double particletime;	// double: a float accumulator stalls at high fps once cl.time reaches a few hours
 static float pscript_preage_min;	// spawned particles start pscript_preage_min + frandom()*pscript_preage_range seconds old
 static float pscript_preage_range;	// (sky reveal backfill; both 0 normally)
 static qboolean pscript_mapdecal_spawn;
@@ -9308,7 +9308,7 @@ void PScript_DrawParticles (void)
 	byte *scenevis = NULL;
 	float pframetime;
 	qboolean scenevis_resolved = false;
-	static float oldtime;
+	static double oldtime;
 	
 	pframetime = cl.time - oldtime;
 	if (pframetime < 0)
