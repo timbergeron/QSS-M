@@ -26,6 +26,7 @@ static double counted_sqrt(double value) { square_roots++; return sqrt(value); }
 #define sqrt counted_sqrt
 '''
 source += function(mesh, 'void Matrix3x4_RM_Transform4(')
+source += function(renderer, 'static qboolean R_AliasModelIsMD5(')
 source += function(renderer, 'static float R_CalculateAliasModelRadius(')
 source += r'''
 #undef sqrt
@@ -155,13 +156,27 @@ int main(void) {
     assert(R_CalculateAliasModelRadius(iqm, &e, &lerp, &md5) == (float)sqrt(52) && md5);
     s->idx[1] = 1; s->weight[0] = s->weight[1] = 0.5f;
     assert(R_CalculateAliasModelRadius(iqm, &e, &lerp, &md5) == (float)sqrt(97) && md5);
+    /* A skeletal radius is never retained, however often it is asked for. */
+    assert(iqm->frames[0].outline_radius == 0);
+
+    /* With no bone state those same vertices are static, so the radius is
+     * retained and the weight verdict is reached once instead of per call. */
     lerp.bonestate = NULL;
     assert(R_CalculateAliasModelRadius(iqm, &e, &lerp, &md5) == 5 && md5);
-    s->weight[0] = s->weight[1] = 0;
-    assert(R_CalculateAliasModelRadius(iqm, &e, NULL, &md5) == 5 && !md5);
-    assert(iqm->frames[0].outline_radius == 0);
+    assert(iqm->frames[0].outline_radius == 5);
+    before = square_roots;
+    assert(R_CalculateAliasModelRadius(iqm, &e, NULL, &md5) == 5 && md5);
+    assert(square_roots == before);
     free(iqm);
-    puts("PASS: cached MDL/MD3 radii, grouped/invalid frames, independent surfaces, relocation/reload, and live skeletal poses");
+
+    /* The verdict follows the vertex data: zeroed weights do not sum to one. */
+    iqm = fixture(PV_IQM, 1, sizeof(iqmvert_t));
+    s = (iqmvert_t *)((byte *)iqm + iqm->vertexes);
+    s->xyz[0] = 3; s->xyz[1] = 4;
+    assert(R_CalculateAliasModelRadius(iqm, &e, NULL, &md5) == 5 && !md5);
+    assert(iqm->md5_weighted == 2 && iqm->frames[0].outline_radius == 5);
+    free(iqm);
+    puts("PASS: cached MDL/MD3/boneless-iqm radii, grouped/invalid frames, independent surfaces, relocation/reload, live skeletal poses, and a once-per-model weight verdict");
     return 0;
 }
 '''

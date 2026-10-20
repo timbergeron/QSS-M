@@ -1220,6 +1220,36 @@ static qboolean R_IsAliasOutlineXray(entity_t *e, vec3_t color, float *alpha, fl
 
 /*
 =============
+R_AliasModelIsMD5 -- woods #routline
+
+A converted md5 always has vertex weights that sum to one, which is how it is
+told apart from a hand-authored iqm. That depends on the vertex data alone, so
+test it once and keep the verdict in the header.
+=============
+*/
+static qboolean R_AliasModelIsMD5(aliashdr_t *paliashdr)
+{
+	if (!paliashdr->md5_weighted)
+	{
+		const iqmvert_t *verts = (const iqmvert_t *)((byte *)paliashdr + paliashdr->vertexes);
+
+		paliashdr->md5_weighted = 1;
+		for (int i = 0; i < paliashdr->numverts; i++)
+		{
+			float weightSum = verts[i].weight[0] + verts[i].weight[1] + verts[i].weight[2] + verts[i].weight[3];
+			if (weightSum < 0.999f || weightSum > 1.001f)
+			{
+				paliashdr->md5_weighted = 2;
+				break;
+			}
+		}
+	}
+
+	return paliashdr->md5_weighted == 1;
+}
+
+/*
+=============
 R_CalculateAliasModelRadius
 =============
 */
@@ -1228,10 +1258,14 @@ static float R_CalculateAliasModelRadius(aliashdr_t *paliashdr, entity_t *e, ler
 	float radius = 0.0f;
 	int framenum = e->frame;
 	maliasframedesc_t *frame;
-	qboolean cacheable = paliashdr->poseverttype == PV_QUAKE1 || paliashdr->poseverttype == PV_QUAKE3;
+	qboolean skeletal = paliashdr->poseverttype == PV_IQM && lerpdata && lerpdata->bonestate;
+	qboolean cacheable = !skeletal && (paliashdr->poseverttype == PV_QUAKE1 ||
+					   paliashdr->poseverttype == PV_QUAKE3 ||
+					   paliashdr->poseverttype == PV_IQM);
 
+	// Decided before the cache hit below returns, so a hit still reports it.
 	if (isMD5Model)
-		*isMD5Model = false;
+		*isMD5Model = paliashdr->poseverttype == PV_IQM && R_AliasModelIsMD5(paliashdr);
 
 	// Match R_SetupAliasFrame's fallback without indexing an invalid network frame.
 	if (framenum < 0 || framenum >= paliashdr->numframes)
@@ -1241,7 +1275,8 @@ static float R_CalculateAliasModelRadius(aliashdr_t *paliashdr, entity_t *e, ler
 	// Frame descriptors are zeroed with the model's hunk allocation and travel
 	// with its cache block. Each surface owns its radius, so reloads and cache
 	// relocation need no pointer-keyed invalidation. Skeletal radii depend on
-	// the live blended bone pose and must always be recalculated.
+	// the live blended bone pose and must always be recalculated; with no bone
+	// state those same vertices are static, so they cache like an mdl's.
 	if (cacheable && frame->outline_radius > 0.0f)
 		return frame->outline_radius;
 
@@ -1272,16 +1307,8 @@ static float R_CalculateAliasModelRadius(aliashdr_t *paliashdr, entity_t *e, ler
 	{
 		const iqmvert_t *verts = (const iqmvert_t *)((byte *)paliashdr + paliashdr->vertexes);
 		float maxDist = 0.0f;
-		qboolean isMD5 = true;
 
-		for (int i = 0; i < paliashdr->numverts && isMD5; i++)
-		{
-			float weightSum = verts[i].weight[0] + verts[i].weight[1] + verts[i].weight[2] + verts[i].weight[3];
-			if (weightSum < 0.999f || weightSum > 1.001f)
-				isMD5 = false;
-		}
-
-		if (lerpdata && lerpdata->bonestate)
+		if (skeletal)
 		{
 			for (int i = 0; i < paliashdr->numverts; i++)
 			{
@@ -1324,8 +1351,6 @@ static float R_CalculateAliasModelRadius(aliashdr_t *paliashdr, entity_t *e, ler
 			}
 		}
 
-		if (isMD5Model)
-			*isMD5Model = isMD5;
 		radius = maxDist;
 		break;
 	}
