@@ -4,8 +4,11 @@ Single-surface models must prepare once for their stencil/ring(/scrub) passes.
 Multi-surface models must retain whole-model stencil barriers, otherwise one
 surface can erase or expose another surface's outline. With enough stencil
 bits every model masks with its own value (no scrub pass, cleared once at the
-end); with fewer the legacy mask/ring/scrub replay in bit 0x01 remains. Compile with CC, or
-run from a Visual Studio developer shell on Windows.
+end) through the lean replay, which never re-enters R_DrawAliasModel; with
+fewer, or an MF_HOLEY skin queued, the legacy mask/ring(/scrub) replay remains.
+Compile with CC, or run from a Visual Studio developer shell on Windows.
+--mutation-check and --mutation-check-lean must FAIL: they break the extracted
+legacy and lean code respectively, never the renderer.
 """
 import os
 from pathlib import Path
@@ -38,8 +41,16 @@ if "--mutation-check" in sys.argv:
     passes = passes.replace(
         "last_phase = r_alias_outline_unique ? ALIAS_OUTLINE_PHASE_RING : ALIAS_OUTLINE_PHASE_SCRUB;",
         "last_phase = ALIAS_OUTLINE_PHASE_RING;")
+lean = function("static void R_DrawDeferredAliasOutlineLean (")
+if "--mutation-check-lean" in sys.argv:
+    # Deliberately mask with the previous ring's culling.
+    cull_restore = ("\t\t\tif (cull)\n\t\t\t\tglEnable (GL_CULL_FACE);\n"
+                    "\t\t\telse\n\t\t\t\tglDisable (GL_CULL_FACE);\n")
+    assert cull_restore in lean
+    lean = lean.replace(cull_restore, "")
 source = r'''
 #include <stdio.h>
+#include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
 #define MAX_EDICTS 16
@@ -60,17 +71,40 @@ source = r'''
 #define GL_TRIANGLES 26
 #define GL_UNSIGNED_SHORT 27
 #define GL_FALSE 0
+#define GL_TRUE 1
+#define GL_CULL_FACE 30
+#define GL_TEXTURE0 31
+#define GL_TEXTURE_ENV 32
+#define GL_TEXTURE_ENV_MODE 33
+#define GL_PERSPECTIVE_CORRECTION_HINT 34
+#define GL_NICEST 35
+#define GL_FLAT 36
+#define GL_BLEND 37
+#define PV_IQM 5
+#define ENTALPHA_DECODE(a) ((a) == 0 ? 1.0f : (float)((a) - 1) / 254)
+#define texCoordsAttrIndex 4
+#define pose1VertexAttrIndex 0
+#define pose1NormalAttrIndex 1
+#define pose2VertexAttrIndex 2
+#define pose2NormalAttrIndex 3
+#define vertColoursAttrIndex 5
+enum { ALIAS_GLSL_BASIC, ALIAS_GLSL_SKELETAL };
+typedef unsigned char byte;
+typedef unsigned char GLboolean;
 #define CHECK(cond, message) do { if (!(cond)) { puts("FAIL: " message); exit(1); } } while (0)
 #define GL_VIEWMODEL_STENCIL_BIT()  (gl_stencilbits > 1 ? (1u << (gl_stencilbits - 1)) : 0u)
 typedef int qboolean;
 typedef unsigned int GLuint;
 typedef int GLint;
-typedef struct { int nextsurface, numtris, numindexes, eboofs; } aliashdr_t;
-typedef struct { aliashdr_t header; const char *meshindexesvboptr; } qmodel_t;
-typedef struct { qmodel_t *model; int alias_outline_order; } entity_t;
-typedef struct { int outlineWidthLoc, isOutlinePassLoc, shellModeLoc, useShellTexLoc; } aliasglsl_t;
-typedef struct { int unused; } lerpdata_t;
-typedef struct { int depthwrite, colorwrite, stencilwrite, depthfunc, stencilref; } glstate_t;
+typedef struct { int nextsurface, numtris, numindexes, eboofs, poseverttype, numbones, id; } aliashdr_t;
+/* A second surface sits far enough away for the real nextsurface walk. */
+typedef struct { aliashdr_t header; char pad[256]; aliashdr_t second; const char *meshindexesvboptr; } qmodel_t;
+typedef struct { qmodel_t *model; int alias_outline_order; unsigned char alpha; } entity_t;
+typedef struct { int outlineWidthLoc, isOutlinePassLoc, shellModeLoc, useShellTexLoc,
+                 useAlphaTestLoc, blendLoc, bonesLoc, program, maxbones; } aliasglsl_t;
+typedef struct { float mat[12]; } bonepose_t;
+typedef struct { int pose1, pose2; float blend, origin[3], angles[3]; bonepose_t *bonestate; } lerpdata_t;
+typedef struct { int depthwrite, colorwrite, stencilwrite, depthfunc, stencilref, cull; } glstate_t;
 static entity_t *currententity;
 static entity_t *cl_visedicts[4];
 static int cl_numvisedicts;
@@ -78,13 +112,14 @@ static int gl_stencilbits = 8, clears, saved, setups, phase_count;
 static int phases[64], refs[64], surface_index, skip_ring, rs_aliaspolys, rs_aliaspasses;
 static int clear_masks[16], clear_at[16], expect_mask = 1;
 static struct { float value; } gl_laserpoint;
-static int uniforms[4];
+static int uniforms[8];
 static float width;
-static glstate_t state = {1, 1, 127, 99, 77}, stack[8];
+static glstate_t state = {1, 1, 127, 99, 77, 1}, stack[8];
+static int ambient_cull = 1;
 static void glPushAttrib(int bits) { (void)bits; stack[saved++] = state; }
 static void glPopAttrib(void) { state = stack[--saved]; }
-static void glEnable(int cap) { (void)cap; }
-static void glDisable(int cap) { (void)cap; }
+static void glEnable(int cap) { if (cap == GL_CULL_FACE) state.cull = 1; }
+static void glDisable(int cap) { if (cap == GL_CULL_FACE) state.cull = 0; }
 static void glClearStencil(int value) { CHECK(value == 0, "wrong clear value"); }
 static void glStencilMask(GLuint mask) { state.stencilwrite = (int)mask; }
 static void glClear(int bits) { (void)bits; clear_at[clears] = phase_count; clear_masks[clears++] = state.stencilwrite; }
@@ -117,8 +152,10 @@ static void glDrawElements(int mode, int count, int type, const void *offset) {
               "mask/scrub writes wrong stencil value");
         CHECK(width == 0 && uniforms[1] == 0 && uniforms[2] == 0 && uniforms[3] == 0,
               "mask/scrub inherited ring or shell shader state");
+        CHECK(state.cull == ambient_cull, "mask/scrub must cull like the fill it masks");
     } else {
         CHECK(width == 4 && uniforms[1] == 1, "ring shader state lost");
+        CHECK(state.colorwrite, "ring drawn with colour writes off");
     }
     refs[phase_count] = (int)r_alias_outline_ref;
     phases[phase_count++] = r_alias_outline_phase * 10 + surface_index;
@@ -134,10 +171,12 @@ static void R_DrawAliasModelOutline(aliasglsl_t *glsl, aliashdr_t *hdr, lerpdata
     CHECK((int)outline_stencil_mask == expect_mask, "ring tests the wrong stencil bits");
     CHECK(outline_stencil_ref == (GLint)r_alias_outline_ref, "ring tests against a different value than its mask wrote");
     }
+    /* Real ring setup: depth writes off, front faces culled. */
+    state.depthwrite = 0; state.depthfunc = GL_LEQUAL; state.cull = 1;
     GL_Uniform1fFunc(glsl->outlineWidthLoc, 4);
     GL_Uniform1iFunc(glsl->isOutlinePassLoc, 1);
     glDrawElements(GL_TRIANGLES, hdr->numindexes, GL_UNSIGNED_SHORT, NULL);
-    state.depthwrite = 1; state.stencilwrite = 255; /* Real ring cleanup. */
+    state.depthwrite = 1; state.stencilwrite = 255; state.cull = 0; /* Real ring cleanup. */
 }
 static void draw_outline_passes(aliasglsl_t *glsl, aliashdr_t *paliashdr, lerpdata_t lerpdata, entity_t *e) {
 '''
@@ -161,21 +200,67 @@ static void R_DrawAliasModel(entity_t *entity) {
 source += function("static void R_ClearAliasOutlineStencil(GLuint mask)")
 source += function("static int R_CompareDeferredAliasOutlines(")
 source += function("void R_BeginDeferredAliasOutlines(void)")
+source += r'''
+/* Lean replay: replace only pose/transform math; execute its real GL orchestration. */
+static int lean_setups, program_binds, current_program, attrib_mask, matrix_depth;
+static int r_drawflat_cheatsafe, r_lightmap_cheatsafe;
+static float entalpha;
+static aliasglsl_t r_alias_glsl[2];
+static void R_SetupAliasFrame(aliashdr_t *hdr, entity_t *e, lerpdata_t *l) {
+    (void)hdr; (void)e; memset(l, 0, sizeof(*l)); lean_setups++;
+}
+static void R_SetupEntityTransform(entity_t *e, lerpdata_t *l) { (void)e; (void)l; }
+static int R_CullModelForEntityTransform(entity_t *e, float *o, float *a) { (void)e; (void)o; (void)a; return 0; }
+static GLboolean glIsEnabled(int cap) { CHECK(cap == GL_CULL_FACE, "unexpected query"); return (GLboolean)state.cull; }
+static void GL_UseProgramFunc(int program) { current_program = program; if (program) program_binds++; }
+static void GL_EnableVertexAttribArrayFunc(int i) { attrib_mask |= 1 << i; }
+static void GL_DisableVertexAttribArrayFunc(int i) { attrib_mask &= ~(1 << i); }
+static void GL_Uniform4fvFunc(int location, int count, const float *v) { (void)location; (void)count; (void)v; }
+static void GL_SelectTexture(int unit) { (void)unit; }
+static void glPushMatrix(void) { matrix_depth++; }
+static void glPopMatrix(void) { CHECK(--matrix_depth >= 0, "matrix stack underflow"); }
+static void R_RotateForEntity(float *o, float *a, entity_t *e) { (void)o; (void)a; (void)e; }
+static void R_ApplyAliasModelScale(const qmodel_t *m, const aliashdr_t *h, float s) { (void)m; (void)h; (void)s; }
+static void GL_BindAliasPose(aliashdr_t *hdr, const lerpdata_t *l) {
+    (void)l; CHECK(attrib_mask == 0x1F, "pose bound without its attribute arrays"); surface_index = hdr->id;
+}
+static void glTexEnvf(int a, int b, int c) { (void)a; (void)b; (void)c; }
+static void glHint(int a, int b) { (void)a; (void)b; }
+static void glShadeModel(int a) { (void)a; }
+static void glColor3f(float r, float g, float b) { (void)r; (void)g; (void)b; }
+'''
+source += lean + "\n"
 source += function("void R_DrawDeferredAliasOutlines(void)")
 source += r'''
-static void reset(void) { setups = phase_count = clears = 0; }
+static void reset(void) { setups = phase_count = clears = lean_setups = program_binds = 0; }
+static void make_model(qmodel_t *m, int surfaces) {
+    memset(m, 0, sizeof(*m));
+    m->header.numtris = m->second.numtris = 10;
+    m->header.numindexes = m->second.numindexes = 30;
+    m->second.id = 1;
+    if (surfaces > 1)
+        m->header.nextsurface = (int)((char *)&m->second - (char *)&m->header);
+}
 static void check_restored(const glstate_t *original) {
     CHECK(!memcmp(&state, original, sizeof(state)), "pass loop leaks GL state");
+    CHECK(!attrib_mask && !current_program && !matrix_depth,
+          "lean replay leaks attribute arrays, program or matrix");
     CHECK(!r_num_deferred_alias_outlines && !r_alias_outline_collecting &&
           r_alias_outline_phase == ALIAS_OUTLINE_PHASE_NORMAL && !saved &&
           r_alias_outline_ref == 1 && r_alias_outline_refmask == 1 && !r_alias_outline_unique,
           "outline replay did not restore state");
 }
 int main(void) {
-    qmodel_t single = {{0, 10, 30, 0}, NULL}, multi = {{128, 10, 30, 0}, NULL};
+    static qmodel_t single, multi;
     entity_t a = {&single}, b = {&multi};
     glstate_t original = state;
     int i;
+    make_model(&single, 1);
+    make_model(&multi, 2);
+    for (i = 0; i < 2; i++) {
+        aliasglsl_t g = {0, 1, 2, 3, 4, -1, -1, 7, 0};
+        r_alias_glsl[i] = g;
+    }
     cl_visedicts[0] = &a; cl_visedicts[1] = &b; cl_visedicts[2] = &a;
     cl_numvisedicts = 3; r_alias_outline_order_changed = 1;
     R_BeginDeferredAliasOutlines();
@@ -250,7 +335,9 @@ int main(void) {
     {
         const int expected[] = {10,20, 10,11,20,21, 10,20};
         const int expected_refs[] = {1,1, 2,2,2,2, 3,3};
-        CHECK(setups == 4 && phase_count == 8 && !memcmp(phases, expected, sizeof(expected)),
+        CHECK(setups == 0 && lean_setups == 3 && program_binds == 1,
+              "per-model replay must take the lean path: one pose setup per model, one program bind");
+        CHECK(phase_count == 8 && !memcmp(phases, expected, sizeof(expected)),
               "per-model replay must drop scrub but keep mask/ring order and multi-surface barriers");
         CHECK(!memcmp(refs, expected_refs, sizeof(expected_refs)),
               "each model must mask and ring with its own stencil value");
@@ -269,6 +356,35 @@ int main(void) {
     R_DrawDeferredAliasOutlines();
     CHECK(clears == 1 && clear_masks[0] == 1, "empty queue keeps the narrow 0x01 clear");
 
+    /* An MF_HOLEY skin needs its texture in the mask: the whole queue keeps the full path. */
+    reset();
+    r_alias_outline_holey = 1;
+    r_deferred_alias_outlines[0] = &a;
+    r_deferred_alias_outlines[1] = &b;
+    r_num_deferred_alias_outlines = 2;
+    R_DrawDeferredAliasOutlines();
+    {
+        const int expected[] = {10,20, 10,11,20,21};
+        CHECK(lean_setups == 0 && setups == 3 && phase_count == 6 && !memcmp(phases, expected, sizeof(expected)),
+              "a holey queue must replay through R_DrawAliasModel");
+    }
+    check_restored(&original);
+    r_alias_outline_holey = 0;
+
+    /* The mask culls like the fill even when culling is off and every ring turned it on. */
+    {
+        glstate_t uncull;
+        state.cull = 0; ambient_cull = 0; uncull = state;
+        reset();
+        r_deferred_alias_outlines[0] = &b;
+        r_deferred_alias_outlines[1] = &a;
+        r_num_deferred_alias_outlines = 2;
+        R_DrawDeferredAliasOutlines();
+        CHECK(lean_setups == 2 && phase_count == 6, "unculled lean replay lost passes");
+        check_restored(&uncull);
+        state.cull = 1; ambient_cull = 1;
+    }
+
     /* ---- running out of values: 5 bits -> 0x0F usable, 15 values ---- */
     gl_stencilbits = 5; expect_mask = 0x0F;
     reset();
@@ -284,7 +400,7 @@ int main(void) {
           "wrap clear must come after the last use of value 15 and before value 1 is reused");
     check_restored(&original);
 
-    puts("PASS: setup reuse, real GL pass order/state/uniforms/counters, legacy and per-model stencil values, wraps, multi-surface and mixed queues, faded rings");
+    puts("PASS: setup reuse, real GL pass order/state/uniforms/counters, legacy and per-model stencil values, lean replay state/culling/holey fallback, wraps, multi-surface and mixed queues, faded rings");
     return 0;
 }
 '''

@@ -60,6 +60,7 @@ static qboolean r_alias_outline_order_changed;
 // ("not my value") needs no scrub draw and one clear ends the replay.
 static GLuint r_alias_outline_ref = 1, r_alias_outline_refmask = 0x01;
 static qboolean r_alias_outline_unique;
+static qboolean r_alias_outline_holey; // a queued MF_HOLEY mask must alpha-test its skin
 
 static qboolean R_QueueDeferredAliasOutline(entity_t *e)
 {
@@ -75,6 +76,8 @@ static qboolean R_QueueDeferredAliasOutline(entity_t *e)
 			r_deferred_alias_outlines[r_num_deferred_alias_outlines - 1]->alias_outline_order > e->alias_outline_order)
 			r_alias_outline_order_changed = true;
 		r_deferred_alias_outlines[r_num_deferred_alias_outlines++] = e;
+		if (e->model->flags & MF_HOLEY)
+			r_alias_outline_holey = true;
 		return true;
 	}
 
@@ -2249,6 +2252,65 @@ void R_EndAliasOutlineRendering(void)
 
 /*
 =============
+GL_BindAliasPose
+
+Bind currententity's mesh buffers and point the pose attributes at one
+surface's vertices for this lerp. The caller enables the attribute arrays.
+=============
+*/
+static void GL_BindAliasPose (aliashdr_t *paliashdr, const lerpdata_t *lerpdata)
+{
+	GL_BindBuffer (GL_ARRAY_BUFFER, currententity->model->meshvbo);
+	GL_BindBuffer (GL_ELEMENT_ARRAY_BUFFER, currententity->model->meshindexesvbo);
+
+	switch(paliashdr->poseverttype)
+	{
+	case PV_QUAKE1:
+		GL_VertexAttribPointerFunc (texCoordsAttrIndex, 2, GL_FLOAT, GL_FALSE, 0, currententity->model->meshvboptr+paliashdr->vbostofs);
+
+		GL_VertexAttribPointerFunc (pose1VertexAttrIndex, 4, GL_UNSIGNED_BYTE, GL_FALSE, sizeof (meshxyz_mdl_t), GLARB_GetXYZOffset_MDL (paliashdr, lerpdata->pose1));
+		GL_VertexAttribPointerFunc (pose2VertexAttrIndex, 4, GL_UNSIGNED_BYTE, GL_FALSE, sizeof (meshxyz_mdl_t), GLARB_GetXYZOffset_MDL (paliashdr, lerpdata->pose2));
+		// GL_TRUE to normalize the signed bytes to [-1 .. 1]
+		GL_VertexAttribPointerFunc (pose1NormalAttrIndex, 4, GL_BYTE, GL_TRUE, sizeof (meshxyz_mdl_t), GLARB_GetNormalOffset_MDL (paliashdr, lerpdata->pose1));
+		GL_VertexAttribPointerFunc (pose2NormalAttrIndex, 4, GL_BYTE, GL_TRUE, sizeof (meshxyz_mdl_t), GLARB_GetNormalOffset_MDL (paliashdr, lerpdata->pose2));
+		break;
+	case PV_QUAKEFORGE:
+		GL_VertexAttribPointerFunc (texCoordsAttrIndex, 2, GL_FLOAT, GL_FALSE, 0, currententity->model->meshvboptr+paliashdr->vbostofs);
+
+		GL_VertexAttribPointerFunc (pose1VertexAttrIndex, 4, GL_UNSIGNED_SHORT, GL_FALSE, sizeof (meshxyz_mdl16_t), GLARB_GetXYZOffset_MDLQF (paliashdr, lerpdata->pose1));
+		GL_VertexAttribPointerFunc (pose2VertexAttrIndex, 4, GL_UNSIGNED_SHORT, GL_FALSE, sizeof (meshxyz_mdl16_t), GLARB_GetXYZOffset_MDLQF (paliashdr, lerpdata->pose2));
+		// GL_TRUE to normalize the signed bytes to [-1 .. 1]
+		GL_VertexAttribPointerFunc (pose1NormalAttrIndex, 4, GL_BYTE, GL_TRUE, sizeof (meshxyz_mdl16_t), GLARB_GetNormalOffset_MDLQF (paliashdr, lerpdata->pose1));
+		GL_VertexAttribPointerFunc (pose2NormalAttrIndex, 4, GL_BYTE, GL_TRUE, sizeof (meshxyz_mdl16_t), GLARB_GetNormalOffset_MDLQF (paliashdr, lerpdata->pose2));
+		break;
+	case PV_QUAKE3:
+		GL_VertexAttribPointerFunc (texCoordsAttrIndex, 2, GL_FLOAT, GL_FALSE, 0, currententity->model->meshvboptr+paliashdr->vbostofs);
+
+		GL_VertexAttribPointerFunc (pose1VertexAttrIndex, 4, GL_SHORT, GL_FALSE, sizeof (meshxyz_md3_t), GLARB_GetXYZOffset_MD3 (paliashdr, lerpdata->pose1));
+		GL_VertexAttribPointerFunc (pose2VertexAttrIndex, 4, GL_SHORT, GL_FALSE, sizeof (meshxyz_md3_t), GLARB_GetXYZOffset_MD3 (paliashdr, lerpdata->pose2));
+		// GL_TRUE to normalize the signed bytes to [-1 .. 1]
+		GL_VertexAttribPointerFunc (pose1NormalAttrIndex, 4, GL_BYTE, GL_TRUE, sizeof (meshxyz_md3_t), GLARB_GetNormalOffset_MD3 (paliashdr, lerpdata->pose1));
+		GL_VertexAttribPointerFunc (pose2NormalAttrIndex, 4, GL_BYTE, GL_TRUE, sizeof (meshxyz_md3_t), GLARB_GetNormalOffset_MD3 (paliashdr, lerpdata->pose2));
+		break;
+	case PV_IQM:
+		{
+			const iqmvert_t *pose = (const iqmvert_t*)(currententity->model->meshvboptr+paliashdr->vbovertofs + (paliashdr->numverts_vbo * 0 * sizeof (iqmvert_t)));
+
+			GL_VertexAttribPointerFunc (pose1VertexAttrIndex, 3, GL_FLOAT, GL_FALSE, sizeof (iqmvert_t), pose->xyz);
+			GL_VertexAttribPointerFunc (pose1NormalAttrIndex, 3, GL_FLOAT, GL_FALSE, sizeof (iqmvert_t), pose->norm);
+			GL_VertexAttribPointerFunc (boneWeightAttrIndex, 4, GL_FLOAT, GL_FALSE, sizeof (iqmvert_t), pose->weight);
+			GL_VertexAttribPointerFunc (boneIndexAttrIndex, 4, GL_UNSIGNED_BYTE, GL_FALSE, sizeof (iqmvert_t), pose->idx);
+			GL_VertexAttribPointerFunc (texCoordsAttrIndex, 2, GL_FLOAT, GL_FALSE, sizeof (iqmvert_t), pose->st);
+
+			GL_EnableVertexAttribArrayFunc (vertColoursAttrIndex);
+			GL_VertexAttribPointerFunc (vertColoursAttrIndex, 4, GL_FLOAT, GL_FALSE, sizeof (iqmvert_t), pose->rgba);
+		}
+		break;
+	}
+}
+
+/*
+=============
 GL_DrawAliasFrame_GLSL -- ericw
 
 Optimized alias model drawing codepath.
@@ -2282,59 +2344,13 @@ static void GL_DrawAliasFrame_GLSL (aliasglsl_t *glsl, aliashdr_t *paliashdr, le
 
 	GL_UseProgramFunc (glsl->program);
 
-	GL_BindBuffer (GL_ARRAY_BUFFER, currententity->model->meshvbo);
-	GL_BindBuffer (GL_ELEMENT_ARRAY_BUFFER, currententity->model->meshindexesvbo);
-
 	GL_EnableVertexAttribArrayFunc (texCoordsAttrIndex);
 	GL_EnableVertexAttribArrayFunc (pose1VertexAttrIndex);
 	GL_EnableVertexAttribArrayFunc (pose2VertexAttrIndex);
 	GL_EnableVertexAttribArrayFunc (pose1NormalAttrIndex);
 	GL_EnableVertexAttribArrayFunc (pose2NormalAttrIndex);
 
-	switch(paliashdr->poseverttype)
-	{
-	case PV_QUAKE1:
-		GL_VertexAttribPointerFunc (texCoordsAttrIndex, 2, GL_FLOAT, GL_FALSE, 0, currententity->model->meshvboptr+paliashdr->vbostofs);
-
-		GL_VertexAttribPointerFunc (pose1VertexAttrIndex, 4, GL_UNSIGNED_BYTE, GL_FALSE, sizeof (meshxyz_mdl_t), GLARB_GetXYZOffset_MDL (paliashdr, lerpdata.pose1));
-		GL_VertexAttribPointerFunc (pose2VertexAttrIndex, 4, GL_UNSIGNED_BYTE, GL_FALSE, sizeof (meshxyz_mdl_t), GLARB_GetXYZOffset_MDL (paliashdr, lerpdata.pose2));
-		// GL_TRUE to normalize the signed bytes to [-1 .. 1]
-		GL_VertexAttribPointerFunc (pose1NormalAttrIndex, 4, GL_BYTE, GL_TRUE, sizeof (meshxyz_mdl_t), GLARB_GetNormalOffset_MDL (paliashdr, lerpdata.pose1));
-		GL_VertexAttribPointerFunc (pose2NormalAttrIndex, 4, GL_BYTE, GL_TRUE, sizeof (meshxyz_mdl_t), GLARB_GetNormalOffset_MDL (paliashdr, lerpdata.pose2));
-		break;
-	case PV_QUAKEFORGE:
-		GL_VertexAttribPointerFunc (texCoordsAttrIndex, 2, GL_FLOAT, GL_FALSE, 0, currententity->model->meshvboptr+paliashdr->vbostofs);
-
-		GL_VertexAttribPointerFunc (pose1VertexAttrIndex, 4, GL_UNSIGNED_SHORT, GL_FALSE, sizeof (meshxyz_mdl16_t), GLARB_GetXYZOffset_MDLQF (paliashdr, lerpdata.pose1));
-		GL_VertexAttribPointerFunc (pose2VertexAttrIndex, 4, GL_UNSIGNED_SHORT, GL_FALSE, sizeof (meshxyz_mdl16_t), GLARB_GetXYZOffset_MDLQF (paliashdr, lerpdata.pose2));
-		// GL_TRUE to normalize the signed bytes to [-1 .. 1]
-		GL_VertexAttribPointerFunc (pose1NormalAttrIndex, 4, GL_BYTE, GL_TRUE, sizeof (meshxyz_mdl16_t), GLARB_GetNormalOffset_MDLQF (paliashdr, lerpdata.pose1));
-		GL_VertexAttribPointerFunc (pose2NormalAttrIndex, 4, GL_BYTE, GL_TRUE, sizeof (meshxyz_mdl16_t), GLARB_GetNormalOffset_MDLQF (paliashdr, lerpdata.pose2));
-		break;
-	case PV_QUAKE3:
-		GL_VertexAttribPointerFunc (texCoordsAttrIndex, 2, GL_FLOAT, GL_FALSE, 0, currententity->model->meshvboptr+paliashdr->vbostofs);
-
-		GL_VertexAttribPointerFunc (pose1VertexAttrIndex, 4, GL_SHORT, GL_FALSE, sizeof (meshxyz_md3_t), GLARB_GetXYZOffset_MD3 (paliashdr, lerpdata.pose1));
-		GL_VertexAttribPointerFunc (pose2VertexAttrIndex, 4, GL_SHORT, GL_FALSE, sizeof (meshxyz_md3_t), GLARB_GetXYZOffset_MD3 (paliashdr, lerpdata.pose2));
-		// GL_TRUE to normalize the signed bytes to [-1 .. 1]
-		GL_VertexAttribPointerFunc (pose1NormalAttrIndex, 4, GL_BYTE, GL_TRUE, sizeof (meshxyz_md3_t), GLARB_GetNormalOffset_MD3 (paliashdr, lerpdata.pose1));
-		GL_VertexAttribPointerFunc (pose2NormalAttrIndex, 4, GL_BYTE, GL_TRUE, sizeof (meshxyz_md3_t), GLARB_GetNormalOffset_MD3 (paliashdr, lerpdata.pose2));
-		break;
-	case PV_IQM:
-		{
-			const iqmvert_t *pose = (const iqmvert_t*)(currententity->model->meshvboptr+paliashdr->vbovertofs + (paliashdr->numverts_vbo * 0 * sizeof (iqmvert_t)));
-
-			GL_VertexAttribPointerFunc (pose1VertexAttrIndex, 3, GL_FLOAT, GL_FALSE, sizeof (iqmvert_t), pose->xyz);
-			GL_VertexAttribPointerFunc (pose1NormalAttrIndex, 3, GL_FLOAT, GL_FALSE, sizeof (iqmvert_t), pose->norm);
-			GL_VertexAttribPointerFunc (boneWeightAttrIndex, 4, GL_FLOAT, GL_FALSE, sizeof (iqmvert_t), pose->weight);
-			GL_VertexAttribPointerFunc (boneIndexAttrIndex, 4, GL_UNSIGNED_BYTE, GL_FALSE, sizeof (iqmvert_t), pose->idx);
-			GL_VertexAttribPointerFunc (texCoordsAttrIndex, 2, GL_FLOAT, GL_FALSE, sizeof (iqmvert_t), pose->st);
-
-			GL_EnableVertexAttribArrayFunc (vertColoursAttrIndex);
-			GL_VertexAttribPointerFunc (vertColoursAttrIndex, 4, GL_FLOAT, GL_FALSE, sizeof (iqmvert_t), pose->rgba);
-		}
-		break;
-	}
+	GL_BindAliasPose (paliashdr, &lerpdata);
 
 #define MyVectorScale(a,s,b) do{(b)[0]=(s)*(a)[0];(b)[1]=(s)*(a)[1];(b)[2]=(s)*(a)[2];}while(0)
 	if (cl.scores && e->netstate.colormap > 0 && e->netstate.colormap <= cl.maxclients)
@@ -3930,6 +3946,44 @@ void R_DeleteAliasModelInstancingBuffers (void)
 
 /*
 =================
+R_ApplyAliasModelScale
+
+Map a model's mesh space into entity space, after R_RotateForEntity.
+=================
+*/
+static void R_ApplyAliasModelScale (const qmodel_t *clmodel, const aliashdr_t *paliashdr, float fovscale)
+{
+	// woods added doubleeyes (MH)
+
+	if (!strcmp(clmodel->name, "progs/eyes.mdl") /*&& gl_doubleeyes.value*/)
+	{	// gl_doubleeyes fix by mh Tue Sep 25, 2012 5:00 pm 
+	// scaling factor - gl_doubleeyes 0 = unscaled, gl_doubleeyes 1 = 2x
+		float sc = 1 + 1.0f;
+
+		// offsets for eyes.mdl derived by taking the scaled midpoint of all verts in the mdl
+		// you may wish to calculate these at load time rather than hard-code them in the engine
+		float ofs[3] = { -0.13172054 * 1, -0.078105450 * 1, 25.347622 * 1 };
+
+		// matrix for scaling and positioning the eyes
+		float eyematrix[16] = { sc, 0, 0, 0, 0, sc, 0, 0, 0, 0, sc, 0, -ofs[0], -ofs[1], -ofs[2], 1 };
+
+		// and fix things up
+		glMultMatrixf(eyematrix);
+
+		glTranslatef(paliashdr->scale_origin[0] * fovscale, paliashdr->scale_origin[1], paliashdr->scale_origin[2]); // woods
+		glScalef(paliashdr->scale[0] * fovscale, paliashdr->scale[1], paliashdr->scale[2]);
+	}
+	else
+	{
+		glTranslatef(paliashdr->scale_origin[0] * fovscale, paliashdr->scale_origin[1], paliashdr->scale_origin[2]); // woods
+		glScalef(paliashdr->scale[0] * fovscale, paliashdr->scale[1], paliashdr->scale[2]);
+	}
+
+	// end double eyes / woods
+}
+
+/*
+=================
 R_DrawAliasModel -- johnfitz -- almost completely rewritten
 =================
 */
@@ -4022,33 +4076,7 @@ static void R_DrawAliasModelPrepared (entity_t *e, const lerpdata_t *prepared, q
 
 	R_RotateForEntity (lerpdata.origin, lerpdata.angles, e);
 
-	// woods added doubleeyes (MH)
-
-	if (!strcmp(clmodel->name, "progs/eyes.mdl") /*&& gl_doubleeyes.value*/)
-	{	// gl_doubleeyes fix by mh Tue Sep 25, 2012 5:00 pm 
-	// scaling factor - gl_doubleeyes 0 = unscaled, gl_doubleeyes 1 = 2x
-		float sc = 1 + 1.0f;
-
-		// offsets for eyes.mdl derived by taking the scaled midpoint of all verts in the mdl
-		// you may wish to calculate these at load time rather than hard-code them in the engine
-		float ofs[3] = { -0.13172054 * 1, -0.078105450 * 1, 25.347622 * 1 };
-
-		// matrix for scaling and positioning the eyes
-		float eyematrix[16] = { sc, 0, 0, 0, 0, sc, 0, 0, 0, 0, sc, 0, -ofs[0], -ofs[1], -ofs[2], 1 };
-
-		// and fix things up
-		glMultMatrixf(eyematrix);
-
-		glTranslatef(paliashdr->scale_origin[0] * fovscale, paliashdr->scale_origin[1], paliashdr->scale_origin[2]); // woods
-		glScalef(paliashdr->scale[0] * fovscale, paliashdr->scale[1], paliashdr->scale[2]);
-	}
-	else
-	{
-		glTranslatef(paliashdr->scale_origin[0] * fovscale, paliashdr->scale_origin[1], paliashdr->scale_origin[2]); // woods
-		glScalef(paliashdr->scale[0] * fovscale, paliashdr->scale[1], paliashdr->scale[2]);
-	}
-
-	// end double eyes / woods
+	R_ApplyAliasModelScale (clmodel, paliashdr, fovscale);
 
 	if (!strcmp(clmodel->name, "progs/bolt.mdl") ||
 		!strcmp(clmodel->name, "progs/bolt2.mdl") ||
@@ -4477,6 +4505,7 @@ void R_BeginDeferredAliasOutlines(void)
 
 	r_alias_outline_phase = ALIAS_OUTLINE_PHASE_NORMAL;
 	r_num_deferred_alias_outlines = 0;
+	r_alias_outline_holey = false;
 	r_alias_outline_collecting = true;
 	r_alias_outline_order_changed = false;
 	// Reverse traversal preserves the first occurrence if the list repeats an entity.
@@ -4502,10 +4531,112 @@ static void R_ClearAliasOutlineStencil(GLuint mask)
 	glPopAttrib();
 }
 
+/*
+=============
+R_DrawDeferredAliasOutlineLean
+
+Replay one queued outline -- mask every surface, then ring every surface --
+without going back through R_DrawAliasModel. Neither pass samples a skin or
+reads lighting, so all a replay needs is the pose, the transform and the
+draws. The caller saves GL state and enables the pose attributes once for
+the whole queue, and the program is only rebound when it changes. Going
+through R_DrawAliasModel again, with its push/pop per pass and program and
+attribute churn per entity, was most of what r_outline cost. MF_HOLEY skins
+and the scrubbed (narrow stencil) replay keep the full path.
+=============
+*/
+static void R_DrawDeferredAliasOutlineLean (entity_t *e, GLuint *program, GLboolean cull)
+{
+	aliashdr_t *first, *paliashdr;
+	aliasglsl_t *glsl;
+	lerpdata_t lerpdata;
+	float blend;
+
+	currententity = e;
+	first = (aliashdr_t *)Mod_Extradata (e->model);
+	R_SetupAliasFrame (first, e, &lerpdata);
+	R_SetupEntityTransform (e, &lerpdata);
+	if (R_CullModelForEntityTransform (e, lerpdata.origin, lerpdata.angles))
+		return;
+
+	glsl = &r_alias_glsl[(first->poseverttype == PV_IQM && lerpdata.bonestate) ? ALIAS_GLSL_SKELETAL : ALIAS_GLSL_BASIC];
+	if (!glsl->program)
+		return;
+	if (*program != glsl->program)
+	{
+		*program = glsl->program;
+		GL_UseProgramFunc (glsl->program);
+	}
+
+	entalpha = (r_drawflat_cheatsafe || r_lightmap_cheatsafe) ? 1 : ENTALPHA_DECODE(e->alpha);
+	blend = (lerpdata.pose1 != lerpdata.pose2) ? lerpdata.blend : 0;
+
+	glPushMatrix ();
+	R_RotateForEntity (lerpdata.origin, lerpdata.angles, e);
+	R_ApplyAliasModelScale (e->model, first, 1.0f);
+
+	for (r_alias_outline_phase = ALIAS_OUTLINE_PHASE_MASK;
+		r_alias_outline_phase <= ALIAS_OUTLINE_PHASE_RING; ++r_alias_outline_phase)
+	{
+		if (r_alias_outline_phase == ALIAS_OUTLINE_PHASE_MASK)
+		{
+			// Mask with the fill's own culling; the previous ring left its own.
+			if (cull)
+				glEnable (GL_CULL_FACE);
+			else
+				glDisable (GL_CULL_FACE);
+			glDepthMask (GL_FALSE);
+			glColorMask (GL_FALSE, GL_FALSE, GL_FALSE, GL_FALSE);
+			glStencilFunc (GL_ALWAYS, (GLint)r_alias_outline_ref, (GLint)r_alias_outline_refmask);
+			glStencilOp (GL_KEEP, GL_KEEP, GL_REPLACE);
+			glStencilMask (r_alias_outline_refmask);
+			GL_Uniform1fFunc (glsl->outlineWidthLoc, 0.0f);
+			GL_Uniform1iFunc (glsl->isOutlinePassLoc, 0);
+			GL_Uniform1iFunc (glsl->shellModeLoc, 0);
+			GL_Uniform1iFunc (glsl->useShellTexLoc, 0);
+			GL_Uniform1iFunc (glsl->useAlphaTestLoc, 0);
+		}
+		else
+			glColorMask (GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+
+		for (paliashdr = first;;)
+		{
+			intptr_t ns;
+
+			if (paliashdr->numbones <= glsl->maxbones || !lerpdata.bonestate)
+			{
+				GL_BindAliasPose (paliashdr, &lerpdata);
+				if (glsl->blendLoc != -1)
+					GL_Uniform1fFunc (glsl->blendLoc, blend);
+				if (glsl->bonesLoc != -1)
+					GL_Uniform4fvFunc (glsl->bonesLoc, paliashdr->numbones*3, lerpdata.bonestate->mat);
+				if (r_alias_outline_phase == ALIAS_OUTLINE_PHASE_MASK)
+					glDrawElements (GL_TRIANGLES, paliashdr->numindexes, GL_UNSIGNED_SHORT,
+						e->model->meshindexesvboptr + paliashdr->eboofs);
+				else
+					R_DrawAliasModelOutline (glsl, paliashdr, &lerpdata, e);
+				rs_aliaspolys += paliashdr->numtris;
+				rs_aliaspasses += paliashdr->numtris;
+			}
+
+			ns = paliashdr->nextsurface;
+			if (ns < 256 || ns > 64*1024*1024)	// last surface, or R_DrawAliasModel's corrupt-chain guard
+				break;
+			paliashdr = (aliashdr_t *)((byte *)paliashdr + ns);
+		}
+	}
+
+	if (first->poseverttype == PV_IQM)
+		GL_DisableVertexAttribArrayFunc (vertColoursAttrIndex);
+	glPopMatrix ();
+}
+
 void R_DrawDeferredAliasOutlines(void)
 {
 	int i;
 	GLuint uniquemask = 0;
+	GLuint program = 0;
+	GLboolean lean, cull = GL_FALSE;
 
 	r_alias_outline_collecting = false;
 
@@ -4538,6 +4669,24 @@ void R_DrawDeferredAliasOutlines(void)
 		qsort(r_deferred_alias_outlines, r_num_deferred_alias_outlines,
 			sizeof(r_deferred_alias_outlines[0]), R_CompareDeferredAliasOutlines);
 
+	// One state save, program and attribute setup for the whole queue. Cull
+	// mode is always GL_BACK here; only whether it is enabled varies.
+	lean = r_alias_outline_unique && !r_alias_outline_holey;
+	if (lean)
+	{
+		cull = glIsEnabled (GL_CULL_FACE);
+		glPushAttrib (GL_ENABLE_BIT | GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT |
+			GL_STENCIL_BUFFER_BIT | GL_POLYGON_BIT);
+		glEnable (GL_DEPTH_TEST);
+		glEnable (GL_STENCIL_TEST);
+		glDepthFunc (GL_LEQUAL);
+		GL_EnableVertexAttribArrayFunc (texCoordsAttrIndex);
+		GL_EnableVertexAttribArrayFunc (pose1VertexAttrIndex);
+		GL_EnableVertexAttribArrayFunc (pose2VertexAttrIndex);
+		GL_EnableVertexAttribArrayFunc (pose1NormalAttrIndex);
+		GL_EnableVertexAttribArrayFunc (pose2NormalAttrIndex);
+	}
+
 	for (i = 0; i < r_num_deferred_alias_outlines; ++i)
 	{
 		aliashdr_t *paliashdr;
@@ -4555,6 +4704,12 @@ void R_DrawDeferredAliasOutlines(void)
 				R_ClearAliasOutlineStencil(r_alias_outline_refmask);
 				r_alias_outline_ref = 1;
 			}
+		}
+
+		if (lean)
+		{
+			R_DrawDeferredAliasOutlineLean (currententity, &program, cull);
+			continue;
 		}
 
 		if (!paliashdr->nextsurface)
@@ -4575,6 +4730,27 @@ void R_DrawDeferredAliasOutlines(void)
 			r_alias_outline_phase = ALIAS_OUTLINE_PHASE_SCRUB;
 			R_DrawAliasModel(currententity);
 		}
+	}
+
+	if (lean)
+	{
+		GL_DisableVertexAttribArrayFunc (texCoordsAttrIndex);
+		GL_DisableVertexAttribArrayFunc (pose1VertexAttrIndex);
+		GL_DisableVertexAttribArrayFunc (pose2VertexAttrIndex);
+		GL_DisableVertexAttribArrayFunc (pose1NormalAttrIndex);
+		GL_DisableVertexAttribArrayFunc (pose2NormalAttrIndex);
+		GL_DisableVertexAttribArrayFunc (vertColoursAttrIndex);
+		GL_UseProgramFunc (0);
+		GL_SelectTexture (GL_TEXTURE0);
+		glPopAttrib ();
+
+		// Leave what the full path's per-model cleanup leaves for later passes.
+		glTexEnvf (GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_REPLACE);
+		glHint (GL_PERSPECTIVE_CORRECTION_HINT, GL_NICEST);
+		glShadeModel (GL_FLAT);
+		glDepthMask (GL_TRUE);
+		glDisable (GL_BLEND);
+		glColor3f (1, 1, 1);
 	}
 
 	// Leave the stencil as zero as the scrubbed replay did, for the translucent
