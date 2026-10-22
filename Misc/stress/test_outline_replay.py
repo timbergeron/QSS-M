@@ -73,6 +73,7 @@ source = r'''
 #define GL_FALSE 0
 #define GL_TRUE 1
 #define GL_CULL_FACE 30
+#define GL_COLOR_WRITEMASK 38
 #define GL_TEXTURE0 31
 #define GL_TEXTURE_ENV 32
 #define GL_TEXTURE_ENV_MODE 33
@@ -114,7 +115,9 @@ static int clear_masks[16], clear_at[16], expect_mask = 1;
 static struct { float value; } gl_laserpoint;
 static int uniforms[8];
 static float width;
-static glstate_t state = {1, 1, 127, 99, 77, 1}, stack[8];
+/* colorwrite holds the RGBA write mask as bits 1/2/4/8. */
+static glstate_t state = {1, 15, 127, 99, 77, 1}, stack[8];
+static int ring_colormask = 15;
 static int ambient_cull = 1;
 static void glPushAttrib(int bits) { (void)bits; stack[saved++] = state; }
 static void glPopAttrib(void) { state = stack[--saved]; }
@@ -126,7 +129,7 @@ static void glClear(int bits) { (void)bits; clear_at[clears] = phase_count; clea
 static void glDepthMask(int value) { state.depthwrite = value; }
 static void glDepthFunc(int value) { state.depthfunc = value; }
 static void glColorMask(int a, int b, int c, int d) {
-    CHECK(a == b && a == c && a == d, "unexpected color mask"); state.colorwrite = a;
+    state.colorwrite = (a != 0) | (b != 0) << 1 | (c != 0) << 2 | (d != 0) << 3;
 }
 static void glStencilFunc(int func, int ref, int mask) {
     CHECK(func == GL_ALWAYS && mask == expect_mask, "wrong stencil function/mask"); state.stencilref = ref;
@@ -155,7 +158,7 @@ static void glDrawElements(int mode, int count, int type, const void *offset) {
         CHECK(state.cull == ambient_cull, "mask/scrub must cull like the fill it masks");
     } else {
         CHECK(width == 4 && uniforms[1] == 1, "ring shader state lost");
-        CHECK(state.colorwrite, "ring drawn with colour writes off");
+        CHECK(state.colorwrite == ring_colormask, "ring ignores the caller's colour mask");
     }
     refs[phase_count] = (int)r_alias_outline_ref;
     phases[phase_count++] = r_alias_outline_phase * 10 + surface_index;
@@ -211,6 +214,10 @@ static void R_SetupAliasFrame(aliashdr_t *hdr, entity_t *e, lerpdata_t *l) {
 }
 static void R_SetupEntityTransform(entity_t *e, lerpdata_t *l) { (void)e; (void)l; }
 static int R_CullModelForEntityTransform(entity_t *e, float *o, float *a) { (void)e; (void)o; (void)a; return 0; }
+static void glGetBooleanv(int pname, GLboolean *v) {
+    CHECK(pname == GL_COLOR_WRITEMASK, "unexpected boolean query");
+    for (int i = 0; i < 4; i++) v[i] = (GLboolean)((state.colorwrite >> i) & 1);
+}
 static GLboolean glIsEnabled(int cap) { CHECK(cap == GL_CULL_FACE, "unexpected query"); return (GLboolean)state.cull; }
 static void GL_UseProgramFunc(int program) { current_program = program; if (program) program_binds++; }
 static void GL_EnableVertexAttribArrayFunc(int i) { attrib_mask |= 1 << i; }
@@ -385,6 +392,20 @@ int main(void) {
         state.cull = 1; ambient_cull = 1;
     }
 
+    /* A stereo eye's colour mask survives the ring: the red eye stays red. */
+    {
+        glstate_t eye;
+        state.colorwrite = ring_colormask = 1 | 8; eye = state;
+        reset();
+        r_deferred_alias_outlines[0] = &a;
+        r_deferred_alias_outlines[1] = &b;
+        r_num_deferred_alias_outlines = 2;
+        R_DrawDeferredAliasOutlines();
+        CHECK(lean_setups == 2 && phase_count == 6, "anaglyph lean replay lost passes");
+        check_restored(&eye);
+        state.colorwrite = ring_colormask = 15;
+    }
+
     /* ---- running out of values: 5 bits -> 0x0F usable, 15 values ---- */
     gl_stencilbits = 5; expect_mask = 0x0F;
     reset();
@@ -400,7 +421,7 @@ int main(void) {
           "wrap clear must come after the last use of value 15 and before value 1 is reused");
     check_restored(&original);
 
-    puts("PASS: setup reuse, real GL pass order/state/uniforms/counters, legacy and per-model stencil values, lean replay state/culling/holey fallback, wraps, multi-surface and mixed queues, faded rings");
+    puts("PASS: setup reuse, real GL pass order/state/uniforms/counters, legacy and per-model stencil values, lean replay state/culling/colour mask/holey fallback, wraps, multi-surface and mixed queues, faded rings");
     return 0;
 }
 '''

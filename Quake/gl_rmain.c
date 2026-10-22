@@ -4036,6 +4036,8 @@ void R_RenderScene (void)
 	if (r_drawentities.value)
 	{
 		int i;
+		// Scripted particles leave fixed-function fog off; the legacy alias path needs it.
+		Fog_EnableGFog ();
 		for (i = 0; i < cl_numvisedicts; ++i)
 		{
 			currententity = cl_visedicts[i];

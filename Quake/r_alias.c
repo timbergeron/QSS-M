@@ -4524,7 +4524,7 @@ attribute churn per entity, was most of what r_outline cost. MF_HOLEY skins
 and the scrubbed (narrow stencil) replay keep the full path.
 =============
 */
-static void R_DrawDeferredAliasOutlineLean (entity_t *e, GLuint *program, GLboolean cull)
+static void R_DrawDeferredAliasOutlineLean (entity_t *e, GLuint *program, GLboolean cull, const GLboolean *colormask)
 {
 	aliashdr_t *first, *paliashdr;
 	aliasglsl_t *glsl;
@@ -4575,8 +4575,8 @@ static void R_DrawDeferredAliasOutlineLean (entity_t *e, GLuint *program, GLbool
 			GL_Uniform1iFunc (glsl->useShellTexLoc, 0);
 			GL_Uniform1iFunc (glsl->useAlphaTestLoc, 0);
 		}
-		else
-			glColorMask (GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+		else	// the caller's mask, so a stereo eye keeps only its own channels
+			glColorMask (colormask[0], colormask[1], colormask[2], colormask[3]);
 
 		for (paliashdr = first;;)
 		{
@@ -4618,6 +4618,7 @@ void R_DrawDeferredAliasOutlines(void)
 	GLuint uniquemask = 0;
 	GLuint program = 0;
 	GLboolean lean, cull = GL_FALSE;
+	GLboolean colormask[4] = {GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE};
 
 	r_alias_outline_collecting = false;
 
@@ -4656,6 +4657,7 @@ void R_DrawDeferredAliasOutlines(void)
 	if (lean)
 	{
 		cull = glIsEnabled (GL_CULL_FACE);
+		glGetBooleanv (GL_COLOR_WRITEMASK, colormask);
 		glPushAttrib (GL_ENABLE_BIT | GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT |
 			GL_STENCIL_BUFFER_BIT | GL_POLYGON_BIT);
 		glEnable (GL_DEPTH_TEST);
@@ -4689,7 +4691,7 @@ void R_DrawDeferredAliasOutlines(void)
 
 		if (lean)
 		{
-			R_DrawDeferredAliasOutlineLean (currententity, &program, cull);
+			R_DrawDeferredAliasOutlineLean (currententity, &program, cull, colormask);
 			continue;
 		}
 
