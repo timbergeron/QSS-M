@@ -2579,9 +2579,7 @@ static qboolean SCR_GetRoundHudString(char *num, size_t num_size)
 	if (round < 0 || roundtotal <= 0)
 		return false;
 
-	if (!cl.matchinp)
-		round = 0;
-
+	// Arena rounds are published independently of the match timer.
 	q_snprintf(num, num_size, "%d / %d", round, roundtotal);
 	return true;
 }
