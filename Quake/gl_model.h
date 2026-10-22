@@ -404,7 +404,7 @@ typedef struct {
 		PV_QUAKEFORGE,	//trivertx16_t
 		PV_IQM,			//iqmvert_t
 	} poseverttype;	//spike
-	int					md5_weighted;	// 0 until tested, then 1 if every vertex's weights sum to one, else 2
+	qboolean			md5;			// loaded from an md5mesh, whose normals point inward
 	struct skintextures_s
 	{
 		struct gltexture_s *base;

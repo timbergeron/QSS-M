@@ -134,6 +134,7 @@ typedef struct
 
 	// uniforms used in vert shader
 	GLint bonesLoc;
+	GLint md5NormalsLoc; // woods #routline #powershell
 	GLint blendLoc;
 	GLint shadevectorLoc;
 	GLint lightColorLoc;
@@ -326,6 +327,7 @@ void GLAlias_CreateShaders (void)
 		"attribute vec4 BoneIndex;\n"
 		"attribute vec4 VertColours;\n"
 		"uniform vec4 BoneTable[MAXBONES*3];\n" //fixme: should probably try to use a UBO or SSBO.
+		"uniform int md5Normals;\n" // woods #routline #powershell
 		"#else\n"
 		"#ifndef INSTANCED\n"
 		"uniform float Blend;\n"
@@ -386,8 +388,7 @@ void GLAlias_CreateShaders (void)
 		"	vec4 basePos = (vec4(Pose1Vert.xyz, 1.0) * wmat);\n"
 		"	vec3 transformedNormal = normalize((vec4(Pose1Normal.xyz, 0.0) * wmat).xyz);\n"
 		"	// MD5 normals point inward, so flip them for the outline and powerup shell expansion\n" // woods #routline #powershell
-		"	float weightSum = BoneWeight.x + BoneWeight.y + BoneWeight.z + BoneWeight.w;\n"
-		"	lerpedNormal = abs(weightSum - 1.0) < 0.001 ? -transformedNormal : transformedNormal;\n"
+		"	lerpedNormal = md5Normals != 0 ? -transformedNormal : transformedNormal;\n"
 		"\n"
 		"	float outlineScale = 1.0;\n"
 		"	if (isOutlinePass == 1 && outlineWidth > 0.0)\n"
@@ -574,11 +575,13 @@ void GLAlias_CreateShaders (void)
 			if (i == ALIAS_GLSL_SKELETAL)
 			{
 				glsl->bonesLoc = GL_GetUniformLocation (&glsl->program, "BoneTable");
+				glsl->md5NormalsLoc = GL_GetUniformLocation (&glsl->program, "md5Normals");
 				glsl->blendLoc = -1;
 			}
 			else
 			{
 				glsl->bonesLoc = -1;
+				glsl->md5NormalsLoc = -1;
 				glsl->blendLoc = GL_GetUniformLocation (&glsl->program, "Blend");
 			}
 			glsl->shadevectorLoc = GL_GetUniformLocation (&glsl->program, "ShadeVector");
@@ -633,6 +636,7 @@ void GLAlias_CreateShaders (void)
 		if (glsl->program != 0)
 		{
 			glsl->bonesLoc = -1;
+			glsl->md5NormalsLoc = -1;
 			glsl->blendLoc = -1;
 			glsl->shadevectorLoc = -1;
 			glsl->lightColorLoc = -1;
@@ -1223,36 +1227,6 @@ static qboolean R_IsAliasOutlineXray(entity_t *e, vec3_t color, float *alpha, fl
 
 /*
 =============
-R_AliasModelIsMD5 -- woods #routline
-
-A converted md5 always has vertex weights that sum to one, which is how it is
-told apart from a hand-authored iqm. That depends on the vertex data alone, so
-test it once and keep the verdict in the header.
-=============
-*/
-static qboolean R_AliasModelIsMD5(aliashdr_t *paliashdr)
-{
-	if (!paliashdr->md5_weighted)
-	{
-		const iqmvert_t *verts = (const iqmvert_t *)((byte *)paliashdr + paliashdr->vertexes);
-
-		paliashdr->md5_weighted = 1;
-		for (int i = 0; i < paliashdr->numverts; i++)
-		{
-			float weightSum = verts[i].weight[0] + verts[i].weight[1] + verts[i].weight[2] + verts[i].weight[3];
-			if (weightSum < 0.999f || weightSum > 1.001f)
-			{
-				paliashdr->md5_weighted = 2;
-				break;
-			}
-		}
-	}
-
-	return paliashdr->md5_weighted == 1;
-}
-
-/*
-=============
 R_CalculateAliasModelRadius
 =============
 */
@@ -1268,7 +1242,7 @@ static float R_CalculateAliasModelRadius(aliashdr_t *paliashdr, entity_t *e, ler
 
 	// Decided before the cache hit below returns, so a hit still reports it.
 	if (isMD5Model)
-		*isMD5Model = paliashdr->poseverttype == PV_IQM && R_AliasModelIsMD5(paliashdr);
+		*isMD5Model = paliashdr->md5;
 
 	// Match R_SetupAliasFrame's fallback without indexing an invalid network frame.
 	if (framenum < 0 || framenum >= paliashdr->numframes)
@@ -1673,7 +1647,10 @@ void R_DrawAliasModelOutline(aliasglsl_t* glsl, aliashdr_t* paliashdr, lerpdata_
 	// Opaque normal outlines are replayed after every opaque entity fill. Queue
 	// once per entity here, after all the ordinary outline eligibility checks,
 	// while leaving xray and translucent outlines in their original draw order.
+	// CSQC viewmodels stay inline: the replay has no view-relative transform
+	// or viewmodel depth range, so it would cull or misplace them.
 	if (!is_xray && r_alias_outline_collecting && entalpha >= 1.0f &&
+		!(e->eflags & EFLAGS_VIEWMODEL) &&
 		r_alias_outline_phase == ALIAS_OUTLINE_PHASE_NORMAL && gl_stencilbits &&
 		R_QueueDeferredAliasOutline(e))
 	{
@@ -2492,6 +2469,8 @@ static void GL_DrawAliasFrame_GLSL (aliasglsl_t *glsl, aliashdr_t *paliashdr, le
 		GL_Uniform1fFunc (glsl->blendLoc, blend);
 	if (glsl->bonesLoc != -1)
 		GL_Uniform4fvFunc (glsl->bonesLoc, paliashdr->numbones*3, lerpdata.bonestate->mat);
+	if (glsl->md5NormalsLoc != -1)
+		GL_Uniform1iFunc (glsl->md5NormalsLoc, paliashdr->md5);
 	GL_Uniform3fFunc (glsl->shadevectorLoc, shadevector[0], shadevector[1], shadevector[2]);
 	GL_Uniform4fFunc (glsl->lightColorLoc, lightcolor[0], lightcolor[1], lightcolor[2], entalpha);	//this includes colormod
 	GL_Uniform1iFunc (glsl->useFullbrightTexLoc, (tex.luma != NULL) ? 1 : 0);
@@ -4610,6 +4589,8 @@ static void R_DrawDeferredAliasOutlineLean (entity_t *e, GLuint *program, GLbool
 					GL_Uniform1fFunc (glsl->blendLoc, blend);
 				if (glsl->bonesLoc != -1)
 					GL_Uniform4fvFunc (glsl->bonesLoc, paliashdr->numbones*3, lerpdata.bonestate->mat);
+				if (glsl->md5NormalsLoc != -1)
+					GL_Uniform1iFunc (glsl->md5NormalsLoc, paliashdr->md5);
 				if (r_alias_outline_phase == ALIAS_OUTLINE_PHASE_MASK)
 					glDrawElements (GL_TRIANGLES, paliashdr->numindexes, GL_UNSIGNED_SHORT,
 						e->model->meshindexesvboptr + paliashdr->eboofs);
@@ -4905,6 +4886,8 @@ static void GL_DrawAliasShadow_GLSL (aliasglsl_t *glsl, aliashdr_t *paliashdr, l
 		GL_Uniform1fFunc (glsl->blendLoc, blend);
 	if (glsl->bonesLoc != -1)
 		GL_Uniform4fvFunc (glsl->bonesLoc, paliashdr->numbones*3, lerpdata.bonestate->mat);
+	if (glsl->md5NormalsLoc != -1)
+		GL_Uniform1iFunc (glsl->md5NormalsLoc, paliashdr->md5);
 	GL_Uniform3fFunc (glsl->shadevectorLoc, shadevector[0], shadevector[1], shadevector[2]);
 	// the fragment shader applies gl_Color.a twice (result *= gl_Color, then
 	// result.a *= gl_Color.a), so pass the square root to land on shadowalpha

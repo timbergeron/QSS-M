@@ -14,8 +14,8 @@ measurement writes a file per frame and perturbs what it is measuring.
 ``_stress_frameprof`` samples the whole frame period, buffers it, and reports
 percentiles plus scene-cache counters once at the end.
 
-The client is left uncapped (``host_maxfps 0``, ``vid_vsync 0``) so frame time
-reflects work rather than the frame limiter.
+The client is left uncapped (``host_maxfps 5000``, ``vid_vsync 0``) so frame
+time reflects work rather than the frame limiter.
 """
 
 import argparse
@@ -210,6 +210,8 @@ class LiveClient:
 
     def focus(self):
         """Bring the client window forward so it is not frame-throttled."""
+        if sys.platform != "win32":
+            return False  # focusutil drives user32 through ctypes.windll
         try:
             import focusutil
         except ImportError:

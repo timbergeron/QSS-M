@@ -96,12 +96,12 @@ typedef unsigned char GLboolean;
 typedef int qboolean;
 typedef unsigned int GLuint;
 typedef int GLint;
-typedef struct { int nextsurface, numtris, numindexes, eboofs, poseverttype, numbones, id; } aliashdr_t;
+typedef struct { int nextsurface, numtris, numindexes, eboofs, poseverttype, numbones, md5, id; } aliashdr_t;
 /* A second surface sits far enough away for the real nextsurface walk. */
 typedef struct { aliashdr_t header; char pad[256]; aliashdr_t second; const char *meshindexesvboptr; } qmodel_t;
 typedef struct { qmodel_t *model; int alias_outline_order; unsigned char alpha; } entity_t;
 typedef struct { int outlineWidthLoc, isOutlinePassLoc, shellModeLoc, useShellTexLoc,
-                 useAlphaTestLoc, blendLoc, bonesLoc, program, maxbones; } aliasglsl_t;
+                 useAlphaTestLoc, blendLoc, bonesLoc, md5NormalsLoc, program, maxbones; } aliasglsl_t;
 typedef struct { float mat[12]; } bonepose_t;
 typedef struct { int pose1, pose2; float blend, origin[3], angles[3]; bonepose_t *bonestate; } lerpdata_t;
 typedef struct { int depthwrite, colorwrite, stencilwrite, depthfunc, stencilref, cull; } glstate_t;
@@ -258,7 +258,7 @@ int main(void) {
     make_model(&single, 1);
     make_model(&multi, 2);
     for (i = 0; i < 2; i++) {
-        aliasglsl_t g = {0, 1, 2, 3, 4, -1, -1, 7, 0};
+        aliasglsl_t g = {0, 1, 2, 3, 4, -1, -1, -1, 7, 0};
         r_alias_glsl[i] = g;
     }
     cl_visedicts[0] = &a; cl_visedicts[1] = &b; cl_visedicts[2] = &a;

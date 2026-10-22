@@ -26,7 +26,6 @@ static double counted_sqrt(double value) { square_roots++; return sqrt(value); }
 #define sqrt counted_sqrt
 '''
 source += function(mesh, 'void Matrix3x4_RM_Transform4(')
-source += function(renderer, 'static qboolean R_AliasModelIsMD5(')
 source += function(renderer, 'static float R_CalculateAliasModelRadius(')
 source += r'''
 #undef sqrt
@@ -149,6 +148,7 @@ int main(void) {
     bonepose_t bones[2] = {{{1,0,0,0, 0,1,0,0, 0,0,1,0}},
                            {{4,0,0,0, 0,1,0,0, 0,0,1,0}}};
     lerpdata_t lerp = {bones}; entity_t e = {0}; qboolean md5;
+    iqm->md5 = true;
     s->xyz[0] = 3; s->xyz[1] = 4;
     s->weight[0] = 1;
     assert(R_CalculateAliasModelRadius(iqm, &e, &lerp, &md5) == 5 && md5);
@@ -160,7 +160,7 @@ int main(void) {
     assert(iqm->frames[0].outline_radius == 0);
 
     /* With no bone state those same vertices are static, so the radius is
-     * retained and the weight verdict is reached once instead of per call. */
+     * retained and a cache hit still reports the format. */
     lerp.bonestate = NULL;
     assert(R_CalculateAliasModelRadius(iqm, &e, &lerp, &md5) == 5 && md5);
     assert(iqm->frames[0].outline_radius == 5);
@@ -169,14 +169,16 @@ int main(void) {
     assert(square_roots == before);
     free(iqm);
 
-    /* The verdict follows the vertex data: zeroed weights do not sum to one. */
+    /* A hand-authored iqm's weights also sum to one; only the loader's
+     * format flag makes a model md5. */
     iqm = fixture(PV_IQM, 1, sizeof(iqmvert_t));
     s = (iqmvert_t *)((byte *)iqm + iqm->vertexes);
     s->xyz[0] = 3; s->xyz[1] = 4;
+    s->weight[0] = 1;
     assert(R_CalculateAliasModelRadius(iqm, &e, NULL, &md5) == 5 && !md5);
-    assert(iqm->md5_weighted == 2 && iqm->frames[0].outline_radius == 5);
+    assert(iqm->frames[0].outline_radius == 5);
     free(iqm);
-    puts("PASS: cached MDL/MD3/boneless-iqm radii, grouped/invalid frames, independent surfaces, relocation/reload, live skeletal poses, and a once-per-model weight verdict");
+    puts("PASS: cached MDL/MD3/boneless-iqm radii, grouped/invalid frames, independent surfaces, relocation/reload, live skeletal poses, and md5 detection by format rather than weights");
     return 0;
 }
 '''

@@ -2436,6 +2436,7 @@ void Mod_LoadMD5MeshModel (qmodel_t *mod, const void *buffer)
 			surf->nextsurface = 0;
 
 		surf->poseverttype = PV_IQM;
+		surf->md5 = true;
 		for (j = 0; j < 3; j++)
 		{
 			surf->scale_origin[j] = 0;
