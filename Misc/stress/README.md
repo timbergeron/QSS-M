@@ -18,6 +18,15 @@ and cancellation of concurrent browser workers during shutdown.
 These tests require a C compiler and SDL3 on Unix. On Windows they find Visual
 Studio automatically and use the repository's bundled SDL3 headers and library.
 
+## Console and menu character batching
+
+`python3 Misc/stress/test_character_batches.py` compiles the production glyph
+drawers and text loops with a GL call recorder. It checks ordered geometry,
+glyph banks, overlapping link underlines, font layouts, scrolling, long-text
+bounds, menu fades, opacity changes, final GL state, and submission counts
+without a window or game assets.
+It requires a C compiler; `CC` and `CFLAGS` select the compiler and extra checks.
+
 ## Requirements
 
 For chunked download pacing and standalone regression tests, see

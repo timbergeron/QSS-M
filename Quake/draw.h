@@ -50,6 +50,19 @@ void Draw_Init (void);
 void Draw_Character (int x, int y, int num);
 void Draw_CharacterRGBA (int x, int y, int num, plcolour_t c, float alpha); // woods #iwtabcomplete
 void Draw_CharactersRGBA (int x, int y, const char *chars, int count, plcolour_t c, float alpha);
+// Local, ordered glyph runs. End before changing matrices, clipping, GL state,
+// or drawing anything else. Empty/all-space runs do not touch GL state.
+// A zero-initialized batch is an ordinary, untinted run.
+typedef struct
+{
+	qboolean active, rgba;
+	plcolour_t colour;
+	float alpha;
+} drawcharbatch_t;
+void Draw_BeginCharacterBatch (drawcharbatch_t *batch);
+void Draw_BeginCharacterBatchRGBA (drawcharbatch_t *batch, plcolour_t colour, float alpha);
+void Draw_BatchCharacter (drawcharbatch_t *batch, int x, int y, int num);
+void Draw_EndCharacterBatch (drawcharbatch_t *batch);
 void Draw_Character_Rotation (int x, int y, int num, int rotation); // woods #movementkeys
 void Draw_DebugChar (char num);
 void Draw_Pic (int x, int y, qpic_t *pic);

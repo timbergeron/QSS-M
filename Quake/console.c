@@ -6656,10 +6656,15 @@ void Con_DrawNotify (void)
 
 		x = chat_x;
 		text += chat_ofs;
-		for (i = 0; i < chat_visible; i++)
 		{
-			Draw_Character (x << 3, v, text[i]);
-			x++;
+			drawcharbatch_t batch;
+			Draw_BeginCharacterBatch (&batch);
+			for (i = 0; i < chat_visible; i++)
+			{
+				Draw_BatchCharacter (&batch, x << 3, v, text[i]);
+				x++;
+			}
+			Draw_EndCharacterBatch (&batch);
 		}
 
 		x = chat_x + chat_cursor - chat_ofs;
@@ -6673,10 +6678,12 @@ void Con_DrawNotify (void)
 			if (hint[0])
 			{
 				plcolour_t hintcolour = CL_PLColours_Parse("0xffffff");
+				drawcharbatch_t batch;
+				Draw_BeginCharacterBatchRGBA (&batch, hintcolour, 0.75f);
 
 				for (i = 0; hint[i] && x + i < chat_x + chat_max; i++)
-					Draw_CharacterRGBA ((x + i) << 3, v,
-						hint[i] | 0x80, hintcolour, 0.75f);
+					Draw_BatchCharacter (&batch, (x + i) << 3, v, hint[i] | 0x80);
+				Draw_EndCharacterBatch (&batch);
 			}
 		}
 
@@ -6727,9 +6734,12 @@ void Con_DrawInput (void)
 		if (hint[0])
 		{
 			plcolour_t hintcolour = CL_PLColours_Parse("0xffffff");
+			drawcharbatch_t batch;
+			Draw_BeginCharacterBatchRGBA (&batch, hintcolour, 0.75f);
 
 			for (i = 0; hint[i] && i + 1 + len - ofs < con_linewidth + CON_MARGIN * 2; i++)
-				Draw_CharacterRGBA ((i+1 + len - ofs) <<3, vid.conheight - 16, hint[i] | 0x80, hintcolour, 0.75f);
+				Draw_BatchCharacter (&batch, (i+1 + len - ofs) <<3, vid.conheight - 16, hint[i] | 0x80);
+			Draw_EndCharacterBatch (&batch);
 		}
 	}
 
@@ -6780,15 +6790,18 @@ static void Con_DrawBirthdayMessage (void)
 		char yearstr[32];
 		int age = (tm->tm_year + 1900) - 1996;
 		int x;
+		drawcharbatch_t batch;
 
 		q_snprintf(birthday, sizeof(birthday), "Happy Birthday Quake ");
 		q_snprintf(yearstr, sizeof(yearstr), "1996-%d (%d) ", tm->tm_year + 1900, age);
 
+		Draw_BeginCharacterBatch (&batch);
 		for (x = 0; x < (int)strlen(birthday); x++)
-			Draw_Character((con_linewidth - strlen(birthday) + x + 2) << 3, vid.conheight - 32, birthday[x] + 128);
+			Draw_BatchCharacter (&batch, (con_linewidth - strlen(birthday) + x + 2) << 3, vid.conheight - 32, birthday[x] + 128);
 
 		for (x = 0; x < (int)strlen(yearstr); x++)
-			Draw_Character((con_linewidth - strlen(yearstr) + x + 2) << 3, vid.conheight - 24, yearstr[x] + 128);
+			Draw_BatchCharacter (&batch, (con_linewidth - strlen(yearstr) + x + 2) << 3, vid.conheight - 24, yearstr[x] + 128);
+		Draw_EndCharacterBatch (&batch);
 	}
 }
 
@@ -6937,6 +6950,7 @@ The typing input line at the bottom should only be drawn if typing is allowed
 void Con_DrawConsole (int lines, qboolean drawinput)
 {
 	int	i, x, y, j, sb, rows;
+	drawcharbatch_t batch;
 	const char	*text;
 	const char	*ver = ENGINE_NAME_AND_VER;
 	qboolean links_enabled;
@@ -6955,41 +6969,43 @@ void Con_DrawConsole (int lines, qboolean drawinput)
 
 // draw the buffer text
 	rows = (con_vislines +7)/8;
-       y = vid.conheight - rows*CHARSIZE;
+	y = vid.conheight - rows*CHARSIZE;
 	rows -= 2; //for input and version lines
 	sb = (con_backscroll) ? 2 : 0;
 
-       for (i = con_current - rows + 1; i <= con_current - sb; i++, y += CHARSIZE)
+	for (i = con_current - rows + 1; i <= con_current - sb; i++, y += CHARSIZE)
 	{
 		j = i - con_backscroll;
 		if (j < 0)
 			j = 0;
 		text = con_text + (j % con_totallines)*con_linewidth;
-               Con_DrawSelectionHighlight (CHARSIZE, y, j); // woods #conselection
-       }
+		Con_DrawSelectionHighlight (CHARSIZE, y, j); // woods #conselection
+	}
 
-       y = vid.conheight - (rows+2)*CHARSIZE; // +2 for input and version lines
-       for (i = con_current - rows + 1; i <= con_current - sb; i++, y += CHARSIZE)
-       {
-               conofs_t ofs;
-               j = i - con_backscroll;
-               if (j < 0)
-                       j = 0;
-               text = con_text + (j % con_totallines)*con_linewidth;
-               ofs.line = j;
+	// Selection fills are complete; retain the exact underline/glyph order.
+	Draw_BeginCharacterBatch (&batch);
+	y = vid.conheight - (rows+2)*CHARSIZE; // +2 for input and version lines
+	for (i = con_current - rows + 1; i <= con_current - sb; i++, y += CHARSIZE)
+	{
+		conofs_t ofs;
+		j = i - con_backscroll;
+		if (j < 0)
+			j = 0;
+		text = con_text + (j % con_totallines)*con_linewidth;
+		ofs.line = j;
 		for (x = 0; x < con_linewidth; x++) // woods #conselection
-               {
-                       conlink_t *drawlink;
-                       char c = text[x];
-                       ofs.col = x;
-                       drawlink = links_enabled ? Con_GetLinkAtOfs(&ofs) : NULL;
-                       if (drawlink)
-                               c |= 0x80;
-                       /* underline hot link */
-                       if (drawlink && drawlink == con_hotlink)
-                               Draw_Character ((x + 1)<<3, y + 2, '_' | (c & 0x80));
-                       Draw_Character ((x + 1)<<3, y, c);
-               }
+		{
+			conlink_t *drawlink;
+			char c = text[x];
+			ofs.col = x;
+			drawlink = links_enabled ? Con_GetLinkAtOfs(&ofs) : NULL;
+			if (drawlink)
+				c |= 0x80;
+			/* underline hot link */
+			if (drawlink && drawlink == con_hotlink)
+				Draw_BatchCharacter (&batch, (x + 1)<<3, y + 2, '_' | (c & 0x80));
+			Draw_BatchCharacter (&batch, (x + 1)<<3, y, c);
+		}
 	}
 
 // draw scrollback arrows
@@ -6997,9 +7013,10 @@ void Con_DrawConsole (int lines, qboolean drawinput)
 	{
 		y += CHARSIZE; // blank line
 		for (x = 0; x < con_linewidth; x += 4)
-			Draw_Character ((x + 1)<<3, y, '^');
+			Draw_BatchCharacter (&batch, (x + 1)<<3, y, '^');
 		y += CHARSIZE;
 	}
+	Draw_EndCharacterBatch (&batch);
 
 // draw the input prompt, user text, and cursor
 	if (drawinput)

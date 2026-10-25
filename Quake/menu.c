@@ -1033,12 +1033,14 @@ void M_PrintRGBA (int cx, int cy, const char* str, plcolour_t c, float alpha, qb
 
 void M_Print2 (int cx, int cy, const char* str) // woods #speed yellow/gold numbers
 {
+	drawcharbatch_t batch = {0};
 	while (*str)
 	{
-		M_DrawCharacter(cx, cy, (*str) -30);
+		Draw_BatchCharacter (&batch, cx, cy, (*str) -30);
 		str++;
 		cx += 8;
 	}
+	Draw_EndCharacterBatch (&batch);
 }
 
 void M_PrintWhite (int cx, int cy, const char *str)
@@ -1194,15 +1196,17 @@ void M_DrawQuakeCursor(int cx, int cy) // woods #skillmenu (iw)
 
 void M_DrawQuakeBar(int x, int y, int cols) // woods #modsmenu (iw)
 {
-	M_DrawCharacter(x, y, '\35');
+	drawcharbatch_t batch = {0};
+	Draw_BatchCharacter (&batch, x, y, '\35');
 	x += 8;
 	cols -= 2;
 	while (cols-- > 0)
 	{
-		M_DrawCharacter(x, y, '\36');
+		Draw_BatchCharacter (&batch, x, y, '\36');
 		x += 8;
 	}
-	M_DrawCharacter(x, y, '\37');
+	Draw_BatchCharacter (&batch, x, y, '\37');
+	Draw_EndCharacterBatch (&batch);
 }
 
 static void M_DrawCountHeader(int x, int y, int cols, const char *title,
@@ -1218,12 +1222,14 @@ static void M_DrawCountHeader(int x, int y, int cols, const char *title,
 
 void M_DrawEllipsisBar(int x, int y, int cols) // woods #modsmenu (iw)
 {
+	drawcharbatch_t batch = {0};
 	while (cols > 0)
 	{
-		M_DrawCharacter(x, y, '.' | 128);
+		Draw_BatchCharacter (&batch, x, y, '.' | 128);
 		cols -= 2;
 		x += 16;
 	}
+	Draw_EndCharacterBatch (&batch);
 }
 
 //=============================================================================
@@ -1351,6 +1357,7 @@ static float M_OneScrollPixelOffset(double time, int max_offset)
 static void M_PrintScrollOnceMasked(int x, int y, int maxwidth,
 	const char *str, double time, int mask)
 {
+	drawcharbatch_t batch = {0};
 	const int charwidth = 8;
 	int maxchars = maxwidth / charwidth;
 	int len = (int)strlen(str);
@@ -1362,7 +1369,8 @@ static void M_PrintScrollOnceMasked(int x, int y, int maxwidth,
 	if (len <= maxchars)
 	{
 		for (int i = 0; i < len; ++i)
-			M_DrawCharacter(x + i * charwidth, y, (unsigned char)str[i] ^ mask);
+			Draw_BatchCharacter (&batch, x + i * charwidth, y, (unsigned char)str[i] ^ mask);
+		Draw_EndCharacterBatch (&batch);
 		return;
 	}
 
@@ -1383,8 +1391,9 @@ static void M_PrintScrollOnceMasked(int x, int y, int maxwidth,
 			continue;
 		if (char_x >= x + maxwidth)
 			break;
-		M_DrawCharacter(char_x, y, (unsigned char)str[pos] ^ mask);
+		Draw_BatchCharacter (&batch, char_x, y, (unsigned char)str[pos] ^ mask);
 	}
+	Draw_EndCharacterBatch (&batch);
 	glPopMatrix();
 }
 
@@ -1495,6 +1504,7 @@ static void M_PrintHighlightScrollOnce2(int x, int y, int maxwidth,
 
 void M_PrintHighlight(int x, int y, const char* str, const char* search, int searchlen)
 {
+	drawcharbatch_t batch = {0};
 	if (!searchlen)
 	{
 		M_Print(x, y, str);
@@ -1512,13 +1522,14 @@ void M_PrintHighlight(int x, int y, const char* str, const char* search, int sea
 	int pos = match - str;
 	int i;
 	for (i = 0; i < pos; i++)
-		M_DrawCharacter(x + i * 8, y, str[i] ^ 128);
+		Draw_BatchCharacter (&batch, x + i * 8, y, str[i] ^ 128);
 
 	for (i = 0; i < searchlen && match[i]; i++) // Print matching part highlighted
-		M_DrawCharacter(x + (pos + i) * 8, y, match[i]);
+		Draw_BatchCharacter (&batch, x + (pos + i) * 8, y, match[i]);
 
 	for (i = 0; match[i + searchlen]; i++) // Print rest normally
-		M_DrawCharacter(x + (pos + searchlen + i) * 8, y, match[i + searchlen] ^ 128);
+		Draw_BatchCharacter (&batch, x + (pos + searchlen + i) * 8, y, match[i + searchlen] ^ 128);
+	Draw_EndCharacterBatch (&batch);
 }
 
 static float M_ScrollPixelOffset(double time, int scrollspeed, int cycle_pixels, int *pixel_offset)
@@ -1550,6 +1561,7 @@ static int M_ScrollSeparatorChar(int index, int mask)
 
 void M_PrintScroll(int x, int y, int maxwidth, const char* str, double time, qboolean color) // woods #modsmenu (iw)
 {
+	drawcharbatch_t batch = {0};
 	const int charwidth = 8;
 	const int gap_len = MENU_SCROLL_SEPARATOR_LEN;
 	const int scrollspeed = 30; // pixels per second, matches Sbar_DrawScrollString
@@ -1597,9 +1609,10 @@ void M_PrintScroll(int x, int y, int maxwidth, const char* str, double time, qbo
 
 			if (pos < len)
 				ch ^= mask;
-			M_DrawCharacter(char_x, y, ch);
+			Draw_BatchCharacter (&batch, char_x, y, ch);
 		}
 	}
+	Draw_EndCharacterBatch (&batch);
 	glPopMatrix();
 }
 
@@ -1687,6 +1700,7 @@ static void M_DrawCvarHintValue(int x, int y, int maxwidth, cvar_t *cv)
 
 void M_PrintScroll2(int x, int y, int maxwidth, const char* str, const char* str2, double time, qboolean name_red)
 {
+	drawcharbatch_t batch = {0};
 	int maxchars = maxwidth / 8;
 	int len_str = (int)strlen(str);
 
@@ -1695,6 +1709,7 @@ void M_PrintScroll2(int x, int y, int maxwidth, const char* str, const char* str
 
 	// Create masked version of name
 	char masked_str[MAX_QPATH];
+	effective_len_str = q_min(effective_len_str, (int)sizeof(masked_str) - 1);
 	char mask = name_red ? 128 : 0;
 	for (int i = 0; i < effective_len_str; i++)
 		masked_str[i] = (char)(str[i] ^ mask);
@@ -1746,9 +1761,10 @@ void M_PrintScroll2(int x, int y, int maxwidth, const char* str, const char* str
 			else
 				c = M_ScrollSeparatorChar(pos - combined_len, 0);
 
-			M_DrawCharacter(char_x, y, c);
+			Draw_BatchCharacter (&batch, char_x, y, c);
 		}
 	}
+	Draw_EndCharacterBatch (&batch);
 	glPopMatrix();
 }
 
@@ -1756,6 +1772,7 @@ void M_PrintHighlightScroll2(int x, int y, int maxwidth,
 	const char* str, const char* str2,
 	const char* highlight, double time)
 {
+	drawcharbatch_t batch = {0};
 	// How many visible characters fit on one line
 	int maxchars = maxwidth / 8;
 
@@ -1822,7 +1839,7 @@ void M_PrintHighlightScroll2(int x, int y, int maxwidth,
 				i < name_highlight_end);
 			qboolean is_bronzed = (i < effective_len_str) || (time == 0.0);
 
-			M_DrawCharacter(x + i * 8, y, ch | (is_highlighted ? 0 : (is_bronzed ? 128 : 0)));
+			Draw_BatchCharacter (&batch, x + i * 8, y, ch | (is_highlighted ? 0 : (is_bronzed ? 128 : 0)));
 		}
 
 		// Draw description portion
@@ -1833,8 +1850,9 @@ void M_PrintHighlightScroll2(int x, int y, int maxwidth,
 				i >= desc_highlight_start &&
 				i < desc_highlight_end);
 
-			M_DrawCharacter(desc_x + i * 8, y, ch | (is_highlighted ? 128 : 0));
+			Draw_BatchCharacter (&batch, desc_x + i * 8, y, ch | (is_highlighted ? 128 : 0));
 		}
+		Draw_EndCharacterBatch (&batch);
 		return;
 	}
 
@@ -1897,15 +1915,17 @@ void M_PrintHighlightScroll2(int x, int y, int maxwidth,
 				drawch = M_ScrollSeparatorChar(pos - combined_len, 128);
 			}
 
-			M_DrawCharacter(char_x, y, drawch);
+			Draw_BatchCharacter (&batch, char_x, y, drawch);
 		}
 	}
+	Draw_EndCharacterBatch (&batch);
 	glPopMatrix();
 }
 
 void M_PrintHighlightScroll(int x, int y, int maxwidth, const char* str, const char* highlight, double time)
 {
-    int len_str = strlen(str);
+	drawcharbatch_t batch = {0};
+	int len_str = (int)strlen(str);
 
 	if (len_str * 8 <= maxwidth)
 	{
@@ -1913,24 +1933,25 @@ void M_PrintHighlightScroll(int x, int y, int maxwidth, const char* str, const c
 		return;
 	}
 
-    // Copy the original string without masking
-    char name_str[MAX_CHAT_SIZE_EX];
-    strncpy(name_str, str, sizeof(name_str) - 1);
-    name_str[sizeof(name_str) - 1] = '\0';
+	// Copy the original string without masking.
+	char name_str[MAX_CHAT_SIZE_EX];
+	q_strlcpy(name_str, str, sizeof(name_str));
+	// Scroll over the stored copy, which can be shorter than the input.
+	len_str = (int)strlen(name_str);
 
-    // Compute highlight positions in the name
-    int name_highlight_start = -1, name_highlight_end = -1;
-    if (highlight && highlight[0])
-    {
-        const char* name_match = q_strcasestr(name_str, highlight);
-        if (name_match)
-        {
-            name_highlight_start = name_match - name_str;
-            name_highlight_end = name_highlight_start + strlen(highlight);
-            if (name_highlight_end > len_str)
-                name_highlight_end = len_str;
-        }
-    }
+	// Compute highlight positions in the name.
+	int name_highlight_start = -1, name_highlight_end = -1;
+	if (highlight && highlight[0])
+	{
+		const char* name_match = q_strcasestr(name_str, highlight);
+		if (name_match)
+		{
+			name_highlight_start = name_match - name_str;
+			name_highlight_end = name_highlight_start + strlen(highlight);
+			if (name_highlight_end > len_str)
+				name_highlight_end = len_str;
+		}
+	}
 
 	const int charwidth = 8;
 	const int gap_len = MENU_SCROLL_SEPARATOR_LEN;
@@ -1972,9 +1993,10 @@ void M_PrintHighlightScroll(int x, int y, int maxwidth, const char* str, const c
 				drawch = M_ScrollSeparatorChar(pos - len_str, 128);
 			}
 
-			M_DrawCharacter(char_x, y, drawch);
+			Draw_BatchCharacter (&batch, char_x, y, drawch);
 		}
 	}
+	Draw_EndCharacterBatch (&batch);
 	glPopMatrix();
 }
 
@@ -4712,10 +4734,11 @@ static void M_ModMenu_PrintTitle(int y, const char *title)
 {
 	int x = (320 - M_ModMenu_TitleVisibleLength(title) * 8) / 2;
 	qboolean gold_digits = false;
+	drawcharbatch_t batch = {0};
 
 	while (*title)
 	{
-		char ch[2];
+		int ch;
 
 		if (title[0] == '^' && q_tolower(title[1]) == 'g')
 		{
@@ -4724,18 +4747,18 @@ static void M_ModMenu_PrintTitle(int y, const char *title)
 			continue;
 		}
 
-		ch[0] = *title++;
-		ch[1] = 0;
-		if (gold_digits && ch[0] >= '0' && ch[0] <= '9')
-			M_Print2(x, y, ch);
-		else
-			M_PrintWhite(x, y, ch);
+		ch = *title++;
+		if (gold_digits && ch >= '0' && ch <= '9')
+			ch -= 30;
+		Draw_BatchCharacter (&batch, x, y, ch);
 		x += 8;
 	}
+	Draw_EndCharacterBatch (&batch);
 }
 
 static void M_ModMenu_PrintModeHeader(int y, const char *text)
 {
+	drawcharbatch_t batch = {0};
 	int x = (320 - (int)strlen(text) * 8) / 2;
 
 	while (*text)
@@ -4743,11 +4766,12 @@ static void M_ModMenu_PrintModeHeader(int y, const char *text)
 		unsigned char c = (unsigned char)*text++;
 
 		if (c == MENU_SCROLL_SEPARATOR_DOT)
-			M_DrawCharacter(x, y, c);
+			Draw_BatchCharacter (&batch, x, y, c);
 		else
-			M_DrawCharacter(x, y, c + 128);
+			Draw_BatchCharacter (&batch, x, y, c + 128);
 		x += 8;
 	}
+	Draw_EndCharacterBatch (&batch);
 }
 
 static void M_ModMenu_ClearSubmenus(void)
@@ -6928,14 +6952,16 @@ static void M_FormatDownloadRate(int bytes_per_second, char *out, size_t outsize
 
 static void M_DownloadMaps_DrawProgress(int x, int y, const char *progress)
 {
+	drawcharbatch_t batch = {0};
 	while (*progress)
 	{
 		int ch = (unsigned char)*progress++;
 		int glyph = (ch >= '0' && ch <= '9') ? ch - 30 : ch + 128;
 
-		M_DrawCharacter(x, y, glyph);
+		Draw_BatchCharacter (&batch, x, y, glyph);
 		x += 8;
 	}
+	Draw_EndCharacterBatch (&batch);
 }
 
 static void M_DownloadMaps_DrawActiveDownload(int x, int y, int maxwidth, const char *display_name)
@@ -6989,6 +7015,7 @@ static void M_DownloadMaps_DrawActiveDownload(int x, int y, int maxwidth, const 
 
 static void M_DownloadMaps_DrawInstalledMap(int x, int y, int maxwidth, const char *display_name, double time)
 {
+	drawcharbatch_t batch;
 	const int charwidth = 8;
 	const int gap_len = MENU_SCROLL_SEPARATOR_LEN;
 	const int scrollspeed = 30;
@@ -7004,9 +7031,7 @@ static void M_DownloadMaps_DrawInstalledMap(int x, int y, int maxwidth, const ch
 
 	if (len <= maxchars)
 	{
-		int i;
-		for (i = 0; i < len; i++)
-			M_DrawCharacterRGBA(x + i * charwidth, y, (unsigned char)display_name[i], white, 0.5f);
+		Draw_CharactersRGBA (x, y, display_name, len, white, 0.5f);
 		return;
 	}
 
@@ -7016,6 +7041,7 @@ static void M_DownloadMaps_DrawInstalledMap(int x, int y, int maxwidth, const ch
 
 	glPushMatrix();
 	glTranslatef(-frac, 0.0f, 0.0f);
+	Draw_BeginCharacterBatchRGBA (&batch, white, 0.5f);
 	for (pass = 0; pass < 2; pass++)
 	{
 		int base_x = x - pixel_offset + pass * cycle_pixels;
@@ -7031,9 +7057,10 @@ static void M_DownloadMaps_DrawInstalledMap(int x, int y, int maxwidth, const ch
 				break;
 
 			ch = (pos < len) ? (unsigned char)display_name[pos] : M_ScrollSeparatorChar(pos - len, 0);
-			M_DrawCharacterRGBA(char_x, y, ch, white, 0.5f);
+			Draw_BatchCharacter (&batch, char_x, y, ch);
 		}
 	}
+	Draw_EndCharacterBatch (&batch);
 	glPopMatrix();
 }
 
@@ -7705,6 +7732,7 @@ void M_Menu_DownloadMaps_f(void)
 static void M_DownloadMaps_DrawTitle(int x, int y, int maxwidth, const char *name,
 	const char *title, const char *search, double time, qboolean installed)
 {
+	drawcharbatch_t batch = {0};
 	char combined[MAX_QPATH + QW_MAPTITLE_SIZE + 16];
 	char visible_name[MAX_QPATH];
 	const char *match;
@@ -7741,10 +7769,19 @@ static void M_DownloadMaps_DrawTitle(int x, int y, int maxwidth, const char *nam
 			if (cx + 8 <= x || cx >= x + maxwidth)
 				continue;
 			if (installed)
-				M_DrawCharacterRGBA(cx, y, ch, white, highlighted ? 1.0f : 0.5f);
+			{
+				float alpha = highlighted ? 1.0f : 0.5f;
+				if (!batch.rgba || batch.alpha != alpha)
+				{
+					Draw_EndCharacterBatch (&batch);
+					Draw_BeginCharacterBatchRGBA (&batch, white, alpha);
+				}
+				Draw_BatchCharacter (&batch, cx, y, ch);
+			}
 			else
-				M_DrawCharacter(cx, y, ch | ((pos < name_len ? !highlighted : highlighted) ? 128 : 0));
+				Draw_BatchCharacter (&batch, cx, y, ch | ((pos < name_len ? !highlighted : highlighted) ? 128 : 0));
 		}
+	Draw_EndCharacterBatch (&batch);
 	glPopMatrix();
 }
 
@@ -9783,6 +9820,7 @@ void M_Shortcut_NameMaker_f (void)
 void M_NameMaker_Draw (void)
 {
 	int	x, y;
+	drawcharbatch_t batch = {0};
 
 	M_TextField_CheckMouseRelease();
 
@@ -9802,7 +9840,8 @@ void M_NameMaker_Draw (void)
 
 	for (y = 0; y < NAMEMAKER_TABLE_SIZE; y++)
 		for (x = 0; x < NAMEMAKER_TABLE_SIZE; x++)
-			M_DrawCharacter(32 + (16 * x), 40 + (8 * y), NAMEMAKER_TABLE_SIZE * y + x);
+			Draw_BatchCharacter (&batch, 32 + (16 * x), 40 + (8 * y), NAMEMAKER_TABLE_SIZE * y + x);
+	Draw_EndCharacterBatch (&batch);
 
 	M_PrintWhite(32, 48 + 8 * NAMEMAKER_TABLE_SIZE, "Web Name Maker");
 
@@ -10339,16 +10378,18 @@ void M_DrawSlider (int x, int y, float range, float value, const char* format)
 {
 	int	i;
 	char	buffer[6];
+	drawcharbatch_t batch = {0};
 
 	if (range < 0)
 		range = 0;
 	if (range > 1)
 		range = 1;
-	M_DrawCharacter (x-8, y, 128);
+	Draw_BatchCharacter (&batch, x-8, y, 128);
 	for (i = 0; i < SLIDER_RANGE; i++)
-		M_DrawCharacter (x + i*8, y, 129);
-	M_DrawCharacter (x+i*8, y, 130);
-	M_DrawCharacter (x + (SLIDER_RANGE-1)*8 * range, y, 131);
+		Draw_BatchCharacter (&batch, x + i*8, y, 129);
+	Draw_BatchCharacter (&batch, x+i*8, y, 130);
+	Draw_BatchCharacter (&batch, x + (SLIDER_RANGE-1)*8 * range, y, 131);
+	Draw_EndCharacterBatch (&batch);
 
 	q_snprintf(buffer, sizeof(buffer), format, value);
 	i = x + (SLIDER_RANGE + 2) * 8;
@@ -13388,6 +13429,7 @@ static void M_Controller_DrawSliderMaybeDim(int x, int y, float range, float val
 	int i;
 	char buffer[6];
 	plcolour_t c;
+	drawcharbatch_t batch;
 
 	if (enabled)
 	{
@@ -13398,11 +13440,13 @@ static void M_Controller_DrawSliderMaybeDim(int x, int y, float range, float val
 	c = CL_PLColours_Parse("0xffffff");
 	if (range < 0) range = 0;
 	if (range > 1) range = 1;
-	M_DrawCharacterRGBA(x - 8, y, 128, c, CONTROLLER_DIM_ALPHA);
+	Draw_BeginCharacterBatchRGBA (&batch, c, CONTROLLER_DIM_ALPHA);
+	Draw_BatchCharacter (&batch, x - 8, y, 128);
 	for (i = 0; i < SLIDER_RANGE; i++)
-		M_DrawCharacterRGBA(x + i * 8, y, 129, c, CONTROLLER_DIM_ALPHA);
-	M_DrawCharacterRGBA(x + i * 8, y, 130, c, CONTROLLER_DIM_ALPHA);
-	M_DrawCharacterRGBA(x + (SLIDER_RANGE - 1) * 8 * range, y, 131, c, CONTROLLER_DIM_ALPHA);
+		Draw_BatchCharacter (&batch, x + i * 8, y, 129);
+	Draw_BatchCharacter (&batch, x + i * 8, y, 130);
+	Draw_BatchCharacter (&batch, x + (SLIDER_RANGE - 1) * 8 * range, y, 131);
+	Draw_EndCharacterBatch (&batch);
 
 	q_snprintf(buffer, sizeof(buffer), format, value);
 	M_PrintRGBA(x + (SLIDER_RANGE + 2) * 8, y, buffer, c, CONTROLLER_DIM_ALPHA, true);
@@ -40714,6 +40758,7 @@ static plcolour_t M_DownloadMods_Color(byte r, byte g, byte b)
 static void M_DownloadMods_PrintRGBAScroll(int x, int y, int maxwidth,
 	const char *str, double time, plcolour_t color, float alpha, qboolean mask)
 {
+	drawcharbatch_t batch;
 	const int charwidth = 8;
 	const int gap_len = MENU_SCROLL_SEPARATOR_LEN;
 	const int scrollspeed = 30;
@@ -40738,6 +40783,7 @@ static void M_DownloadMods_PrintRGBAScroll(int x, int y, int maxwidth,
 
 	glPushMatrix();
 	glTranslatef(-frac, 0.0f, 0.0f);
+	Draw_BeginCharacterBatchRGBA (&batch, color, alpha);
 	for (pass = 0; pass < 2; pass++)
 	{
 		int base_x = x - pixel_offset + pass * cycle_pixels;
@@ -40760,9 +40806,10 @@ static void M_DownloadMods_PrintRGBAScroll(int x, int y, int maxwidth,
 
 			if (pos < len)
 				ch += mask_offset;
-			M_DrawCharacterRGBA(char_x, y, ch, color, alpha);
+			Draw_BatchCharacter (&batch, char_x, y, ch);
 		}
 	}
+	Draw_EndCharacterBatch (&batch);
 	glPopMatrix();
 }
 
@@ -40783,18 +40830,21 @@ static void M_DownloadMods_PrintMaskedAlpha(int x, int y, const char *str, float
 static void M_DownloadMods_PrintGoldProgress(int x, int y, const char *str, float alpha)
 {
 	plcolour_t white = M_DownloadMods_Color(255, 255, 255);
+	drawcharbatch_t batch;
+	if (alpha >= 1.0f)
+		Draw_BeginCharacterBatch (&batch);
+	else
+		Draw_BeginCharacterBatchRGBA (&batch, white, alpha);
 
 	while (*str)
 	{
 		int ch = (unsigned char)*str++;
 		int glyph = (ch >= '0' && ch <= '9') ? ch - 30 : ch + 128;
 
-		if (alpha >= 1.0f)
-			M_DrawCharacter(x, y, glyph);
-		else
-			M_DrawCharacterRGBA(x, y, glyph, white, alpha);
+		Draw_BatchCharacter (&batch, x, y, glyph);
 		x += 8;
 	}
+	Draw_EndCharacterBatch (&batch);
 }
 
 static void M_DownloadMods_DrawDetail(int x, int y, const char *detail,

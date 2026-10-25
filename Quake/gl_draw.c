@@ -1246,6 +1246,85 @@ void Draw_CharacterRGBA (int x, int y, int num, plcolour_t c, float alpha)
 	Draw_CharactersRGBA (x, y, &glyph, 1, c, alpha);
 }
 
+void Draw_BeginCharacterBatch (drawcharbatch_t *batch)
+{
+	batch->active = false;
+	batch->rgba = false;
+}
+
+void Draw_BeginCharacterBatchRGBA (drawcharbatch_t *batch, plcolour_t colour, float alpha)
+{
+	Draw_BeginCharacterBatch (batch);
+	batch->rgba = true;
+	batch->colour = colour;
+	batch->alpha = alpha;
+}
+
+void Draw_BatchCharacter (drawcharbatch_t *batch, int x, int y, int num)
+{
+	num &= 255;
+	if (num == 32)
+		return;
+
+	if (!batch->active)
+	{
+		if (batch->rgba)
+		{
+			const plcolour_t *c = &batch->colour;
+			float alpha = batch->alpha * gl_menu_alpha;
+			glEnable (GL_BLEND);
+			if (c->type == 2)
+				glColor4f (c->rgb[0] / 255.0f, c->rgb[1] / 255.0f, c->rgb[2] / 255.0f, alpha);
+			else
+			{
+				const byte *pal = (const byte *)&d_8to24table[(c->basic << 4) + 8];
+				glColor4f (pal[0] / 255.0f, pal[1] / 255.0f, pal[2] / 255.0f, alpha);
+			}
+			glDisable (GL_ALPHA_TEST);
+			glTexEnvf (GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_MODULATE);
+		}
+		GL_Bind (char_texture);
+		glBegin (GL_QUADS);
+		batch->active = true;
+	}
+
+	if (batch->rgba)
+	{
+		// Match Draw_CharacterRGBA's 16x16 layout, including with Hexen II fonts.
+		float s = (num & 15) * 0.0625f, t = (num >> 4) * 0.0625f;
+		glTexCoord2f (s, t);
+		glVertex2f (x, y);
+		glTexCoord2f (s + 0.0625f, t);
+		glVertex2f (x + 8, y);
+		glTexCoord2f (s + 0.0625f, t + 0.0625f);
+		glVertex2f (x + 8, y + 8);
+		glTexCoord2f (s, t + 0.0625f);
+		glVertex2f (x, y + 8);
+	}
+	else
+		Draw_CharacterQuad (x, y, (char)num);
+}
+
+void Draw_EndCharacterBatch (drawcharbatch_t *batch)
+{
+	if (!batch->active)
+		return;
+	glEnd ();
+	batch->active = false;
+	if (!batch->rgba)
+		return;
+
+	if (gl_menu_alpha < 1.0f)
+		glColor4f (1, 1, 1, gl_menu_alpha);
+	else
+	{
+		glTexEnvf (GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_REPLACE);
+		glEnable (GL_ALPHA_TEST);
+		glDisable (GL_BLEND);
+		glColor4f (1, 1, 1, 1);
+	}
+}
+
 void Draw_Character_Rotation (int x, int y, int num, int rotation) // woods #movementkeys
 {
 	num &= 255;
