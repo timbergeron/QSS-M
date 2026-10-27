@@ -166,6 +166,68 @@ byte *Image_LoadPNG(FILE *f, int *width, int *height, qboolean *malloced)
 #endif
 }
 
+/*
+============
+Image_LoadWebP -- tb
+
+Lossy and lossless WebP through simplewebp, for hub levelshots.  The decoder
+leaves the output allocation to us, and a corrupt header can claim up to
+16383x16383, so the dimensions are capped before anything is allocated.
+============
+*/
+#define SIMPLEWEBP_IMPLEMENTATION
+#include "simplewebp.h"
+
+#define WEBP_MAX_FILE_BYTES	(16 * 1024 * 1024)
+#define WEBP_MAX_DIMENSION	4096
+
+static byte *Image_LoadWebP (FILE *f, int *width, int *height, qboolean *malloced)
+{
+	simplewebp	*webp = NULL;
+	byte		*raw, *out = NULL;
+	size_t		w, h;
+
+	if (com_filesize <= 0 || com_filesize > WEBP_MAX_FILE_BYTES)
+	{
+		fclose (f);
+		return NULL;
+	}
+	raw = (byte *) malloc (com_filesize);
+	if (!raw || fread (raw, 1, com_filesize, f) != (size_t)com_filesize)
+	{
+		free (raw);
+		fclose (f);
+		return NULL;
+	}
+	fclose (f);
+
+	if (simplewebp_load_from_memory (raw, com_filesize, NULL, &webp) == SIMPLEWEBP_NO_ERROR)
+	{
+		simplewebp_get_dimensions (webp, &w, &h);
+		if (w > 0 && h > 0 && w <= WEBP_MAX_DIMENSION && h <= WEBP_MAX_DIMENSION)
+		{
+			out = (byte *) malloc (w * h * 4);
+			if (out && simplewebp_decode (webp, out, NULL) != SIMPLEWEBP_NO_ERROR)
+			{
+				free (out);
+				out = NULL;
+			}
+		}
+		else
+			Con_DPrintf ("%s: webp %ux%u exceeds %d\n", loadfilename,
+				(unsigned) w, (unsigned) h, WEBP_MAX_DIMENSION);
+		simplewebp_unload (webp);
+	}
+	free (raw);
+
+	if (!out)
+		return NULL;
+	*width = (int) w;
+	*height = (int) h;
+	*malloced = true;
+	return out;
+}
+
 
 
 /*spike -- start of dds loader
@@ -605,7 +667,7 @@ byte *Image_LoadImage (const char *name, int *width, int *height, enum srcformat
 	return ret;
 }
 
-enum imgkind { IMG_NONE, IMG_DDS, IMG_TGA, IMG_PNG, IMG_JPEG, IMG_PCX, IMG_LMP };
+enum imgkind { IMG_NONE, IMG_DDS, IMG_TGA, IMG_PNG, IMG_JPEG, IMG_PCX, IMG_WEBP, IMG_LMP };
 
 /*
 ============
@@ -620,9 +682,9 @@ static enum imgkind Image_Locate (const char *name, FILE **out)
 	static const char *const prefixes[] = {"", "textures/", "textures/"};
 	static const char *const extensions[] = {"dds", "tga", "png", "jpeg", "jpg", "pcx"};
 	static const enum imgkind kinds[] = {IMG_DDS, IMG_TGA, IMG_PNG, IMG_JPEG, IMG_JPEG, IMG_PCX};
-	char paths[19][MAX_OSPATH];
-	const char *candidates[19];
-	enum imgkind formats[19];
+	char paths[20][MAX_OSPATH];
+	const char *candidates[20];
+	enum imgkind formats[20];
 	int i, j, count = 0, hit;
 
 	const char *origname = name;
@@ -645,6 +707,15 @@ static enum imgkind Image_Locate (const char *name, FILE **out)
 			candidates[count] = paths[count];
 			formats[count++] = kinds[j];
 		}
+	}
+
+	/* WebP only where the hub's levelshots land: every texture lookup walks
+	   this list, so a general extension would cost each one another probe. */
+	if (!q_strncasecmp (origname, "levelshots/", 11))
+	{
+		q_snprintf (paths[count], sizeof(paths[count]), "%s.webp", origname);
+		candidates[count] = paths[count];
+		formats[count++] = IMG_WEBP;
 	}
 
 	q_snprintf (paths[count], sizeof(paths[count]), "%s.lmp", origname);
@@ -678,6 +749,7 @@ static byte *Image_LoadImage_impl (const char *name, int *width, int *height, en
 	case IMG_PNG:	return Image_LoadPNG (f, width, height, malloced);
 	case IMG_JPEG:	return Image_LoadSTBI (f, width, height, malloced);
 	case IMG_PCX:	return Image_LoadPCX (f, width, height);
+	case IMG_WEBP:	return Image_LoadWebP (f, width, height, malloced);
 	case IMG_LMP:	return Image_LoadLMP (f, width, height, fmt);
 	default:	return NULL;
 	}

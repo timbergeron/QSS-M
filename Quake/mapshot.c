@@ -25,7 +25,7 @@ of the License, or (at your option) any later version.
 */
 
 #ifndef QSSM_MAPSHOT_QUAKEWORLD_URL
-#define QSSM_MAPSHOT_QUAKEWORLD_URL "https://assets.quake.world/mapshots/sm/%s.webp"
+#define QSSM_MAPSHOT_QUAKEWORLD_URL "https://media.quake.world/mapshots/640/%s.webp"
 #endif
 #ifndef QSSM_MAPSHOT_QUAKEONE_URL
 #define QSSM_MAPSHOT_QUAKEONE_URL "https://servers.quakeone.com/mapthumbs/%s.jpg"
@@ -44,7 +44,7 @@ of the License, or (at your option) any later version.
 #define MAPSHOT_NEG_CACHE_MAX_FILE_SIZE		(1024 * 1024)
 #define MAPSHOT_NEG_CACHE_MISS_SECONDS		(30 * 24 * 60 * 60)
 /* Bumping the source list must invalidate stored misses. */
-#define MAPSHOT_NEG_CACHE_SOURCES			"quakeworld.webp,quakeone.jpg"
+#define MAPSHOT_NEG_CACHE_SOURCES			"quakeworld-media640.webp+pic,quakeone.jpg"
 
 cvar_t cl_mapshots = {"cl_mapshots", "1", CVAR_ARCHIVE};
 /* Below 1 on purpose.  Draw_Levelshot's gamma compensation is a linear scale,
@@ -59,12 +59,11 @@ typedef struct
 	qboolean	gamedir_qualified;	// "<gamedir>/<map>" instead of "<map>"
 } mapshot_source_t;
 
-/* Order matters: Discord keeps the historical preference for the .webp source,
-   which is smaller and better curated.  The pic path skips it because
-   stb_image is built STBI_ONLY_JPEG (see image.c). */
+/* Order matters: the hub's .webp set is smaller and better curated, so both
+   Discord and the levelshot download try it first and fall back to quakeone. */
 static const mapshot_source_t mapshot_sources[] =
 {
-	{ QSSM_MAPSHOT_QUAKEWORLD_URL,	false,	false },
+	{ QSSM_MAPSHOT_QUAKEWORLD_URL,	true,	false },
 	{ QSSM_MAPSHOT_QUAKEONE_URL,	true,	false },
 	{ QSSM_MAPSHOT_QUAKEONE_URL,	true,	true  },
 };
@@ -524,6 +523,8 @@ static const char *Mapshot_ImageExtension (const byte *data, size_t length)
 		data[3] == 'G' && data[4] == 0x0D && data[5] == 0x0A &&
 		data[6] == 0x1A && data[7] == 0x0A)
 		return "png";
+	if (length >= 12 && !memcmp(data, "RIFF", 4) && !memcmp(data + 8, "WEBP", 4))
+		return "webp";
 	return NULL;
 }
 
@@ -762,6 +763,14 @@ static void Mapshot_FinishJob (void)
 		Mapshot_NegCacheRemove(mapshots.kind, mapshots.key);
 		if (mapshots.kind == MAPSHOT_JOB_PIC)
 		{
+			/* Every source is drawable, so the URL that served the pic is the
+			   one a presence probe would find first; skip that HEAD. */
+			if (!entry->url_resolved)
+			{
+				entry->url_resolved = true;
+				q_strlcpy(entry->url, mapshots.result_url, sizeof(entry->url));
+				Mapshot_NegCacheRemove(MAPSHOT_JOB_URL, mapshots.key);
+			}
 			entry->has_pic = (Mapshot_LoadPic(mapshots.map) != NULL);
 			entry->pic_resolved = true;
 			if (!entry->has_pic)
@@ -1081,6 +1090,9 @@ static void Mapshot_f (void)
 	if (pic)
 	{
 		Con_Printf("mapshot %s: ready (%dx%d)\n", normalized, pic->width, pic->height);
+		entry = Mapshot_CacheFind(key);
+		if (entry && entry->url_resolved)
+			Con_Printf("  url: %s\n", entry->url[0] ? entry->url : "(none)");
 		return;
 	}
 	entry = Mapshot_CacheFind(key);

@@ -16,11 +16,11 @@ mapshot.c -- shared level-screenshot lookup.
 Two consumers with different needs share one worker thread and one cache:
 
   Discord rich presence wants a *URL* to hand to Discord, which fetches the
-  image itself.  It can use any format, including the .webp source.
+  image itself.
 
   The in-engine overlays (loading screen, levels menu) want a *drawable pic*,
-  so they need the bytes locally and a format the engine can decode.  stb_image
-  is built with STBI_ONLY_JPEG here, so only the .jpg sources qualify.
+  so they need the bytes locally and a format the engine can decode: the
+  hub's .webp (via simplewebp, levelshots/ only) or quakeone's .jpg.
 
 Both resolve calls are non-blocking: they answer from cache when they can and
 otherwise start (or leave running) a background job, returning "not yet".  Call
