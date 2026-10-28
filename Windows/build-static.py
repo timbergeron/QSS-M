@@ -6,6 +6,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import re
 import shutil
 import subprocess
 import tarfile
@@ -36,6 +37,32 @@ def write_if_changed(path, content):
 
 def mingw_native():
     return os.name == "nt" or os.environ.get("MSYSTEM", "").startswith("MINGW")
+
+
+def autotools_bash(native):
+    if native:
+        # CreateProcess searches System32 before PATH for an unqualified bash,
+        # which can launch WSL instead of the shell that owns this toolchain.
+        gcc = shutil.which("gcc")
+        if gcc:
+            root = Path(gcc.replace("\\", "/")).parents[2]
+            bash = root / "usr/bin/bash.exe"
+            if bash.is_file():
+                return bash
+        raise RuntimeError("MSYS2 bash was not found beside GCC; use the MINGW64 or MINGW32 shell")
+    bash = shutil.which("bash")
+    if not bash:
+        raise RuntimeError("bash is required to build the GNU dependencies")
+    return Path(bash)
+
+
+def verify_msvc_archives(archives, compiler):
+    dumpbin = Path(compiler["compiler"]).with_name("dumpbin.exe")
+    for archive in archives:
+        directives = subprocess.check_output([str(dumpbin), "/nologo", "/directives", str(archive)],
+                                             encoding="utf-8", errors="replace")
+        if re.search(r'/DEFAULTLIB:"?MSVCRTD?(?:\.lib)?"?(?:\s|$)', directives, re.IGNORECASE):
+            raise RuntimeError(f"{archive.name} requests the DLL CRT; rebuild it with /MT or /MTd")
 
 
 def compiler_identity(args):
@@ -177,6 +204,7 @@ def lock_build(work):
 
 def build_gnutls(args, manifest, downloads, work, prefix, triplet, native):
     env = os.environ.copy()
+    bash = autotools_bash(native)
     optimization = "-O0 -g" if args.config == "Debug" else "-O2"
     env.update(CC="gcc" if native else triplet + "-gcc",
                CXX="g++" if native else triplet + "-g++",
@@ -214,7 +242,10 @@ def build_gnutls(args, manifest, downloads, work, prefix, triplet, native):
                       "--without-leancrypto", "--disable-libdane", "--disable-gcc-warnings",
                       "--disable-tools", "--disable-doc", "--disable-tests", "--disable-nls"]
         print(f"Building {name} {dep['version']} ({args.arch})", flush=True)
-        run("bash", (source / "configure").as_posix(), *flags, cwd=build, env=env)
+        # Autoconf's auxiliary-file search treats a drive-letter colon as a
+        # PATH separator. A relative source path works on MSYS2 and Linux.
+        configure = os.path.relpath(source / "configure", build).replace("\\", "/")
+        run(bash, configure, *flags, cwd=build, env=env)
         if name == "nettle":
             run("make", f"-j{args.jobs}", "libnettle.a", "libhogweed.a", cwd=build, env=env)
             run("make", "install-static", "install-headers", "install-pkgconfig", cwd=build, env=env)
@@ -333,6 +364,9 @@ def main():
         build = work / "objects" / name
         print(f"Building {name} {dep['version']} ({args.toolchain}, {args.arch})", flush=True)
         extra = list(options[name])
+        if name == "opus" and args.toolchain == "msvc":
+            # Opus overrides CMAKE_MSVC_RUNTIME_LIBRARY unless this is enabled.
+            extra += ["OPUS_STATIC_RUNTIME=ON"]
         if name == "curl":
             zlib = next(p for p in (prefix / "lib").iterdir()
                         if p.suffix in (".a", ".lib") and p.stem in ("libzs", "zs", "zsd"))
@@ -369,6 +403,7 @@ def main():
             ' '.join('-l' + lib for lib in SYSTEM_LIBS.split()) + ' -latomic -lssp -pthread\n')
     else:
         archives = sorted((prefix / "lib").glob("*.lib"))
+        verify_msvc_archives(archives, compiler)
         deps = ';'.join(str(p) for p in archives) + ';' + ';'.join(lib + '.lib' for lib in SYSTEM_LIBS.split())
         write_if_changed(prefix / "qssm-static.props",
             '<Project xmlns="http://schemas.microsoft.com/developer/msbuild/2003"><ItemDefinitionGroup>'

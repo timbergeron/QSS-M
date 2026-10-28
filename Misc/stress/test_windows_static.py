@@ -114,6 +114,59 @@ class WindowsVoipTests(unittest.TestCase):
 
 
 class DependencyBuildTests(unittest.TestCase):
+    def test_native_autotools_uses_the_msys2_shell_beside_gcc(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            gcc = root / "mingw64/bin/gcc.exe"
+            gcc.parent.mkdir(parents=True)
+            gcc.touch()
+            bash = root / "usr/bin/bash.exe"
+            bash.parent.mkdir(parents=True)
+            bash.touch()
+            with mock.patch.object(BUILD.shutil, "which", return_value=str(gcc)) as which:
+                self.assertEqual(BUILD.autotools_bash(True), bash)
+                which.assert_called_once_with("gcc")
+                bash.unlink()
+                with self.assertRaisesRegex(RuntimeError, "MSYS2 bash"):
+                    BUILD.autotools_bash(True)
+
+    def test_msvc_archives_reject_dynamic_crt_directives(self):
+        compiler = {"compiler": "cl.exe"}
+        archives = [Path("opus.lib")]
+        for directives in ('/DEFAULTLIB:"MSVCRT"', '/DEFAULTLIB:msvcrtd.lib\n'):
+            with self.subTest(directives=directives), mock.patch.object(BUILD.subprocess, "check_output", return_value=directives):
+                with self.assertRaisesRegex(RuntimeError, "opus.lib requests the DLL CRT"):
+                    BUILD.verify_msvc_archives(archives, compiler)
+        with mock.patch.object(BUILD.subprocess, "check_output", return_value='/DEFAULTLIB:"LIBCMT" /DEFAULTLIB:"OLDNAMES"'):
+            BUILD.verify_msvc_archives(archives, compiler)
+
+    def test_autotools_configure_does_not_receive_a_drive_letter_path(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            work = Path(tmp)
+            prefix = work / "prefix"
+            prefix.mkdir()
+            manifest = {name: {"version": "1.0", "sha256": name}
+                        for name in ("gmp", "nettle", "tasn1", "gnutls")}
+            sources = {}
+            for name in manifest:
+                source = work / "sources" / name / (name + "-1.0")
+                source.mkdir(parents=True)
+                (source / "configure").touch()
+                sources[name] = source
+            args = SimpleNamespace(config="Release", arch="x86", jobs=1)
+            with mock.patch.object(BUILD, "autotools_bash", return_value=Path("/msys/usr/bin/bash.exe")), \
+                 mock.patch.object(BUILD, "fetch"), \
+                 mock.patch.object(BUILD, "extract", side_effect=lambda archive, container: sources[container.name]), \
+                 mock.patch.object(BUILD, "run") as run:
+                BUILD.build_gnutls(args, manifest, work, work, prefix, "i686-w64-mingw32", True)
+            configure_calls = [call for call in run.call_args_list if str(call.args[0]).endswith("bash.exe")]
+            self.assertEqual(len(configure_calls), 4)
+            for call in configure_calls:
+                script = call.args[1]
+                self.assertFalse(Path(script).is_absolute(), script)
+                self.assertNotIn(":", script)
+                self.assertTrue((call.kwargs["cwd"] / script).is_file())
+
     def test_cache_tracks_recipe_configuration_sources_and_patches(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
