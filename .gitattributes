@@ -1,0 +1,2 @@
+# These patches target LF source files extracted from upstream archives.
+Windows/static-adapters/*.patch text eol=lf

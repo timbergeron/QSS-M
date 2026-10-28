@@ -199,16 +199,30 @@ class DependencyBuildTests(unittest.TestCase):
             root = Path(tmp)
             source = root / "source"
             source.mkdir()
-            (source / "first.c").write_text("after\n")  # First patch already applied.
-            (source / "second.c").write_text("before\n")
+            (source / "first.c").write_bytes(b"after\n")  # First patch already applied.
+            (source / "second.c").write_bytes(b"before\n")
             patches = []
             for name in ("first", "second"):
                 patch = root / (name + ".patch")
-                patch.write_text(f"--- a/{name}.c\n+++ b/{name}.c\n@@ -1 +1 @@\n-before\n+after\n")
+                patch.write_bytes(f"--- a/{name}.c\n+++ b/{name}.c\n@@ -1 +1 @@\n-before\n+after\n".encode())
                 patches.append(patch)
             BUILD.apply_patches(source, patches)
             BUILD.apply_patches(source, patches)
             self.assertEqual((source / "second.c").read_text(), "after\n")
+
+    @unittest.skipUnless(shutil.which("git"), "Git required")
+    def test_windows_checkout_patches_apply_to_lf_archive_sources(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "source"
+            source.mkdir()
+            (source / "decoder.c").write_bytes(b"before\n")
+            patch = root / "decoder.patch"
+            patch.write_bytes(b"--- a/decoder.c\r\n+++ b/decoder.c\r\n@@ -1 +1 @@\r\n-before\r\n+after\r\n")
+            BUILD.apply_patches(source, [patch])
+            self.assertEqual((source / "decoder.c").read_bytes(), b"after\n")
+            BUILD.apply_patches(source, [patch])
+            self.assertEqual((source / "decoder.c").read_bytes(), b"after\n")
 
     @unittest.skipUnless(shutil.which("make"), "GNU Make required")
     def test_dependency_changes_relink_both_windows_targets(self):

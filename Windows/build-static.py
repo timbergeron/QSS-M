@@ -116,13 +116,17 @@ def extract(archive, container):
 
 def apply_patches(source, patches):
     for patch in patches:
+        # A Windows checkout can have CRLF patches while source archives use LF.
+        # Normalize the patch stream without changing source context whitespace.
+        data = patch.read_bytes().replace(b"\r\n", b"\n")
         # git apply is atomic per patch; a previous run may have finished some
         # patches before being interrupted. Check those before applying again.
         command = ["git", "apply", "--unsafe-paths", "--directory=" + source.as_posix()]
-        applied = subprocess.run([*command, "--reverse", "--check", str(patch)], cwd=ROOT,
+        applied = subprocess.run([*command, "--reverse", "--check", "-"], cwd=ROOT, input=data,
                                  stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         if applied.returncode:
-            run(*command, patch, cwd=ROOT)
+            print(f"Applying {patch.name}", flush=True)
+            run(*command, "-", input=data, cwd=ROOT)
 
 
 def build_fingerprint(manifest, args, compiler):
