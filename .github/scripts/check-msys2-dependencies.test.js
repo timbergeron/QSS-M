@@ -39,6 +39,26 @@ test("upstreamVersion removes pacman epochs and package revisions", () => {
   assert.equal(upstreamVersion("14.0.0.r179.g24aaa6147-1"), "14.0.0.r179.g24aaa6147");
 });
 
+test("validateManifest checks static source versions without requiring a DLL", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "qssm-static-dependency-test-"));
+  try {
+    for (const directory of ["SDL3", "codecs", "curl", "zlib"])
+      fs.mkdirSync(path.join(root, "Windows", directory), { recursive: true });
+    fs.writeFileSync(path.join(root, "Windows/static-sources.json"), JSON.stringify({
+      gnutls: { version: "3.8.13" },
+    }));
+    const manifest = [{
+      name: "GnuTLS", source: "gnutls", vendored: "3.8.13", dlls: [],
+      packages: [{ repository: "mingw64", name: "gnutls", baseline: "3.8.13-3" }],
+    }];
+    assert.doesNotThrow(() => validateManifest(manifest, root));
+    manifest[0].vendored = "3.8.12";
+    assert.throws(() => validateManifest(manifest, root), /Static source version/);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("findChanges detects upstream changes and package-only rebuilds", () => {
   const dependencies = [{
     name: "example",

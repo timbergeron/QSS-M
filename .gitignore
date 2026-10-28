@@ -20,6 +20,9 @@ out
 *.d
 /Quake/quakespasm
 /Quake/quakespasm.exe
+/Quake/QSS-M-w*.exe
+/Quake/QSS-M-w*.zip
+/QSS-M-Revision.txt
 /Quake/QSS-M
 /Quake/debug.txt
 /build/live-fsaa/
@@ -42,5 +45,6 @@ out
 
 # python bytecode from the harness runner
 /build/live-settings/
+/build/windows-static/
 __pycache__/
 *.pyc

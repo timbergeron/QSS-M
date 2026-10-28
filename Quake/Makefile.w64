@@ -2,7 +2,7 @@
 # Usage: "make -f Makefile.w64"
 # To cross-compile on Linux hosts, see build_cross_win64.sh.
 # "make DEBUG=1" to build a debug client.
-# "make SDL_CFLAGS=... SDL_LIBS=..." to override the locally included SDL3.
+# All bundled dependencies, including SDL3, are linked statically.
 
 ### Enable/disable codecs for streaming music support
 USE_CODEC_WAVE=1
@@ -10,7 +10,7 @@ USE_CODEC_FLAC=1
 USE_CODEC_MP3=1
 USE_CODEC_VORBIS=1
 USE_CODEC_OPUS=1
-# either xmp or mikmod (or modplug)
+# either xmp or mikmod
 USE_CODEC_MIKMOD=0
 USE_CODEC_XMP=1
 USE_CODEC_MODPLUG=0
@@ -18,7 +18,7 @@ USE_CODEC_UMX=1
 
 # which library to use for mp3 decoding: mad or mpg123
 MP3LIB=mad
-# which library to use for ogg decoding: vorbis or tremor
+# The static dependency build supplies vorbis for ogg decoding.
 VORBISLIB=vorbis
 
 # ---------------------------
@@ -38,54 +38,24 @@ USE_GNUTLS?= 1
 # ---------------------------
 
 CC = gcc
-LINKER = $(CC)
+CXX = g++
+# SDL3 includes Windows C++ backends; keep their runtime static too.
+LINKER = $(CXX)
 WINDRES = windres
 
-CC_MACHINE := $(shell $(CC) -dumpmachine 2>/dev/null)
-ifeq ($(findstring mingw,$(CC_MACHINE)),mingw)
-ifneq ($(shell command -v $(CC_MACHINE)-pkg-config 2>/dev/null),)
-PKG_CONFIG ?= $(CC_MACHINE)-pkg-config
-else ifneq ($(shell command -v $(CC_MACHINE)-pkgconf 2>/dev/null),)
-PKG_CONFIG ?= $(CC_MACHINE)-pkgconf
-else
-PKG_CONFIG ?= pkg-config
+# Build dependencies once with: python3 Windows/build-static.py --arch x64
+WINDOWS_STATIC_ROOT ?= ../build/windows-static/mingw-x64/prefix
+ifneq ($(MAKECMDGOALS),clean)
+ifeq ($(wildcard $(WINDOWS_STATIC_ROOT)/qssm-static.mk),)
+$(error Static dependencies missing. Run python3 Windows/build-static.py --arch x64 from the repository root)
 endif
-else
-PKG_CONFIG ?= pkg-config
+include $(WINDOWS_STATIC_ROOT)/qssm-static.mk
 endif
-
-define gnutls_pkg_probe
-$(shell if command -v $(1) >/dev/null 2>&1 && $(1) --exists gnutls 2>/dev/null; then \
-	cflags="$$( $(1) --cflags gnutls 2>/dev/null )"; \
-	printf '%s\n' '#include <gnutls/gnutls.h>' 'int main(void){return 0;}' | $(CC) -DGNUTLS_STATIC -DGNUTLS_INTERNAL_BUILD $$cflags -Werror -S -o /dev/null -xc - >/dev/null 2>&1 && echo yes; \
-fi)
-endef
-
-GNUTLS_PKG_OK := $(call gnutls_pkg_probe,$(PKG_CONFIG))
-ifeq ($(GNUTLS_PKG_OK),)
-ifneq ($(PKG_CONFIG),pkg-config)
-ifeq ($(call gnutls_pkg_probe,pkg-config),yes)
-PKG_CONFIG := pkg-config
-GNUTLS_PKG_OK := yes
-endif
-endif
-endif
-GNUTLS_PKG_CFLAGS := $(if $(GNUTLS_PKG_OK),$(shell $(PKG_CONFIG) --cflags gnutls 2>/dev/null))
-GNUTLS_PKG_LIBS := $(if $(GNUTLS_PKG_OK),$(shell $(PKG_CONFIG) --libs gnutls 2>/dev/null))
-GNUTLS_HOST_CFLAGS_RAW := $(shell command -v pkg-config >/dev/null 2>&1 && pkg-config --exists gnutls 2>/dev/null && pkg-config --cflags gnutls 2>/dev/null)
-GNUTLS_HOST_CFLAGS := $(filter-out -I/usr/include -isystem /usr/include,$(GNUTLS_HOST_CFLAGS_RAW))
-GNUTLS_HOST_INC_FALLBACK := $(if $(wildcard /usr/include/gnutls/gnutls.h),-idirafter /usr/include)
-ZLIB_LIB := $(shell zlib="$$( $(CC) -print-file-name=libz.a )"; \
-	if [ "$$zlib" != "libz.a" ] && [ -f "$$zlib" ]; then \
-		printf '%s' "$$zlib"; \
-	elif [ -f ../Windows/zlib/x64/zlib1.lib ]; then \
-		printf '%s' ../Windows/zlib/x64/zlib1.lib; \
-	fi)
 
 STRIP = strip
 
 CPUFLAGS=
-LDFLAGS = -m64 -mwindows -static-libgcc
+LDFLAGS = -m64 -mwindows -static -static-libgcc -static-libstdc++
 LDFLAGS += $(QSS_LDFLAGS)
 LDFLAGS += -Wl,--no-insert-timestamp	#prevent non-determinism in the exe header. mustn't be used for dlls.
 DFLAGS ?=
@@ -109,25 +79,16 @@ define do_strip
 endef
 endif
 
-# default to our local SDL3 for build; SDL_main.h supplies WinMain, so no SDLmain library
-SDL3_ROOT  ?= ../Windows/SDL3
-SDL_CFLAGS ?= -I$(SDL3_ROOT)/include
-SDL_LIBS   ?= -L$(SDL3_ROOT)/lib/x64 -lSDL3
-
-DEFWINSOCK :=-D_USE_WINSOCK2
-LIBWINSOCK := -lws2_32
-
-CFLAGS     += $(DEFWINSOCK)
-NET_LIBS   := $(LIBWINSOCK)
-
-NET_LIBS   += -lcurl
-CFLAGS     += -I../Windows/curl/include
-LDFLAGS    += -L../Windows/curl/lib/x64
+# The generated prefix supplies matching headers and actual static archives.
+SDL_CFLAGS :=
+SDL_LIBS :=
+CFLAGS += -D_USE_WINSOCK2 $(WINDOWS_STATIC_CFLAGS)
 
 ifneq ($(VORBISLIB),vorbis)
-ifneq ($(VORBISLIB),tremor)
-$(error Invalid VORBISLIB setting)
+$(error VORBISLIB=$(VORBISLIB) is unsupported by static Windows builds; use VORBISLIB=vorbis)
 endif
+ifeq ($(USE_CODEC_MODPLUG),1)
+$(error USE_CODEC_MODPLUG=1 is unsupported by static Windows builds; use USE_CODEC_XMP=1 or USE_CODEC_MIKMOD=1)
 endif
 ifneq ($(MP3LIB),mpg123)
 ifneq ($(MP3LIB),mad)
@@ -136,94 +97,44 @@ endif
 endif
 ifeq ($(MP3LIB),mad)
 mp3_obj=snd_mp3.o snd_mp3tag.o
-lib_mp3dec=-lmad
 endif
 ifeq ($(MP3LIB),mpg123)
 mp3_obj=snd_mpg123.o snd_mp3tag.o
-lib_mp3dec=-lmpg123
 CFLAGS+= -DMP3LIB_MPG123
 endif
-ifeq ($(VORBISLIB),vorbis)
-cpp_vorbisdec=
-lib_vorbisdec=-lvorbisfile -lvorbis -logg
-endif
-ifeq ($(VORBISLIB),tremor)
-cpp_vorbisdec=-DVORBIS_USE_TREMOR
-lib_vorbisdec=-lvorbisidec -logg
-endif
 
-CODECLIBS  :=
 ifeq ($(USE_CODEC_WAVE),1)
 CFLAGS+= -DUSE_CODEC_WAVE
 endif
 ifeq ($(USE_CODEC_FLAC),1)
 CFLAGS+= -DUSE_CODEC_FLAC
-CODEC_INC = -I../Windows/codecs/include
-CODEC_LINK= -L../Windows/codecs/x64
-CODECLIBS+= -lFLAC
 endif
 ifeq ($(USE_CODEC_OPUS),1)
 CFLAGS+= -DUSE_CODEC_OPUS
-CODEC_INC = -I../Windows/codecs/include
-CODEC_LINK= -L../Windows/codecs/x64
-CODECLIBS+= -lopusfile -lopus -logg
 endif
 ifeq ($(USE_CODEC_VORBIS),1)
-CFLAGS+= -DUSE_CODEC_VORBIS $(cpp_vorbisdec)
-CODEC_INC = -I../Windows/codecs/include
-CODEC_LINK= -L../Windows/codecs/x64
-CODECLIBS+= $(lib_vorbisdec)
+CFLAGS+= -DUSE_CODEC_VORBIS
 endif
 ifeq ($(USE_CODEC_MP3),1)
 CFLAGS+= -DUSE_CODEC_MP3
-CODEC_INC = -I../Windows/codecs/include
-CODEC_LINK= -L../Windows/codecs/x64
-CODECLIBS+= $(lib_mp3dec)
 endif
 ifeq ($(USE_CODEC_MIKMOD),1)
 CFLAGS+= -DUSE_CODEC_MIKMOD
-CODEC_INC = -I../Windows/codecs/include
-CODEC_LINK= -L../Windows/codecs/x64
-CODECLIBS+= -lmikmod
 endif
 ifeq ($(USE_CODEC_XMP),1)
 CFLAGS+= -DUSE_CODEC_XMP
-CODEC_INC = -I../Windows/codecs/include
-CODEC_LINK= -L../Windows/codecs/x64
-CODECLIBS+= -lxmp
-endif
-ifeq ($(USE_CODEC_MODPLUG),1)
-CFLAGS+= -DUSE_CODEC_MODPLUG
-CODEC_INC = -I../Windows/codecs/include
-CODEC_LINK= -L../Windows/codecs/x64
-CODECLIBS+= -lmodplug
 endif
 ifeq ($(USE_CODEC_UMX),1)
 CFLAGS+= -DUSE_CODEC_UMX
 endif
-CFLAGS+= $(CODEC_INC)
-
-COMMON_LIBS:= -lopengl32 -lwinmm -lole32 -lshell32 -luuid
 
 ifeq ($(USE_ZLIB),1)
-CFLAGS+= -DUSE_ZLIB
-CFLAGS+= -I../Windows/zlib/include
-COMMON_LIBS+= $(ZLIB_LIB)
+CFLAGS += -DUSE_ZLIB
 endif
-
 ifeq ($(USE_GNUTLS),1)
-ifeq ($(FORCE_GNUTLS_DYNAMIC),1)
-CFLAGS+= -DUSE_GNUTLS $(GNUTLS_HOST_CFLAGS) $(GNUTLS_HOST_INC_FALLBACK)
-$(warning forcing USE_GNUTLS dynamic-loader mode without pkg-config link flags)
-else ifeq ($(GNUTLS_PKG_OK),yes)
-CFLAGS+= -DUSE_GNUTLS -DGNUTLS_STATIC -DGNUTLS_INTERNAL_BUILD $(GNUTLS_PKG_CFLAGS)
-COMMON_LIBS+= $(GNUTLS_PKG_LIBS)
-else
-$(warning gnutls not found via $(PKG_CONFIG); building without USE_GNUTLS. Install mingw gnutls dev packages or set PKG_CONFIG/PKG_CONFIG_LIBDIR)
+CFLAGS += -DUSE_GNUTLS -DGNUTLS_STATIC -DGNUTLS_INTERNAL_BUILD -D__WIN32__
 endif
-endif
-
-LIBS := $(COMMON_LIBS) $(NET_LIBS) $(CODEC_LINK) $(CODECLIBS)
+LIBS := $(WINDOWS_STATIC_LIBS)
 
 ICEOBJS:= ice_gnutls.o  ice_main.o  ice_mdns.o ice_quake.o ice_sctp.o  ice_socket.o  ice_stream.o  ice_json.o  ice_md5.o  ice_sha1.o  ice_sha2.o
 
@@ -363,9 +274,10 @@ ice_sha2.o:	ice/sha2.c
 %.res:	../Windows/%.rc
 	$(WINDRES) -I../Windows --output-format=coff --target=pe-x86-64 -o $@ $<
 
-quakespasm.exe: $(OBJS) $(SYSOBJ_RES)
+quakespasm.exe: $(OBJS) $(SYSOBJ_RES) $(WINDOWS_STATIC_ARCHIVES) $(WINDOWS_STATIC_ROOT)/qssm-static.mk ../Windows/verify-static.py
 	$(LINKER) $(OBJS) $(SYSOBJ_RES) $(LDFLAGS) $(LIBS) $(SDL_LIBS) -o $@
 	$(call do_strip,$@)
+	python3 ../Windows/verify-static.py $@
 
 release:	quakespasm.exe
 debug:

@@ -43,7 +43,9 @@ No voice commands nor packets will be sent which the other is unable to understa
 /*sidenote: should probably just statically link*/
 
 #ifdef USE_CODEC_OPUS
-#ifndef _WIN32	//for some reason, the win32 libs lack opus_encode* symbols. the dlls contain them though. I've no idea what's going on there.
+// Source-built Windows archives include the encoder as well as the decoder.
+// Legacy Windows import libraries still need the runtime loader.
+#if !defined(_WIN32) || defined(QSSM_STATIC_WINDOWS)
 #define OPUS_STATIC
 #endif
 #endif

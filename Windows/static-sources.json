@@ -1,0 +1,85 @@
+{
+  "sdl3": {
+    "version": "3.4.18",
+    "url": "https://github.com/libsdl-org/SDL/releases/download/release-3.4.18/SDL3-3.4.18.tar.gz",
+    "sha256": "9c75cf16330322c217dedd2e0609f1124f1b54b8633e763467b4684d0f4334a3"
+  },
+  "zlib": {
+    "version": "1.3.2",
+    "url": "https://github.com/madler/zlib/releases/download/v1.3.2/zlib-1.3.2.tar.xz",
+    "sha256": "d7a0654783a4da529d1bb793b7ad9c3318020af77667bcae35f95d0e42a792f3"
+  },
+  "curl": {
+    "version": "8.22.0",
+    "url": "https://curl.se/download/curl-8.22.0.tar.xz",
+    "sha256": "f7ef3ae8a22e521f289803fe93543eb64c329b58aa73a9e224dfd915a2a5f4f7"
+  },
+  "ogg": {
+    "version": "1.3.6",
+    "url": "https://downloads.xiph.org/releases/ogg/libogg-1.3.6.tar.gz",
+    "sha256": "83e6704730683d004d20e21b8f7f55dcb3383cdf84c0daedf30bde175f774638"
+  },
+  "vorbis": {
+    "version": "1.3.7",
+    "url": "https://downloads.xiph.org/releases/vorbis/libvorbis-1.3.7.tar.gz",
+    "sha256": "0e982409a9c3fc82ee06e08205b1355e5c6aa4c36bca58146ef399621b0ce5ab"
+  },
+  "flac": {
+    "version": "1.5.0",
+    "url": "https://github.com/xiph/flac/releases/download/1.5.0/flac-1.5.0.tar.xz",
+    "sha256": "f2c1c76592a82ffff8413ba3c4a1299b6c7ab06c734dee03fd88630485c2b920"
+  },
+  "opus": {
+    "version": "1.6.1",
+    "url": "https://downloads.xiph.org/releases/opus/opus-1.6.1.tar.gz",
+    "sha256": "6ffcb593207be92584df15b32466ed64bbec99109f007c82205f0194572411a1"
+  },
+  "opusfile": {
+    "version": "0.12",
+    "url": "https://downloads.xiph.org/releases/opus/opusfile-0.12.tar.gz",
+    "sha256": "118d8601c12dd6a44f52423e68ca9083cc9f2bfe72da7a8c1acb22a80ae3550b"
+  },
+  "mad": {
+    "version": "0.15.1b",
+    "url": "https://downloads.sourceforge.net/sourceforge/mad/libmad-0.15.1b.tar.gz",
+    "mirrors": [
+      "https://deb.debian.org/debian/pool/main/libm/libmad/libmad_0.15.1b.orig.tar.gz"
+    ],
+    "sha256": "bbfac3ed6bfbc2823d3775ebb931087371e142bb0e9bb1bee51a76a6e0078690"
+  },
+  "xmp": {
+    "version": "4.7.4",
+    "url": "https://github.com/libxmp/libxmp/releases/download/libxmp-4.7.4/libxmp-4.7.4.tar.gz",
+    "sha256": "a25583aa3b031c78ba0b4e83387fa596fb05742622e60f60d1540ee2af79b8d9"
+  },
+  "gmp": {
+    "version": "6.3.0",
+    "url": "https://ftp.gnu.org/gnu/gmp/gmp-6.3.0.tar.xz",
+    "sha256": "a3c2b80201b89e68616f4ad30bc66aee4927c3ce50e33929ca819d5c43538898"
+  },
+  "nettle": {
+    "version": "3.10.2",
+    "url": "https://ftp.gnu.org/gnu/nettle/nettle-3.10.2.tar.gz",
+    "sha256": "fe9ff51cb1f2abb5e65a6b8c10a92da0ab5ab6eaf26e7fc2b675c45f1fb519b5"
+  },
+  "tasn1": {
+    "version": "4.21.0",
+    "url": "https://ftp.gnu.org/gnu/libtasn1/libtasn1-4.21.0.tar.gz",
+    "sha256": "1d8a444a223cc5464240777346e125de51d8e6abf0b8bac742ac84609167dc87"
+  },
+  "gnutls": {
+    "version": "3.8.13",
+    "url": "https://www.gnupg.org/ftp/gcrypt/gnutls/v3.8/gnutls-3.8.13.tar.xz",
+    "sha256": "ffed8ec1bf09c2426d4f14aae377de4753b53e537d685e604e99a8b16ca9c97e"
+  },
+  "mikmod": {
+    "version": "3.3.15",
+    "url": "https://downloads.sourceforge.net/mikmod/libmikmod-3.3.15.tar.gz",
+    "sha256": "dc27b338154b8f88dc9e6317196d42c6abc13bf63c4e055257a18d4e38e1afa2"
+  },
+  "mpg123": {
+    "version": "1.33.7",
+    "url": "https://www.mpg123.de/download/mpg123-1.33.7.tar.bz2",
+    "sha256": "31d0e35a4ca567ec9b5ebda6c3062bb4435d6d3eacd6ef0d95cadd7854dc03ee"
+  }
+}

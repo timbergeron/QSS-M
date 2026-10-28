@@ -53,13 +53,14 @@
      disables this startup helper. "-quakeimportselftest" runs its developer
      diagnostics and exits without starting the game.
 
-  -  When upgrading from an SDL2 build on Windows or Linux, quit QSS-M
-     and manually extract the complete SDL3 release into your QSS-M
-     directory. The old in-game updater cannot install the new SDL3
-     runtime correctly. Keep the supplied SDL3.dll (Windows) or
-     libSDL3.so.0 (Linux) beside the executable. Subsequent SDL3 builds
-     support normal in-game updates. macOS updates replace the whole app
-     bundle and do not require this manual upgrade.
+  -  Windows releases statically link SDL3 and all bundled libraries.
+     When upgrading from a DLL-based Windows release, quit QSS-M and
+     manually extract the complete static package into your installation.
+     Older updaters require runtime DLLs in the archive and cannot install
+     the first static package. Subsequent updates work normally.
+     On Linux, upgrading from SDL2 likewise requires a complete manual
+     extraction; keep libSDL3.so.0 beside the executable when supplied.
+     macOS updates replace the whole app bundle.
 
   -  For different sound backend drivers use :
      "SDL_AUDIO_DRIVER=DRIVER ./quakespasm"
@@ -211,10 +212,12 @@
 
   Compiling for Windows:
 
-  QuakeSpasm developers cross-compile windows binaries using MinGW-w64
-  <http://mingw-w64.sf.net> and MinGW <https://mingw.osdn.io>.  The
-  project can also be built using Microsoft Visual Studio 2005 and newer
-  versions.
+  Use sh build-w64.sh or sh build-w32.sh from the repository root with
+  MinGW-w64 installed. These scripts build pinned static dependencies and
+  verify that the executables import only Windows system DLLs. Visual
+  Studio 2022 builds use static libraries built with the same compiler
+  and the static CRT. See Windows/README-static.md for prerequisites and
+  commands for all three Windows toolchains.
 
   Compiling for Mac OS X:
 

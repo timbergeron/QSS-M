@@ -1,6 +1,11 @@
 # Windows codec runtime DLLs
 
-Prebuilt Windows codec libraries vendored for the MinGW and MSVC builds.
+The current MinGW and MSVC builds use source-built static libraries; see
+[the static build notes](../README-static.md). The binaries described below
+are retained for legacy build configurations and are not shipped in current
+Windows release packages.
+
+Legacy prebuilt Windows codec libraries.
 `x64/` holds the 64-bit binaries, `x86/` the 32-bit ones, and `include/` the
 shared public headers.
 

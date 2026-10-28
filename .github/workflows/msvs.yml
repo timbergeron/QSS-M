@@ -55,6 +55,26 @@ jobs:
         Write-Host "Computed BUILD_ARTIFACT=$build_artifact"
         Write-Host "Computed EXE_NAME=$exe_name"
 
+    - name: Identify compiler
+      id: compiler
+      shell: pwsh
+      run: |
+        $compilerId = python Windows/build-static.py --toolchain msvc --arch $env:PLATFORM_SHORT --print-toolchain-id
+        if ($LASTEXITCODE -ne 0) { throw "Compiler identification failed" }
+        "fingerprint=$compilerId" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+
+    - name: Cache static dependencies
+      uses: actions/cache@v5
+      with:
+        path: build/windows-static
+        key: windows-static-msvc-${{ matrix.platform }}-${{ steps.compiler.outputs.fingerprint }}-${{ hashFiles('Windows/build-static.py', 'Windows/static-sources.json', 'Windows/static-adapters/*', 'Windows/static-licenses/*') }}
+
+    - name: Build static dependencies
+      shell: pwsh
+      run: |
+        python Windows/build-static.py --toolchain msvc --arch $env:PLATFORM_SHORT
+        if ($LASTEXITCODE -ne 0) { throw "Static dependency build failed" }
+
     - name: Build
       shell: pwsh
       run: |
@@ -135,18 +155,11 @@ jobs:
           Write-Error "Executable file not found in $compiledir"
         }
 
-        # Stage runtime DLLs explicitly from the repo. The vcxproj post-build event
-        # (which copies these) is disabled in CI via PostBuildEventUseInBuild=false,
-        # because $(SolutionDir) is unreliable when building the bare .vcxproj, so the
-        # codec/SDL3/curl/zlib DLLs must be staged here instead.
-        $short = $env:PLATFORM_SHORT
-        $sdlDir = "Windows\SDL3\lib\$short"
-        Copy-Item "Windows\codecs\$short\*.dll" $zipdir
-        Copy-Item "$sdlDir\SDL3.dll" $zipdir
-        Copy-Item "Windows\curl\lib\$short\libcurl.dll" $zipdir
-        Copy-Item "Windows\zlib\$short\zlib1.dll" $zipdir
-        # Also grab anything the linker itself emitted into the build dir (normally none).
-        Copy-Item "$compiledir\*.dll" $zipdir -ErrorAction SilentlyContinue
+        $prefix = "build/windows-static/msvc-$($env:PLATFORM_SHORT)-Release/prefix"
+        Copy-Item "$prefix/third-party-licenses.txt" $zipdir
+        Copy-Item "Windows/static-sources.json" $zipdir
+        python Windows/verify-static.py (Join-Path $zipdir $env:EXE_NAME)
+        if ($LASTEXITCODE -ne 0) { throw "Unexpected DLL dependency" }
         Copy-Item "Quake\qssm.pak" $zipdir
         Copy-Item "Quake\quakespasm.pak" $zipdir
         Copy-Item "Quake\gamecontrollerdb.txt" $zipdir
@@ -156,9 +169,8 @@ jobs:
         Copy-Item "LICENSE.txt" $zipdir
         Write-Host "Archive staging contents:"
         Get-ChildItem $zipdir
-        $requiredFiles = @($env:EXE_NAME, "qssm.pak", "quakespasm.pak", "gamecontrollerdb.txt", "SDL3.dll", "libcurl.dll", "zlib1.dll", "libFLAC.dll", "libwinpthread-1.dll", "libogg-0.dll")
-        # 32-bit libFLAC.dll additionally needs the dwarf2 libgcc runtime.
-        if ($short -eq "x86") { $requiredFiles += "libgcc_s_dw2-1.dll" }
+        $requiredFiles = @($env:EXE_NAME, "qssm.pak", "quakespasm.pak", "gamecontrollerdb.txt", "third-party-licenses.txt", "static-sources.json")
+        if (Get-ChildItem $zipdir -Filter *.dll) { throw "Static package contains DLLs" }
         foreach ($requiredFile in $requiredFiles) {
           if (-not (Test-Path (Join-Path $zipdir $requiredFile))) {
             throw "Required runtime file missing from archive staging: $requiredFile"

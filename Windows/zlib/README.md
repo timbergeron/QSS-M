@@ -1,5 +1,9 @@
 # Bundled Windows zlib
 
+Current Windows builds compile this version from pinned source as a static
+library. See [the static build notes](../README-static.md). The DLLs described
+below are retained for legacy build configurations.
+
 Both DLLs are zlib 1.3.2 from the MSYS2 MSVCRT packages:
 
 | Architecture | Package | SHA-256 |

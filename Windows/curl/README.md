@@ -1,5 +1,9 @@
 # Bundled Windows libcurl
 
+Current Windows builds compile this version from pinned source as a static
+library. See [the static build notes](../README-static.md). The DLLs and recipe
+below describe the retained legacy binaries.
+
 Both architectures use curl 8.22.0, built from the unmodified upstream release:
 
 - Source: https://curl.se/download/curl-8.22.0.tar.xz

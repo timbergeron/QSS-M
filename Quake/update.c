@@ -2696,10 +2696,6 @@ static qboolean M_Update_ValidateExtracted(const updatereleaseinfo_t *info,
 			M_Update_RequireFile(extract_dir, "qssm.pak", error,
 			error_size) &&
 			M_Update_RequireFile(extract_dir, "quakespasm.pak", error,
-			error_size) &&
-			M_Update_RequireFile(extract_dir, "SDL3.dll", error,
-			error_size) &&
-			M_Update_RequireFile(extract_dir, "libcurl.dll", error,
 			error_size);
 	}
 
@@ -2710,10 +2706,6 @@ static qboolean M_Update_ValidateExtracted(const updatereleaseinfo_t *info,
 			M_Update_RequireFile(extract_dir, "qssm.pak", error,
 			error_size) &&
 			M_Update_RequireFile(extract_dir, "quakespasm.pak", error,
-			error_size) &&
-			M_Update_RequireFile(extract_dir, "SDL3.dll", error,
-			error_size) &&
-			M_Update_RequireFile(extract_dir, "libcurl.dll", error,
 			error_size);
 	}
 
@@ -2772,6 +2764,9 @@ static const char *const update_win_files[] =
 	"Quakespasm.txt",
 	"Quakespasm-Spiked.txt",
 	"Quakespasm-Music.txt",
+	"third-party-licenses.txt",
+	"static-sources.json",
+	/* Retain optional runtime names for compatibility with older packages. */
 	"SDL3.dll",
 	"libcurl.dll",
 	"zlib1.dll",
@@ -2838,6 +2833,7 @@ static qboolean M_Update_CopyHelperRuntimeFiles(const char *platform,
 #ifdef _WIN32
 	static const char *const update_win_helper_runtime_files[] =
 	{
+#ifndef QSSM_STATIC_WINDOWS
 		"SDL3.dll",
 		"libcurl.dll",
 		"zlib1.dll",
@@ -2853,6 +2849,7 @@ static qboolean M_Update_CopyHelperRuntimeFiles(const char *platform,
 		"libvorbis-0.dll",
 		"libvorbisfile-3.dll",
 		"libxmp.dll",
+#endif
 		NULL
 	};
 

@@ -14,12 +14,13 @@ jobs:
       matrix:
         include:
           - platform: w64
-            arch: x86_64
+            arch: x64
+            package_arch: x86_64
             bits: 64
           - platform: w32
-            arch: i686
+            arch: x86
+            package_arch: i686
             bits: 32
-    
     steps:
     - uses: actions/checkout@v6
 
@@ -29,207 +30,42 @@ jobs:
         msystem: MINGW${{ matrix.bits }}
         update: true
         install: |
+          base-devel
           make
-          mingw-w64-${{ matrix.arch }}-gcc
-          mingw-w64-${{ matrix.arch }}-binutils
-          mingw-w64-${{ matrix.arch }}-pkgconf
-          mingw-w64-${{ matrix.arch }}-gnutls
-          mingw-w64-${{ matrix.arch }}-opus
-          mingw-w64-${{ matrix.arch }}-libvorbis
-          mingw-w64-${{ matrix.arch }}-zlib
-          mingw-w64-${{ matrix.arch }}-curl
-          zip
           git
-          dos2unix
+          curl
+          zip
+          mingw-w64-${{ matrix.package_arch }}-gcc
+          mingw-w64-${{ matrix.package_arch }}-binutils
+          mingw-w64-${{ matrix.package_arch }}-cmake
+          mingw-w64-${{ matrix.package_arch }}-ninja
+          mingw-w64-${{ matrix.package_arch }}-python
+          mingw-w64-${{ matrix.package_arch }}-pkgconf
+
+    - name: Identify compiler
+      id: compiler
+      shell: msys2 {0}
+      run: |
+        set -euo pipefail
+        compiler_id=$(python3 Windows/build-static.py --arch ${{ matrix.arch }} --print-toolchain-id)
+        echo "fingerprint=$compiler_id" >> "$GITHUB_OUTPUT"
+
+    - name: Cache static dependencies
+      uses: actions/cache@v5
+      with:
+        path: build/windows-static
+        key: windows-static-msys2-${{ matrix.arch }}-${{ steps.compiler.outputs.fingerprint }}-${{ hashFiles('Windows/build-static.py', 'Windows/static-sources.json', 'Windows/static-adapters/*', 'Windows/static-licenses/*') }}
 
     - name: Build qssm.pak
       shell: msys2 {0}
       run: bash Misc/qssm_pak/build.sh
 
-    - name: Generate QSS-M Revision Info
-      shell: bash
-      run: |
-        echo "Git URL:      https://github.com/timbergeron/QSS-M.git" > QSS-M-Revision.txt
-        echo "Git Revision: $(git rev-parse HEAD)" >> QSS-M-Revision.txt
-        echo "Git Date:     $(git log -1 --date=short --format=%cd)" >> QSS-M-Revision.txt
-        echo "Compile Date: $(date)" >> QSS-M-Revision.txt
-        export SOURCE_DATE_EPOCH=$(git log -1 --date=short --format=%ct)
-
-    - name: Build and Package
+    - name: Build and verify package
       shell: msys2 {0}
       run: |
-        set -euxo pipefail
-        cd Quake || {
-          echo "Quake directory not found. Exiting."
-          exit 1
-        }
-        . ../ci-version.sh
-
-        mingw_prefix="/mingw${{ matrix.bits }}"
-        target_triple="${{ matrix.arch }}-w64-mingw32"
-
-        echo "==== MSYS2 GNUTLS DEBUG BEGIN ===="
-        echo "MSYSTEM=${MSYSTEM:-<unset>}"
-        echo "MINGW_PREFIX=${MINGW_PREFIX:-<unset>}"
-        echo "Using workflow mingw_prefix=$mingw_prefix"
-        echo "target_triple=$target_triple"
-        echo "PATH=$PATH"
-        echo
-        echo "[tool locations]"
-        command -v make || true
-        command -v gcc || true
-        command -v pkg-config || true
-        command -v pkgconf || true
-        command -v "${target_triple}-pkg-config" || true
-        command -v "${target_triple}-pkgconf" || true
-        ls -l /usr/bin/pkg-config /usr/bin/pkgconf 2>/dev/null || true
-        ls -l "$mingw_prefix/bin/pkg-config" "$mingw_prefix/bin/pkgconf" 2>/dev/null || true
-        ls -l "/usr/bin/${target_triple}-pkg-config" "/usr/bin/${target_triple}-pkgconf" 2>/dev/null || true
-        echo
-        echo "[installed packages]"
-        pacman -Q | grep -Ei "mingw-w64-.*(gnutls|pkgconf|gcc|curl|sdl3|zlib)" || true
-        echo
-        echo "[gnutls package file listing]"
-        pacman -Ql "mingw-w64-${{ matrix.arch }}-gnutls" | sed -n '1,200p' || true
-        echo
-        echo "[pkgconfig files]"
-        ls -l "$mingw_prefix/lib/pkgconfig/gnutls.pc" 2>/dev/null || true
-        ls -l "$mingw_prefix/share/pkgconfig" 2>/dev/null || true
-        find "$mingw_prefix" -path "*/pkgconfig/gnutls.pc" -print 2>/dev/null || true
-        echo
-        echo "[probe pkg-config binaries]"
-        pkg-config --version || true
-        pkg-config --variable pc_path pkg-config || true
-        pkg-config --modversion gnutls || true
-        pkg-config --cflags gnutls || true
-        pkg-config --libs gnutls || true
-        if command -v "${target_triple}-pkg-config" >/dev/null 2>&1; then
-          "${target_triple}-pkg-config" --version || true
-          "${target_triple}-pkg-config" --modversion gnutls || true
-          "${target_triple}-pkg-config" --cflags gnutls || true
-          "${target_triple}-pkg-config" --libs gnutls || true
-        fi
-        echo "==== MSYS2 GNUTLS DEBUG END ===="
-
-        # Ensure stale dependency/object files from other environments never leak in
-        make -f Makefile.w64 clean >/dev/null 2>&1 || true
-        make -f Makefile.w32 clean >/dev/null 2>&1 || true
-        rm -f -- ./*.d ./*.o ./*.res
-        find . -maxdepth 1 -type f \( -name '*.d' -o -name '*.o' -o -name '*.res' \) -delete
-
-        # Force MinGW pkg-config explicitly and pin search paths
-        export PKG_CONFIG="$mingw_prefix/bin/pkg-config"
-        export PKG_CONFIG_PATH="$mingw_prefix/lib/pkgconfig:$mingw_prefix/share/pkgconfig"
-        export PKG_CONFIG_LIBDIR="$mingw_prefix/lib/pkgconfig:$mingw_prefix/share/pkgconfig"
-        echo "Selected PKG_CONFIG=$PKG_CONFIG"
-        "$PKG_CONFIG" --version
-        "$PKG_CONFIG" --variable pc_path pkg-config || true
-        "$PKG_CONFIG" --modversion gnutls || true
-        "$PKG_CONFIG" --cflags gnutls || true
-        "$PKG_CONFIG" --libs gnutls || true
-
-        # Fail-fast if GNUTLS cannot be resolved in this MSYS2 environment
-        if ! "$PKG_CONFIG" --exists gnutls; then
-          echo "ERROR: pkg-config cannot find gnutls in ${MSYSTEM}."
-          echo "pkg-config path: $(command -v "$PKG_CONFIG" || true)"
-          "$PKG_CONFIG" --variable pc_path pkg-config || true
-          "$PKG_CONFIG" --cflags gnutls || true
-          "$PKG_CONFIG" --libs gnutls || true
-          pacman -Q | grep -Ei "mingw-w64-.*(gnutls|pkgconf)" || true
-          exit 1
-        fi
-
-        # Set build-specific environment variables
-        export QSS_CFLAGS="$(qssm_build_cflags)"
-        export QSS_LDFLAGS="-Wl,--allow-multiple-definition"
-        runtime_bin="/mingw${{ matrix.bits }}/bin"
-        gnutls_runtime=()
-        for pat in \
-          "libgnutls-*.dll" \
-          "libnettle-*.dll" \
-          "libhogweed-*.dll" \
-          "libgmp-*.dll" \
-          "libidn2-*.dll" \
-          "libunistring-*.dll" \
-          "libtasn1-*.dll" \
-          "libiconv-*.dll" \
-          "libp11-kit-*.dll" \
-          "libffi-*.dll"
-        do
-          for f in "$runtime_bin"/$pat; do
-            [ -e "$f" ] || continue
-            gnutls_runtime+=("$f")
-          done
-        done
-        
-        # Run the build with platform-specific makefile
-        if [ "${{ matrix.platform }}" = "w64" ]; then
-          make -f Makefile.w64 PKG_CONFIG="$PKG_CONFIG" -j8 2>&1 | tee build-w64.log
-          if grep -q "gnutls not found via pkg-config" build-w64.log; then
-            echo "ERROR: w64 build fell back to non-GNUTLS."
-            exit 1
-          fi
-          mv quakespasm.exe QSS-M-w64.exe
-          zip -9j QSS-M-w64.zip ../Windows/codecs/x64/*.dll ../Windows/curl/lib/x64/libcurl.dll ../Windows/zlib/x64/zlib1.dll ../LICENSE.txt ../Quakespasm.html quakespasm.pak qssm.pak gamecontrollerdb.txt ../Quakespasm.txt ../Quakespasm-Spiked.txt ../Quakespasm-Music.txt ../Windows/SDL3/lib/x64/SDL3.dll ../QSS-M-Revision.txt QSS-M-w64.exe "${gnutls_runtime[@]}"
-        else
-          make -f Makefile.w32 PKG_CONFIG="$PKG_CONFIG" -j8 2>&1 | tee build-w32.log
-          if grep -q "gnutls not found via pkg-config" build-w32.log; then
-            echo "ERROR: w32 build fell back to non-GNUTLS."
-            exit 1
-          fi
-          mv quakespasm.exe QSS-M-w32.exe
-          zip -9j QSS-M-w32.zip ../Windows/codecs/x86/*.dll ../Windows/curl/lib/x86/libcurl.dll ../Windows/zlib/x86/zlib1.dll ../LICENSE.txt ../Quakespasm.html quakespasm.pak qssm.pak gamecontrollerdb.txt ../Quakespasm.txt ../Quakespasm-Spiked.txt ../Quakespasm-Music.txt ../Windows/SDL3/lib/x86/SDL3.dll ../QSS-M-Revision.txt QSS-M-w32.exe "${gnutls_runtime[@]}"
-        fi
-
-    - name: Verify package artifact
-      shell: pwsh
-      run: |
-        $packageName = "QSS-M-${{ matrix.platform }}"
-        $packageZip = "Quake/$packageName.zip"
-        if (-not (Test-Path $packageZip)) {
-          throw "Package archive not found: $packageZip"
-        }
-
-        Write-Host "===== Package archive ====="
-        Get-Item $packageZip | Format-List FullName,Length
-        Write-Host "===== Package archive contents ====="
-        $archiveContents = tar -tf $packageZip
-        $archiveContents
-        foreach ($requiredFile in @("gamecontrollerdb.txt")) {
-          if ($archiveContents -notcontains $requiredFile) {
-            throw "Required controller support file missing from archive: $requiredFile"
-          }
-        }
-
-    - name: Prepare MSYS2 debug logs
-      if: always()
-      shell: pwsh
-      run: |
-        $packageName = "QSS-M-${{ matrix.platform }}"
-        $packageZip = "Quake/$packageName.zip"
-        $logRoot = "artifact/logs/$packageName-logs"
-        $buildLog = "Quake/build-${{ matrix.platform }}.log"
-
-        Remove-Item $logRoot -Recurse -Force -ErrorAction SilentlyContinue
-        New-Item -ItemType Directory -Force -Path $logRoot | Out-Null
-
-        if (Test-Path $buildLog) {
-          Copy-Item $buildLog $logRoot
-        }
-        if (Test-Path "Quake") {
-          Get-ChildItem "Quake" -File |
-            Sort-Object FullName |
-            Select-Object -ExpandProperty FullName |
-            Set-Content "$logRoot/quake-files.txt"
-        }
-        if (Test-Path $packageZip) {
-          tar -tf $packageZip | Set-Content "$logRoot/$packageName-zip-contents.txt"
-        }
-
-        Write-Host "===== Log artifact tree ====="
-        Get-ChildItem "artifact/logs" -Recurse -File -ErrorAction SilentlyContinue |
-          Sort-Object FullName |
-          ForEach-Object { $_.FullName }
+        set -euo pipefail
+        export CC=gcc CXX=g++ WINDRES=windres STRIP=strip
+        sh ./build-${{ matrix.platform }}.sh 2>&1 | tee build-${{ matrix.platform }}.log
 
     - name: Upload package artifact
       uses: actions/upload-artifact@v7
@@ -238,10 +74,10 @@ jobs:
         if-no-files-found: error
         archive: false
 
-    - name: Upload MSYS2 debug logs
+    - name: Upload build logs
       if: always()
       uses: actions/upload-artifact@v7
       with:
         name: QSS-M-${{ matrix.platform }}-logs
-        path: artifact/logs/QSS-M-${{ matrix.platform }}-logs
+        path: build-${{ matrix.platform }}.log
         if-no-files-found: warn

@@ -458,46 +458,49 @@
       <p>Grab the installer from <a href="https://www.msys2.org">msys2.org</a>. From the Start menu open the <strong>&ldquo;MSYS2 MINGW64&rdquo;</strong> shell (the blue one &mdash; not the plain UCRT/MSYS shell).</p>
 
       <div class="step-label"><span class="n">2</span>Install the toolchain &amp; libraries</div>
-      <div class="code"><button class="copy" type="button" aria-label="Copy to clipboard"><svg class="ic" aria-hidden="true"><use href="#ic-copy"/></svg></button><pre><span class="p">pacman</span> -S --needed git make zip \
-  mingw-w64-x86_64-gcc mingw-w64-x86_64-pkgconf mingw-w64-x86_64-gnutls \
-  mingw-w64-x86_64-opus mingw-w64-x86_64-libvorbis \
-  mingw-w64-x86_64-zlib mingw-w64-x86_64-curl</pre></div>
+      <div class="code"><button class="copy" type="button" aria-label="Copy to clipboard"><svg class="ic" aria-hidden="true"><use href="#ic-copy"/></svg></button><pre><span class="p">pacman</span> -S --needed base-devel git make curl zip \
+  mingw-w64-x86_64-gcc mingw-w64-x86_64-pkgconf \
+  mingw-w64-x86_64-cmake mingw-w64-x86_64-ninja mingw-w64-x86_64-python</pre></div>
 
       <div class="step-label"><span class="n">3</span>Clone &amp; build (64-bit)</div>
       <div class="code"><button class="copy" type="button" aria-label="Copy to clipboard"><svg class="ic" aria-hidden="true"><use href="#ic-copy"/></svg></button><pre><span class="p">git</span> clone https://github.com/timbergeron/QSS-M.git
-<span class="p">cd</span> QSS-M/Quake
-<span class="p">make</span> -f Makefile.w64 -j8</pre></div>
-      <p class="result"><b>Done.</b> Out comes <code>Quake/quakespasm.exe</code>. Keep <code>SDL3.dll</code> and the codec DLLs from the <code>Windows/</code> folder beside it (the CI build scripts do this for you when packaging).</p>
+<span class="p">cd</span> QSS-M
+<span class="p">export</span> CC=gcc CXX=g++ WINDRES=windres STRIP=strip
+<span class="p">bash</span> Misc/qssm_pak/build.sh
+<span class="p">sh</span> build-w64.sh</pre></div>
+      <p class="result"><b>Done.</b> Out come <code>Quake/QSS-M-w64.exe</code> and its ZIP. SDL3 and the other bundled libraries are embedded in the executable; no third-party DLLs are required.</p>
 
       <div class="step-label">Want a 32-bit build?</div>
-      <p>Open the <strong>MSYS2 MINGW32</strong> shell instead, install the matching <code>mingw-w64-i686-*</code> packages, and build with <code>Makefile.w32</code>.</p>
+      <p>Open the <strong>MSYS2 MINGW32</strong> shell instead, install the matching <code>mingw-w64-i686-*</code> packages, and run <code>sh build-w32.sh</code>.</p>
 
       <hr style="border:none;border-top:1px solid var(--line);margin:26px 0">
 
       <h3 class="step-label" style="color:var(--teal)" id="cross">Alternative · Cross-compile from Linux (MinGW-w64)</h3>
-      <p>No Windows machine needed &mdash; these commands use the same cross-build scripts and targets as the <code>windows.yml</code> workflow. SDL3, curl, zlib and the audio codec import libraries are already vendored in the repo's <code>Windows/</code> folder, so a normal local build only needs the cross toolchain and basic build utilities. CI additionally bootstraps GnuTLS for TLS-enabled artifacts.</p>
+      <p>The release scripts build pinned SDL3, curl, zlib, audio codec, and GnuTLS sources as static libraries. The first build downloads and compiles dependencies; later builds reuse their objects. See <a href="Windows/README-static.md">the static build notes</a> for details.</p>
 
       <div class="step-label"><span class="n">1</span>Install the MinGW-w64 cross toolchain</div>
       <div class="code"><button class="copy" type="button" aria-label="Copy to clipboard"><svg class="ic" aria-hidden="true"><use href="#ic-copy"/></svg></button><pre><span class="c"># Debian / Ubuntu / Mint &mdash; one package covers both 64- and 32-bit targets</span>
-<span class="p">sudo</span> apt-get install -y build-essential git zip mingw-w64</pre></div>
+<span class="p">sudo</span> apt-get install -y build-essential git zip mingw-w64 python3 cmake ninja-build \
+  pkg-config curl xz-utils autoconf automake libtool gettext texinfo gperf bison flex</pre></div>
       <p>On Fedora/RHEL that's <code>mingw64-gcc mingw32-gcc</code>; on Arch it's <code>mingw-w64-gcc</code>.</p>
 
       <div class="step-label"><span class="n">2</span>Build &amp; package</div>
       <div class="code"><button class="copy" type="button" aria-label="Copy to clipboard"><svg class="ic" aria-hidden="true"><use href="#ic-copy"/></svg></button><pre><span class="p">sh</span> ./build-w64.sh          <span class="c"># 64-bit</span>
 <span class="p">sh</span> ./build-w32.sh          <span class="c"># 32-bit</span></pre></div>
-      <p class="result"><b>Done.</b> The 64-bit command produces <code>Quake/QSS-M-w64.exe</code> and <code>Quake/QSS-M-w64.zip</code>; the 32-bit command produces the matching <code>QSS-M-w32.exe</code> and <code>QSS-M-w32.zip</code>. Each ZIP includes the required runtime DLLs.</p>
+      <p class="result"><b>Done.</b> The 64-bit command produces <code>Quake/QSS-M-w64.exe</code> and <code>Quake/QSS-M-w64.zip</code>; the 32-bit command produces the matching <code>QSS-M-w32.exe</code> and <code>QSS-M-w32.zip</code>. Each ZIP includes support files and dependency licenses, with no bundled DLLs.</p>
       <p><span class="c" style="color:var(--muted)"># These scripts are checked in without the executable bit, so run them via <code>sh</code><br>
 # (or <code>chmod +x build-w64.sh</code> first). Override the defaults with environment<br>
-# variables: <code>MAKEARGS=-j16</code>, <code>TARGET_TRIPLET=</code>, <code>CROSS_PREFIX=</code>, <code>PKG_CONFIG=</code>.</span></p>
+# variables: <code>MAKEARGS=-j16</code>, <code>CC=</code>, <code>WINDRES=</code>, <code>STRIP=</code>.</span></p>
 
       <div class="step-label">A word about TLS</div>
-      <p>Debian and friends ship no MinGW GnuTLS package. If <code>pkg-config</code> can't find a cross GnuTLS, the makefile prints <code>building without USE_GNUTLS</code> and carries on &mdash; you still get a perfectly good <code>.exe</code>, just without TLS support. To get a TLS-enabled build you have to cross-compile GnuTLS and its dependencies (GMP, Nettle, libtasn1) as static libraries first; the <a href="https://github.com/timbergeron/QSS-M/blob/qsrebase/.github/workflows/windows.yml">windows.yml</a> workflow does this step by step and is the recipe to copy.</p>
+      <p>MinGW builds compile GnuTLS and its dependencies statically and retain TLS support. A dependency build failure stops the release build.</p>
 
       <hr style="border:none;border-top:1px solid var(--line);margin:26px 0">
 
       <div class="step-label" style="color:var(--gold)">Alternative · Visual Studio 2022</div>
-      <p>Open <code>Windows/VisualStudio/quakespasm.sln</code>, select <strong>Release / x64</strong>, and hit Build. Or from a Developer prompt:</p>
-      <div class="code"><button class="copy" type="button" aria-label="Copy to clipboard"><svg class="ic" aria-hidden="true"><use href="#ic-copy"/></svg></button><pre><span class="p">msbuild</span> Windows\VisualStudio\quakespasm.vcxproj ^
+      <p>Install Python 3.12+, CMake, Git, and the C++ desktop workload. Build the static dependencies before opening <code>Windows/VisualStudio/quakespasm.sln</code> or running MSBuild:</p>
+      <div class="code"><button class="copy" type="button" aria-label="Copy to clipboard"><svg class="ic" aria-hidden="true"><use href="#ic-copy"/></svg></button><pre><span class="p">python</span> Windows/build-static.py --toolchain msvc --arch x64
+<span class="p">msbuild</span> Windows\VisualStudio\quakespasm.vcxproj ^
   -p:Configuration=Release -p:Platform=x64</pre></div>
     </div></div>
   </section>

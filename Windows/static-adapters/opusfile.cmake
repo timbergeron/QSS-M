@@ -1,0 +1,7 @@
+cmake_minimum_required(VERSION 3.16)
+project(opusfile C)
+add_library(opusfile STATIC src/info.c src/internal.c src/opusfile.c src/stream.c)
+target_include_directories(opusfile PRIVATE include "${CMAKE_INSTALL_PREFIX}/include" "${CMAKE_INSTALL_PREFIX}/include/opus")
+target_compile_definitions(opusfile PRIVATE OP_DISABLE_HTTP)
+install(TARGETS opusfile ARCHIVE DESTINATION lib)
+install(FILES include/opusfile.h DESTINATION include/opus)

@@ -1,7 +1,7 @@
 """Run the release scripts on staging fixtures and inspect their actual ZIPs.
 
 Compilation and Git metadata use test doubles; copying, shell control flow and
-zip are real. Reusing an old ZIP must not retain SDL2 or an omitted SDL3 runtime.
+zip are real. Reusing an old ZIP must not retain retired DLLs or an omitted runtime.
 No toolchain, engine build, or writes to the source checkout are required.
 """
 
@@ -46,6 +46,13 @@ class ReleaseArchiveTests(unittest.TestCase):
                              f"Windows/zlib/{arch}/zlib1.dll",
                              f"Windows/SDL3/lib/{arch}/SDL3.dll"):
                     write(root / name, "current runtime\n")
+                # Dependency compilation and PE validation have separate tests;
+                # this fixture exercises the real release script and archive.
+                write(root / "Windows/build-static.py", "# dependency build fixture\n")
+                write(root / "Windows/verify-static.py", "# PE verification fixture\n")
+                write(root / f"build/windows-static/mingw-{arch}/prefix/third-party-licenses.txt",
+                      "current third-party licenses\n")
+                write(root / "Windows/static-sources.json", "{}\n")
             exe = f"QSS-M-{target}" + (".exe" if target != "l64" else "")
             archive = root / "Quake" / f"QSS-M-{target}.zip"
             with zipfile.ZipFile(archive, "w") as old:
@@ -70,7 +77,8 @@ class ReleaseArchiveTests(unittest.TestCase):
                 self.assertNotIn("SDL2.dll", package.namelist())
                 self.assertNotIn("retired-codec.dll", package.namelist())
                 if target != "l64":
-                    self.assertEqual(package.read("SDL3.dll"), b"current runtime\n")
+                    self.assertFalse(any(name.lower().endswith(".dll") for name in package.namelist()))
+                    self.assertEqual(package.read("third-party-licenses.txt"), b"current third-party licenses\n")
                 if runtime:
                     self.assertEqual(package.read("libSDL3.so.0"), b"current SDL3\n")
                 else:

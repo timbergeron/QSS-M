@@ -80,11 +80,14 @@ function validateManifest(dependencies, repositoryRoot) {
   const dependencyNames = new Set();
   const packageNames = new Set();
   const declaredDlls = new Set();
+  const staticSources = dependencies.some((dependency) => dependency?.source)
+    ? JSON.parse(fs.readFileSync(path.join(repositoryRoot, "Windows/static-sources.json"), "utf8"))
+    : {};
 
   for (const dependency of dependencies) {
     if (!dependency || typeof dependency.name !== "string" ||
         typeof dependency.vendored !== "string" ||
-        !Array.isArray(dependency.dlls) || dependency.dlls.length === 0 ||
+        !Array.isArray(dependency.dlls) || (dependency.dlls.length === 0 && !dependency.source) ||
         !Array.isArray(dependency.packages) || dependency.packages.length === 0) {
       throw new Error("Every dependency requires name, vendored, dlls, and packages fields.");
     }
@@ -93,6 +96,8 @@ function validateManifest(dependencies, repositoryRoot) {
     if (dependencyNames.has(dependency.name))
       throw new Error(`Duplicate dependency name: ${dependency.name}`);
     dependencyNames.add(dependency.name);
+    if (dependency.source && staticSources[dependency.source]?.version !== dependency.vendored)
+      throw new Error(`Static source version does not match monitor baseline: ${dependency.name}`);
 
     for (const dll of dependency.dlls) {
       if (typeof dll !== "string" || !dll.startsWith("Windows/") || !dll.toLowerCase().endsWith(".dll"))
