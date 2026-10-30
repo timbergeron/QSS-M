@@ -4,19 +4,17 @@ Checks 0 / 1 / exactly-cap / cap+1 match counts, and that matches omitted from
 the printed list are still counted in the summary line.  Also asserts explicit
 `apropos` stays uncapped.
 
-The capped path is reached from any src_command unknown command, so the stress
-script is a faithful stand-in for a requeued server stufftext here.
+The capped path handles src_command prefix searches, so the stress script is
+a faithful stand-in for a requeued server stufftext here.
 """
 import re
-import sys
-
-sys.path.insert(0, "/Users/timbergeron/codedev/QSS-M/Misc/stress")
 import qssm_stress as S
 
 CAP = 20                       # must match CMD_MAX_SUGGESTIONS in cmd.c
 SUMMARY = re.compile(r"(\d+) cvars?/commands?/alias(?:es)? containing '([^']*)'")
 NOHITS = re.compile(r"no cvars/commands/aliases contain '([^']*)'")
 MORE = re.compile(r"\.\.\.and (\d+) more")
+UNKNOWN = re.compile(r'Unknown command "([^"]*)"')
 
 cfg = S.Config(binary=S.find_binary(), paks=S.find_paks(), registered=True,
                results="/tmp/qssm-capbounds", scenarios=[], runs=1, minutes=0, seed=0,
@@ -45,51 +43,19 @@ def true_hits(substr):
     return (int(m.group(1)) if m else -1), out
 
 
-# --- find substrings with the match counts we want -------------------------
-# Scrape the engine's own name lists once and compute counts offline, rather
-# than probing candidate strings one round-trip at a time -- the interesting
-# boundaries (exactly CAP, exactly CAP+1) are too rare to stumble on.
-names = [n.lower() for n in S.collect_list(eng, "cmdlist", "CMDS", S.CMDLIST_RE)]
-names += [n.lower() for n in S.collect_list(eng, "cvarlist", "CVARS", S.CVARLIST_RE)]
-print(f"scraped {len(names)} command+cvar names")
-
-exact = set(names)
-
-
-def offline_hits(sub):
-    return sum(1 for n in names if sub in n)
-
-
-import itertools, string
-found = {0: "zqx"}
-pool = string.ascii_lowercase + "_"
-for a, b in itertools.product(pool, repeat=2):
-    sub = a + b
-    if sub in exact:
-        continue                      # must not be a real command/cvar name
-    n = offline_hits(sub)
-    for target in (1, CAP, CAP + 1):
-        if n == target and target not in found:
-            found[target] = sub
-for a, b, c in itertools.product(pool, repeat=3):
-    if len(found) == 4:
-        break
-    sub = a + b + c
-    if sub in exact:
-        continue
-    n = offline_hits(sub)
-    for target in (1, CAP, CAP + 1):
-        if n == target and target not in found:
-            found[target] = sub
-
-print("substrings chosen:", found)
-# confirm the offline model agrees with the engine before trusting it
-for t, sub in sorted(found.items()):
-    n, _ = true_hits(sub)
-    if n != t:
-        print(f"  NOTE: engine reports {n} for '{sub}', offline model said {t}; using engine value")
-        found[t] = None if n != t else sub
-found = {t: sub for t, sub in found.items() if sub}
+# Deliberate prefixes always exercise substring discovery; arbitrary fragments
+# may now be spelling corrections ("connectt" -> "connect"). Give every cap
+# boundary a predictable fixture, independent of the engine's current names.
+found = {0: "zzcap_no_matches_zqx"}
+for count in (1, CAP, CAP + 1):
+    prefix = f"zzcap{count}_"
+    found[count] = prefix
+    for i in range(count):
+        eng.send(f'alias {prefix}{i:02d} "echo cap_fixture"')
+eng.status()
+for count, prefix in found.items():
+    actual, _ = true_hits(prefix)
+    assert actual == count, (prefix, actual, count)
 
 failures = []
 
@@ -100,8 +66,8 @@ def check(label, substr, expect_hits):
                   if l.startswith("   ") and "...and" not in l])
     more = MORE.search(out)
     if expect_hits == 0:
-        ok = bool(NOHITS.search(out)) and listed == 0
-        print(f"{label:16s} hits=0   listed={listed} nohits_line={bool(NOHITS.search(out))} -> {'ok' if ok else 'FAIL'}")
+        ok = bool(UNKNOWN.search(out)) and listed == 0
+        print(f"{label:16s} hits=0   listed={listed} unknown_line={bool(UNKNOWN.search(out))} -> {'ok' if ok else 'FAIL'}")
         if not ok:
             failures.append(label)
         return

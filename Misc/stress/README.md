@@ -27,6 +27,21 @@ bounds, menu fades, opacity changes, final GL state, and submission counts
 without a window or game assets.
 It requires a C compiler; `CC` and `CFLAGS` select the compiler and extra checks.
 
+## Console command suggestions
+
+`python3 Misc/stress/test_command_typos.py` checks production command dispatch,
+typo ranking, commands/cvars/aliases, prefix discovery, highlighted output,
+ambiguity, caps, and long input with address and undefined behavior sanitizers.
+It requires a C compiler, with no window or game data.
+
+`python3 Misc/stress/test_command_typo_corpus.py` also checks generated omissions,
+insertions, substitutions, and transpositions against names declared in the
+engine sources. It compares the bounded distance calculation with a full-matrix
+reference and checks unrelated input. Optional `--registry-json names.json`
+accepts a JSON array of names scraped from a running engine. These checks measure
+synthetic typo coverage, not certainty about a user's intent. `CC` selects the
+compiler for both scripts.
+
 ## Requirements
 
 For chunked download pacing and standalone regression tests, see

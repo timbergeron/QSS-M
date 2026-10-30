@@ -23,6 +23,7 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 // cmd.c -- Quake script command processing module
 
 #include "quakedef.h"
+#include "q_ctype.h"
 
 cvar_t	cl_nopext = {"cl_nopext","0",CVAR_NONE};	//Spike -- prevent autodetection of protocol extensions, so that servers fall back to only their base protocol (without needing to reconfigure the server. Requires reconnect.
 cvar_t	cmd_warncmd = {"cl_warncmd","1",CVAR_NONE};	//Spike -- prevent autodetection of protocol extensions, so that servers fall back to only their base protocol (without needing to reconfigure the server. Requires reconnect.
@@ -929,13 +930,14 @@ we don't support descriptions, so this isn't really all that useful, but even wi
 // useful, summarise the rest, and keep the total count honest.
 #define CMD_MAX_SUGGESTIONS	20
 
-static void Cmd_ListAllContaining(const char* substr, int maxshow)
+static int Cmd_ListAllContaining(const char* substr, int maxshow)
 {
 	char tmpbuf[256];
 	int hits = 0;
 	int shown = 0;
 	cmd_function_t* cmd;
 	cvar_t* var;
+	cmdalias_t* alias;
 	const char* plural;
 	const char* plural2; // woods #addaliases
 
@@ -960,15 +962,163 @@ static void Cmd_ListAllContaining(const char* substr, int maxshow)
 		}
 	}
 
+	for (alias = cmd_alias; alias; alias = alias->next)
+	{
+		if (!Cmd_IsReservedName(alias->name) && q_strcasestr(alias->name, substr))
+		{
+			hits++;
+			if (!maxshow || shown++ < maxshow)
+				Con_SafePrintf("   %s (alias)\n", COM_TintSubstring(alias->name, substr, tmpbuf, sizeof(tmpbuf)));
+		}
+	}
+
 	if (maxshow && hits > maxshow)
 		Con_SafePrintf ("   ...and %d more\n", hits - maxshow);
 
 	plural = (hits == 1) ? "" : "s";
 	plural2 = (hits == 1) ? "" : "es"; // woods #addaliases
 	if (!hits)
-		Con_SafePrintf("no cvars/commands/aliases contain '%s'\n", substr);
+	{
+		if (!maxshow)
+			Con_SafePrintf("no cvars/commands/aliases contain '%s'\n", substr);
+	}
 	else
 		Con_SafePrintf("%d cvar%s/command%s/alias%s containing '%s'\n", hits, plural, plural, plural2, substr); // woods #addaliases
+	return hits;
+}
+
+// Case-insensitive edit distance, including adjacent swapped letters.  Three
+// fixed rows avoid allocating a matrix for every registered name.  Reject long
+// tokens and stop once no prefix can be within the small typo budget.
+static int Cmd_NameDistance (const char *input, const char *name, int limit)
+{
+	int rows[3][MAXCMDLINE];
+	size_t n = strlen(input), m = strlen(name);
+	size_t i, j;
+
+	if (n >= MAXCMDLINE || m >= MAXCMDLINE ||
+		n > m + limit || m > n + limit)
+		return limit + 1;
+	// Never confuse a press command with a release command.
+	if ((input[0] == '+' || input[0] == '-' || name[0] == '+' || name[0] == '-') &&
+		input[0] != name[0])
+		return limit + 1;
+
+	for (j = 0; j <= m; j++)
+		rows[0][j] = j;
+	for (i = 1; i <= n; i++)
+	{
+		int *row = rows[i % 3];
+		int *prev = rows[(i - 1) % 3];
+		int best = row[0] = i;
+		for (j = 1; j <= m; j++)
+		{
+			int cost = q_tolower(input[i - 1]) != q_tolower(name[j - 1]);
+			row[j] = q_min(q_min(row[j - 1] + 1, prev[j] + 1), prev[j - 1] + cost);
+			if (i > 1 && j > 1 &&
+				q_tolower(input[i - 1]) == q_tolower(name[j - 2]) &&
+				q_tolower(input[i - 2]) == q_tolower(name[j - 1]))
+				row[j] = q_min(row[j], rows[(i - 2) % 3][j - 2] + 1);
+			best = q_min(best, row[j]);
+		}
+		if (best > limit)
+			return limit + 1;
+	}
+	return rows[n % 3][m];
+}
+
+#define CMD_MAX_TYPO_SUGGESTIONS 5
+typedef struct
+{
+	const char *names[CMD_MAX_TYPO_SUGGESTIONS];
+	int count;
+	int distance;
+	qboolean has_prefix;
+	qboolean more;
+} cmd_suggestions_t;
+
+static void Cmd_ConsiderSuggestion (cmd_suggestions_t *suggestions, const char *input, const char *name)
+{
+	int i, j;
+	int distance, limit;
+	size_t n = strlen(input), m = strlen(name), shorter = q_min(n, m);
+
+	if (Cmd_IsReservedName(name))
+		return;
+	if (!q_strncasecmp(name, input, n))
+		suggestions->has_prefix = true;
+	// Two-character typos can find names like "map", without matching every
+	// one- or two-letter shortcut. Scale the budget with both names' lengths.
+	if (n == 2 && m < 3)
+		return;
+	limit = q_min(suggestions->distance, shorter < 6 ? 1 : shorter < 9 ? 2 : 3);
+	distance = Cmd_NameDistance(input, name, limit);
+	if (distance > limit)
+		return;
+	if (distance < suggestions->distance)
+	{
+		suggestions->count = 0;
+		suggestions->distance = distance;
+		suggestions->more = false;
+	}
+	// Keep only the closest names, sorted and deduplicated across registries.
+	for (i = 0; i < suggestions->count; i++)
+	{
+		int order = q_strcasecmp(name, suggestions->names[i]);
+		if (!order)
+			return;
+		if (order < 0)
+			break;
+	}
+	if (suggestions->count == CMD_MAX_TYPO_SUGGESTIONS)
+		suggestions->more = true;
+	if (i == CMD_MAX_TYPO_SUGGESTIONS)
+		return;
+	if (suggestions->count < CMD_MAX_TYPO_SUGGESTIONS)
+		suggestions->count++;
+	for (j = suggestions->count - 1; j > i; j--)
+		suggestions->names[j] = suggestions->names[j - 1];
+	suggestions->names[i] = name;
+}
+
+static qboolean Cmd_SuggestName (const char *input)
+{
+	cmd_suggestions_t suggestions = {0};
+	char tinted[MAXCMDLINE];
+	cmd_function_t *cmd;
+	cvar_t *var;
+	cmdalias_t *alias;
+	size_t len = strlen(input);
+	int i;
+
+	if (len < 2 || len >= MAXCMDLINE)
+		return false;
+	suggestions.distance = len < 6 ? 1 : len < 9 ? 2 : 3;
+	for (cmd = cmd_functions; cmd; cmd = cmd->next)
+		if (cmd->srctype != src_server)
+			Cmd_ConsiderSuggestion(&suggestions, input, cmd->name);
+	for (var = Cvar_FindVarAfter("", 0); var; var = var->next)
+		Cmd_ConsiderSuggestion(&suggestions, input, var->name);
+	for (alias = cmd_alias; alias; alias = alias->next)
+		Cmd_ConsiderSuggestion(&suggestions, input, alias->name);
+	// Preserve intentional prefixes ("con", "vid_", etc.). Otherwise a close
+	// typo should beat an incidental substring: "connectt" -> "connect",
+	// rather than listing only "net_connecttimeout".
+	if (suggestions.has_prefix || !suggestions.count)
+		return false;
+	Con_SafePrintf("Unknown command \"%s\"\n", input);
+	// Use the native alternate font palette, as partial-name searches do.
+	if (suggestions.count == 1)
+		Con_SafePrintf("Did you mean %s?\n", COM_TintString(suggestions.names[0], tinted, sizeof(tinted)));
+	else if (suggestions.count > 1)
+	{
+		Con_SafePrintf("Did you mean one of these?\n");
+		for (i = 0; i < suggestions.count; i++)
+			Con_SafePrintf("   %s\n", COM_TintString(suggestions.names[i], tinted, sizeof(tinted)));
+		if (suggestions.more)
+			Con_SafePrintf("   ...more equally close matches\n");
+	}
+	return true;
 }
 
 /*
@@ -981,7 +1131,7 @@ void Cmd_Apropos_f(void)
 	const char* substr = Cmd_Argv(1);
 	if (!*substr)
 	{
-		Con_SafePrintf("%s <substring> : search through commands and cvars for the given substring\n", Cmd_Argv(0));
+		Con_SafePrintf("%s <substring> : search through commands, cvars and aliases for the given substring\n", Cmd_Argv(0));
 		return;
 	}
 	Cmd_ListAllContaining(substr, 0);	// explicit request -- no cap
@@ -1739,8 +1889,9 @@ qboolean	Cmd_ExecuteString (const char *text, cmd_source_t src)
 		{
 			if (in_cfg_exec) // woods - Skip apropos text for unknown commands executed from config (ironwail)
 				Con_Printf("Unknown command \"%s\"\n", Cmd_Argv(0));
-			else
-				Cmd_ListAllContaining(Cmd_Argv(0), CMD_MAX_SUGGESTIONS);
+			else if (!Cmd_SuggestName(Cmd_Argv(0)) &&
+				!Cmd_ListAllContaining(Cmd_Argv(0), CMD_MAX_SUGGESTIONS))
+				Con_SafePrintf("Unknown command \"%s\"\n", Cmd_Argv(0));
 		}
 
 	return true;
