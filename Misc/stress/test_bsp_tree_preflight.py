@@ -29,6 +29,16 @@ def mutations(orig):
             ofs, _ = lump(b, lumpidx)
             struct.pack_into(fmt, b, ofs + rel, val)
         return f
+    def clip_cycle(length):
+        def f(b):
+            modelofs, _ = lump(b, LUMP_MODELS)
+            root = struct.unpack_from("<i", b, modelofs + 40)[0]  # world hull 1
+            clipofs, clipsize = lump(b, LUMP_CLIPNODES)
+            assert 0 <= root and root + length <= clipsize // CLIP
+            for i in range(length):
+                struct.pack_into("<H", b, clipofs + (root + i) * CLIP + 4,
+                                 root + (i + 1) % length)
+        return f
     return {
         "leaf contents >= 0": (poke("<i", LUMP_LEAFS, 1 * LEAF, 0), "invalid contents"),
         "leaf contents < -31": (poke("<i", LUMP_LEAFS, 1 * LEAF, -1000), "invalid contents"),
@@ -36,7 +46,9 @@ def mutations(orig):
         "marksurface face": (poke("<H", LUMP_MARKSURFACES, 0, 0xffff), "out of range face"),
         "node face range": (poke("<H", LUMP_NODES, 20, 0xffff), "out of range faces"),
         "node self cycle": (poke("<H", LUMP_NODES, 4, 0), "loops back"),
-        # no BSP29 clipnode case: a 16-bit child >= count wraps to a (valid) negative contents value, so
+        "clipnode self cycle": (clip_cycle(1), "clip hull that loops"),
+        "clipnode two-node cycle": (clip_cycle(2), "clip hull that loops"),
+        # no out-of-range BSP29 clipnode case: a 16-bit child >= count wraps to a negative contents value, so
         # only BSP2 clipnodes can carry an out of range child.
         "submodel headnode0": (poke("<i", LUMP_MODELS, 36, 0x7ffffff), "out of range headnode"),
         "submodel clip headnode": (poke("<i", LUMP_MODELS, 40, 0x7ffffff), "out of range clip headnode"),

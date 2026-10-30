@@ -5071,6 +5071,96 @@ static qboolean Mod_BSPNodesCyclic (const byte *nodes, size_t nodesize, int bsp2
 	return cyclic;
 }
 
+/* Match Mod_LoadClipnodes, including unsigned BSP29 indices above 32767. */
+static int Mod_BSPClipnodeChild (const byte *in, int bsp2, int side, int numclipnodes)
+{
+	int child;
+	if (bsp2)
+		child = LittleLong (((const dlclipnode_t *)in)->children[side]);
+	else
+	{
+		child = (unsigned short)LittleShort (((const dsclipnode_t *)in)->children[side]);
+		if (child >= numclipnodes)
+			child -= 65536;
+	}
+	return child;
+}
+
+/*
+=================
+Mod_BSPClipHullsInvalid
+
+Collision walkers assume every path ends at negative contents. Walk the used
+hulls of every submodel without recursion, rejecting back edges but allowing
+shared clipnodes. Headnode and child indices must already be range-checked.
+Inspired by ezQuake b211cc8; unused hull 3 data remains ignored as below.
+=================
+*/
+static const char *Mod_BSPClipHullsInvalid (const dheader_t *header, int bsp2, unsigned int modelstride, unsigned int nummodels)
+{
+	typedef struct { int node, side; } clipwalk_t;
+	const byte *base = (const byte *)header;
+	const byte *clips = base + header->lumps[LUMP_CLIPNODES].fileofs;
+	size_t clipsize = bsp2 ? sizeof(dlclipnode_t) : sizeof(dsclipnode_t);
+	int numclipnodes = header->lumps[LUMP_CLIPNODES].filelen / clipsize;
+	byte *state;
+	clipwalk_t *stack;
+	const char *reason = NULL;
+	unsigned int i;
+	int hull;
+
+	if (!numclipnodes)
+		return NULL;	// -noclip maps use the already-checked render nodes
+	state = (byte *) calloc ((size_t)numclipnodes, 1);
+	stack = (clipwalk_t *) malloc ((size_t)numclipnodes * sizeof(*stack));
+	if (!state || !stack)
+	{
+		free (state);
+		free (stack);
+		return "clip hulls that could not be validated (out of memory)";
+	}
+
+	for (i = 0; i < nummodels && !reason; i++)
+	{
+		const int *heads = (const int *)(base + header->lumps[LUMP_MODELS].fileofs + (size_t)i * modelstride + 36);
+		for (hull = 1; hull <= 2 && !reason; hull++)
+		{
+			int root = LittleLong (heads[hull]);
+			int sp = 0;
+			if (root < 0 || state[root])
+				continue;
+			state[root] = 1;	// 0 unseen, 1 on this path, 2 checked
+			stack[sp].node = root;
+			stack[sp++].side = 0;
+			while (sp)
+			{
+				clipwalk_t *entry = &stack[sp - 1];
+				int child;
+				if (entry->side == 2)
+				{
+					state[entry->node] = 2;
+					sp--;
+					continue;
+				}
+				child = Mod_BSPClipnodeChild (clips + (size_t)entry->node * clipsize, bsp2, entry->side++, numclipnodes);
+				if (child < 0 || state[child] == 2)
+					continue;
+				if (state[child] == 1)
+				{
+					reason = "a clip hull that loops back on itself";
+					break;
+				}
+				state[child] = 1;
+				stack[sp].node = child;
+				stack[sp++].side = 0;
+			}
+		}
+	}
+	free (state);
+	free (stack);
+	return reason;
+}
+
 /*
 =================
 Mod_BSPTreeInvalid
@@ -5170,16 +5260,7 @@ static const char *Mod_BSPTreeInvalid (const dheader_t *header, int bsp2)
 		Q_UNUSED (planenum);
 		for (j = 0; j < 2; j++)
 		{
-			int child;
-			if (bsp2)
-				child = LittleLong (((const dlclipnode_t *)in)->children[j]);
-			else
-			{
-				// the same >32k unwrapping as Mod_LoadClipnodes
-				child = (unsigned short)LittleShort (((const dsclipnode_t *)in)->children[j]);
-				if (child >= (int)numclipnodes)
-					child -= 65536;
-			}
+			int child = Mod_BSPClipnodeChild (in, bsp2, j, (int)numclipnodes);
 			if (child >= (int)numclipnodes)
 				return "a clipnode with an out of range child";
 		}
@@ -5214,7 +5295,7 @@ static const char *Mod_BSPTreeInvalid (const dheader_t *header, int bsp2)
 			return "a submodel with out of range faces";
 	}
 
-	return NULL;
+	return Mod_BSPClipHullsInvalid (header, bsp2, modelstride, nummodels);
 }
 
 /*
