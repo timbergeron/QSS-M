@@ -2,7 +2,7 @@
 
 Mod_BSPTreeInvalid (gl_model.c) covers what Mod_BSPIndicesInvalid does not:
 leaf contents / marksurface ranges, marksurface faces, node face ranges, node
-cycles, clipnode children and submodel headnode / face ranges.  The original
+cycles, clipnode children and submodel headnode / face / visibility counts.  The original
 finding was a fuzzed leafs lump whose garbage contents made SV_FindTouchedLeafs
 walk a leaf as if it were a node (SIGSEGV).
 
@@ -53,6 +53,11 @@ def mutations(orig):
         "submodel headnode0": (poke("<i", LUMP_MODELS, 36, 0x7ffffff), "out of range headnode"),
         "submodel clip headnode": (poke("<i", LUMP_MODELS, 40, 0x7ffffff), "out of range clip headnode"),
         "submodel faces": (poke("<i", LUMP_MODELS, 36 + 16 + 8, 0x7ffffff), "out of range faces"),
+        "negative world visible leafs": (poke("<i", LUMP_MODELS, 52, -1), "invalid visible leaf count"),
+        "oversized world visible leafs": (poke("<i", LUMP_MODELS, 52, 1000000), "invalid visible leaf count"),
+        "world visible count includes solid": (poke("<i", LUMP_MODELS, 52, lump(orig, LUMP_LEAFS)[1] // LEAF), "invalid visible leaf count"),
+        "negative inline visible leafs": (poke("<i", LUMP_MODELS, 64 + 52, -1), "invalid visible leaf count"),
+        "oversized inline visible leafs": (poke("<i", LUMP_MODELS, 64 + 52, 1000000), "invalid visible leaf count"),
         # not a preflight rejection: the map loads but has no worldspawn, so the QC never precaches
         # anything and the spawning player's weapon model used to Sys_Error in SV_ModelIndex
         "empty entity lump (must load)": (lambda b: struct.pack_into("<I", b, 8, 0), None),

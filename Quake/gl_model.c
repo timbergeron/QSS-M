@@ -5279,8 +5279,13 @@ static const char *Mod_BSPTreeInvalid (const dheader_t *header, int bsp2)
 		// mins/maxs/origin = 9 floats, then headnode[], visleafs, firstface, numfaces
 		const int *hn = (const int *)(in + 36);
 		const int nheads = hexen2 ? 8 : 4;
+		int visleafs = LittleLong (hn[nheads]);
 		int firstface = LittleLong (hn[nheads + 1]), nfaces = LittleLong (hn[nheads + 2]);
 		int head0 = LittleLong (hn[0]), j;
+		// Like ezQuake 86eda89: visible counts exclude solid leaf 0. Validate
+		// every submodel before water-VIS walks or assigning its PVS row size.
+		if (visleafs < 0 || (unsigned int)visleafs >= numleafs)
+			return "a submodel with an invalid visible leaf count";
 		if (head0 < 0 || head0 >= (int)numnodes)
 			return "a submodel with an out of range headnode";
 		// only hulls 1 and 2 are ever traced against: several compilers leave garbage in the unused hull 3

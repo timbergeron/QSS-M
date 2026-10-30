@@ -1,4 +1,4 @@
-"""Check production BSP preflight against collision cycles and shared hulls.
+"""Check production BSP preflight for collision cycles and visible-leaf counts.
 
 Run: python3 Misc/stress/test_bsp_clip_cycles.py
 Compiles the actual preflight functions and BSP structs; no game data or GL needed.
@@ -90,11 +90,11 @@ static void child(fixture_t *f, int node, int side, int value) {
     else
         ((dsclipnode_t *)f->clips)[node].children[side] = LittleShort((short)value);
 }
-static fixture_t fixture(int format, int nclips, int nmodels) {
+static fixture_t fixture_with_leafs(int format, int nclips, int nmodels, int nleafs) {
     fixture_t f = {0};
     f.format = format;
     f.nclips = nclips;
-    f.data = calloc(1, 1024 + (size_t)nclips * sizeof(dlclipnode_t) +
+    f.data = calloc(1, 1024 + (size_t)nleafs * sizeof(dl2leaf_t) + (size_t)nclips * sizeof(dlclipnode_t) +
                        (size_t)nmodels * sizeof(dmodelq1_t));
     if (!f.data) exit(2);
     f.header = (dheader_t *)f.data;
@@ -104,24 +104,36 @@ static fixture_t fixture(int format, int nclips, int nmodels) {
     if (format == 2) {
         dl2node_t *node = add_lump(&f, LUMP_NODES, sizeof(*node));
         node->children[0] = LittleLong(-1); node->children[1] = LittleLong(-2);
-        dl2leaf_t *leaves = add_lump(&f, LUMP_LEAFS, 2 * sizeof(*leaves));
-        leaves[0].contents = LittleLong(-2); leaves[1].contents = LittleLong(-1);
+        dl2leaf_t *leaves = add_lump(&f, LUMP_LEAFS, (size_t)nleafs * sizeof(*leaves));
+        for (int i = 0; i < nleafs; i++) leaves[i].contents = LittleLong(i ? -1 : -2);
     } else if (format == 1) {
         dl1node_t *node = add_lump(&f, LUMP_NODES, sizeof(*node));
         node->children[0] = LittleLong(-1); node->children[1] = LittleLong(-2);
-        dl1leaf_t *leaves = add_lump(&f, LUMP_LEAFS, 2 * sizeof(*leaves));
-        leaves[0].contents = LittleLong(-2); leaves[1].contents = LittleLong(-1);
+        dl1leaf_t *leaves = add_lump(&f, LUMP_LEAFS, (size_t)nleafs * sizeof(*leaves));
+        for (int i = 0; i < nleafs; i++) leaves[i].contents = LittleLong(i ? -1 : -2);
     } else {
         dsnode_t *node = add_lump(&f, LUMP_NODES, sizeof(*node));
         node->children[0] = LittleShort(-1); node->children[1] = LittleShort(-2);
-        dsleaf_t *leaves = add_lump(&f, LUMP_LEAFS, 2 * sizeof(*leaves));
-        leaves[0].contents = LittleLong(-2); leaves[1].contents = LittleLong(-1);
+        dsleaf_t *leaves = add_lump(&f, LUMP_LEAFS, (size_t)nleafs * sizeof(*leaves));
+        for (int i = 0; i < nleafs; i++) leaves[i].contents = LittleLong(i ? -1 : -2);
     }
     f.clips = add_lump(&f, LUMP_CLIPNODES,
                       (size_t)nclips * (format ? sizeof(dlclipnode_t) : sizeof(dsclipnode_t)));
     for (int i = 0; i < nclips; i++) { child(&f, i, 0, -1); child(&f, i, 1, -2); }
     f.models = add_lump(&f, LUMP_MODELS, (size_t)nmodels * sizeof(*f.models));
     for (int i = 0; i < nmodels; i++) f.models[i].visleafs = LittleLong(1);
+    return f;
+}
+static fixture_t fixture(int format, int nclips, int nmodels) {
+    return fixture_with_leafs(format, nclips, nmodels, 2);
+}
+static fixture_t hexen_fixture(int format) {
+    /* Five Q1 model records occupy the same space as four Hexen II records. */
+    fixture_t f = fixture(format, 4, 5);
+    dmodelh2_t *models = (dmodelh2_t *)f.models;
+    memset(models, 0, 4 * sizeof(*models));
+    for (int i = 0; i < 4; i++) models[i].visleafs = LittleLong(1);
+    models[1].headnode[1] = LittleLong(1); /* existing Hexen II format discriminator */
     return f;
 }
 static int checks;
@@ -179,8 +191,34 @@ int main(void) {
             check(&f, "collision validation allocation failure", "out of memory");
             fail_allocation = 0;
         }
+        const int bad_counts[] = {-1, INT32_MIN, 2, 1000000, INT32_MAX};
+        for (size_t i = 0; i < sizeof(bad_counts) / sizeof(bad_counts[0]); i++) {
+            for (int model = 0; model < 2; model++) {
+                f = fixture(format, 4, 2);
+                f.models[model].visleafs = LittleLong(bad_counts[i]);
+                check(&f, "invalid world/inline visible-leaf count", "invalid visible leaf count");
+                f = hexen_fixture(format);
+                ((dmodelh2_t *)f.models)[model].visleafs = LittleLong(bad_counts[i]);
+                check(&f, "invalid Hexen II world/inline visible-leaf count", "invalid visible leaf count");
+            }
+        }
+        f = fixture(format, 4, 2);
+        f.models[0].visleafs = f.models[1].visleafs = 0;
+        check(&f, "zero world and inline visible-leaf counts", NULL);
+        f = hexen_fixture(format);
+        ((dmodelh2_t *)f.models)[0].visleafs = ((dmodelh2_t *)f.models)[1].visleafs = 0;
+        check(&f, "zero Hexen II visible-leaf counts", NULL);
+        const int valid_counts[] = {1, 8, 9, 16, 17};
+        for (size_t i = 0; i < sizeof(valid_counts) / sizeof(valid_counts[0]); i++) {
+            f = fixture_with_leafs(format, 4, 2, 18);
+            f.models[0].visleafs = f.models[1].visleafs = LittleLong(valid_counts[i]);
+            check(&f, "visible-leaf byte boundaries and unused leaf records", NULL);
+        }
+        f = fixture_with_leafs(format, 4, 2, 18);
+        f.models[0].visleafs = LittleLong(18);
+        check(&f, "solid leaf zero cannot be counted as visible", "invalid visible leaf count");
     }
-    printf("PASS: %d collision-preflight cases across BSP29 and both BSP2 formats\n", checks);
+    printf("PASS: %d BSP-preflight cases across BSP29 and both BSP2 formats\n", checks);
     return 0;
 }
 '''
