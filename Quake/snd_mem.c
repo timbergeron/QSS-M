@@ -50,8 +50,8 @@ static int ResampleSfx_GetStereoSample (const byte *data, int inwidth, int srcsa
 		return (LittleShort (((const short *)data)[srcsample]) +
 			LittleShort (((const short *)data)[srcsample + 1])) / 2;
 
-	return ((((int)((unsigned char)data[srcsample]) - 128) << 8) +
-		(((int)((unsigned char)data[srcsample + 1]) - 128) << 8)) / 2;
+	return ((((int)((unsigned char)data[srcsample]) - 128) * 256) +
+		(((int)((unsigned char)data[srcsample + 1]) - 128) * 256)) / 2;
 }
 
 /*

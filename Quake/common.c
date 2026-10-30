@@ -6245,7 +6245,7 @@ static qboolean ZIP_ExtractInternalBody(const char* zipfile, const char* outdir,
 			continue;
 		if (fread(buffer, 1, 4, zip) != 4) continue;
 
-		unsigned int sig = buffer[0] | (buffer[1] << 8) | (buffer[2] << 16) | (buffer[3] << 24);
+		unsigned int sig = buffer[0] | (buffer[1] << 8) | (buffer[2] << 16) | ((unsigned int)buffer[3] << 24);
 		if (sig == ZIP_EOCD_SIGNATURE) {
 			break;
 		}
@@ -6271,7 +6271,7 @@ static qboolean ZIP_ExtractInternalBody(const char* zipfile, const char* outdir,
 
 	// Parse EOCD record
 	unsigned short total_entries = buffer[10] | (buffer[11] << 8);
-	unsigned int cd_offset = buffer[16] | (buffer[17] << 8) | (buffer[18] << 16) | (buffer[19] << 24);
+	unsigned int cd_offset = buffer[16] | (buffer[17] << 8) | (buffer[18] << 16) | ((unsigned int)buffer[19] << 24);
 
 	// Check number of files
 	if (total_entries > ZIP_MAX_FILES) {
@@ -6322,7 +6322,7 @@ static qboolean ZIP_ExtractInternalBody(const char* zipfile, const char* outdir,
 		unsigned short general_flags = header[4] | (header[5] << 8);
 		unsigned short compression_method = header[6] | (header[7] << 8);
 		unsigned int size = header[16] | (header[17] << 8) |
-			(header[18] << 16) | (header[19] << 24);
+			(header[18] << 16) | ((unsigned int)header[19] << 24);
 		total_bytes += size;
 
 		unsigned short name_len = header[24] | (header[25] << 8);
@@ -6432,12 +6432,12 @@ static qboolean ZIP_ExtractInternalBody(const char* zipfile, const char* outdir,
 		// Get file info from central directory
 		unsigned short compression_method = cd_header[6] | (cd_header[7] << 8);
 		unsigned int compressed_size = cd_header[16] | (cd_header[17] << 8) |
-			(cd_header[18] << 16) | (cd_header[19] << 24);
+			(cd_header[18] << 16) | ((unsigned int)cd_header[19] << 24);
 		unsigned short name_length = cd_header[24] | (cd_header[25] << 8);
 		unsigned short extra_length = cd_header[26] | (cd_header[27] << 8);
 		unsigned short comment_length = cd_header[28] | (cd_header[29] << 8);
 		unsigned int local_header_offset = cd_header[38] | (cd_header[39] << 8) |
-			(cd_header[40] << 16) | (cd_header[41] << 24);
+			(cd_header[40] << 16) | ((unsigned int)cd_header[41] << 24);
 
 		// Read filename
 		char filename[MAX_OSPATH];
