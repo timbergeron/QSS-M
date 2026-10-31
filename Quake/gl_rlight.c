@@ -509,10 +509,10 @@ static byte ReadByte(struct rctx_s *ctx)
 }
 static int ReadInt(struct rctx_s *ctx)
 {
-	int r = (int)ReadByte(ctx)<<0;
-		r|= (int)ReadByte(ctx)<<8;
-		r|= (int)ReadByte(ctx)<<16;
-		r|= (int)ReadByte(ctx)<<24;
+	unsigned int r = (unsigned int)ReadByte(ctx)<<0;
+		r|= (unsigned int)ReadByte(ctx)<<8;
+		r|= (unsigned int)ReadByte(ctx)<<16;
+		r|= (unsigned int)ReadByte(ctx)<<24;
 	return r;
 }
 static float ReadFloat(struct rctx_s *ctx)

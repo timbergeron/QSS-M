@@ -199,7 +199,7 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 #define SU_UNUSED28		(1<<28)
 #define SU_UNUSED29		(1<<29)
 #define SU_UNUSED30		(1<<30)
-#define SU_EXTEND3		(1<<31) // another byte to follow, future expansion
+#define SU_EXTEND3		(1u<<31) // another byte to follow, future expansion
 //johnfitz
 //spike dp crap
 #define DPSU_PUNCHVEC1		(1<<16)

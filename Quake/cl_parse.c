@@ -275,11 +275,11 @@ static unsigned int CLFTE_ReadDelta(unsigned int entnum, entity_state_t *news, c
 	
 	bits = MSG_ReadByte();
 	if (bits & UF_EXTEND1)
-		bits |= MSG_ReadByte()<<8;
+		bits |= (unsigned int)MSG_ReadByte()<<8;
 	if (bits & UF_EXTEND2)
-		bits |= MSG_ReadByte()<<16;
+		bits |= (unsigned int)MSG_ReadByte()<<16;
 	if (bits & UF_EXTEND3)
-		bits |= MSG_ReadByte()<<24;
+		bits |= (unsigned int)MSG_ReadByte()<<24;
 
 	if (cl_shownet.value >= 3)
 		Con_SafePrintf("%3i:     Update %4i 0x%x\n", msg_readcount, entnum, bits);
@@ -986,7 +986,7 @@ void CLFTE_ParseCSQCEntitiesUpdate(void)
 #define E5_UNUSED28 (1<<28)
 #define E5_UNUSED29 (1<<29)
 #define E5_UNUSED30 (1<<30)
-#define E5_EXTEND4 (1<<31)
+#define E5_EXTEND4 (1u<<31)
 
 #define E5_ALLUNUSED (E5_UNUSED27|E5_UNUSED28|E5_UNUSED29|E5_UNUSED30|E5_EXTEND4)
 #define E5_ALLUNSUPPORTED (E5_LIGHT|E5_GLOW|E5_GLOWMOD|E5_COMPLEXANIMATION)
@@ -996,12 +996,12 @@ static void CLDP_ReadDelta(unsigned int entnum, entity_state_t *s, const entity_
 	unsigned int bits = MSG_ReadByte();
 	if (bits & E5_EXTEND1)
 	{
-		bits |= MSG_ReadByte() << 8;
+		bits |= (unsigned int)MSG_ReadByte() << 8;
 		if (bits & E5_EXTEND2)
 		{
-			bits |= MSG_ReadByte() << 16;
+			bits |= (unsigned int)MSG_ReadByte() << 16;
 			if (bits & E5_EXTEND3)
-				bits |= MSG_ReadByte() << 24;
+				bits |= (unsigned int)MSG_ReadByte() << 24;
 		}
 	}
 	if (bits & (E5_ALLUNSUPPORTED|E5_ALLUNUSED))
@@ -1742,7 +1742,7 @@ If an entities model or origin changes from frame to frame, it must be
 relinked.  Other attributes can change without relinking.
 ==================
 */
-static void CL_ParseUpdate (int bits)
+static void CL_ParseUpdate (unsigned int bits)
 {
 	int		i;
 	qmodel_t	*model;
@@ -1760,16 +1760,16 @@ static void CL_ParseUpdate (int bits)
 	if (bits & U_MOREBITS)
 	{
 		i = MSG_ReadByte ();
-		bits |= (i<<8);
+		bits |= (unsigned int)i<<8;
 	}
 
 	//johnfitz -- PROTOCOL_FITZQUAKE
 	if (cl.protocol == PROTOCOL_FITZQUAKE || cl.protocol == PROTOCOL_RMQ)
 	{
 		if (bits & U_EXTEND1)
-			bits |= MSG_ReadByte() << 16;
+			bits |= (unsigned int)MSG_ReadByte() << 16;
 		if (bits & U_EXTEND2)
-			bits |= MSG_ReadByte() << 24;
+			bits |= (unsigned int)MSG_ReadByte() << 24;
 	}
 	//johnfitz
 
@@ -2019,15 +2019,15 @@ Spike -- tweaked this function to ensure float stats get set as well as int ones
 static void CL_ParseClientdata (void)
 {
 	int		i;
-	int		bits; //johnfitz
+	unsigned int	bits; //johnfitz
 
 	bits = (unsigned short)MSG_ReadShort (); //johnfitz -- read bits here isntead of in CL_ParseServerMessage()
 
 	//johnfitz -- PROTOCOL_FITZQUAKE
 	if (bits & SU_EXTEND1)
-		bits |= (MSG_ReadByte() << 16);
+		bits |= (unsigned int)MSG_ReadByte() << 16;
 	if (bits & SU_EXTEND2)
-		bits |= (MSG_ReadByte() << 24);
+		bits |= (unsigned int)MSG_ReadByte() << 24;
 	//johnfitz
 
 	if (cl.protocol != PROTOCOL_VERSION_DP7)

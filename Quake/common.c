@@ -1091,7 +1091,7 @@ int LongSwap (int l)
 	b3 = (l>>16)&255;
 	b4 = (l>>24)&255;
 
-	return ((int)b1<<24) + ((int)b2<<16) + ((int)b3<<8) + b4;
+	return ((unsigned int)b1<<24) + ((unsigned int)b2<<16) + ((unsigned int)b3<<8) + b4;
 }
 
 int LongNoSwap (int l)
