@@ -2584,7 +2584,7 @@ retry:
 	MSG_WriteString (&client->message, PR_GetString(qcvm->edicts->v.message));
 
 	//johnfitz -- only send the first 256 model and sound precaches if protocol is 15
-	for (i = 1,s = sv.model_precache+1 ; *s && i < client->limit_models; s++,i++)
+	for (i = 1,s = sv.model_precache+1 ; i < MAX_MODELS && i < client->limit_models && *s; s++,i++)
 		MSG_WriteString (&client->message, *s);
 	MSG_WriteByte (&client->message, 0);
 	client->signon_models = i;
@@ -2592,7 +2592,7 @@ retry:
 	//Spike: if we have svc_precache then use it for sounds. this reduces the stress on the serverinfo message size.
 	if (host_client->protocol_pext2 && truncated)
 		i=1;	//we tried, it didn't fit.
-	else for (i = 1, s = sv.sound_precache+1 ; *s && i < client->limit_sounds; s++,i++)
+	else for (i = 1, s = sv.sound_precache+1 ; i < MAX_SOUNDS && i < client->limit_sounds && *s; s++,i++)
 		MSG_WriteString (&client->message, *s);
 	MSG_WriteByte (&client->message, 0);
 	client->signon_sounds = i;
@@ -2682,7 +2682,7 @@ retry:
 	}
 	if (client->limit_models < MAX_MODELS && sv.model_precache[client->limit_models])
 	{
-		for (i = client->limit_models; sv.model_precache[i]; i++);
+		for (i = client->limit_models; i < MAX_MODELS && sv.model_precache[i]; i++);
 		Con_Warning("Protocol limitation (models) for %s (%i / %i)\n", NET_QSocketGetTrueAddressString(client->netconnection), client->limit_models, i);
 		MSG_WriteByte (&client->message, svc_print);
 		MSG_WriteByte (&client->message, 2);
@@ -2692,7 +2692,7 @@ retry:
 	}
 	if (client->limit_sounds < MAX_SOUNDS && sv.sound_precache[client->limit_sounds])
 	{
-		for (i = client->limit_sounds; sv.sound_precache[i]; i++);
+		for (i = client->limit_sounds; i < MAX_SOUNDS && sv.sound_precache[i]; i++);
 		Con_Warning("Protocol limitation (sounds) for %s\n", NET_QSocketGetTrueAddressString(client->netconnection));
 		MSG_WriteByte (&client->message, svc_print);
 		MSG_WriteByte (&client->message, 2);
@@ -4875,7 +4875,8 @@ static void SV_SpawnServer_Load (const char *server)
 	SV_Precache_Sound("items/suit2.wav");
 	sv.model_precache[0] = dummy;
 	sv.model_precache[1] = sv.modelname;
-	if (qcvm->worldmodel->numsubmodels > MAX_MODELS)
+	// Slot 0 is reserved; the world and inline models occupy slots 1 through numsubmodels.
+	if (qcvm->worldmodel->numsubmodels >= MAX_MODELS)
 	{
 		Con_Printf ("too many inline models %s\n", sv.modelname);
 		sv.active = false;

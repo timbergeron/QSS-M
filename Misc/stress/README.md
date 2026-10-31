@@ -42,6 +42,16 @@ accepts a JSON array of names scraped from a running engine. These checks measur
 synthetic typo coverage, not certainty about a user's intent. `CC` selects the
 compiler for both scripts.
 
+## Server precache bounds
+
+`python3 Misc/stress/test_server_precache_bounds.py` checks the production inline
+model limit, serverinfo catalog serialization and protocol warnings, QuakeC
+model/sound lookups, and final-slot registration with address and undefined
+behavior sanitizers. It covers empty, partial and full catalogs, preserving
+client limits and rejecting missing entries without reading adjacent fields.
+It requires a C compiler and SDL3; no window or game data is needed.
+Use `--baseline REV --case NAME` to reproduce an individual pre-fix failure.
+
 ## Requirements
 
 For chunked download pacing and standalone regression tests, see

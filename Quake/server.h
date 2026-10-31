@@ -61,9 +61,9 @@ typedef struct
 
 	char		name[64];			// map name
 	char		modelname[64];		// maps/<name>.bsp, for model_precache[0]
-	const char	*model_precache[MAX_MODELS];	// NULL terminated
+	const char	*model_precache[MAX_MODELS];	// may be full; bound scans by MAX_MODELS
 	struct qmodel_s	*models[MAX_MODELS];
-	const char	*sound_precache[MAX_SOUNDS];	// NULL terminated
+	const char	*sound_precache[MAX_SOUNDS];	// may be full; bound scans by MAX_SOUNDS
 	const char	*lightstyles[MAX_LIGHTSTYLES];
 	server_state_t	state;			// some actions are only valid during load
 
