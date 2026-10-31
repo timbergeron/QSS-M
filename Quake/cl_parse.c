@@ -2204,8 +2204,10 @@ static void CL_ParseStatic (int version) //johnfitz -- added a parameter
 	}
 
 	ent = cl.static_entities[i].ent;
-	cl.num_statics++;
 	CL_ParseBaseline (ent, version); //johnfitz -- added second parameter
+	if (msg_badread || ent->baseline.modelindex >= MAX_MODELS)
+		Host_Error ("CL_ParseStatic: invalid model index or truncated entity");
+	cl.num_statics++;
 
 // copy it to the current state
 
