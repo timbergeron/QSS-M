@@ -4685,6 +4685,7 @@ typedef struct
 	qboolean pun_map1, pun_map3, pun_map5;
 	qboolean rrp_locust, rrp_mfxsp19, rrp_telefragged;
 	qboolean qrt_adornesibley, qrt_radiatoryang, qrt_whark;
+	qboolean hj26_moko, hj26_pulsar, hj26_zetabyt;
 	qboolean libre_start, libre_end;
 	qboolean hip_demo1, hip_demo2, hip_demo3, hip_demo4;
 	qboolean rogue_end1, rogue_end2;
@@ -5005,6 +5006,12 @@ static void COM_DetectGameSignaturesInPak(const char *pak_path,
 			signatures->qrt_radiatoryang = true;
 		else if (COM_PackEntryNameEquals(entry.name, "maps/qrt_whark.bsp"))
 			signatures->qrt_whark = true;
+		else if (COM_PackEntryNameEquals(entry.name, "maps/mc_hj26_moko.bsp"))
+			signatures->hj26_moko = true;
+		else if (COM_PackEntryNameEquals(entry.name, "maps/mc_hj26_pulsar.bsp"))
+			signatures->hj26_pulsar = true;
+		else if (COM_PackEntryNameEquals(entry.name, "maps/mc_hj26_zetabyt.bsp"))
+			signatures->hj26_zetabyt = true;
 		else if (COM_PackEntryNameEquals(entry.name, "maps/lq_e0m1.bsp"))
 			signatures->libre_start = true;
 		else if (COM_PackEntryNameEquals(entry.name, "maps/lq_end.bsp"))
@@ -5137,6 +5144,9 @@ qboolean COM_DetectGameDescription(const char *game, char *description,
 	signatures.qrt_radiatoryang |=
 		COM_GamePathIsFile(game_path, "maps/qrt_radiatoryang.bsp");
 	signatures.qrt_whark |= COM_GamePathIsFile(game_path, "maps/qrt_whark.bsp");
+	signatures.hj26_moko |= COM_GamePathIsFile(game_path, "maps/mc_hj26_moko.bsp");
+	signatures.hj26_pulsar |= COM_GamePathIsFile(game_path, "maps/mc_hj26_pulsar.bsp");
+	signatures.hj26_zetabyt |= COM_GamePathIsFile(game_path, "maps/mc_hj26_zetabyt.bsp");
 	/* DMD ships its maps loose rather than in a PAK. */
 	signatures.dmd_map1 |= COM_GamePathIsFile(game_path, "maps/dmd1.bsp");
 	signatures.dmd_map6 |= COM_GamePathIsFile(game_path, "maps/dmd6.bsp");
@@ -5201,6 +5211,9 @@ qboolean COM_DetectGameDescription(const char *game, char *description,
 	else if (signatures.qrt_adornesibley && signatures.qrt_radiatoryang &&
 		signatures.qrt_whark)
 		q_strlcpy(description, "Rooftops Jam", description_size);
+	else if (signatures.hj26_moko && signatures.hj26_pulsar &&
+		signatures.hj26_zetabyt)
+		q_strlcpy(description, "Halloween Jam 2026", description_size);
 	/* Tremor reuses id1's map names (e1m1..e4m8), so its readme is the only
 	 * thing that distinguishes it from Quake itself or another replacement. */
 	else if ((size_t)q_snprintf(path, sizeof(path), "%s/tremor.txt",
