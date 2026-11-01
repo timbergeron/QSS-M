@@ -901,10 +901,14 @@ static const char *DiscordPresence_KnownModLabel(const char *mod)
 static const char *DiscordPresence_DetectedModLabel(const char *mod)
 {
 	char description[sizeof(discord_presence.mod_detection_description)];
+	static unsigned int metadata_revision;
+	unsigned int revision = M_ModMetadata_Revision();
 
 	if (!discord_presence.mod_detection_cached ||
+		metadata_revision != revision ||
 		strcmp(discord_presence.mod_detection_key, mod))
 	{
+		metadata_revision = revision;
 		discord_presence.mod_detection_cached = true;
 		q_strlcpy(discord_presence.mod_detection_key, mod,
 			sizeof(discord_presence.mod_detection_key));

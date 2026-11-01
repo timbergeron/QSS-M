@@ -38090,6 +38090,20 @@ static struct
 	char				error[128];
 } downloadmodsfetch;
 
+typedef struct
+{
+	char install_dir[MAX_QPATH];
+	char title[128];
+} modmetadataitem_t;
+
+static modmetadataitem_t *modmetadata_items;
+static unsigned int modmetadata_revision;
+static qboolean modmetadata_initialized;
+static char modmetadata_source[DOWNLOAD_MODS_MAX_URL];
+
+static void M_ModMetadata_EnsureSource(void);
+static void M_ModMetadata_RefreshDescriptions(void);
+static void M_DownloadMods_RebuildVisibleList(void);
 static void M_DownloadMods_StartFetch(qboolean force);
 static void M_DownloadMods_PollFetch(void);
 static void M_DownloadMods_ShutdownFetch(void);
@@ -38456,6 +38470,7 @@ static void M_DownloadMods_Init(void)
 	qboolean source_ok;
 	qboolean keep_items;
 
+	M_ModMetadata_EnsureSource();
 	source_ok = M_DownloadMods_ManifestUrl(manifest_url, sizeof(manifest_url));
 	if (!source_ok)
 		manifest_url[0] = '\0';
@@ -40205,6 +40220,18 @@ void M_DownloadMods_Frame(void)
 	qofs_t file_size;
 	SDL_Thread *thread = NULL;
 
+	static unsigned int metadata_revision;
+
+	if (isDedicated)
+		return;
+	M_ModMetadata_EnsureSource();
+	M_DownloadMods_PollFetch();
+	if (metadata_revision != modmetadata_revision)
+	{
+		metadata_revision = modmetadata_revision;
+		M_ModMetadata_RefreshDescriptions();
+	}
+
 	if (!downloadmodinstall.active || !downloadmodinstall.mutex)
 		return;
 
@@ -41362,6 +41389,204 @@ done:
 	return valid;
 }
 
+/* Titles are independent of installable assets: metadata-only entries need
+ * just install_dir and title. description remains downloader detail text.
+ * Build a replacement first so a bad response never loses the last good list. */
+static qboolean M_ModMetadata_ApplyJson(const char *text)
+{
+	json_t *json = JSON_Parse(text);
+	const jsonentry_t *array = NULL, *entry;
+	modmetadataitem_t *items = NULL;
+	qboolean valid = false;
+
+	if (!json || !json->root)
+		goto done;
+	if (json->root->type == JSON_ARRAY)
+		array = json->root;
+	else if (json->root->type == JSON_OBJECT)
+	{
+		array = JSON_Find(json->root, "mods", JSON_ARRAY);
+		if (!array)
+			array = JSON_Find(json->root, "downloads", JSON_ARRAY);
+	}
+	if (!array)
+		goto done;
+	for (entry = array->firstchild; entry; entry = entry->next)
+	{
+		modmetadataitem_t item;
+		const char *folder, *title;
+		size_t i, j;
+
+		if (entry->type != JSON_OBJECT)
+			continue;
+		folder = M_DownloadMods_ManifestString(entry, "install_dir", "folder", "directory");
+		if (!folder)
+			folder = JSON_FindString(entry, "id");
+		title = M_DownloadMods_ManifestString(entry, "title", "name", NULL);
+		if (!folder || !M_DownloadMods_InstallDirNameOkay(folder) ||
+			!title || !*title || strlen(folder) >= sizeof(item.install_dir) ||
+			strlen(title) >= sizeof(item.title))
+			continue;
+		/* Keep remote titles on one line in menus and rich presence. */
+		for (j = 0; title[j]; j++)
+			if ((unsigned char)title[j] < 32 || (unsigned char)title[j] == 127)
+				break;
+		if (title[j])
+			continue;
+		q_strlcpy(item.install_dir, folder, sizeof(item.install_dir));
+		q_strlcpy(item.title, title, sizeof(item.title));
+		for (i = 0; i < VEC_SIZE(items); i++)
+			if (!q_strcasecmp(items[i].install_dir, item.install_dir))
+				break;
+		if (i < VEC_SIZE(items))
+			items[i] = item;
+		else
+			VEC_PUSH(items, item);
+	}
+	if (!VEC_SIZE(items))
+		goto done;
+	VEC_FREE(modmetadata_items);
+	modmetadata_items = items;
+	items = NULL;
+	modmetadata_revision++;
+	valid = true;
+done:
+	VEC_FREE(items);
+	if (json)
+		JSON_Free(json);
+	return valid;
+}
+
+/* The first line binds the cached JSON to its exact configured source. Keep
+ * this outside gamedirs so changing mods never changes the cached catalogue. */
+static qboolean M_ModMetadata_CachePath(char *path, size_t size)
+{
+	const char *root = host_parms ? host_parms->userdir : NULL;
+	return root && *root && (size_t)q_snprintf(path, size,
+		"%s/modmetadata.cache", root) < size;
+}
+
+static void M_ModMetadata_SaveCache(const char *text)
+{
+	char path[MAX_OSPATH], temp[MAX_OSPATH];
+	FILE *file;
+	qboolean ok;
+
+	if (!M_ModMetadata_CachePath(path, sizeof(path)) ||
+		(size_t)q_snprintf(temp, sizeof(temp), "%s.tmp", path) >= sizeof(temp))
+		return;
+	file = fopen(temp, "wb");
+	if (!file)
+		return;
+	ok = fprintf(file, "%s\n%s", modmetadata_source, text) >= 0;
+	if (fclose(file) != 0)
+		ok = false;
+	if (ok)
+	{
+#ifdef _WIN32
+		ok = MoveFileExA(temp, path, MOVEFILE_REPLACE_EXISTING) != 0;
+#else
+		ok = rename(temp, path) == 0;
+#endif
+	}
+	if (!ok)
+		remove(temp);
+}
+
+static void M_ModMetadata_LoadCache(void)
+{
+	char path[MAX_OSPATH], source[DOWNLOAD_MODS_MAX_URL + 2];
+	char *text = NULL;
+	long size, start;
+	FILE *file;
+
+	if (!M_ModMetadata_CachePath(path, sizeof(path)))
+		return;
+	file = fopen(path, "rb");
+	if (!file)
+		return;
+	if (!fgets(source, sizeof(source), file))
+		goto done;
+	source[strcspn(source, "\r\n")] = '\0';
+	if (strcmp(source, modmetadata_source))
+		goto done;
+	start = ftell(file);
+	if (start < 0 || fseek(file, 0, SEEK_END) != 0 ||
+		(size = ftell(file)) <= start ||
+		size - start > DOWNLOAD_MODS_MAX_MANIFEST_BYTES ||
+		fseek(file, start, SEEK_SET) != 0)
+		goto done;
+	size -= start;
+	text = (char *)malloc((size_t)size + 1);
+	if (!text || fread(text, 1, (size_t)size, file) != (size_t)size)
+		goto done;
+	text[size] = '\0';
+	if (M_ModMetadata_ApplyJson(text))
+		M_DownloadMods_ApplyManifestJson(text, NULL);
+done:
+	free(text);
+	fclose(file);
+}
+
+static void M_ModMetadata_EnsureSource(void)
+{
+	char source[DOWNLOAD_MODS_MAX_URL];
+	qboolean source_ok = M_DownloadMods_ManifestUrl(source, sizeof(source));
+
+	if (!source_ok)
+		source[0] = '\0';
+	if (modmetadata_initialized && !strcmp(source, modmetadata_source))
+		return;
+	modmetadata_initialized = true;
+	q_strlcpy(modmetadata_source, source, sizeof(modmetadata_source));
+	VEC_FREE(modmetadata_items);
+	modmetadata_revision++;
+	M_DownloadMods_ClearItemsForSource(source, source_ok && CL_DownloadRepoIsQ1Tools());
+	if (source_ok)
+	{
+		M_ModMetadata_LoadCache();
+		M_DownloadMods_StartFetch(false);
+	}
+	M_DownloadMods_RebuildVisibleList();
+}
+
+unsigned int M_ModMetadata_Revision(void)
+{
+	M_ModMetadata_EnsureSource();
+	return modmetadata_revision;
+}
+
+qboolean M_ModMetadata_Description(const char *game, char *out, size_t outsize)
+{
+	size_t i;
+
+	if (!game || !out || !outsize)
+		return false;
+	M_ModMetadata_EnsureSource();
+	for (i = 0; i < VEC_SIZE(modmetadata_items); i++)
+		if (!q_strcasecmp(game, modmetadata_items[i].install_dir))
+		{
+			q_strlcpy(out, modmetadata_items[i].title, outsize);
+			return true;
+		}
+	return false;
+}
+
+static void M_ModMetadata_RefreshDescriptions(void)
+{
+	int i;
+
+	/* Closed menus may hold names from an older modlist scan. They rebuild
+	 * from current metadata on their next open. */
+	if (m_state != m_mods)
+		return;
+	for (i = 0; i < modsmenu.modcount; i++)
+		if (!modsmenu.items[i].download_menu)
+			COM_DetectGameDescription(modsmenu.items[i].name,
+				modsmenu.items[i].description, sizeof(modsmenu.items[i].description));
+	M_Mods_Refilter();
+}
+
 /* GET a URL and return a malloc'd copy of the response body, or NULL. */
 static char *M_DownloadMods_FetchUrl(const char *url, char *error,
 	size_t error_size)
@@ -41553,6 +41778,10 @@ static void M_DownloadMods_PollFetch(void)
 	}
 	else if (success && json)
 	{
+		if (M_ModMetadata_ApplyJson(json))
+		{
+			M_ModMetadata_SaveCache(json);
+		}
 		if (!M_DownloadMods_ApplyManifestJson(json, &added))
 			Con_DPrintf("Mod downloads manifest returned no valid entries\n");
 	}
@@ -41587,6 +41816,9 @@ static void M_DownloadMods_ShutdownFetch(void)
 	SDL_Thread *thread = NULL;
 	char *json = NULL;
 
+	VEC_FREE(modmetadata_items);
+	modmetadata_initialized = false;
+	modmetadata_revision++;
 	if (!mutex)
 		return;
 

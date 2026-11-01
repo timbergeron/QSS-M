@@ -510,6 +510,8 @@ void BookmarkData_Format (char* dest, size_t dest_size, const char* alias, qbool
 void M_CheckMods (void); // woods #modsmenu (iw)
 void M_DownloadMods_Frame(void); // woods #moddownloads
 void M_DownloadMods_Shutdown(void); // woods #moddownloads
+qboolean M_ModMetadata_Description(const char *game, char *out, size_t outsize);
+unsigned int M_ModMetadata_Revision(void);
 
 extern cvar_t	gl_lightning_alpha; // woods #lightalpha
 float R_LightningAlphaForModel(const qmodel_t* model); // woods #lightalpha

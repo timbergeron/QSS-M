@@ -5109,6 +5109,9 @@ qboolean COM_DetectGameDescription(const char *game, char *description,
 			fclose(file);
 		}
 	}
+	if (M_ModMetadata_Description(game, description, description_size))
+		return true;
+
 	memset(&signatures, 0, sizeof(signatures));
 	for (pak_dir = 0; pak_dir < (int)Q_COUNTOF(pak_dirs); ++pak_dir)
 	{

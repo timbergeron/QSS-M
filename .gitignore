@@ -35,6 +35,8 @@ out
 /*.dem
 /Quake/qconsole.log
 /Quake/history.txt
+modmetadata.cache
+modmetadata.cache.tmp
 /Mods/
 
 # Local assistant state and deferred work
