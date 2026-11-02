@@ -1694,6 +1694,8 @@ void SCR_DrawClock (void)
 		}
 		case 2:
 				strftime(str, sizeof(str), "%I:%M %p", loct);
+			if (str[0] == '0')
+				memmove(str, str + 1, strlen(str));
 			break;
 		case 3:
 				strftime(str, sizeof(str), "%X", loct);
@@ -1703,6 +1705,8 @@ void SCR_DrawClock (void)
 			break;
 		case 5:
 			strftime(str, sizeof(str), "%m/%d/%Y %I:%M %p", loct);
+			if (str[11] == '0')
+				memmove(str + 11, str + 12, strlen(str + 11));
 			break;
 		case 6:
 			strftime(str, sizeof(str), "%m/%d/%Y %X", loct);
@@ -1711,7 +1715,11 @@ void SCR_DrawClock (void)
 			if (sb_showscores)
 				strftime(str, sizeof(str), "%m/%d/%y", loct);
 			else
+			{
 				strftime(str, sizeof(str), "%I:%M %p", loct);
+				if (str[0] == '0')
+					memmove(str, str + 1, strlen(str));
+			}
 			break;
 		case 8:
 			if (sb_showscores)
