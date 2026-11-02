@@ -1179,6 +1179,7 @@ void NET_PortPingProbe_Frame(void)
 	if (status == PORTPINGPROBE_COMPLETED)
 	{
 		char display_addr[MAX_SERVER_ADDRESS_LEN * 2];
+		qboolean keep_connection;
 		NET_HostnameCache_FormatDetailedDisplay(ctx->connect_addr, net_hostport,
 			display_addr, sizeof(display_addr));
 		portpingprobe_result.valid = true;
@@ -1198,7 +1199,12 @@ void NET_PortPingProbe_Frame(void)
 		portpingprobe_result.best_socket = ctx->best_socket;
 		ctx->best_socket = INVALID_SOCKET;
 
-		if (!portpingprobe_result.resolution_failed &&
+		keep_connection = cls.state == ca_connected && !portpingprobe_result.has_target;
+		if (keep_connection)
+		{
+			Con_Printf("Port probe completed: no stable network endpoint found; keeping current connection\n");
+		}
+		else if (!portpingprobe_result.resolution_failed &&
 			!portpingprobe_result.has_target)
 		{
 			Con_Printf("Port probe completed: no stable network endpoint found; falling back to normal connection selection\n");
@@ -1218,7 +1224,13 @@ void NET_PortPingProbe_Frame(void)
 				net_landrivers[ctx->landriver].name, ctx->responsive_ports);
 		}
 
-		Cbuf_AddText(va("connect \"%s\"\n", ctx->connect_addr));
+		if (keep_connection)
+		{
+			NET_PortPingProbe_ClearResult();
+			SDL_SetAtomicInt(&portpingprobe_status, PORTPINGPROBE_IDLE);
+		}
+		else
+			Cbuf_AddText(va("connect \"%s\"\n", ctx->connect_addr));
 	}
 	else
 	{
