@@ -186,6 +186,7 @@ typedef struct portpingprobe_ctx_s
 	int total_work;
 	unsigned long delay_ms;
 	int landriver;
+	qboolean background;	// re-probing the server we are already connected to
 	char connect_addr[NET_NAMELEN];
 	char resolve_address[MAX_SERVER_ADDRESS_LEN + 16];
 	struct qsockaddr target_addr;
@@ -1018,7 +1019,7 @@ finished:
 	return 0;
 }
 
-qboolean NET_PortPingProbe_Start(const char *connect_addr)
+qboolean NET_PortPingProbe_Start(const char *connect_addr, qboolean background)
 {
 	portpingprobe_ctx_t *ctx;
 	char display_addr[MAX_SERVER_ADDRESS_LEN * 2];
@@ -1054,6 +1055,7 @@ qboolean NET_PortPingProbe_Start(const char *connect_addr)
 		q_min(num_probes, PORTPINGPROBE_FINALISTS) * port_probes;
 	ctx->delay_ms = cl_portpingprobe_delay.value > 0 ? (unsigned long)cl_portpingprobe_delay.value : 0;
 	ctx->landriver = -1;
+	ctx->background = background;
 	memset(&ctx->target_addr, 0, sizeof(ctx->target_addr));
 	control = BigLong(NETFLAG_CTL | ((int)sizeof(ctx->serverinfo_packet) & NETFLAG_LENGTH_MASK));
 	memcpy(ctx->serverinfo_packet, &control, sizeof(control));
@@ -1199,7 +1201,10 @@ void NET_PortPingProbe_Frame(void)
 		portpingprobe_result.best_socket = ctx->best_socket;
 		ctx->best_socket = INVALID_SOCKET;
 
-		keep_connection = cls.state == ca_connected && !portpingprobe_result.has_target;
+		// Only a background re-probe has a connection worth keeping; a pre-connect
+		// probe still runs while connected to the server being left.
+		keep_connection = ctx->background && cls.state == ca_connected &&
+			!portpingprobe_result.has_target;
 		if (keep_connection)
 		{
 			Con_Printf("Port probe completed: no stable network endpoint found; keeping current connection\n");

@@ -620,7 +620,7 @@ static qboolean CL_HandlePortPingProbe(const char *target)
 
 	probe_status = NET_PortPingProbe_GetStatus();
 	if (probe_status == PORTPINGPROBE_IDLE)
-		return NET_PortPingProbe_Start(target);
+		return NET_PortPingProbe_Start(target, false);
 
 	if (probe_status == PORTPINGPROBE_PROBING || probe_status == PORTPINGPROBE_ABORT)
 	{
@@ -633,7 +633,7 @@ static qboolean CL_HandlePortPingProbe(const char *target)
 	if (probe_status == PORTPINGPROBE_COMPLETED)
 	{
 		if (!NET_PortPingProbe_ConsumeCompleted(target))
-			return NET_PortPingProbe_Start(target);
+			return NET_PortPingProbe_Start(target, false);
 		if (NET_PortPingProbe_GetMode() == 1)
 			cl_portpingprobe_reconnecting = true;
 	}
@@ -1176,7 +1176,7 @@ void CL_SignonReply (void)
 			if (NET_PortPingProbe_GetMode() == 1 &&
 				NET_PortPingProbe_GetStatus() == PORTPINGPROBE_IDLE)
 			{
-				NET_PortPingProbe_Start(cl_portpingprobe_pending_host);
+				NET_PortPingProbe_Start(cl_portpingprobe_pending_host, true);
 			}
 			cl_portpingprobe_pending_host[0] = '\0';
 		}

@@ -191,7 +191,7 @@ qboolean NET_PortPingProbe_IsEnabled(void);
 int NET_PortPingProbe_GetMode(void);
 portpingprobe_status_t NET_PortPingProbe_GetStatus(void);
 int NET_PortPingProbe_GetProgress(void);
-qboolean NET_PortPingProbe_Start(const char *connect_addr);
+qboolean NET_PortPingProbe_Start(const char *connect_addr, qboolean background);
 void NET_PortPingProbe_RequestAbort(void);
 void NET_PortPingProbe_RequestAbortQuietly(void);
 void NET_PortPingProbe_Frame(void);
