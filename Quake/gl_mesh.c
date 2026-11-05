@@ -109,8 +109,8 @@ void GL_MakeAliasModelDisplayLists (qmodel_t *m, aliashdr_t *paliashdr)
 			if (!remap[v])
 			{
 				// basic s/t coords
-				int s = stverts[vertindex].s;
-				int t = stverts[vertindex].t;
+				double s = stverts[vertindex].s;
+				double t = stverts[vertindex].t;
 
 				// check for back side and adjust texcoord s
 				if (v & 1)
@@ -140,7 +140,7 @@ void GL_MakeAliasModelDisplayLists (qmodel_t *m, aliashdr_t *paliashdr)
 			for (j=0 ; j<paliashdr->numverts_vbo ; j++)
 			{
 				verts[i*paliashdr->numverts_vbo*2 + j] = poseverts_mdl[i][desc[j].vertindex];
-				verts[i*paliashdr->numverts_vbo*2 + j + paliashdr->numverts_vbo] = poseverts_mdl[i][desc[j].vertindex + paliashdr->numverts_vbo];
+				verts[i*paliashdr->numverts_vbo*2 + j + paliashdr->numverts_vbo] = poseverts_mdl[i][desc[j].vertindex + paliashdr->numverts];
 			}
 		break;
 	case PV_QUAKE1:
@@ -270,6 +270,7 @@ void GLMesh_LoadVertexBuffer (qmodel_t *m, aliashdr_t *mainhdr)
 
 				for (v = 0; v < hdr->numverts_vbo; v++, tv++)
 				{
+					int normalindex = tv->lightnormalindex < NUMVERTEXNORMALS ? tv->lightnormalindex : 0;
 					xyz[v].xyz[0] = tv->v[0];
 					xyz[v].xyz[1] = tv->v[1];
 					xyz[v].xyz[2] = tv->v[2];
@@ -278,9 +279,9 @@ void GLMesh_LoadVertexBuffer (qmodel_t *m, aliashdr_t *mainhdr)
 					// map the normal coordinates in [-1..1] to [-127..127] and store in an unsigned char.
 					// this introduces some error (less than 0.004), but the normals were very coarse
 					// to begin with
-					xyz[v].normal[0] = 127 * r_avertexnormals[tv->lightnormalindex][0];
-					xyz[v].normal[1] = 127 * r_avertexnormals[tv->lightnormalindex][1];
-					xyz[v].normal[2] = 127 * r_avertexnormals[tv->lightnormalindex][2];
+					xyz[v].normal[0] = 127 * r_avertexnormals[normalindex][0];
+					xyz[v].normal[1] = 127 * r_avertexnormals[normalindex][1];
+					xyz[v].normal[2] = 127 * r_avertexnormals[normalindex][2];
 					xyz[v].normal[3] = 0;	// unused; for 4-byte alignment
 				}
 			}
@@ -295,17 +296,18 @@ void GLMesh_LoadVertexBuffer (qmodel_t *m, aliashdr_t *mainhdr)
 
 				for (v = 0; v < hdr->numverts_vbo; v++, tv++)
 				{
+					int normalindex = tv->lightnormalindex < NUMVERTEXNORMALS ? tv->lightnormalindex : 0;
 					xyz[v].xyz[0] = (tv->v[0]<<8) | tv[hdr->numverts_vbo].v[0];
-					xyz[v].xyz[1] = (tv->v[1]<<8) | tv[hdr->numverts_vbo].v[0];
-					xyz[v].xyz[2] = (tv->v[2]<<8) | tv[hdr->numverts_vbo].v[0];
+					xyz[v].xyz[1] = (tv->v[1]<<8) | tv[hdr->numverts_vbo].v[1];
+					xyz[v].xyz[2] = (tv->v[2]<<8) | tv[hdr->numverts_vbo].v[2];
 					xyz[v].xyz[3] = 1;	// need w 1 for 4 byte vertex compression
 
 					// map the normal coordinates in [-1..1] to [-127..127] and store in an unsigned char.
 					// this introduces some error (less than 0.004), but the normals were very coarse
 					// to begin with
-					xyz[v].normal[0] = 127 * r_avertexnormals[tv->lightnormalindex][0];
-					xyz[v].normal[1] = 127 * r_avertexnormals[tv->lightnormalindex][1];
-					xyz[v].normal[2] = 127 * r_avertexnormals[tv->lightnormalindex][2];
+					xyz[v].normal[0] = 127 * r_avertexnormals[normalindex][0];
+					xyz[v].normal[1] = 127 * r_avertexnormals[normalindex][1];
+					xyz[v].normal[2] = 127 * r_avertexnormals[normalindex][2];
 					xyz[v].normal[3] = 0;	// unused; for 4-byte alignment
 				}
 			}

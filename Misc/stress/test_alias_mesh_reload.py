@@ -45,11 +45,26 @@ GLuint GL_GenBufferName(void) { static GLuint name; return ++name; }
 void GL_ClearBufferBindings(void) {}
 int TexMgr_PadConditional(int n) { return n; }
 void Sys_Error(const char *fmt, ...) { (void)fmt; abort(); }
+stvert_t stverts[MAXALIASVERTS];
+mtriangle_t *triangles;
+trivertx_t *poseverts_mdl[MAXALIASFRAMES];
+static union { max_align_t align; byte bytes[8192]; } hunk;
+static int hunk_used;
+int Hunk_LowMark(void) { return hunk_used; }
+void Hunk_FreeToLowMark(int mark) { hunk_used = mark; }
+void *Hunk_Alloc(int bytes) {
+    void *p = hunk.bytes + hunk_used;
+    hunk_used += (bytes + 15) & ~15;
+    assert((size_t)hunk_used <= sizeof(hunk.bytes)); memset(p, 0, bytes); return p;
+}
+void *Hunk_AllocNoFill(int bytes) { return Hunk_Alloc(bytes); }
 #define malloc tracked_malloc
 #define free tracked_free
 '''
 source += function('static size_t GLMesh_CheckedSize (')
 source += function('static void GLMesh_AddCheckedSize (')
+source += function('static int GLMesh_CheckedHunkSize (')
+source += function('void GL_MakeAliasModelDisplayLists (')
 source += (function('void GLMesh_LoadVertexBuffer (')
            .replace('GL_DeleteBuffersFunc', 'mock_delete')
            .replace('GL_BindBufferFunc', 'mock_bind')
@@ -60,10 +75,38 @@ source += r'''
 struct fixture {
     aliashdr_t hdr;
     aliasmesh_t desc[3];
-    trivertx_t vertices[3];
+    trivertx_t vertices[6];
     unsigned short indices[3];
 };
+static void check_seam_mesh(void) {
+    aliashdr_t *h = Hunk_Alloc(sizeof(*h));
+    h->poseverttype = PV_QUAKEFORGE;
+    h->numverts = 3; h->numtris = 2; h->nummorphposes = 1;
+    h->skinwidth = 4; h->skinheight = 1;
+    mtriangle_t faces[2] = {0}; triangles = faces;
+    faces[0].facesfront = 1;
+    for (int f=0; f<2; f++) for (int v=0; v<3; v++) faces[f].vertindex[v] = v;
+    stverts[0].onseam = 1; stverts[0].s = INT_MAX;
+    trivertx_t *pose = calloc(6, sizeof(*pose)); poseverts_mdl[0] = pose;
+    for (int v=0; v<6; v++) for (int axis=0; axis<3; axis++) pose[v].v[axis] = 10*v + axis;
+    GL_MakeAliasModelDisplayLists(NULL, h);
+    assert(h->numverts_vbo == 4);
+    aliasmesh_t *desc = (aliasmesh_t *)((byte *)h + h->meshdesc);
+    trivertx_t *out = (trivertx_t *)((byte *)h + h->vertexes);
+    assert(desc[3].st[0] >= (double)INT_MAX);
+    for (int v=0; v<4; v++) {
+        assert(!memcmp(&out[v], &pose[desc[v].vertindex], sizeof(*pose)));
+        assert(!memcmp(&out[v+4], &pose[desc[v].vertindex+3], sizeof(*pose)));
+    }
+    qmodel_t model = {0};
+    GLMesh_LoadVertexBuffer(&model, h);
+    meshxyz_mdl16_t *xyz = (meshxyz_mdl16_t *)model.meshvboptr;
+    for (int v=0; v<4; v++) for (int a=0; a<3; a++)
+        assert(xyz[v].xyz[a] == ((pose[desc[v].vertindex].v[a]<<8) | pose[desc[v].vertindex+3].v[a]));
+    tracked_free(model.meshvboptr); tracked_free(model.meshindexesvboptr); free(pose);
+}
 int main(void) {
+    check_seam_mesh();
     struct fixture f = {0};
     qmodel_t model = {0};
     f.hdr.poseverttype = PV_QUAKE1;
@@ -83,6 +126,20 @@ int main(void) {
         assert(model.meshvboptr[0] == 10);
         assert(!memcmp(model.meshindexesvboptr, f.indices, sizeof(f.indices)));
     }
+    // Both MDL formats must map invalid normal bytes to normal zero.
+    f.vertices[1].lightnormalindex = 162;
+    f.vertices[2].lightnormalindex = 255;
+    for (int format = 0; format < 2; format++) {
+        f.hdr.poseverttype = format ? PV_QUAKEFORGE : PV_QUAKE1;
+        GLMesh_LoadVertexBuffer(&model, &f.hdr);
+        for (int v = 0; v < 3; v++) {
+            if (format)
+                assert(((meshxyz_mdl16_t *)model.meshvboptr)[v].normal[2] == 127);
+            else
+                assert(((meshxyz_mdl_t *)model.meshvboptr)[v].normal[2] == 127);
+        }
+    }
+    f.hdr.poseverttype = PV_QUAKE1;
     gl_vbo_able = true;
     GLMesh_LoadVertexBuffer(&model, &f.hdr);
     assert(live == 0 && !model.meshvboptr && !model.meshindexesvboptr);
@@ -92,7 +149,7 @@ int main(void) {
     assert(live == 2 && model.meshvboptr && model.meshindexesvboptr);
     tracked_free(model.meshvboptr); tracked_free(model.meshindexesvboptr);
     assert(live == 0);
-    puts("PASS: 1000 real mesh rebuilds preserve bytes, keep two CPU buffers, and free them on VBO transitions");
+    puts("PASS: 1000 real mesh rebuilds preserve bytes, keep two CPU buffers, and free them on VBO transitions; QuakeForge seam duplication, XYZ precision, extreme UVs and invalid normals");
 }
 '''
 with tempfile.TemporaryDirectory(prefix='qssm-mesh-reload-') as directory:
