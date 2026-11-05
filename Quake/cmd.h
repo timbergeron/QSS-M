@@ -54,6 +54,17 @@ void Cbuf_InsertText (const char *text);
 // inserted at the beginning of the buffer, before any remaining unexecuted
 // commands.
 
+// woods #remotecmd -- command origin tracking. Text that came from a server
+// (stufftext, demos) or from CSQC stays marked as untrusted through the
+// buffer, aliases it defines or runs, binds it sets and files it execs.
+// The plain Cbuf_* functions inherit the current execution context.
+void Cbuf_AddTextUntrusted (const char *text);
+void Cbuf_AddTextLenUntrusted (const char *text, int l);
+qboolean Cmd_IsUntrusted (void);	// true while server/CSQC-originated commands run
+int Cmd_EnterUntrusted (void);		// returns the previous state for Cmd_LeaveUntrusted
+void Cmd_LeaveUntrusted (int previous);
+void Cmd_ResetUntrusted (void);		// error recovery: unwound commands can't restore it
+
 void Cbuf_Execute (void);
 // Pulls off \n terminated lines of text from the command buffer and sends
 // them through Cmd_ExecuteString.  Stops when the buffer is empty.

@@ -52,6 +52,10 @@ keydest_t	key_dest;
 
 int			key_bindmap[2] = {0,1};
 char		*keybindings[MAX_BINDMAPS][MAX_KEYS];
+// woods #remotecmd -- binds set by a server or CSQC run as untrusted, and the
+// config keeps the user's own binding for that key instead of the server's
+static qboolean	keybinding_untrusted[MAX_BINDMAPS][MAX_KEYS];
+static char		*keybinding_saved[MAX_BINDMAPS][MAX_KEYS];
 qboolean	consolekeys[MAX_KEYS];	// if true, can't be rebound while in console
 qboolean	menubound[MAX_KEYS];	// if true, can't be rebound while in menu
 qboolean	keydown[MAX_KEYS];
@@ -2503,17 +2507,41 @@ const char *Key_KeynumToFriendlyString (int keynum)
 	return Key_KeynumToString(keynum);
 }
 
-static const char *Key_GetEffectiveBinding (int keynum)
+static const char *Key_GetEffectiveBindingOrigin (int keynum, qboolean *untrusted)
 {
+	int i, map;
+
+	if (untrusted)
+		*untrusted = false;
 	if (keynum < 0 || keynum >= MAX_KEYS)
 		return NULL;
 
-	if (key_bindmap[0] >= 0 && key_bindmap[0] < MAX_BINDMAPS && keybindings[key_bindmap[0]][keynum])
-		return keybindings[key_bindmap[0]][keynum];
-	if (key_bindmap[1] >= 0 && key_bindmap[1] < MAX_BINDMAPS && keybindings[key_bindmap[1]][keynum])
-		return keybindings[key_bindmap[1]][keynum];
+	for (i = 0; i < 2; i++)
+	{
+		map = key_bindmap[i];
+		if (map >= 0 && map < MAX_BINDMAPS && keybindings[map][keynum])
+		{
+			if (untrusted)
+				*untrusted = keybinding_untrusted[map][keynum];
+			return keybindings[map][keynum];
+		}
+	}
 
 	return NULL;
+}
+
+static const char *Key_GetEffectiveBinding (int keynum)
+{
+	return Key_GetEffectiveBindingOrigin (keynum, NULL);
+}
+
+// woods #remotecmd -- queue a binding's text with the origin of whoever bound it
+static void Key_AddBindingText (const char *text, qboolean untrusted)
+{
+	if (untrusted)
+		Cbuf_AddTextUntrusted (text);
+	else
+		Cbuf_AddText (text);
 }
 
 static qboolean Key_IsAltModifierBinding (const char *binding)
@@ -2645,6 +2673,26 @@ void Key_SetBinding (int keynum, const char *binding, int bindmap)
 		return;
 	if (bindmap < 0 || bindmap >= MAX_BINDMAPS)
 		return;
+
+	// woods #remotecmd -- remember the user's binding the first time a server
+	// replaces it; any local change makes the key the user's again
+	if (Cmd_IsUntrusted ())
+	{
+		if (!keybinding_untrusted[bindmap][keynum])
+		{
+			keybinding_saved[bindmap][keynum] = keybindings[bindmap][keynum] ? Z_Strdup (keybindings[bindmap][keynum]) : NULL;
+			keybinding_untrusted[bindmap][keynum] = true;
+		}
+	}
+	else
+	{
+		if (keybinding_saved[bindmap][keynum])
+		{
+			Z_Free (keybinding_saved[bindmap][keynum]);
+			keybinding_saved[bindmap][keynum] = NULL;
+		}
+		keybinding_untrusted[bindmap][keynum] = false;
+	}
 
 // free old bindings
 	if (keybindings[bindmap][keynum])
@@ -2862,12 +2910,14 @@ void Key_WriteBindings (FILE *f)
 	{
 		for (i = 0; i < MAX_KEYS; i++)
 		{
-			if (keybindings[bindmap][i] && *keybindings[bindmap][i])
+			// woods #remotecmd -- never persist a server's bind as if the user made it
+			const char *b = keybinding_untrusted[bindmap][i] ? keybinding_saved[bindmap][i] : keybindings[bindmap][i];
+			if (b && *b)
 			{
 				if (bindmap)
-					fprintf (f, "in_bind %i \"%s\" \"%s\"\n", bindmap, Key_KeynumToString(i), keybindings[bindmap][i]);
+					fprintf (f, "in_bind %i \"%s\" \"%s\"\n", bindmap, Key_KeynumToString(i), b);
 				else
-					fprintf (f, "bind \"%s\" \"%s\"\n", Key_KeynumToString(i), keybindings[bindmap][i]);
+					fprintf (f, "bind \"%s\" \"%s\"\n", Key_KeynumToString(i), b);
 			}
 		}
 	}
@@ -3337,10 +3387,26 @@ qboolean Menu_HandleKeyEvent(qboolean down, int keyc, int unic)
 	}
 	return inhibit;
 }
+// woods #remotecmd -- key-ups reach CSQC outside the game so it never sees a
+// stuck key, but only for keys it saw go down: otherwise every key released
+// while typing in the console (rcon_password included) would reach CSQC
+static qboolean csqc_keydown[MAX_KEYS];
+
 qboolean CSQC_HandleKeyEvent(qboolean down, int keyc, int unic)
 {
 	qboolean inhibit = false;
-	if (cl.qcvm.extfuncs.CSQC_InputEvent && (key_dest == key_game || !down))
+	qboolean deliver = false;
+
+	if (cl.qcvm.extfuncs.CSQC_InputEvent && keyc >= 0 && keyc < MAX_KEYS)
+	{
+		if (down)
+			deliver = key_dest == key_game;
+		else
+			deliver = key_dest == key_game || csqc_keydown[keyc];
+		if (deliver)
+			csqc_keydown[keyc] = down;
+	}
+	if (deliver)
 	{
 		PR_SwitchQCVM(&cl.qcvm);
 		G_FLOAT(OFS_PARM0) = down?CSIE_KEYDOWN:CSIE_KEYUP;
@@ -3441,6 +3507,7 @@ not necessarily the US-keyboard-based scancode. Pass 0 if not applicable.
 void Key_EventWithKeycode (int key, qboolean down, int keycode)
 {
 	const char	*kb;
+	qboolean	kb_untrusted = false;	// woods #remotecmd
 	char	cmd[1024];
 	qboolean wasdown;  // woods #printscreen
 
@@ -3926,11 +3993,11 @@ void Key_EventWithKeycode (int key, qboolean down, int keycode)
 // downs can be matched with ups
 	if (!down)
 	{
-		kb = Key_GetEffectiveBinding(key);
+		kb = Key_GetEffectiveBindingOrigin(key, &kb_untrusted);
 		if (kb && kb[0] == '+')
 		{
 			q_snprintf (cmd, sizeof(cmd), "-%s %i\n", kb+1, key);
-			Cbuf_AddText (cmd);
+			Key_AddBindingText (cmd, kb_untrusted);
 		}
 		return;
 	}
@@ -3950,18 +4017,18 @@ void Key_EventWithKeycode (int key, qboolean down, int keycode)
 	    (key_dest == key_console && !consolekeys[key]) ||
 	    (key_dest == key_game && (!con_forcedup || !consolekeys[key])))
 	{
-		kb = Key_GetEffectiveBinding(key);
+		kb = Key_GetEffectiveBindingOrigin(key, &kb_untrusted);
 		if (kb)
 		{
 			if (kb[0] == '+')
 			{	// button commands add keynum as a parm
 				q_snprintf (cmd, sizeof(cmd), "%s %i\n", kb, key);
-				Cbuf_AddText (cmd);
+				Key_AddBindingText (cmd, kb_untrusted);
 			}
 			else
 			{
-				Cbuf_AddText (kb);
-				Cbuf_AddText ("\n");
+				Key_AddBindingText (kb, kb_untrusted);
+				Key_AddBindingText ("\n", kb_untrusted);
 			}
 		}
 		//else if (key >= 200)

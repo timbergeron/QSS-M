@@ -38,6 +38,7 @@ typedef struct cmdalias_s
 	struct cmdalias_s	*next;
 	char	name[MAX_ALIAS_NAME];
 	char	*value;
+	qboolean	untrusted;	// woods #remotecmd -- defined by a server or CSQC
 } cmdalias_t;
 
 cmdalias_t	*cmd_alias;
@@ -82,6 +83,36 @@ static void Cmd_CfgMarker_f(void)
 */
 
 sizebuf_t	cmd_text;
+static byte	*cmd_text_untrusted;	// woods #remotecmd -- one origin mark per cmd_text byte
+static int	cmd_untrusted_depth;	// > 0 while server/CSQC-originated commands run
+
+/*
+============
+Cmd_IsUntrusted -- woods #remotecmd
+
+CSQC is server-supplied code, so anything it queues or changes is untrusted
+too. The command buffer itself always runs with no QC VM active.
+============
+*/
+qboolean Cmd_IsUntrusted (void)
+{
+	return cmd_untrusted_depth > 0 || (qcvm && qcvm == &cl.qcvm);
+}
+
+int Cmd_EnterUntrusted (void)
+{
+	return cmd_untrusted_depth++;
+}
+
+void Cmd_LeaveUntrusted (int previous)
+{
+	cmd_untrusted_depth = previous;
+}
+
+void Cmd_ResetUntrusted (void)
+{
+	cmd_untrusted_depth = 0;
+}
 
 /*
 ============
@@ -91,8 +122,28 @@ Cbuf_Init
 void Cbuf_Init (void)
 {
 	SZ_Alloc (&cmd_text, 1<<18);		// space for commands and script files. spike -- was 8192, but modern configs can be _HUGE_, at least if they contain lots of comments/docs for things.
+	cmd_text_untrusted = (byte *) Hunk_AllocName (cmd_text.maxsize, "cmd_origin");
 }
 
+// Appends raw bytes and their origin marks. Both buffers share cmd_text's
+// size, so check before writing either one; the text and marks never diverge.
+static qboolean Cbuf_WriteMarked (const void *text, int l, const byte *marks, qboolean untrusted)
+{
+	if (l < 0 || l >= cmd_text.maxsize - cmd_text.cursize)
+		return false;
+	if (marks)
+		memcpy (cmd_text_untrusted + cmd_text.cursize, marks, l);
+	else
+		memset (cmd_text_untrusted + cmd_text.cursize, untrusted ? 1 : 0, l);
+	SZ_Write (&cmd_text, text, l);
+	return true;
+}
+
+static void Cbuf_AddTextOrigin (const char *text, int l, qboolean untrusted)
+{
+	if (!Cbuf_WriteMarked (text, l, NULL, untrusted))
+		Con_Printf ("Cbuf_AddText: overflow\n");
+}
 
 /*
 ============
@@ -103,27 +154,19 @@ Adds command text at the end of the buffer
 */
 void Cbuf_AddText (const char *text)
 {
-	int		l;
-
-	l = Q_strlen (text);
-
-	if (cmd_text.cursize + l >= cmd_text.maxsize)
-	{
-		Con_Printf ("Cbuf_AddText: overflow\n");
-		return;
-	}
-
-	SZ_Write (&cmd_text, text, l);
+	Cbuf_AddTextOrigin (text, Q_strlen (text), Cmd_IsUntrusted ());
 }
 void Cbuf_AddTextLen (const char *text, int l)
 {
-	if (cmd_text.cursize + l >= cmd_text.maxsize)
-	{
-		Con_Printf ("Cbuf_AddText: overflow\n");
-		return;
-	}
-
-	SZ_Write (&cmd_text, text, l);
+	Cbuf_AddTextOrigin (text, l, Cmd_IsUntrusted ());
+}
+void Cbuf_AddTextUntrusted (const char *text)
+{
+	Cbuf_AddTextOrigin (text, Q_strlen (text), true);
+}
+void Cbuf_AddTextLenUntrusted (const char *text, int l)
+{
+	Cbuf_AddTextOrigin (text, l, true);
 }
 
 
@@ -136,31 +179,52 @@ Adds a \n to the text
 FIXME: actually change the command buffer to do less copying
 ============
 */
-void Cbuf_InsertText (const char *text)
+static void Cbuf_InsertTextOrigin (const char *text, qboolean untrusted)
 {
 	char	*temp;
-	int		templen;
+	byte	*tempmarks;
+	int		templen, textlen;
+
+	// woods #remotecmd -- the inserted text, its newline and everything still
+	// queued must all fit, or nothing changes. Previously a near-full buffer
+	// dropped the inserted text and then hit SZ_Write's fatal overflow.
+	textlen = Q_strlen (text);
+	templen = cmd_text.cursize;
+	if (textlen >= cmd_text.maxsize - 1 - templen)
+	{
+		Con_Printf ("Cbuf_InsertText: overflow\n");
+		return;
+	}
 
 // copy off any commands still remaining in the exec buffer
-	templen = cmd_text.cursize;
 	if (templen)
 	{
-		temp = (char *) Z_Malloc (templen);
+		temp = (char *) Z_Malloc (templen * 2);
+		tempmarks = (byte *) temp + templen;
 		Q_memcpy (temp, cmd_text.data, templen);
+		Q_memcpy (tempmarks, cmd_text_untrusted, templen);
 		SZ_Clear (&cmd_text);
 	}
 	else
+	{
 		temp = NULL;	// shut up compiler
+		tempmarks = NULL;
+	}
 
 // add the entire text of the file
-	Cbuf_AddText (text);
-	SZ_Write (&cmd_text, "\n", 1);
+	Cbuf_WriteMarked (text, textlen, NULL, untrusted);
+	Cbuf_WriteMarked ("\n", 1, NULL, untrusted);
 // add the copied off data
 	if (templen)
 	{
-		SZ_Write (&cmd_text, temp, templen);
+		Cbuf_WriteMarked (temp, templen, tempmarks, false);
 		Z_Free (temp);
 	}
+}
+
+void Cbuf_InsertText (const char *text)
+{
+	Cbuf_InsertTextOrigin (text, Cmd_IsUntrusted ());
 }
 
 //Spike: for renderer/server isolation
@@ -182,6 +246,8 @@ void Cbuf_Execute (void)
 	char	*text;
 	char	line[1024];
 	int		quotes, comment;
+	qboolean	untrusted;
+	int		previous;
 
 	while (cmd_text.cursize && !cmd_wait)
 	{
@@ -213,6 +279,9 @@ void Cbuf_Execute (void)
 			line[i] = 0;
 		}
 
+		// woods #remotecmd -- one untrusted byte makes the whole line untrusted
+		untrusted = i > 0 && memchr (cmd_text_untrusted, 1, i) != NULL;
+
 // delete the text from the command buffer and move remaining commands down
 // this is necessary because commands (exec, alias) can insert data at the
 // beginning of the text buffer
@@ -224,10 +293,13 @@ void Cbuf_Execute (void)
 			i++;
 			cmd_text.cursize -= i;
 			memmove (text, text + i, cmd_text.cursize);
+			memmove (cmd_text_untrusted, cmd_text_untrusted + i, cmd_text.cursize);
 		}
 
 // execute the command line
+		previous = untrusted ? Cmd_EnterUntrusted () : cmd_untrusted_depth;
 		Cmd_ExecuteString (line, src_command);
+		Cmd_LeaveUntrusted (previous);
 	}
 }
 
@@ -490,6 +562,7 @@ void Cmd_Alias_f (void)
 		}
 
 		a->value = Z_Strdup (cmd);
+		a->untrusted = Cmd_IsUntrusted ();	// woods #remotecmd
 		break;
 	}
 }
@@ -708,7 +781,7 @@ void Alias_WriteAliases(FILE* f)
 	// Gather and categorize the aliases
 	for (alias = cmd_alias; alias; alias = alias->next) {
 		if (alias->value[0] != '\0') {
-			if (IsServerAlias(alias->name, server_aliases)) {
+			if (alias->untrusted || IsServerAlias(alias->name, server_aliases)) { // woods #remotecmd
 				continue; // Skip server aliases
 			}
 			if (cfg_save_aliases.value == 1 && Alias_NameCollides(alias->name))
@@ -1878,7 +1951,8 @@ qboolean	Cmd_ExecuteString (const char *text, cmd_source_t src)
 	{
 		if (!q_strcasecmp (cmd_argv[0], a->name))
 		{
-			Cbuf_InsertText (a->value);
+			// woods #remotecmd -- a server-defined alias stays untrusted even when a local bind runs it
+			Cbuf_InsertTextOrigin (a->value, a->untrusted || Cmd_IsUntrusted ());
 			return true;
 		}
 	}

@@ -45,6 +45,7 @@ typedef struct cmdalias_s {
     struct cmdalias_s *next;
     char name[32];
     char *value;
+    qboolean untrusted;
 } cmdalias_t;
 static cmd_function_t *cmd_functions;
 static cmdalias_t *cmd_alias;
@@ -88,6 +89,11 @@ void Cmd_TokenizeString(const char *text) {
 int Cmd_Argc(void) { return argc; }
 const char *Cmd_Argv(int i) { return i == 0 ? token : ""; }
 void Cbuf_InsertText(const char *text) { snprintf(inserted, sizeof(inserted), "%s", text); }
+static qboolean untrusted_context, inserted_untrusted;
+qboolean Cmd_IsUntrusted(void) { return untrusted_context; }
+static void Cbuf_InsertTextOrigin(const char *text, qboolean untrusted) {
+    Cbuf_InsertText(text); inserted_untrusted = untrusted;
+}
 static qboolean Cvar_Command(void) {
     for (cvar_t *var = cvars; var; var = var->next)
         if (!strcmp(token, var->name)) { ++cvar_reads; return true; }
@@ -156,6 +162,14 @@ int main(void) {
     assert(strstr(output, "containing 'gl_'") && !strstr(output, "Did you mean"));
     run("connect", src_command); assert(executed == 1 && !*output);
     run("rocketjump", src_command); assert(!strcmp(inserted, "echo rocket\n") && !*output);
+    // Alias origin: a server-defined alias stays untrusted when run locally,
+    // and a local alias run by a server inherits the server's origin.
+    assert(!inserted_untrusted);
+    aliases[0].untrusted = true;
+    run("rocketjump", src_command); assert(inserted_untrusted);
+    aliases[0].untrusted = false; untrusted_context = true;
+    run("rocketjump", src_command); assert(inserted_untrusted);
+    untrusted_context = false;
     run("sensitivity 4", src_command); assert(cvar_reads == 1 && !*output);
     run("conenct", src_server); assert(!*output && !executed);
     run("conenct", src_client); assert(!strstr(output, "Did you mean"));

@@ -655,6 +655,7 @@ void Host_EndGame (const char *message, ...)
 	Con_DPrintf ("Host_EndGame: %s\n",string);
 
 	PR_SwitchQCVM(NULL);
+	Cmd_ResetUntrusted ();	// woods #remotecmd -- the longjmp skips the executing command's restore
 
 	/* woods -- reenable screen updates, as Host_Error does.  Whatever load was
 	   in progress is over, and nothing else released the plaque here: a demo
@@ -704,6 +705,7 @@ void Host_Error (const char *error, ...)
 	if (qcvm == &cls.menu_qcvm)
 		MQC_Shutdown();
 	PR_SwitchQCVM(NULL);
+	Cmd_ResetUntrusted ();	// woods #remotecmd -- the longjmp skips the executing command's restore
 
 	SCR_EndLoadingPlaque ();		// reenable screen updates
 

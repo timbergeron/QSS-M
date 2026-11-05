@@ -3772,6 +3772,7 @@ static qboolean CL_MarkMapScopedServerStuffText(const char *text)
 static void CL_ParseStuffText(const char *msg)
 {
 	char *str;
+	int previous = Cmd_EnterUntrusted ();	// woods #remotecmd -- also covers the deferred flush of unterminated stufftext
 	q_strlcat(cl.stuffcmdbuf, msg, sizeof(cl.stuffcmdbuf));
 	for (; (str = strchr(cl.stuffcmdbuf, '\n')); memmove(cl.stuffcmdbuf, str, Q_strlen(str)+1))
 	{
@@ -3858,12 +3859,13 @@ static void CL_ParseStuffText(const char *msg)
 		{
 			// Only fallback stuffcmds reach the user command buffer; server commands that mutate cvars need explicit marking.
 			qboolean map_scoped = CL_MarkMapScopedServerStuffText(cl.stuffcmdbuf);
-			Cbuf_AddTextLen(cl.stuffcmdbuf, str-cl.stuffcmdbuf);
-			Cbuf_AddTextLen("\n", 1);
+			Cbuf_AddTextLenUntrusted(cl.stuffcmdbuf, str-cl.stuffcmdbuf);
+			Cbuf_AddTextLenUntrusted("\n", 1);
 			if (map_scoped)
-				Cbuf_AddText(Cvar_MapScoped_CommitCommand ());
+				Cbuf_AddTextUntrusted(Cvar_MapScoped_CommitCommand ());
 		}
 	}
+	Cmd_LeaveUntrusted (previous);
 }
 
 #if defined(__linux__) || defined(__linux)
@@ -5186,6 +5188,11 @@ void CL_ParseServerMessage (void)
 			break;
 
 		case svc_stufftext:
+		{
+			// woods #remotecmd -- everything the server stuffs (and anything CSQC
+			// queues while handling it) stays marked untrusted in the command buffer
+			int previous = Cmd_EnterUntrusted ();
+
 			// JPG - check for ProQuake message // woods #pqteam
 			if (MSG_PeekByte() == 0x01)
 				CL_ParseProQuakeMessage();
@@ -5203,7 +5210,9 @@ void CL_ParseServerMessage (void)
 			else
 				CL_ParseStuffText(str);
 
+			Cmd_LeaveUntrusted (previous);
 			break;
+		}
 
 		case svc_damage:
 			V_ParseDamage ();
