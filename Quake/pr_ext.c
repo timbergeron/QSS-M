@@ -3374,9 +3374,37 @@ static void PF_cl_localsound(void)
 
 //returns false if the file is denied.
 //fallbackread can be NULL, if the qc is not allowed to read that (original) file at all.
+/* woods #remotecmd -- the directory and extension checks below compare the
+ * spelling QC supplied, so only accept spellings that name one file. Reject
+ * empty, "." and ".." components ("./configs/x" would dodge the configs/ ban),
+ * components ending in '.' or ' ' (Windows drops those when opening, so
+ * "config.cfg." opens config.cfg), and '~' (Windows 8.3 short names such as
+ * CONFIG~1 alias configs). */
+static qboolean QC_PathIsCanonical(const char *name)
+{
+	const char *c = name, *end;
+
+	for (;;)
+	{
+		end = strchr(c, '/');
+		if (!end)
+			end = c + strlen(c);
+		if (end == c ||
+			(end - c == 1 && c[0] == '.') ||
+			(end - c == 2 && c[0] == '.' && c[1] == '.') ||
+			end[-1] == '.' || end[-1] == ' ')
+			return false;
+		if (!*end)
+			break;
+		c = end + 1;
+	}
+	return !strchr(name, '~');
+}
+
 static qboolean QC_FixFileName(const char *name, const char **result, const char **fallbackread)
 {
 	if (!*name ||	//blank names are bad
+		!QC_PathIsCanonical(name) ||	// woods #remotecmd
 		strchr(name, ':') ||	//dos/win absolute path, ntfs ADS, amiga drives. reject them all.
 		strchr(name, '\\') ||	//windows-only paths.
 		*name == '/' ||	//absolute path was given - reject
@@ -3387,9 +3415,12 @@ static qboolean QC_FixFileName(const char *name, const char **result, const char
 
 	*fallbackread = name;
 	//if its a user config, ban any fallback locations so that csqc can't read passwords or whatever.
-	if ((!strchr(name, '/') || q_strncasecmp(name, "configs/", 8)) 
-		&& !q_strcasecmp(COM_FileGetExtension(name), "cfg")
-		&& q_strncasecmp(name, "particles/", 10) && q_strncasecmp(name, "huds/", 5) && q_strncasecmp(name, "models/", 7))
+	// woods #remotecmd -- QSS-M keeps the user's config.cfg and autoexec.cfg in
+	// configs/, which the upstream rule exempted. Ban everything there, and any
+	// other .cfg outside the content directories mods legitimately ship.
+	if (!q_strncasecmp(name, "configs/", 8) ||
+		(!q_strcasecmp(COM_FileGetExtension(name), "cfg")
+		&& q_strncasecmp(name, "particles/", 10) && q_strncasecmp(name, "huds/", 5) && q_strncasecmp(name, "models/", 7)))
 		*fallbackread = NULL;
 	*result = va("data/%s", name);
 	return true;
