@@ -694,6 +694,24 @@ qboolean Hunk_IsContiguous (int from, int to)
 	return Hunk_SegForOfs (from) == Hunk_SegForOfs (to - 1);
 }
 
+/* Measure a relocatable payload through a low mark, excluding the first
+ * allocation header. Marks are virtual offsets in our segmented hunk. */
+int Hunk_PayloadSize (const void *payload, int from, int to)
+{
+	const hunkseg_t *seg;
+	const byte *begin;
+	size_t offset;
+
+	if (!Hunk_IsContiguous (from, to) || from == to)
+		Sys_Error ("Hunk_PayloadSize: non-contiguous range");
+	seg = hunk_segments[Hunk_SegForOfs (from)];
+	begin = SEG_MEM (seg);
+	if (!PTR_IN_RANGE (payload, begin + (from - seg->base), begin + (to - seg->base)))
+		Sys_Error ("Hunk_PayloadSize: payload outside range");
+	offset = (const byte *)payload - begin;
+	return (to - seg->base) - (int)offset;
+}
+
 /* Returns true only while the complete range is backed by live Hunk storage below mark. */
 qboolean Hunk_IsRangeBeforeMark (const void *ptr, size_t size, int mark)
 {

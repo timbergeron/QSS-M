@@ -979,10 +979,10 @@ qboolean Mod_LoadMD3Model (qmodel_t *mod, void *buffer, size_t file_size)
 // any consumer walks those offsets.
 //
 	end = Hunk_LowMark ();
-	total = end - start;
 
 	if (!Hunk_IsContiguous (start, end))
 		Sys_Error ("Mod_LoadMD3Model: %s spans multiple hunk segments (try a larger -heapsize)", mod->name);
+	total = Hunk_PayloadSize (outhdr, start, end);
 
 	GLMesh_LoadVertexBuffer (mod, outhdr);
 
@@ -1690,10 +1690,10 @@ void Mod_LoadIQMModel (qmodel_t *mod, const void *buffer)
 // any consumer walks those offsets.
 //
 	end = Hunk_LowMark ();
-	total = end - start;
 
 	if (!Hunk_IsContiguous (start, end))
 		Sys_Error ("Mod_LoadIQMModel: %s spans multiple hunk segments (try a larger -heapsize)", mod->name);
+	total = Hunk_PayloadSize (outhdr, start, end);
 
 	GLMesh_LoadVertexBuffer (mod, outhdr);
 
@@ -2697,10 +2697,10 @@ void Mod_LoadMD5MeshModel (qmodel_t *mod, const void *buffer)
 // any consumer walks those offsets.
 //
 	end = Hunk_LowMark ();
-	total = end - start;
 
 	if (!Hunk_IsContiguous (start, end))
 		Sys_Error ("Mod_LoadMD5MeshModel: %s spans multiple hunk segments (try a larger -heapsize)", mod->name);
+	total = Hunk_PayloadSize (outhdr, start, end);
 
 	GLMesh_LoadVertexBuffer (mod, outhdr);
 
