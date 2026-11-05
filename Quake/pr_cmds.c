@@ -997,9 +997,12 @@ static void PF_cvar (void)
 {
 	const char	*str;
 
-	str = G_STRING(OFS_PARM0);
+	cvar_t		*var;
 
-	G_FLOAT(OFS_RETURN) = Cvar_VariableValue (str);
+	str = G_STRING(OFS_PARM0);
+	var = Cvar_FindVarForGamecode (str);	// woods #remotecmd
+
+	G_FLOAT(OFS_RETURN) = var ? var->value : 0;
 }
 
 /*
@@ -2356,7 +2359,10 @@ static void PF_cvar_menuhack (void)
 		G_FLOAT(OFS_RETURN) = vid.height/s;
 	}
 	else
-		G_FLOAT(OFS_RETURN) = Cvar_VariableValue (str);
+	{
+		cvar_t *var = Cvar_FindVarForGamecode (str);	// woods #remotecmd
+		G_FLOAT(OFS_RETURN) = var ? var->value : 0;
+	}
 }
 
 //as a DP-derived API, these builtin numbers are completely unrelated to the ssqc ones. expect problems.

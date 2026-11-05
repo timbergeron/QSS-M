@@ -2789,7 +2789,7 @@ static void PF_print(void)
 static void PF_cvar_string(void)
 {
 	const char *name = G_STRING(OFS_PARM0);
-	cvar_t *var = Cvar_FindVar(name);
+	cvar_t *var = Cvar_FindVarForGamecode(name);	// woods #remotecmd
 	if (var && var->string)
 	{
 		//cvars can easily change values.
@@ -2811,7 +2811,7 @@ static void PF_cvar_string(void)
 static void PF_cvar_defstring(void)
 {
 	const char *name = G_STRING(OFS_PARM0);
-	cvar_t *var = Cvar_FindVar(name);
+	cvar_t *var = Cvar_FindVarForGamecode(name);	// woods #remotecmd
 	if (var && var->default_string)
 		G_INT(OFS_RETURN) = PR_SetEngineString(var->default_string);
 	else
@@ -10924,6 +10924,8 @@ void PR_EnableExtensions(ddef_t *pr_globaldefs)
 			numautocvars++;
 			if (!var)
 				continue;	//name conflicts with a command?
+			if (var->flags & CVAR_SECRET)
+				continue;	// woods #remotecmd -- the global keeps the progs' own default
 	
 			if (!ED_ParseEpair ((void *)qcvm->globals, &pr_globaldefs[i], var->string, true))
 				Con_Warning("EXT: Unable to configure %s\n", n);

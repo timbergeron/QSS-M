@@ -74,7 +74,7 @@ cvar_t sv_reportheartbeats = {"sv_reportheartbeats", "0"};
 cvar_t sv_heartbeat_interval = {"sv_heartbeat_interval", "110"};
 cvar_t sv_public = {"sv_public", NULL};
 cvar_t com_protocolname = {"com_protocolname", "FTE-Quake DarkPlaces-Quake"};
-cvar_t password = {"password", ""};	//this is super-lame and limited to numbers, so when not numeric we hash it and use that instead. there's no nonces though.
+cvar_t password = {"password", "", CVAR_SECRET};	//this is super-lame and limited to numbers, so when not numeric we hash it and use that instead. there's no nonces though.
 cvar_t cl_portpingprobe_enable = {"cl_portpingprobe_enable", "0", CVAR_ARCHIVE};
 cvar_t cl_portpingprobe_probes = {"cl_portpingprobe_probes", "500", CVAR_ARCHIVE};
 cvar_t cl_portpingprobe_port_probes = {"cl_portpingprobe_port_probes", "5", CVAR_ARCHIVE};
@@ -90,7 +90,9 @@ cvar_t net_masters[] =
 	{"net_masterextra3", "master.quakeone.com:27950"},
 	{NULL}
 };
-cvar_t rcon_password = {"rcon_password", ""};
+cvar_t rcon_password = {"rcon_password", "", CVAR_SECRET};
+// woods #remotecmd -- when set, rcon only sends the password to this server
+static cvar_t rcon_address = {"rcon_address", "", CVAR_PROTECTED};
 extern cvar_t net_messagetimeout;
 extern cvar_t net_connecttimeout;
 extern cvar_t net_connectattempts; // woods #connectretry
@@ -2386,12 +2388,48 @@ JustDoIt:
 	SchedulePollProcedure(&test2PollProcedure, 0.05);
 }
 
+/* woods #remotecmd -- does the current connection match rcon_address? NQ
+ * servers move each client to a private port, so compare the control
+ * endpoint we originally dialled as well as the live address. */
+static qboolean NET_Rcon_BoundToConnection (qsocket_t *sock)
+{
+	struct qsockaddr bound, control;
+
+	if (!sfunc.GetAddrFromName || !sfunc.AddrCompare)
+		return false;
+	if (sfunc.GetAddrFromName (rcon_address.string, &bound) != 0)
+	{
+		Con_Printf ("rcon: couldn't resolve rcon_address \"%s\"\n", rcon_address.string);
+		return false;
+	}
+	if (sfunc.AddrCompare (&bound, &sock->addr) == 0)
+		return true;
+	if (sock->resolvedaddress[0] &&
+		sfunc.GetAddrFromName (sock->resolvedaddress, &control) == 0 &&
+		sfunc.AddrCompare (&bound, &control) == 0)
+		return true;
+
+	Con_Printf ("rcon: not connected to rcon_address \"%s\"\n", rcon_address.string);
+	return false;
+}
+
 void NET_Rcon_f(void)
 {
 	qsocket_t *sock = cls.netcon;
 
+	// woods #remotecmd -- rcon sends rcon_password to the connected server in
+	// plaintext, so a server or its CSQC must never be able to trigger it
+	if (Cmd_IsUntrusted ())
+	{
+		Con_Printf ("rcon: blocked a command from the server\n");
+		return;
+	}
+
 	if (!sock || !net_drivers[sock->driver].initialized || net_drivers[sock->driver].SendUnreliableMessage != Datagram_SendUnreliableMessage)
 		return;	//not dgram. probably loopback. just use the proper command or something.
+
+	if (rcon_address.string[0] && !NET_Rcon_BoundToConnection (sock))
+		return;
 
 	SZ_Clear(&net_message);
 	MSG_WriteLong(&net_message, 0);
@@ -2418,6 +2456,7 @@ int Datagram_Init (void)
 
 	Cmd_AddCommand ("net_stats", NET_Stats_f);
 
+	Cvar_RegisterVariable(&rcon_address);	// woods #remotecmd
 	Cvar_RegisterVariable(&cl_portpingprobe_enable);
 	Cvar_RegisterVariable(&cl_portpingprobe_probes);
 	Cvar_RegisterVariable(&cl_portpingprobe_port_probes);

@@ -94,6 +94,8 @@ void Cvar_Reset (const char *name); //johnfitz
 Cvar_List_f -- johnfitz
 ============
 */
+static const char *Cvar_DisplayString (const cvar_t *var, const char *value);	// woods #remotecmd
+
 void Cvar_List_f (void)
 {
 	cvar_t	*cvar;
@@ -199,9 +201,9 @@ void Cvar_List_f (void)
 			is_archived  ? "*" : " ",
 			is_serverinfo ? "s" : " ",
 			cvar->name,
-			cvar->string);
+			Cvar_DisplayString (cvar, cvar->string));
 		if (show_defaults && cvar->default_string)
-			Con_SafePrintf (", default \"%s\"", cvar->default_string);
+			Con_SafePrintf (", default \"%s\"", Cvar_DisplayString (cvar, cvar->default_string));
 		Con_SafePrintf ("\n");
 		count++;
 		if (is_modified)   modified++;
@@ -327,6 +329,13 @@ void Cvar_Set_f (void)
 	if (var->flags & CVAR_LOCKED)
 	{
 		Con_Printf ("\"%s\" is locked by the current map\n", var->name);
+		return;
+	}
+	// woods #remotecmd -- also refuse flag changes: 'setfl rcon_password x u'
+	// would otherwise forward the user's next password change as userinfo
+	if ((var->flags & (CVAR_SECRET|CVAR_PROTECTED)) && Cmd_IsUntrusted ())
+	{
+		Con_Printf ("Blocked server change to protected cvar %s\n", var->name);
 		return;
 	}
 
@@ -1274,12 +1283,32 @@ void Cvar_Reset (const char *name)
 	}
 }
 
+/*
+============
+Cvar_FindVarForGamecode -- woods #remotecmd
+
+QC (CSQC in particular is server-supplied) never sees credentials.
+============
+*/
+cvar_t *Cvar_FindVarForGamecode (const char *var_name)
+{
+	cvar_t *var = Cvar_FindVar (var_name);
+	return (var && !(var->flags & CVAR_SECRET)) ? var : NULL;
+}
+
 void Cvar_SetQuick (cvar_t *var, const char *value)
 {
 	if (var->flags & (CVAR_ROM|CVAR_LOCKED))
 		return;
 	if (!(var->flags & CVAR_REGISTERED))
 		return;
+	// woods #remotecmd -- every cvar write funnels through here
+	if ((var->flags & (CVAR_SECRET|CVAR_PROTECTED)) && Cmd_IsUntrusted ())
+	{
+		if (!var->string || strcmp (var->string, value))
+			Con_Printf ("Blocked server change to protected cvar %s\n", var->name);
+		return;
+	}
 
 	if (!var->string)
 		var->string = Z_Strdup (value);
@@ -1649,6 +1678,12 @@ Cvar_Command
 Handles variable inspection and changing from the console
 ============
 */
+// woods #remotecmd -- servers can query a secret's existence, not its value
+static const char *Cvar_DisplayString (const cvar_t *var, const char *value)
+{
+	return ((var->flags & CVAR_SECRET) && Cmd_IsUntrusted ()) ? "<hidden>" : value;
+}
+
 qboolean	Cvar_Command (void)
 {
 	cvar_t			*v;
@@ -1664,12 +1699,12 @@ qboolean	Cvar_Command (void)
 		if (v->default_string) // woods from https://github.com/andrei-drexler/quakespasm print defaults
 		{
 			if (!Q_strcmp(v->string, v->default_string))
-				Con_Printf("\"%s\" is \"%s\" (default)\n", v->name, v->string);
+				Con_Printf("\"%s\" is \"%s\" (default)\n", v->name, Cvar_DisplayString (v, v->string));
 			else
-				Con_Printf("\"%s\" is \"%s\" (default: \"%s\")\n", v->name, v->string, v->default_string);
+				Con_Printf("\"%s\" is \"%s\" (default: \"%s\")\n", v->name, Cvar_DisplayString (v, v->string), Cvar_DisplayString (v, v->default_string));
 		}
 		else
-			Con_Printf("\"%s\" is \"%s\"\n", v->name, v->string);
+			Con_Printf("\"%s\" is \"%s\"\n", v->name, Cvar_DisplayString (v, v->string));
 		if (v->help)
 			v->help(v);
 		return true;
@@ -1682,7 +1717,7 @@ qboolean	Cvar_Command (void)
 	}
 
 	if (Con_IsRedirected())
-		Con_Printf ("changing \"%s\" from \"%s\" to \"%s\"\n", v->name, v->string, Cmd_Argv(1));
+		Con_Printf ("changing \"%s\" from \"%s\" to \"%s\"\n", v->name, Cvar_DisplayString (v, v->string), Cvar_DisplayString (v, Cmd_Argv(1)));
 
 	Cvar_Set (v->name, Cmd_Argv(1));
 	return true;

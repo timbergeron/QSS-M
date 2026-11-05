@@ -341,6 +341,14 @@ static void Con_Dump_f (void)
 	char	relname[MAX_OSPATH];
 	char	name[MAX_OSPATH];
 
+	// woods #remotecmd -- the console holds typed passwords and cvar values,
+	// and the gamedir (data/ especially) is readable by server-supplied CSQC
+	if (Cmd_IsUntrusted ())
+	{
+		Con_Printf ("condump: blocked a command from the server\n");
+		return;
+	}
+
 	q_strlcpy (relname, Cmd_Argc () >= 2 ? Cmd_Argv (1) : "condump.txt", sizeof (relname));
 	if (strstr (relname, ".."))
 	{

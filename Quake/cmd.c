@@ -1396,6 +1396,13 @@ void Cmd_If_f(void)
 		Con_Printf("if: cvar %s not found\n", Cmd_Argv(1));
 		return;
 	}
+	// woods #remotecmd -- comparisons are an oracle: a server could probe a
+	// numeric password one guess (or one bisection step) at a time.
+	if ((cvar->flags & CVAR_SECRET) && Cmd_IsUntrusted ())
+	{
+		Con_Printf("if: %s is not available to server commands\n", cvar->name);
+		return;
+	}
 
 	if (Cmd_Argc() > 3)
 	{
@@ -1686,6 +1693,17 @@ cmd_function_t *Cmd_AddCommand2 (const char *cmd_name, xcommand_t function, cmd_
 	{
 		Con_Printf ("Cmd_AddCommand: %s already defined as a var\n", cmd_name);
 		return NULL;
+	}
+	// woods #remotecmd -- commands are matched before cvars, so a CSQC
+	// registercommand("rcon_password") made while the cvar is still empty
+	// would receive the user's typed password through CSQC_ConsoleCommand
+	{
+		cvar_t *var = Cvar_FindVar (cmd_name);
+		if (var && (var->flags & (CVAR_SECRET|CVAR_PROTECTED)))
+		{
+			Con_Printf ("Cmd_AddCommand: %s is a protected var\n", cmd_name);
+			return NULL;
+		}
 	}
 
 // fail if the command already exists

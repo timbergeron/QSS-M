@@ -76,6 +76,8 @@ interface from being ambiguous.
 #define CVAR_USERDEFINED	(1U << 17)	// cvar was created by the user/mod, and needs to be saved a bit differently.
 #define CVAR_AUTOCVAR		(1U << 18)	// cvar changes need to feed back to qc global changes.
 #define CVAR_SETA			(1U << 19)	// cvar will be saved with seta.
+#define CVAR_SECRET			(1U << 20)	// woods #remotecmd -- credentials: hidden from gamecode, implies CVAR_PROTECTED
+#define CVAR_PROTECTED		(1U << 21)	// woods #remotecmd -- servers and CSQC cannot change it
 
 
 typedef void (*cvarcallback_t) (struct cvar_s *);
@@ -133,6 +135,7 @@ float	Cvar_VariableValue (const char *var_name);
 // returns 0 if not defined or non numeric
 
 const char *Cvar_VariableString (const char *var_name);
+cvar_t *Cvar_FindVarForGamecode (const char *var_name);	// woods #remotecmd -- NULL for CVAR_SECRET
 // returns an empty string if not defined
 
 qboolean Cvar_Command (void);

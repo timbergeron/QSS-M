@@ -1203,6 +1203,13 @@ Host_WriteConfig_f  - woods - ironwail #writecfg
 void Host_WriteConfig_f(void)
 {
 	char filename[MAX_QPATH];
+	// woods #remotecmd -- configs can hold seta'd credentials, and a server
+	// could aim the write at data/, where its CSQC can read the file back
+	if (Cmd_IsUntrusted ())
+	{
+		Con_Printf ("writeconfig: blocked a command from the server\n");
+		return;
+	}
 	q_strlcpy(filename, Cmd_Argc() >= 2 ? Cmd_Argv(1) : "config.cfg", sizeof(filename));
 	COM_AddExtension(filename, ".cfg", sizeof(filename));
 	Host_WriteConfigurationToFile(filename);
