@@ -97,3 +97,6 @@ not delete files from an existing installation.
 When updating a dependency, change its version, URL, and checksum in the source
 manifest, rebuild both architectures, and rerun import/package verification.
 Keep `.github/dependency-watch.json` synchronized with the versions in use.
+
+The [November 2026 dependency refresh](dependency-refresh-2026-11.md) records
+upgrade provenance, retained legacy runtime versions, and compatibility checks.

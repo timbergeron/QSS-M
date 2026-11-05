@@ -52,17 +52,17 @@ i686-w64-mingw32-objdump   -p x86/libFLAC.dll | grep 'DLL Name'
 | Library            | Version        | Source (MSYS2 package)                     |
 |--------------------|----------------|--------------------------------------------|
 | libFLAC            | 1.5.0-2        | `mingw-w64-{x86_64,i686}-flac`             |
-| libopus            | 1.6.1          | `mingw-w64-{x86_64,i686}-opus-1.6.1`       |
+| libopus            | 1.6.1-2        | `mingw-w64-{x86_64,i686}-opus-1.6.1-2`       |
 | libopusfile        | 0.12           | `mingw-w64-{x86_64,i686}-opusfile-0.12`    |
 | libvorbis          | 1.3.7-3        | `mingw-w64-{x86_64,i686}-libvorbis`        |
 | libxmp             | 4.7.4-1        | `mingw-w64-{x86_64,i686}-libxmp`           |
-| libmikmod          | 3.3.15         | MSYS2 x64 `3.3.15-1`; upstream source for x86 |
+| libmikmod          | 3.3.16         | MSYS2 x64 `3.3.16-1`; upstream source for x86 |
 | libmpg123          | 1.33.7-1       | `mingw-w64-{x86_64,i686}-mpg123`           |
 | libogg             | 1.3.6          | `mingw-w64-{x86_64,i686}-libogg-1.3.6`     |
-| libwinpthread      | 14.0.0.r426.g4564ee4b5-1 | `mingw-w64-{x86_64,i686}-libwinpthread` |
-| libgcc (x86 only)  | gcc 16.2.0-5   | `mingw-w64-i686-libgcc` (monitored as `gcc-libs`) |
+| libwinpthread      | 14.0.0.r598.ge3d18511f-1 | `mingw-w64-{x86_64,i686}-libwinpthread` |
+| libgcc (x86 only)  | gcc 16.2.0-6   | `mingw-w64-i686-libgcc` (monitored as `gcc-libs`) |
 
-Package revisions are included above for the September and October 2026
+Package revisions are included above for the September through November 2026
 refreshes. Downloads were verified against the SHA-256 hashes in the MSYS2
 repository indexes.
 The matching `winpthreads` package is the development package; the runtime DLL
@@ -81,7 +81,7 @@ automatically). macOS also uses libxmp, built from its vcpkg baseline with the
 matching vcpkg header rather than a separate platform-specific copy.
 
 Note: libmikmod is disabled in the MinGW and macOS builds, where libxmp handles
-module playback. It remains enabled in the MSVC project. The Windows 3.3.15 DLL
+module playback. It remains enabled in the MSVC project. The Windows 3.3.16 DLL
 is built with DirectSound/WinMM/WASAPI output drivers, so
 it imports `dsound.dll` / `user32.dll` / `winmm.dll` / `ole32.dll` (system DLLs) — these
 are inert here: `snd_mikmod.c` registers only `drv_nos` and decodes via
@@ -106,7 +106,7 @@ The DLL imports `SHLWAPI.dll` (system) and, on x86, the shared
 The Windows import libraries (`libFLAC.dll.a` for MinGW, `libFLAC.lib` for MSVC)
 target `libFLAC.dll` and were generated with `dlltool` from the shipped DLL.
 Import libraries can be kept when the DLL name and required exported symbols
-remain ABI-compatible. Every updated DLL in the September and October 2026
+remain ABI-compatible. Every updated DLL in the September through November 2026
 refreshes retains all previously exported names, so the existing import libraries
 were retained.
 The hand-patched opus headers, which

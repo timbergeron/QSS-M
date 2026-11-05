@@ -4,18 +4,19 @@ Current Windows builds compile this version from pinned source as a static
 library. See [the static build notes](../README-static.md). The DLLs and recipe
 below describe the retained legacy binaries.
 
-Both architectures use curl 8.22.0, built from the unmodified upstream release:
+Both architectures use curl 8.23.0, built from the unmodified upstream release:
 
-- Source: https://curl.se/download/curl-8.22.0.tar.xz
-- SHA-256: `f7ef3ae8a22e521f289803fe93543eb64c329b58aa73a9e224dfd915a2a5f4f7`
+- Source: https://curl.se/download/curl-8.23.0.tar.xz
+- SHA-256: `8dadd7d2536a314f982ad05a651b713f426bf7d02cc2c76cffb9796f2218e6c5`
 
-The source hash was checked against MSYS2's curl 8.22.0-1 recipe. The dependency
+The source hash was checked against MSYS2's curl 8.23.0-1 recipe. The dependency
 watch uses that package's version as the upstream notification baseline; these
 DLLs are built locally rather than copied from the MSYS2 curl package.
 
-Schannel supplies TLS and the Windows certificate store. The only non-system
-runtime dependency is the bundled `zlib1.dll`. OpenSSL, libssh2, HTTP/2, Brotli,
-Zstandard and libpsl are disabled to preserve the standalone Windows package.
+Schannel supplies TLS and the Windows certificate store. The direct non-system
+runtime dependency is the bundled `zlib1.dll`. On x86, zlib also requires the
+existing `libgcc_s_dw2-1.dll` and `libwinpthread-1.dll` from `Windows/codecs/x86/`.
+OpenSSL, libssh2, HTTP/2, Brotli, Zstandard and libpsl are disabled to preserve the standalone Windows package.
 Windows IDN support imports the system `Normaliz.dll`. All exports from the
 previous DLLs remain available, so the existing `libcurl.lib` import libraries
 are retained. Public headers come from the same source release.
@@ -25,7 +26,7 @@ are retained. Public headers come from the same source release.
 Extract the source outside the repository and run the following from the
 repository root with CMake and the MinGW-w64 cross toolchains installed. Set
 `curl_source` to the extracted directory and `curl_build` to a scratch directory.
-The September 2026 binaries were built with MinGW-w64 GCC 13 (win32 threads).
+The November 2026 binaries were built with MinGW-w64 GCC 13 (win32 threads).
 
 ```sh
 for arch in x86 x64; do
