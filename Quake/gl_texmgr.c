@@ -1950,7 +1950,7 @@ Fill background pixels so mipmapping doesn't have haloes - Ed
 
 typedef struct
 {
-	short		x, y;
+	int			x, y; // skin dimensions can exceed the signed-short range
 } floodfill_t;
 
 // must be a power of 2

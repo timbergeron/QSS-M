@@ -2915,6 +2915,15 @@ void GL_DrawAliasFrame (aliashdr_t *paliashdr, lerpdata_t lerpdata)
 	rs_aliaspasses += paliashdr->numtris;
 }
 
+/* Reduce before converting to an integer: even finite, positive file
+ * intervals can make time/interval exceed the integer range. */
+static double R_AliasPoseCycle (double time, float interval, int poses)
+{
+	if (!isfinite(time) || time <= 0 || !isfinite(interval) || interval <= 0 || poses <= 1)
+		return 0;
+	return fmod (time / (double)interval, (double)poses);
+}
+
 /*
 =================
 R_SetupAliasFrame -- johnfitz -- rewritten to support lerping
@@ -2970,7 +2979,9 @@ void R_SetupAliasFrame (aliashdr_t *paliashdr, entity_t *e, lerpdata_t *lerpdata
 
 			if (time < 0)
 				time = 0;	//just in case...
-			frac = (time / paliashdr->frames[frame].interval);
+			frac = R_AliasPoseCycle (time, paliashdr->frames[frame].interval, paliashdr->frames[frame].numposes);
+			if (frac >= paliashdr->frames[frame].numposes)
+				frac = 0; // float rounding at the end of a cycle
 			posenum = (int)frac;
 			lerpdata->blend = (frac - posenum);
 
@@ -2984,10 +2995,10 @@ void R_SetupAliasFrame (aliashdr_t *paliashdr, entity_t *e, lerpdata_t *lerpdata
 			lerpdata->blend = frac;
 
 			lerpdata->pose1 = paliashdr->frames[frame].firstpose;
-			lerpdata->pose1 += (unsigned int)(e->lerp.snap.time[0]/paliashdr->frames[frame].interval) % paliashdr->frames[frame].numposes;
+			lerpdata->pose1 += (int)R_AliasPoseCycle (e->lerp.snap.time[0], paliashdr->frames[frame].interval, paliashdr->frames[frame].numposes);
 
 			lerpdata->pose2 = paliashdr->frames[frame2].firstpose;
-			lerpdata->pose2 += (unsigned int)(e->lerp.snap.time[1]/paliashdr->frames[frame2].interval) % paliashdr->frames[frame2].numposes;
+			lerpdata->pose2 += (int)R_AliasPoseCycle (e->lerp.snap.time[1], paliashdr->frames[frame2].interval, paliashdr->frames[frame2].numposes);
 		}
 	}
 	else
@@ -3006,7 +3017,7 @@ void R_SetupAliasFrame (aliashdr_t *paliashdr, entity_t *e, lerpdata_t *lerpdata
 			if (time < 0)
 				time = 0;	//just in case...
 			e->lerp.state.lerptime = paliashdr->frames[frame].interval;	//FIXME: no per-frame intervals
-			posenum += (int)(time / e->lerp.state.lerptime) % numposes;
+			posenum += (int)R_AliasPoseCycle (time, e->lerp.state.lerptime, numposes);
 		}
 		else
 			e->lerp.state.lerptime = 0.1;

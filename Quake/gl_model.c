@@ -5922,6 +5922,103 @@ static void Mod_AliasBadFile (const char *what)
 	Host_Error ("%s: %s", loadmodel->name, what);
 }
 
+/* Validate the entire MDL before allocating or uploading anything. All disk
+ * records remain four-byte aligned, including QuakeForge's doubled poses. */
+static const void *Mod_AliasTake (const byte **cursor, const byte *end, size_t count, size_t stride)
+{
+	const byte *data = *cursor;
+	if (count > (size_t)(end - data) / stride)
+		return NULL;
+	*cursor += count * stride;
+	return data;
+}
+
+static const char *Mod_ValidateAliasModel (const byte *buffer, size_t filesize, int pvtype)
+{
+	const byte *cursor = buffer, *end = buffer + filesize;
+	const mdl_t *mdl = Mod_AliasTake (&cursor, end, 1, sizeof(*mdl));
+	int skins, width, height, verts, tris, frames, poses = 0, i, j;
+	size_t pixels, posesize;
+
+	if (!mdl)
+		return "truncated alias header";
+	if (LittleLong(mdl->version) != ALIAS_VERSION)
+		return "invalid alias version";
+	skins = LittleLong(mdl->numskins);
+	width = LittleLong(mdl->skinwidth);
+	height = LittleLong(mdl->skinheight);
+	verts = LittleLong(mdl->numverts);
+	tris = LittleLong(mdl->numtris);
+	frames = LittleLong(mdl->numframes);
+	if (skins < 1 || skins > MAX_SKINS || verts < 1 || verts > MAXALIASVERTS ||
+		tris < 1 || tris > INT_MAX / 3 || frames < 1 || frames > MAXALIASFRAMES)
+		return "invalid alias counts";
+	if (width <= 0 || height <= 0 || width > INT_MAX / height)
+		return "invalid alias skin dimensions";
+	pixels = (size_t)width * height;
+	if ((pixels & 3) || pixels > filesize)
+		return "invalid alias skin size";
+	posesize = sizeof(daliasframe_t) + (size_t)verts * sizeof(trivertx_t) * (pvtype == PV_QUAKEFORGE ? 2 : 1);
+
+	for (i = 0; i < skins; i++)
+	{
+		const daliasskintype_t *type = Mod_AliasTake (&cursor, end, 1, sizeof(*type));
+		int count = 1;
+		if (!type)
+			return "truncated alias skin type";
+		if (LittleLong(type->type) == ALIAS_SKIN_GROUP)
+		{
+			const daliasskingroup_t *group = Mod_AliasTake (&cursor, end, 1, sizeof(*group));
+			const daliasskininterval_t *intervals;
+			if (!group || (count = LittleLong(group->numskins)) < 1)
+				return "invalid alias skin group";
+			intervals = Mod_AliasTake (&cursor, end, count, sizeof(*intervals));
+			if (!intervals)
+				return "truncated alias skin intervals";
+		}
+		else if (LittleLong(type->type) != ALIAS_SKIN_SINGLE)
+			return "invalid alias skin type";
+		if (!Mod_AliasTake (&cursor, end, count, pixels))
+			return "truncated alias skins";
+	}
+	if (!Mod_AliasTake (&cursor, end, verts, sizeof(stvert_t)))
+		return "truncated alias texture coordinates";
+	{
+		const dtriangle_t *triangles = Mod_AliasTake (&cursor, end, tris, sizeof(*triangles));
+		if (!triangles)
+			return "truncated alias triangles";
+		for (i = 0; i < tris; i++)
+			for (j = 0; j < 3; j++)
+				if ((unsigned int)LittleLong(triangles[i].vertindex[j]) >= (unsigned int)verts)
+					return "invalid alias triangle vertex";
+	}
+	for (i = 0; i < frames; i++)
+	{
+		const daliasframetype_t *type = Mod_AliasTake (&cursor, end, 1, sizeof(*type));
+		int count = 1;
+		if (!type)
+			return "truncated alias frame type";
+		if (LittleLong(type->type) == ALIAS_GROUP)
+		{
+			const daliasgroup_t *group = Mod_AliasTake (&cursor, end, 1, sizeof(*group));
+			const daliasinterval_t *intervals;
+			if (!group || (count = LittleLong(group->numframes)) < 1 || count > MAXALIASFRAMES - poses)
+				return "invalid alias frame group";
+			intervals = Mod_AliasTake (&cursor, end, count, sizeof(*intervals));
+			if (!intervals)
+				return "truncated alias frame intervals";
+		}
+		else if (LittleLong(type->type) != ALIAS_SINGLE)
+			return "invalid alias frame type";
+		if (count > MAXALIASFRAMES - poses)
+			return "too many alias poses";
+		if (!Mod_AliasTake (&cursor, end, count, posesize))
+			return "truncated alias poses";
+		poses += count;
+	}
+	return NULL;
+}
+
 /*
 =================
 Mod_LoadAliasFrame
@@ -5938,7 +6035,8 @@ static void *Mod_LoadAliasFrame (void * pin, maliasframedesc_t *frame, int pvtyp
 
 	pdaliasframe = (daliasframe_t *)pin;
 
-	q_strlcpy (frame->name, pdaliasframe->name, sizeof (frame->name));
+	memcpy (frame->name, pdaliasframe->name, sizeof (frame->name));
+	frame->name[sizeof(frame->name) - 1] = 0;
 	frame->firstpose = posenum;
 	frame->numposes = 1;
 
@@ -5989,7 +6087,11 @@ static void *Mod_LoadAliasGroup (void * pin,  maliasframedesc_t *frame, int pvty
 
 	pin_intervals = (daliasinterval_t *)(pingroup + 1);
 
+	// Only the first interval is used; GL-era models may leave the rest
+	// unset. Keep loading such models, but give lerping a usable duration.
 	frame->interval = LittleFloat (pin_intervals->interval);
+	if (!isfinite(frame->interval) || frame->interval <= 0)
+		frame->interval = 0.1f;
 
 	pin_intervals += numframes;
 
@@ -6037,7 +6139,7 @@ static void *Mod_LoadAllSkins (int numskins, daliasskintype_t *pskintype)
 
 	for (i=0 ; i<numskins ; i++)
 	{
-		if (pskintype->type == ALIAS_SKIN_SINGLE)
+		if (LittleLong (pskintype->type) == ALIAS_SKIN_SINGLE)
 		{
 			// save 8 bit texels for the player model to remap
 			texels = (byte *) Hunk_AllocName(size, loadname);
@@ -6132,14 +6234,16 @@ static void *Mod_LoadAllSkins (int numskins, daliasskintype_t *pskintype)
 
 			pskintype = (daliasskintype_t *)(pinskinintervals + groupskins);
 
-			for (j=0 ; j<groupskins ; j++)
-			{
-				if (j == 0) {
-					texels = (byte *) Hunk_AllocName(size, loadname);
-					pheader->texels[i] = texels - (byte *)pheader;
-					memcpy (texels, (byte *)(pskintype), size);
-				}
+			// Recoloring retains skin 0 even when slot 0 is replaced later.
+			texels = (byte *) Hunk_AllocName(size, loadname);
+			pheader->texels[i] = texels - (byte *)pheader;
+			memcpy (texels, (byte *)pskintype, size);
 
+			// Only the final skin assigned to each j&3 slot can be drawn.
+			j = groupskins > 4 ? groupskins - 4 : 0;
+			pskintype = (daliasskintype_t *)((byte *)pskintype + (size_t)j * size);
+			for ( ; j<groupskins ; j++)
+			{
 				//johnfitz -- rewritten
 				q_snprintf (name, sizeof(name), "%s:frame%i_%i", loadmodel->name, i,j);
 				offset = (src_offset_t)(pskintype) - (src_offset_t)mod_base; //johnfitz
@@ -6414,45 +6518,27 @@ static void Mod_LoadAliasModel (qmodel_t *mod, void *buffer, int pvtype)
 	mdl_t				*pinmodel;
 	stvert_t			*pinstverts;
 	dtriangle_t			*pintriangles;
-	int					version, numframes;
+	int					numframes;
 	int					size;
 	daliasframetype_t	*pframetype;
 	daliasskintype_t	*pskintype;
 	int					start, end, total;
 
-	start = Hunk_LowMark ();
+	const char *invalid;
 
-	if (com_filesize < (qofs_t)sizeof(mdl_t))
+	start = Hunk_LowMark ();
+	invalid = Mod_ValidateAliasModel ((const byte *)buffer, (size_t)com_filesize, pvtype);
+	if (invalid)
 	{
-		Con_Warning("%s is too small to be an alias model\n", mod->name);
+		Con_Warning ("%s: %s\n", mod->name, invalid);
 		mod->type = mod_ext_invalid;
 		return;
 	}
+
+	// The preflight has checked the header and every variable-length record.
 	pinmodel = (mdl_t *)buffer;
 	mod_base = (byte *)buffer; //johnfitz
-
-	version = LittleLong (pinmodel->version);
-	// these all describe a bad file, not a broken engine: reject the model the way the vertex/triangle
-	// limits below do instead of taking the whole process down with Sys_Error
-	if (version != ALIAS_VERSION)
-	{
-		Con_Warning ("%s has wrong version number (%i should be %i)\n", mod->name, version, ALIAS_VERSION);
-		mod->type = mod_ext_invalid;
-		return;
-	}
-
 	numframes = LittleLong (pinmodel->numframes);
-	if (numframes < 1)
-	{
-		Con_Warning ("model %s has an invalid number of frames (%d)\n", mod->name, numframes);
-		mod->type = mod_ext_invalid;
-		return;
-	}
-	if (numframes > MAXALIASFRAMES)
-	{
-		Con_Warning("model %s has too many frames (%i > %i)\n", mod->name, numframes, MAXALIASFRAMES);
-		numframes = MAXALIASFRAMES;
-	}
 
 //
 // allocate space for a working header, plus all the data except the frames,
