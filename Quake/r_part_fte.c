@@ -948,7 +948,7 @@ static void PScript_AssociateEffect_f(void)
 		strstr(modelname, "eyes") ||
 		strstr(modelname, "flag") ||
 		strstr(modelname, "tf_stan") ||
-		strstr(modelname, ".bsp") ||
+		(strstr(modelname, ".bsp") && strncmp(modelname, "maps/b_", 7)) ||	// b_*.bsp are item boxes, no more revealing than the powerup .mdls
 		strstr(modelname, "turr"))
 	{
 		//there is a very real possibility of attaching 'large' effects to models so that they become more visible (eg: a stream of particles passing through walls showing you the entity that they're eminating from)
