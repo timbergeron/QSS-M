@@ -2323,10 +2323,10 @@ static float R_GrenadeGlowTimeRemaining(const entity_t *e)
 static void R_GrenadeGlowColor(float remaining, float color[4])
 {
 	float elapsed = CLAMP(0.0f, 1.0f - remaining / 2.5f, 1.0f);
-	/* Integral of a 1.1 -> 5 Hz acceleration: continuous phase, no frame
- * accumulation, and a separate clock for each grenade's remaining fuse.
- */
-	float cycles = 2.5f * (1.1f * elapsed + 1.3f * elapsed * elapsed * elapsed);
+	/* Integral of a 1.1 -> 10 Hz acceleration: continuous phase, no frame
+	 * accumulation, and a separate clock for each grenade's remaining fuse.
+	 */
+	float cycles = 2.5f * (1.1f * elapsed + (8.9f / 3.0f) * elapsed * elapsed * elapsed);
 	float pulse = 0.5f - 0.5f * cosf(2.0f * M_PI * cycles);
 
 	color[0] = 1.0f;

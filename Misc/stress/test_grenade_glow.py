@@ -96,15 +96,20 @@ int main(void) {
  R_GrenadeGlowColor(2.5,a);R_GrenadeGlowColor(0,b);
  assert(b[1]<a[1] && b[3]>a[3] && b[3]<0.75f);
  /* Count peaks per second: fuse-driven pulses should visibly accelerate. */
- int early=0,late=0;float prev=0,cur=0;
+ int early=0,late=0,final_half=0;float prev=0,cur=0;
  for(int i=0;i<=2500;i++) {
   R_GrenadeGlowColor(2.5f-i/1000.0f,a);
-  if(i>1 && cur>prev && cur>a[3]) {if(i<1000)early++;if(i>1500)late++;}
+  if(i>1 && cur>prev && cur>a[3]) {
+   if(i<1000)early++;
+   if(i>1500)late++;
+   if(i>2000)final_half++;
+  }
   for(int k=0;k<4;k++)assert(isfinite(a[k]) && a[k]>=0 && a[k]<=1);
   prev=cur;cur=a[3];
  }
- assert(early>=1 && late>early && late<=5);
- puts("PASS: grenade ownership, fuse validity, VM restoration, entity identity and accelerating pulses");
+ assert(early>=1 && early<=2 && late>=6 && late<=9);
+ assert(final_half>=4 && final_half<=5);
+ printf("PASS: grenade ownership, fuse validity, VM restoration, entity identity and accelerating pulses (%d in final 500 ms)\n",final_half);
 }
 '''
 with tempfile.TemporaryDirectory(prefix='qssm-grenade-glow-') as tmp:

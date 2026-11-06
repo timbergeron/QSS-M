@@ -8,8 +8,9 @@
 | `3` | Pulsing orange/red tint and soft halo on grenade models, without bars |
 
 Mode `3` preserves the grenade's texture detail. Its pulses accelerate from
-about 1 to 5 per second over the standard 2.5-second fuse, becoming brighter
-and redder toward detonation. Each grenade follows its own fuse; pausing freezes
+about 1 to 10 per second over the standard 2.5-second fuse, reaching about 7 per
+second as the final half-second begins. They become brighter and redder toward
+detonation. Each grenade follows its own fuse; pausing freezes
 the effect. The tint and halo respect world depth and fog. The halo requires a
 stencil buffer; the surface tint works without one. This mode uses alias-model
 shaders, including supported animated replacement models.
