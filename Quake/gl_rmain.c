@@ -2247,6 +2247,7 @@ void R_DrawEntitiesOnList (qboolean alphapass) //johnfitz -- added parameter
 	if (!alphapass)
 	{
 		R_DrawDeferredAliasOutlines();
+		R_DrawDeferredGrenadeGlows();
 
 		if (viewmodel_ent)
 		{

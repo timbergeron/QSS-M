@@ -9,11 +9,13 @@
 
 Mode `3` preserves the grenade's texture detail. Its pulses accelerate from
 about 1 to 10 per second over the standard 2.5-second fuse, reaching about 7 per
-second as the final half-second begins. They become brighter and redder toward
-detonation. Each grenade follows its own fuse; pausing freezes
-the effect. The tint and halo respect world depth and fog. The halo requires a
-stencil buffer; the surface tint works without one. This mode uses alias-model
-shaders, including supported animated replacement models.
+second as the final half-second begins, then hold at full brightness for the
+last moments before detonation. Each crest heats the grenade toward yellow-white
+while its halo stays a red rim that swells with the pulse and keeps a few pixels
+of width at range. Each grenade follows its own fuse; pausing freezes the effect.
+The tint and halo respect world depth and fog, and the halo is drawn after other
+models, so they cannot cover it. This mode uses alias-model shaders, including
+supported animated replacement models.
 
 Like the existing bars, this requires a local server (single-player or hosting)
 and applies to the viewed player's own grenades. Remote servers and demos do not

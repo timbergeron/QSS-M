@@ -583,6 +583,7 @@ void R_DeleteAliasModelInstancingBuffers (void);
 extern cvar_t gl_alias_instancing;
 void R_BeginDeferredAliasOutlines (void);
 void R_DrawDeferredAliasOutlines (void);
+void R_DrawDeferredGrenadeGlows (void);
 void R_DrawBrushModel (entity_t *e);
 void R_DrawBrushModelsInstanced (entity_t **ents, int count);
 void R_DeleteBrushModelInstancingBuffers (void);

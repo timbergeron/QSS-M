@@ -46,7 +46,8 @@ typedef enum alias_outline_phase_e
 	ALIAS_OUTLINE_PHASE_MASK,
 	ALIAS_OUTLINE_PHASE_RING,
 	ALIAS_OUTLINE_PHASE_SCRUB,
-	ALIAS_OUTLINE_PHASE_SINGLE_SURFACE
+	ALIAS_OUTLINE_PHASE_SINGLE_SURFACE,
+	ALIAS_OUTLINE_PHASE_GRENADE_GLOW
 } alias_outline_phase_t;
 
 static alias_outline_phase_t r_alias_outline_phase = ALIAS_OUTLINE_PHASE_NORMAL;
@@ -82,6 +83,29 @@ static qboolean R_QueueDeferredAliasOutline(entity_t *e)
 	}
 
 	return false;
+}
+
+#define GRENADE_GLOW_SHELLS 8
+
+typedef struct
+{
+	float surface[4];	// rgb the skin is pulled toward (may exceed 1), alpha is how far
+	float halo[4];		// rgb and strength of the rim around the model
+	float halo_width;	// world units
+} grenade_glow_t;
+
+static entity_t *r_grenade_glows[MAX_EDICTS];
+static int r_num_grenade_glows;
+
+static void R_QueueGrenadeGlow(entity_t *e)
+{
+	int i;
+
+	for (i = 0; i < r_num_grenade_glows; ++i)	// multi-surface models arrive per surface
+		if (r_grenade_glows[i] == e)
+			return;
+	if (r_alias_outline_collecting && r_num_grenade_glows < countof(r_grenade_glows))
+		r_grenade_glows[r_num_grenade_glows++] = e;
 }
 
 cvar_t	gl_lightning_alpha = {"gl_lightning_alpha","1"}; // woods #lightalpha
@@ -2320,7 +2344,7 @@ static float R_GrenadeGlowTimeRemaining(const entity_t *e)
 	return SCR_GrenadeGlowTimeRemaining((int)(offset / sizeof(*e)));
 }
 
-static void R_GrenadeGlowColor(float remaining, float color[4])
+static void R_GrenadeGlowColor(float remaining, grenade_glow_t *glow)
 {
 	float elapsed = CLAMP(0.0f, 1.0f - remaining / 2.5f, 1.0f);
 	/* Integral of a 1.1 -> 10 Hz acceleration: continuous phase, no frame
@@ -2328,43 +2352,77 @@ static void R_GrenadeGlowColor(float remaining, float color[4])
 	 */
 	float cycles = 2.5f * (1.1f * elapsed + (8.9f / 3.0f) * elapsed * elapsed * elapsed);
 	float pulse = 0.5f - 0.5f * cosf(2.0f * M_PI * cycles);
+	/* The last crest merges into a held flare. SV_RunThink fires up to a frame
+	 * early, so no pulse phase can be timed to land on the detonation itself.
+	 */
+	float flare = CLAMP(0.0f, (0.12f - remaining) / 0.06f, 1.0f);
+	float heat, strength;
 
-	color[0] = 1.0f;
-	color[1] = 0.42f - 0.35f * elapsed;
-	color[2] = 0.025f - 0.017f * elapsed;
-	color[3] = 0.10f + 0.12f * elapsed + (0.12f + 0.36f * elapsed) * pulse;
+	flare = flare * flare * (3.0f - 2.0f * flare);
+	pulse = q_max(pulse, flare);
+	heat = elapsed * pulse * pulse;
+	strength = 0.10f + 0.12f * elapsed + (0.12f + 0.36f * elapsed) * pulse;
+
+	/* Red alone loses luminance as the fuse runs down, so each crest heats the
+	 * surface toward yellow-white while the halo stays a red rim around it.
+	 * The shader dims this by the skin's detail, which would leave a dark skin
+	 * tan rather than hot, so the hot color overdrives past 1 to make up for it.
+	 */
+	glow->surface[0] = 1.0f + heat;
+	glow->surface[1] = (0.42f - 0.35f * elapsed + (0.78f - 0.42f + 0.35f * elapsed) * heat) * (1.0f + heat);
+	glow->surface[2] = (0.025f - 0.017f * elapsed + (0.36f - 0.025f + 0.017f * elapsed) * heat) * (1.0f + heat);
+	glow->surface[3] = strength + 0.15f * heat;
+	glow->halo[0] = 1.0f;
+	glow->halo[1] = 0.42f - 0.30f * elapsed;
+	glow->halo[2] = 0.025f - 0.017f * elapsed;
+	glow->halo[3] = strength;
+	glow->halo_width = 1.4f + (0.8f + 1.6f * elapsed) * pulse;
 }
 
-/* Four faint expanded silhouettes form a compact halo. The model's stencil
- * excludes its interior, depth hides walls, and pass 4 attenuates it in fog.
- * The surface tint still works on hardware without a stencil buffer.
+/* Hold a few pixels of halo at range, without ever ballooning a distant one. */
+static float R_GrenadeGlowHaloWidth(float width, float distance, float fov_x, float view_width)
+{
+	float pixel = 2.0f * distance * tanf(fov_x * (float)M_PI / 360.0f) / q_max(view_width, 1.0f);
+
+	return q_max(width, q_min(3.0f * pixel, 8.0f));
+}
+
+/* Nested expanded silhouettes form a soft halo. They are drawn inside out, so
+ * the grenade's own depth hides everything but the rim, and after all opaque
+ * fills, so no other model can cover it or clip it. Pass 4 fades it in fog.
  */
-static void R_DrawGrenadeGlow(aliasglsl_t *glsl, aliashdr_t *hdr, entity_t *e, const float color[4])
+static void R_DrawGrenadeGlow(aliasglsl_t *glsl, aliashdr_t *hdr, entity_t *e, const grenade_glow_t *glow)
 {
 	float meshunit = (fabsf(hdr->scale[0]) + fabsf(hdr->scale[1]) + fabsf(hdr->scale[2])) / 3.0f;
+	float width;
+	vec3_t offset;
 	int i;
 
-	if (!gl_stencilbits || meshunit <= 0.0f || entalpha < 1.0f)
+	if (meshunit <= 0.0f || entalpha < 1.0f)
 		return;
-	glPushAttrib(GL_ENABLE_BIT | GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT);
-	glEnable(GL_STENCIL_TEST);
-	glStencilFunc(GL_NOTEQUAL, 1, 0x01);
-	glStencilOp(GL_KEEP, GL_KEEP, GL_KEEP);
-	glStencilMask(0);
+	VectorSubtract(e->origin, r_origin, offset);
+	width = R_GrenadeGlowHaloWidth(glow->halo_width, VectorLength(offset),
+		r_refdef.fov_x, r_refdef.vrect.width);
+	glPushAttrib(GL_ENABLE_BIT | GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT | GL_POLYGON_BIT);
+	glDisable(GL_STENCIL_TEST);
 	glEnable(GL_DEPTH_TEST);
 	glDepthFunc(GL_LEQUAL);
 	glDepthMask(GL_FALSE);
+	glEnable(GL_CULL_FACE);
+	glCullFace(GL_FRONT);
 	glEnable(GL_BLEND);
 	glBlendFunc(GL_SRC_ALPHA, GL_ONE);
 	GL_Uniform1iFunc(glsl->isOutlinePassLoc, 4);
 	GL_Uniform1iFunc(glsl->shellModeLoc, 2);
 	GL_Uniform1fFunc(glsl->shellTimeLoc, 0.0f);
 	GL_Uniform4fFunc(glsl->shellWaveParamsLoc, 0, 0, 0, 0);
-	for (i = 0; i < 4; ++i)
+	for (i = 0; i < GRENADE_GLOW_SHELLS; ++i)
 	{
-		GL_Uniform1fFunc(glsl->outlineWidthLoc, (0.30f + 0.30f * i) / meshunit);
-		GL_Uniform4fFunc(glsl->outlineColorLoc, color[0], color[1], color[2],
-			color[3] * 0.12f * (4 - i) / 4.0f);
+		float falloff = (float)(GRENADE_GLOW_SHELLS - i) / GRENADE_GLOW_SHELLS;
+
+		GL_Uniform1fFunc(glsl->outlineWidthLoc, width * (i + 1) / GRENADE_GLOW_SHELLS / meshunit);
+		GL_Uniform4fFunc(glsl->outlineColorLoc, glow->halo[0], glow->halo[1], glow->halo[2],
+			glow->halo[3] * 0.33f * falloff * falloff);
 		glDrawElements(GL_TRIANGLES, hdr->numindexes, GL_UNSIGNED_SHORT,
 			e->model->meshindexesvboptr + hdr->eboofs);
 		rs_aliaspasses += hdr->numtris;
@@ -2392,7 +2450,7 @@ Based on code by MH from RMQEngine
 static void GL_DrawAliasFrame_GLSL (aliasglsl_t *glsl, aliashdr_t *paliashdr, lerpdata_t lerpdata, struct skintextures_s tex, entity_t *e, qboolean depthonly, qboolean surfacefade)
 {
 	GLfloat	tints[3][4];
-	float grenade_glow[4] = {0, 0, 0, 0};
+	grenade_glow_t grenade_glow = {{0}};
 	float grenade_remaining;
 	float	blend;
 	qboolean applied_shell;
@@ -2569,11 +2627,13 @@ static void GL_DrawAliasFrame_GLSL (aliasglsl_t *glsl, aliashdr_t *paliashdr, le
 	GL_Uniform1iFunc (glsl->useAlphaTestLoc, (currententity->model->flags & MF_HOLEY) ? 1 : 0);
 	GL_Uniform4fvFunc(glsl->colorTintLoc, countof(tints), tints[0]);	//colourmapping and glowmod.
 	GL_Uniform1iFunc (glsl->fogModeLoc, Fog_GetMode());
-	if (!depthonly && r_alias_outline_phase == ALIAS_OUTLINE_PHASE_NORMAL &&
+	if (!depthonly && (r_alias_outline_phase == ALIAS_OUTLINE_PHASE_NORMAL ||
+		r_alias_outline_phase == ALIAS_OUTLINE_PHASE_GRENADE_GLOW) &&
 		(grenade_remaining = R_GrenadeGlowTimeRemaining(e)) >= 0.0f)
 	{
-		R_GrenadeGlowColor(grenade_remaining, grenade_glow);
-		GL_Uniform4fvFunc(glsl->grenadeGlowLoc, 1, grenade_glow);
+		R_GrenadeGlowColor(grenade_remaining, &grenade_glow);
+		if (r_alias_outline_phase == ALIAS_OUTLINE_PHASE_NORMAL)
+			GL_Uniform4fvFunc(glsl->grenadeGlowLoc, 1, grenade_glow.surface);
 	}
 
 	if (depthonly)
@@ -2585,6 +2645,11 @@ static void GL_DrawAliasFrame_GLSL (aliasglsl_t *glsl, aliashdr_t *paliashdr, le
 		GL_Uniform1iFunc(glsl->useShellTexLoc, 0);
 		glDrawElements(GL_TRIANGLES, paliashdr->numindexes, GL_UNSIGNED_SHORT,
 			currententity->model->meshindexesvboptr + paliashdr->eboofs);
+	}
+	else if (r_alias_outline_phase == ALIAS_OUTLINE_PHASE_GRENADE_GLOW)
+	{
+		if (grenade_glow.halo[3] > 0.0f)
+			R_DrawGrenadeGlow(glsl, paliashdr, e, &grenade_glow);
 	}
 	else if (r_alias_outline_phase == ALIAS_OUTLINE_PHASE_NORMAL)
 	{
@@ -2601,8 +2666,8 @@ static void GL_DrawAliasFrame_GLSL (aliasglsl_t *glsl, aliashdr_t *paliashdr, le
 
 		if (e != &cl.viewent)
 		{
-			if (grenade_glow[3] > 0.0f)
-				R_DrawGrenadeGlow(glsl, paliashdr, e, grenade_glow);
+			if (grenade_glow.halo[3] > 0.0f)
+				R_QueueGrenadeGlow(e);
 			R_DrawPowerupPickupShell(glsl, paliashdr, &lerpdata, e); // woods #powershell
 			R_DrawAliasModelOutline(glsl, paliashdr, &lerpdata, e); // woods #routline
 		}
@@ -2663,7 +2728,7 @@ static void GL_DrawAliasFrame_GLSL (aliasglsl_t *glsl, aliashdr_t *paliashdr, le
 	}
 
 // clean up
-	if (grenade_glow[3] > 0.0f)
+	if (grenade_glow.surface[3] > 0.0f)
 		GL_Uniform4fFunc(glsl->grenadeGlowLoc, 0, 0, 0, 0);
 	GL_DisableVertexAttribArrayFunc (texCoordsAttrIndex);
 	GL_DisableVertexAttribArrayFunc (pose1VertexAttrIndex);
@@ -4600,6 +4665,7 @@ void R_BeginDeferredAliasOutlines(void)
 
 	r_alias_outline_phase = ALIAS_OUTLINE_PHASE_NORMAL;
 	r_num_deferred_alias_outlines = 0;
+	r_num_grenade_glows = 0;
 	r_alias_outline_holey = false;
 	r_alias_outline_collecting = true;
 	r_alias_outline_order_changed = false;
@@ -4862,6 +4928,28 @@ void R_DrawDeferredAliasOutlines(void)
 	r_alias_outline_ref = 1;
 	r_alias_outline_refmask = 0x01;
 	r_num_deferred_alias_outlines = 0;
+}
+
+/*
+=============
+R_DrawDeferredGrenadeGlows
+
+Halos are additive and write no depth, so a model filled after the grenade
+would paint over one. Draw them once every opaque model is in place.
+=============
+*/
+void R_DrawDeferredGrenadeGlows(void)
+{
+	int i;
+
+	r_alias_outline_phase = ALIAS_OUTLINE_PHASE_GRENADE_GLOW;
+	for (i = 0; i < r_num_grenade_glows; ++i)
+	{
+		currententity = r_grenade_glows[i];
+		R_DrawAliasModel(currententity);
+	}
+	r_alias_outline_phase = ALIAS_OUTLINE_PHASE_NORMAL;
+	r_num_grenade_glows = 0;
 }
 
 //johnfitz -- values for shadow matrix
