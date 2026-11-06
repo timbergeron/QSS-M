@@ -32,6 +32,7 @@ void SCR_LoadPics (void);
 
 void SCR_UpdateScreen (void);
 qboolean SCR_GetLaserPoint (vec3_t point);
+float SCR_GrenadeGlowTimeRemaining(int entnum); // scr_showgrenadecounter 3
 // Takes ownership of malloc'ed pixels; copies them once the image worker has encoded them.
 qboolean SCR_CopyImageToClipboard (byte *pixels, int width, int height,
 	clipboard_pixels_t layout, qboolean bottom_up, const char *label);

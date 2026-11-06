@@ -1088,6 +1088,7 @@ static void GrenadeCounter_Completion_f(cvar_t* cvar, const char* partial)
 	Con_AddToTabList("0", partial, "off", NULL);
 	Con_AddToTabList("1", partial, "center-screen bar", NULL);
 	Con_AddToTabList("2", partial, "small bars above grenade models", NULL);
+	Con_AddToTabList("3", partial, "pulsing orange/red grenade glow", NULL);
 }
 
 /*
@@ -3905,6 +3906,55 @@ void SCR_DrawMovementKeys(void)
 
 /*
 ===============
+SCR_GrenadeGlowTimeRemaining -- woods #nadecount
+===============
+*/
+/* Authoritative fuse for mode 3, preserving the caller's VM (including CSQC).
+ * Remote servers do not send nextthink, so never guess their grenade fuses.
+ */
+float SCR_GrenadeGlowTimeRemaining(int entnum)
+{
+	qcvm_t *oldvm;
+	edict_t *ent;
+	float remaining = -1.0f;
+
+	if ((int)scr_showgrenadecounter.value != 3 || cls.state != ca_connected ||
+		!sv.active || cls.demoplayback || cl.intermission || qeintermission || crxintermission ||
+		!cl.entities || entnum <= 0 || entnum >= sv.qcvm.num_edicts || entnum >= cl.num_entities ||
+		cl.viewentity <= 0 || cl.viewentity >= sv.qcvm.num_edicts)
+		return -1.0f;
+
+	oldvm = qcvm;
+	if (oldvm != &sv.qcvm)
+	{
+		if (oldvm)
+			PR_SwitchQCVM(NULL);
+		PR_SwitchQCVM(&sv.qcvm);
+	}
+
+	ent = EDICT_NUM(entnum);
+	if (!ent->free && ent->v.classname &&
+		!strcmp(PR_GetString(ent->v.classname), "grenade") &&
+		ent->v.owner == EDICT_TO_PROG(EDICT_NUM(cl.viewentity)) &&
+		ent->v.model && *PR_GetString(ent->v.model) &&
+		ent->v.modelindex == cl.entities[entnum].netstate.modelindex)
+	{
+		remaining = !ent->v.touch ? 0.0f : ent->v.nextthink - cl.time;
+		if (!(remaining >= 0.0f && remaining < GRENADE_EXPLOSION_TIME))
+			remaining = -1.0f;
+	}
+
+	if (oldvm != &sv.qcvm)
+	{
+		PR_SwitchQCVM(NULL);
+		if (oldvm)
+			PR_SwitchQCVM(oldvm);
+	}
+	return remaining;
+}
+
+/*
+===============
 SCR_DrawGrenadeTimer -- woods #nadecount
 ===============
 */
@@ -3915,7 +3965,7 @@ void SCR_DrawGrenadeTimer(void)
 	static float smooth_time_frac = -1.0f;
 
 	if (cls.state != ca_connected || !scr_showgrenadecounter.value ||
-		(int)scr_showgrenadecounter.value == 2)
+		(int)scr_showgrenadecounter.value == 2 || (int)scr_showgrenadecounter.value == 3)
 	{
 		finish_state = false;
 		last_time_remaining = -1.0f;

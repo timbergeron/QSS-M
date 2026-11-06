@@ -26,7 +26,7 @@ else:
     alias_delete = 'void GLAlias_DeleteShaders (void)\n{\nint i;\n' + alias[start:end] + '\n}\n'
 world_delete = function(world, 'static void GLWorld_DeleteShaderPrograms (void)')
 uniforms = sorted(set(re.findall(r'^\t(\w+) =', world_delete, re.M)) -
-    {'r_world_program', 'r_world_instanced_program'})
+    {'r_world_program', 'r_world_instanced_program', 'r_grass_program'})
 water_fields = sorted(set(re.findall(r'r_water\[i\]\.(\w+)', world_delete)) - {'program'})
 
 source = r'''
@@ -34,14 +34,14 @@ source = r'''
 #include <stdio.h>
 #include <string.h>
 typedef unsigned int GLuint;
-#define countof(a) (sizeof(a)/sizeof((a)[0]))
+#define countof(a) ((int)(sizeof(a)/sizeof((a)[0])))
 #define ALIAS_GLSL_MODES 2
 static int gl_glsl_able = 1, gl_num_programs, deleted;
 static int gl_vbo_able = 1, gl_bmodel_vbo = 1, gl_glsl_water_able = 1;
 static GLuint gl_programs[32];
 static int alive[32];
 static struct { GLuint program; int uniform; } r_alias_glsl[ALIAS_GLSL_MODES], r_alias_inst_glsl;
-static GLuint r_world_program, r_world_instanced_program;
+static GLuint r_world_program, r_world_instanced_program, r_grass_program;
 static void GL_DeleteProgramFunc(GLuint id) { assert(id < 32 && alive[id]); alive[id] = 0; deleted++; }
 static void R_ItemTimersShutdownGL(void) {}
 static void PolyBlend_DeleteVignetteTexture(void) {}

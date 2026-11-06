@@ -160,6 +160,7 @@ typedef struct
 	GLint shellTimeLoc; // woods #powershell
 	GLint shellWaveParamsLoc; // woods #powershell
 	GLint fogModeLoc;
+	GLint grenadeGlowLoc;
 } aliasglsl_t;
 static aliasglsl_t r_alias_glsl[ALIAS_GLSL_MODES];
 static aliasglsl_t r_alias_inst_glsl;
@@ -464,6 +465,7 @@ void GLAlias_CreateShaders (void)
 			"uniform int isOutlinePass;      // Indicates if this is the outline pass\n" // woods #routline
 			"uniform vec4 outlineColor;       // Color to use for the outline\n" // woods #routline
 			"uniform int FogMode;\n"
+			"uniform vec4 GrenadeGlow;\n"
 			"\n"
 			"varying vec2 ShellCoord;\n" // woods #powershell
 			"varying vec2 ShellCoord2;\n" // woods #powershell
@@ -492,6 +494,13 @@ void GLAlias_CreateShaders (void)
 			"\n"
 			"void main()\n"
 			"{\n"
+			"    if (isOutlinePass == 4)\n"
+			"    {\n"
+			"        if (UseAlphaTest && texture2D(Tex, gl_TexCoord[0].xy).a < 0.666) discard;\n"
+			"        float fog = clamp(FogFactor(FogFragCoord), 0.0, 1.0) * gl_Fog.color.a;\n"
+			"        gl_FragColor = vec4(outlineColor.rgb, outlineColor.a * fog);\n"
+			"        return;\n"
+			"    }\n"
 			"if (isOutlinePass == 1 || isOutlinePass == 3)\n" // woods #powershell -- flat outline or glow
 			"    {\n"
 			"        // Render the outline with a solid color\n"
@@ -532,12 +541,18 @@ void GLAlias_CreateShaders (void)
 			"	if (ColourTint[1].a != 0.0) result.rgb += texture2D(UpperTex, gl_TexCoord[0].xy).rgb * ColourTint[1].rgb;\n"	//personal/upper/torso
 			"	if (UseAlphaTest && (result.a < 0.666))\n"
 			"		discard;\n"
+			"    vec3 grenadeBase = result.rgb;\n"
 			"	result *= gl_Color;\n"	//vertex lighting results (and colormod).
 			"	if (UseOverbright)\n"
 			"		result.rgb *= 2.0;\n"
 			"	if (UseFullbrightTex)\n"
 			"		result += texture2D(FullbrightTex, gl_TexCoord[0].xy) * ColourTint[2];\n" //fullbrights (with glowmod)
 			"	result = clamp(result, 0.0, 1.0);\n"
+			"    if (GrenadeGlow.a > 0.0)\n"
+			"    {\n"
+			"        float detail = dot(grenadeBase, vec3(0.299, 0.587, 0.114));\n"
+			"        result.rgb = mix(result.rgb, GrenadeGlow.rgb * (0.55 + 0.45 * detail), GrenadeGlow.a);\n"
+			"    }\n"
 			"	float fog = FogFactor(FogFragCoord);\n"
 			"	fog = clamp(fog, 0.0, 1.0) * gl_Fog.color.a;\n"
 			"	result.rgb = mix(gl_Fog.color.rgb, result.rgb, fog);\n"
@@ -609,6 +624,7 @@ void GLAlias_CreateShaders (void)
 			glsl->shellTimeLoc = GL_GetUniformLocation(&glsl->program, "shellTime");
 			glsl->shellWaveParamsLoc = GL_GetUniformLocation(&glsl->program, "shellWaveParams");
 			glsl->fogModeLoc = GL_GetUniformLocation(&glsl->program, "FogMode");
+			glsl->grenadeGlowLoc = GL_GetUniformLocation (&glsl->program, "GrenadeGlow");
 
 			//we can do this here, its not going to change.
 			GL_UseProgramFunc (glsl->program);
@@ -660,6 +676,7 @@ void GLAlias_CreateShaders (void)
 			glsl->shellTimeLoc = GL_GetUniformLocation (&glsl->program, "shellTime");
 			glsl->shellWaveParamsLoc = GL_GetUniformLocation (&glsl->program, "shellWaveParams");
 			glsl->fogModeLoc = GL_GetUniformLocation (&glsl->program, "FogMode");
+			glsl->grenadeGlowLoc = GL_GetUniformLocation (&glsl->program, "GrenadeGlow");
 
 			GL_UseProgramFunc (glsl->program);
 			GL_Uniform1iFunc (glsl->texLoc, 0);
@@ -2286,6 +2303,78 @@ static void GL_BindAliasPose (aliashdr_t *paliashdr, const lerpdata_t *lerpdata)
 	}
 }
 
+/* Only network entities can be paired with local server edicts. Use integer
+ * addresses so temporary, static and CSQC entities never incur pointer UB.
+ */
+static float R_GrenadeGlowTimeRemaining(const entity_t *e)
+{
+	extern cvar_t scr_showgrenadecounter;
+	uintptr_t offset;
+
+	if ((int)scr_showgrenadecounter.value != 3 || !sv.active || !e || !cl.entities ||
+		(uintptr_t)e < (uintptr_t)cl.entities)
+		return -1.0f;
+	offset = (uintptr_t)e - (uintptr_t)cl.entities;
+	if (offset % sizeof(*e) || offset / sizeof(*e) >= (uintptr_t)cl.num_entities)
+		return -1.0f;
+	return SCR_GrenadeGlowTimeRemaining((int)(offset / sizeof(*e)));
+}
+
+static void R_GrenadeGlowColor(float remaining, float color[4])
+{
+	float elapsed = CLAMP(0.0f, 1.0f - remaining / 2.5f, 1.0f);
+	/* Integral of a 1.1 -> 5 Hz acceleration: continuous phase, no frame
+ * accumulation, and a separate clock for each grenade's remaining fuse.
+ */
+	float cycles = 2.5f * (1.1f * elapsed + 1.3f * elapsed * elapsed * elapsed);
+	float pulse = 0.5f - 0.5f * cosf(2.0f * M_PI * cycles);
+
+	color[0] = 1.0f;
+	color[1] = 0.42f - 0.35f * elapsed;
+	color[2] = 0.025f - 0.017f * elapsed;
+	color[3] = 0.10f + 0.12f * elapsed + (0.12f + 0.36f * elapsed) * pulse;
+}
+
+/* Four faint expanded silhouettes form a compact halo. The model's stencil
+ * excludes its interior, depth hides walls, and pass 4 attenuates it in fog.
+ * The surface tint still works on hardware without a stencil buffer.
+ */
+static void R_DrawGrenadeGlow(aliasglsl_t *glsl, aliashdr_t *hdr, entity_t *e, const float color[4])
+{
+	float meshunit = (fabsf(hdr->scale[0]) + fabsf(hdr->scale[1]) + fabsf(hdr->scale[2])) / 3.0f;
+	int i;
+
+	if (!gl_stencilbits || meshunit <= 0.0f || entalpha < 1.0f)
+		return;
+	glPushAttrib(GL_ENABLE_BIT | GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT);
+	glEnable(GL_STENCIL_TEST);
+	glStencilFunc(GL_NOTEQUAL, 1, 0x01);
+	glStencilOp(GL_KEEP, GL_KEEP, GL_KEEP);
+	glStencilMask(0);
+	glEnable(GL_DEPTH_TEST);
+	glDepthFunc(GL_LEQUAL);
+	glDepthMask(GL_FALSE);
+	glEnable(GL_BLEND);
+	glBlendFunc(GL_SRC_ALPHA, GL_ONE);
+	GL_Uniform1iFunc(glsl->isOutlinePassLoc, 4);
+	GL_Uniform1iFunc(glsl->shellModeLoc, 2);
+	GL_Uniform1fFunc(glsl->shellTimeLoc, 0.0f);
+	GL_Uniform4fFunc(glsl->shellWaveParamsLoc, 0, 0, 0, 0);
+	for (i = 0; i < 4; ++i)
+	{
+		GL_Uniform1fFunc(glsl->outlineWidthLoc, (0.30f + 0.30f * i) / meshunit);
+		GL_Uniform4fFunc(glsl->outlineColorLoc, color[0], color[1], color[2],
+			color[3] * 0.12f * (4 - i) / 4.0f);
+		glDrawElements(GL_TRIANGLES, hdr->numindexes, GL_UNSIGNED_SHORT,
+			e->model->meshindexesvboptr + hdr->eboofs);
+		rs_aliaspasses += hdr->numtris;
+	}
+	glPopAttrib();
+	GL_Uniform1iFunc(glsl->isOutlinePassLoc, 0);
+	GL_Uniform1iFunc(glsl->shellModeLoc, 0);
+	GL_Uniform1fFunc(glsl->outlineWidthLoc, 0.0f);
+}
+
 /*
 =============
 GL_DrawAliasFrame_GLSL -- ericw
@@ -2303,6 +2392,8 @@ Based on code by MH from RMQEngine
 static void GL_DrawAliasFrame_GLSL (aliasglsl_t *glsl, aliashdr_t *paliashdr, lerpdata_t lerpdata, struct skintextures_s tex, entity_t *e, qboolean depthonly, qboolean surfacefade)
 {
 	GLfloat	tints[3][4];
+	float grenade_glow[4] = {0, 0, 0, 0};
+	float grenade_remaining;
 	float	blend;
 	qboolean applied_shell;
 	int shell_unit;
@@ -2478,6 +2569,12 @@ static void GL_DrawAliasFrame_GLSL (aliasglsl_t *glsl, aliashdr_t *paliashdr, le
 	GL_Uniform1iFunc (glsl->useAlphaTestLoc, (currententity->model->flags & MF_HOLEY) ? 1 : 0);
 	GL_Uniform4fvFunc(glsl->colorTintLoc, countof(tints), tints[0]);	//colourmapping and glowmod.
 	GL_Uniform1iFunc (glsl->fogModeLoc, Fog_GetMode());
+	if (!depthonly && r_alias_outline_phase == ALIAS_OUTLINE_PHASE_NORMAL &&
+		(grenade_remaining = R_GrenadeGlowTimeRemaining(e)) >= 0.0f)
+	{
+		R_GrenadeGlowColor(grenade_remaining, grenade_glow);
+		GL_Uniform4fvFunc(glsl->grenadeGlowLoc, 1, grenade_glow);
+	}
 
 	if (depthonly)
 	{
@@ -2504,6 +2601,8 @@ static void GL_DrawAliasFrame_GLSL (aliasglsl_t *glsl, aliashdr_t *paliashdr, le
 
 		if (e != &cl.viewent)
 		{
+			if (grenade_glow[3] > 0.0f)
+				R_DrawGrenadeGlow(glsl, paliashdr, e, grenade_glow);
 			R_DrawPowerupPickupShell(glsl, paliashdr, &lerpdata, e); // woods #powershell
 			R_DrawAliasModelOutline(glsl, paliashdr, &lerpdata, e); // woods #routline
 		}
@@ -2564,6 +2663,8 @@ static void GL_DrawAliasFrame_GLSL (aliasglsl_t *glsl, aliashdr_t *paliashdr, le
 	}
 
 // clean up
+	if (grenade_glow[3] > 0.0f)
+		GL_Uniform4fFunc(glsl->grenadeGlowLoc, 0, 0, 0, 0);
 	GL_DisableVertexAttribArrayFunc (texCoordsAttrIndex);
 	GL_DisableVertexAttribArrayFunc (pose1VertexAttrIndex);
 	GL_DisableVertexAttribArrayFunc (pose2VertexAttrIndex);
@@ -3558,6 +3659,10 @@ qboolean R_AliasInst_Eligible (entity_t *e)
 	else if (R_AliasInst_SpecialModel(e->model->name))
 	{
 		eligible = false;
+	}
+	else if (R_GrenadeGlowTimeRemaining(e) >= 0.0f)
+	{
+		eligible = false; // A fuse tint and halo need this grenade's own draw.
 	}
 
 	return eligible;

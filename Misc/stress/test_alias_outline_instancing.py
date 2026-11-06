@@ -31,6 +31,7 @@ typedef int qboolean;
 #define EFLAGS_VIEWMODEL 1
 #define EFLAGS_COLOURMAPPED 2
 #define EF_NOSHADOW 1
+#define MF_HOLEY 2
 #define ENTSCALE_DEFAULT 16
 #define PV_QUAKE1 1
 #define ALIAS_GLSL_BASIC 0
@@ -45,7 +46,7 @@ typedef struct skintextures_s {void *base,*luma,*lower,*upper;} skintextures_t;
 typedef struct {int program;} aliasglsl_t;
 typedef struct {int pose1,pose2;} lerpdata_t;
 typedef struct {int poseverttype,nextsurface,numbones,numindexes,numverts_vbo,nummorphposes,numskins;float scale[3],scale_origin[3];skintextures_t textures[1][4];} aliashdr_t;
-typedef struct {int type,needload,meshvbo,meshindexesvbo;char *name;aliashdr_t *hdr;} qmodel_t;
+typedef struct {int type,needload,meshvbo,meshindexesvbo;char *name;aliashdr_t *hdr;int flags;} qmodel_t;
 typedef struct {qmodel_t *model;int eflags,effects,skinnum,alias_outline_order;float alpha;struct {int colormap,scale,tagentity,glowmod[3];} netstate;} entity_t;
 typedef struct {entity_t *ent;qmodel_t *model;lerpdata_t lerp;float scale[3],scale_origin[3];skintextures_t tex;int skin;} alias_inst_rec_t;
 static cvar_t gl_alias_instancing={1},r_outline={5},gl_fullbrights={1};
@@ -54,9 +55,11 @@ static int gl_bmodel_instancing_able=1,r_drawflat_cheatsafe,r_fullbright_cheatsa
 static int r_alias_outline_collecting=1,gl_stencilbits=8,r_alias_outline_phase;
 static entity_t *r_deferred_alias_outlines[2];
 static int r_num_deferred_alias_outlines,outline_calls,culled;
-static qboolean r_alias_outline_order_changed;
+static qboolean r_alias_outline_order_changed, r_alias_outline_holey;
 static qboolean R_QueueDeferredAliasOutline(entity_t *e);
 static float entalpha;
+static float grenade_remaining = -1;
+static float R_GrenadeGlowTimeRemaining(const entity_t *e) {return grenade_remaining;}
 static struct {entity_t viewent;double time;} cl;
 static void *Mod_Extradata(qmodel_t *m) {return m->hdr;}
 static void R_SetupAliasFrame(aliashdr_t *h,entity_t *e,lerpdata_t *l) {l->pose1=l->pose2=0;}
@@ -77,6 +80,7 @@ int main(void) {
  e.model=&m;e.alpha=1;e.netstate.scale=ENTSCALE_DEFAULT;
  e.netstate.glowmod[0]=e.netstate.glowmod[1]=e.netstate.glowmod[2]=32;
  h.poseverttype=PV_QUAKE1;h.numindexes=6;h.numverts_vbo=4;h.nummorphposes=1;h.numskins=1;
+ grenade_remaining=1;CHECK(!R_AliasInst_Eligible(&e),"fuse glow must bypass instancing");grenade_remaining=-1;
  CHECK(R_AliasInst_Eligible(&e),"deferred opaque fill should be eligible with outlines enabled");
  CHECK(R_AliasInst_Prepare(&e,&rec)==ALIAS_INST_PREP_OK,"compatible model should prepare");
  CHECK(outline_calls==1 && r_deferred_alias_outlines[0]==&e,"instanced fill must retain its deferred outline");
