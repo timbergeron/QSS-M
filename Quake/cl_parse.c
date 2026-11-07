@@ -4156,7 +4156,7 @@ if (!strcmp(printtext, "Client ping times:\n") && (cl.expectingpingtimes > realt
 			if (!strcmp(r_particledesc.string, ""))
 				strcpy(particles, "classic");
 			else
-				strncpy(particles, r_particledesc.string, sizeof(particles) - 1);
+				q_strlcpy(particles, r_particledesc.string, sizeof(particles));
 
 			if (r_lightmap.value == 1 || gl_picmip.value >= 2)
 				strcpy(textures, "OFF");
