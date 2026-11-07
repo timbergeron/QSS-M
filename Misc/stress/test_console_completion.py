@@ -54,6 +54,9 @@ static cvar_t cl_chatmode = {.value = 1}, con_autohint = {.value = 1},
 static struct { int state; } cls = {ca_connected};
 static struct { int gametype, modtype; } cl;
 static char key_lines[CMDLINES][MAXCMDLINE], key_tabhint[MAXCMDLINE], key_tabpartial[MAXCMDLINE];
+static qboolean key_tabhint_midname;
+typedef struct tab_s { const char *matchname; struct tab_s *next; } tab_t;
+static tab_t *tablist;
 static int key_linepos, edit_line, history_line, command_completions;
 static char submitted[1024];
 static size_t q_strlcpy(char *out, const char *in, size_t size) {
@@ -104,6 +107,10 @@ for declaration in ("static void ConAuto_Refresh (", "const char *Key_GetConsole
                     "qboolean Key_ConsoleAcceptAutocomplete (", "static void Key_ConsoleCommitTabHint ("):
     source += function(keys, declaration)
 
+for declaration in ("static qboolean Con_SegmentIsChat (",
+                    "static qboolean Con_TabListSharesPrefix ("):
+    source += function(console, declaration)
+
 # Execute the production autohint gates; record reaching the completion engine.
 gate = console[console.index("\tkey_tabhint[0] = '\\0';", console.index("void Con_TabComplete (")):]
 source += "void Con_TabComplete(tabcomplete_t mode) {\n"
@@ -115,6 +122,14 @@ dispatch = function(keys, "static void Key_ConsoleKey (int key)").replace(
     "static void Key_ConsoleKey", "void Key_Console", 1)
 source += dispatch[:dispatch.index("\n\tcase K_BACKSPACE:")] + "\n\t}\n}\n"
 source += r'''
+static qboolean chat(const char *text) {
+    return Con_SegmentIsChat(text, text + strlen(text));
+}
+static qboolean shares(const char *text, const char *a, const char *b) {
+    tab_t second = {b, NULL}, first = {a, &second};
+    second.next = &first; tablist = &first;
+    return Con_TabListSharesPrefix(text);
+}
 static void line(const char *text) {
     key_lines[edit_line][0] = ']';
     q_strlcpy(key_lines[edit_line] + 1, text, MAXCMDLINE - 1);
@@ -199,6 +214,15 @@ int main(void) {
             Key_Console(submit_keys[i]); assert(!strcmp(submitted, "sensitivity\n"));
         }
     }
+    // A hint from inside a name is display-only: "fun" must not become "funkf".
+    cl_chatmode.value = 0;
+    line("map fun"); strcpy(key_tabhint, "kf"); key_tabhint_midname = true;
+    submitted[0] = 0; Key_Console(K_ENTER);
+    assert(!strcmp(submitted, "map fun\n"));
+    key_tabhint_midname = false;
+    line("map fun"); strcpy(key_tabhint, "kf");
+    submitted[0] = 0; Key_Console(K_ENTER);
+    assert(!strcmp(submitted, "map funkf\n"));
     // Quotes must clear a stale color hint and preserve the literal on submit.
     cl_chatmode.value = 0;
     const char *quoted[] = {"gl_teamcolor \"", "gl_teamcolor \"\"",
@@ -235,6 +259,22 @@ int main(void) {
     cl_chat_autocomplete.value = 0; assert(!*Key_GetConsoleAutocompleteSuffix());
     cl_chat_autocomplete.value = 1; assert(*Key_GetConsoleAutocompleteSuffix());
     cls.state = ca_disconnected; assert(!*Key_GetConsoleAutocompleteSuffix());
+
+    // Chat text is never completed, quoted or not; other commands still are.
+    const char *chats[] = {"say fun", "say ", "SAY fun", "  say fun", "say_team fun",
+        "say \"fun", "say_team \"fun", "say\"fun", "say hi \"fun"};
+    for (size_t i = 0; i < sizeof(chats)/sizeof(*chats); ++i) assert(chat(chats[i]));
+    const char *notchats[] = {"", "say", "say_team", "sa", "map fun", "sayx fun",
+        "say_teamx fun", "bind \"fun"};
+    for (size_t i = 0; i < sizeof(notchats)/sizeof(*notchats); ++i) assert(!chat(notchats[i]));
+    const char *cursor = "say fun";
+    assert(!Con_SegmentIsChat(cursor, cursor + 3)); // cursor still on the command name
+
+    // Shared text counts only when it starts every match.
+    assert(shares("ra_funkf", "ra_funkf", "ra_funkf2"));
+    assert(shares("RA_FUN", "ra_funkf", "ra_funkf2"));
+    assert(!shares("funkf", "ra_funkf", "xa_funkf2"));
+    assert(!shares("funkf", "funkf2", "ra_funkf"));
     puts("Console completion: prefix ownership, dictionary cache, quoted literals, Tab and all submit keys passed");
 }
 '''

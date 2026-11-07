@@ -248,6 +248,7 @@ extern	qboolean	keydown[MAX_KEYS];
 
 extern	char	key_lines[CMDLINES][MAXCMDLINE];
 extern	char	key_tabhint[MAXCMDLINE]; // woods #iwtabcomplete
+extern	qboolean	key_tabhint_midname;
 extern	int		edit_line;
 extern	size_t	key_linepos; // woods -- int to size_t
 extern	int		key_insert;

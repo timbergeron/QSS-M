@@ -31,6 +31,7 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 
 char		key_lines[CMDLINES][MAXCMDLINE];
 char		key_tabhint[MAXCMDLINE]; // woods #iwtabcomplete
+qboolean	key_tabhint_midname; // hint continues a match inside a name, so it is display-only
 
 size_t	key_linepos = 0; // woods -- int to size_t
 int		key_insert = true;	//johnfitz -- insert key toggle (for editing)
@@ -1066,13 +1067,17 @@ Key_ConsoleCommitTabHint
 The console's auto-hint is drawn after the cursor but is not part of
 key_lines[].  Commit it when Enter is pressed so accepting a visible
 completion has the same effect as pressing Tab first.
+
+A hint for a match inside a name is only the tail of that name: "fun" against
+"ra_funkf" hints "kf".  Committing it would produce "funkf", which is neither
+what was typed nor the name, so those hints are left as display only.
 ====================
 */
 static void Key_ConsoleCommitTabHint (char *workline)
 {
 	size_t line_len, hint_len, copy_len;
 
-	if (!key_tabhint[0])
+	if (!key_tabhint[0] || key_tabhint_midname)
 		return;
 
 	line_len = strlen(workline);

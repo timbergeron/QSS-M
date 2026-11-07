@@ -3116,6 +3116,7 @@ void Con_DedicatedTabComplete(char* text, size_t buf_size, int* textlen, int* cu
 	char saved_line[MAXCMDLINE];
 	char saved_tabpartial[MAXCMDLINE];
 	char saved_tabhint[MAXCMDLINE];
+	qboolean saved_tabhint_midname = key_tabhint_midname;
 	size_t saved_pos = key_linepos;
 	qboolean saved_shift = keydown[K_SHIFT];
 
@@ -3179,6 +3180,7 @@ void Con_DedicatedTabComplete(char* text, size_t buf_size, int* textlen, int* cu
 	key_linepos = saved_pos;
 	memcpy(key_tabpartial, saved_tabpartial, sizeof(saved_tabpartial));
 	memcpy(key_tabhint, saved_tabhint, sizeof(saved_tabhint));
+	key_tabhint_midname = saved_tabhint_midname;
 	keydown[K_SHIFT] = saved_shift;
 }
 
@@ -3604,6 +3606,34 @@ static qboolean Con_OpenQuoteIsCvarValue(const char* command_start, const char* 
 ParseCommand -- woods #iwtabcomplete
 ============
 */
+/*
+============
+Con_SegmentIsChat
+
+True when the command segment [s, end) is say or say_team with its message
+already started.  A word that reaches end is still the command name being typed.
+============
+*/
+static qboolean Con_SegmentIsChat (const char *s, const char *end)
+{
+	const char *word;
+	size_t len;
+
+	while (s < end && *s == ' ')
+		s++;
+	word = s;
+	while (s < end && *s != ' ' && *s != '\t' && *s != '\"')
+		s++;
+	if (s == end)
+		return false;
+
+	len = (size_t)(s - word);
+	return (len == 3 && !q_strncasecmp(word, "say", 3)) ||
+		(len == 8 && !q_strncasecmp(word, "say_team", 8));
+}
+
+static qboolean parsed_command_is_chat; // set by ParseCommand
+
 static const char* ParseCommand (void)
 {
 	char buf[MAXCMDLINE];
@@ -3637,6 +3667,9 @@ static const char* ParseCommand (void)
 		else if (!quote && c == '/' && *str == '/')
 			break;
 	}
+
+	// inside an open quote ret is the quoted text; the command is before it
+	parsed_command_is_chat = Con_SegmentIsChat(quote ? quote : ret, end);
 
 	if (quote && Con_OpenQuoteIsCvarValue(quote, quote_contents))
 	{
@@ -6148,6 +6181,11 @@ static void BuildTabList (const char* partial)
 
 	ParseCommand();
 
+	// chat is free-form text; matching it against cvars, commands and aliases
+	// only rewrites the message
+	if (parsed_command_is_chat)
+		return;
+
 	if (Cmd_Argc() >= 2)
 	{
 		cvar = Cvar_FindVar(Cmd_Argv(0));
@@ -6381,6 +6419,29 @@ static void Con_PrintTabList(void)
 
 /*
 ============
+Con_TabListSharesPrefix
+
+True when every match starts with text.  Matches can be substrings, so the text
+they share may be a piece from the middle of each name rather than a usable start.
+============
+*/
+static qboolean Con_TabListSharesPrefix (const char *text)
+{
+	size_t len = strlen(text);
+	const tab_t *t = tablist;
+
+	do
+	{
+		if (q_strncasecmp(t->matchname, text, len))
+			return false;
+		t = t->next;
+	} while (t != tablist);
+
+	return true;
+}
+
+/*
+============
 Con_TabComplete -- johnfitz -- woods #iwtabcomplete
 ============
 */
@@ -6394,6 +6455,7 @@ void Con_TabComplete (tabcomplete_t mode)
 	int		mark, i;
 
 	key_tabhint[0] = '\0';
+	key_tabhint_midname = false;
 	if (mode == TABCOMPLETE_AUTOHINT)
 	{
 		key_tabpartial[0] = '\0';
@@ -6470,6 +6532,9 @@ void Con_TabComplete (tabcomplete_t mode)
 		{
 			// First time, just show maximum matching chars -- S.A.
 			match = bash_partial;
+			// no common start: keep what was typed, the next Tab cycles the list
+			if (mode == TABCOMPLETE_USER && !Con_TabListSharesPrefix(match))
+				match = key_tabpartial;
 		}
 	}
 	else
@@ -6500,6 +6565,11 @@ void Con_TabComplete (tabcomplete_t mode)
 	if (mode == TABCOMPLETE_AUTOHINT)
 	{
 		size_t len = strlen(partial);
+		const char *source = selected ? selected->matchname : match;
+
+		// Enter may only add a hint that continues the start of every match
+		key_tabhint_midname = q_strcasestr (source, partial) != source ||
+			!Con_TabListSharesPrefix(source);
 		if (!(selected && Con_CopyTabHint(selected, partial, key_tabhint, sizeof(key_tabhint))))
 		{
 			match = q_strcasestr (match, partial);
