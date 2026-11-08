@@ -21,11 +21,11 @@
   {
     "name": "zlib",
     "source": "zlib",
-    "vendored": "1.3.2",
+    "vendored": "1.4",
     "dlls": ["Windows/zlib/x86/zlib1.dll", "Windows/zlib/x64/zlib1.dll"],
     "packages": [
-      { "repository": "mingw32", "name": "mingw-w64-i686-zlib", "baseline": "1.3.2-3" },
-      { "repository": "mingw64", "name": "mingw-w64-x86_64-zlib", "baseline": "1.3.2-3" }
+      { "repository": "mingw32", "name": "mingw-w64-i686-zlib", "baseline": "1.4-2" },
+      { "repository": "mingw64", "name": "mingw-w64-x86_64-zlib", "baseline": "1.4-2" }
     ]
   },
   {

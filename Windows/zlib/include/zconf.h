@@ -8,6 +8,7 @@
 #ifndef ZCONF_H
 #define ZCONF_H
 
+
 /*
  * If you *really* need a unique prefix for all types and library functions,
  * compile with -DZ_PREFIX. The "standard" zlib should be compiled without it.
@@ -499,6 +500,10 @@ typedef uLong FAR uLongf;
 
 #if defined(_LFS64_LARGEFILE) && _LFS64_LARGEFILE-0
 #  define Z_LFS64
+#elif defined(_WIN32) && !defined(__CYGWIN__) && !defined(__BORLANDC__) && \
+      !defined(UNDER_CE) && (defined(__MINGW32__) || !defined(__GNUC__))
+#  define Z_LFS64       /* native Windows has 64-bit file offsets */
+#  define Z_WINLFS
 #endif
 
 #if defined(_LARGEFILE64_SOURCE) && defined(Z_LFS64)
@@ -519,7 +524,7 @@ typedef uLong FAR uLongf;
 #  define z_off_t long
 #endif
 
-#if (defined(_WIN32) && defined(__GNUC__) && defined(_LARGEFILE64_SOURCE)) || defined(Z_LARGE64)
+#if !defined(_WIN32) && defined(Z_LARGE64)
 #  define z_off64_t off64_t
 #elif defined(__MINGW32__)
 #  define z_off64_t long long
@@ -529,6 +534,11 @@ typedef uLong FAR uLongf;
 #  define z_off64_t offset_t
 #else
 #  define z_off64_t z_off_t
+#endif
+
+#if defined(Z_WINLFS) && defined(Z_WANT64) && !defined(Z_SOLO)
+#  undef z_off_t
+#  define z_off_t z_off64_t
 #endif
 
 /* MVS linker does not support external names larger than 8 bytes */
