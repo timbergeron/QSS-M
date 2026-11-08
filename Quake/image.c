@@ -23,6 +23,12 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 
 #include "quakedef.h"
 
+#ifdef USE_ZLIB
+#include <zlib.h>
+/* Compression is supplied below; omit LodePNG's duplicate implementation. */
+#define LODEPNG_NO_COMPILE_ZLIB
+#endif
+
 #define STB_IMAGE_WRITE_IMPLEMENTATION
 #define STB_IMAGE_WRITE_STATIC
 #define STBI_WRITE_NO_STDIO
@@ -2020,6 +2026,69 @@ void Image_FreePNGMemory (void *png)
 	lodepng_free (png); /* png was allocated by lodepng */
 }
 
+#ifdef USE_ZLIB
+/* Keep LodePNG's filtering/container, but use the optimized compressor already
+   linked into the engine. Each call owns its state, including on image workers. */
+static unsigned Image_CompressPNG (unsigned char **out, size_t *outsize,
+	const unsigned char *in, size_t insize, const LodePNGCompressSettings *settings)
+{
+	z_stream stream;
+	uLong capacity;
+	size_t input_left, output_left;
+	int result;
+	(void)settings;
+
+	if (insize > ULONG_MAX)
+		return 83; /* input cannot be represented by zlib's size counters */
+	memset (&stream, 0, sizeof(stream));
+	/* Like the old fast encoder, skip match searching. zlib's Huffman path
+	   encodes the filtered pixels faster without changing their precision. */
+	if (deflateInit2 (&stream, Z_BEST_SPEED, Z_DEFLATED, MAX_WBITS, 8,
+		Z_HUFFMAN_ONLY) != Z_OK)
+		return 83;
+	capacity = deflateBound (&stream, (uLong)insize);
+	if (capacity < insize || (uLong)(size_t)capacity != capacity)
+	{
+		deflateEnd (&stream);
+		return 83;
+	}
+	*out = (unsigned char *)lodepng_malloc ((size_t)capacity);
+	if (!*out)
+	{
+		deflateEnd (&stream);
+		return 83;
+	}
+	stream.next_in = (Bytef *)in;
+	stream.next_out = *out;
+	input_left = insize;
+	output_left = capacity;
+	do
+	{
+		if (!stream.avail_in)
+		{
+			stream.avail_in = (uInt)q_min (input_left, UINT_MAX);
+			input_left -= stream.avail_in;
+		}
+		if (!stream.avail_out)
+		{
+			stream.avail_out = (uInt)q_min (output_left, UINT_MAX);
+			output_left -= stream.avail_out;
+		}
+		result = deflate (&stream, input_left ? Z_NO_FLUSH : Z_FINISH);
+	} while (result == Z_OK);
+	*outsize = (size_t)stream.total_out;
+	deflateEnd (&stream);
+	if (result != Z_STREAM_END)
+	{
+		lodepng_free (*out);
+		*out = NULL;
+		*outsize = 0;
+		return 83;
+	}
+	return 0;
+}
+#endif
+
 /*
 ============
 Image_EncodePNGMemory
@@ -2066,6 +2135,9 @@ qboolean Image_EncodePNGMemory (const byte *data, int width, int height, int bpp
 
 // set some options for faster compression
 	lodepng_state_init(&state);
+#ifdef USE_ZLIB
+	state.encoder.zlibsettings.custom_zlib = Image_CompressPNG;
+#endif
 	state.encoder.zlibsettings.use_lz77 = 0;
 	state.encoder.auto_convert = 0;
 	state.encoder.filter_strategy = LFS_PREDEFINED;

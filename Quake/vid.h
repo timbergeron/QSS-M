@@ -95,7 +95,7 @@ void VID_OnDisplayChange (void);
 void VID_Gamma_Reapply (void);
 void VID_Gamma_Frame (void);
 void VID_Gamma_FocusLost (void);
-void VID_Gamma_ApplyToBuffer (byte *buffer, size_t pixel_count, int bytes_per_pixel);
+qboolean VID_Gamma_GetCaptureTable (byte table[3][256]); // main-thread snapshot for image workers
 
 void *VID_GetWindow (void);
 qboolean VID_HasMouseOrInputFocus (void);

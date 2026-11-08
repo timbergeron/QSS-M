@@ -223,6 +223,7 @@ int	scr_tileclear_updates = 0; //johnfitz
 void SCR_ScreenShot_f (void);
 static void SCR_ScreenshotInit (void);
 static void SCR_ScreenshotConsumeCompleted (void);
+static void SCR_ScreenshotCollectReadbacks (qboolean wait);
 void TP_DrawClosestLocText(void); // woods #locext
 
 /*
@@ -6513,6 +6514,8 @@ typedef struct scr_screenshot_job_s
 	qboolean save;			/* false for clipboard-only jobs */
 	qboolean ok;
 	qboolean filtered;
+	qboolean apply_gamma;
+	byte gamma_table[3][256]; /* snapshot: video/gamma can change before encoding */
 	uint64_t clipboard_request;	/* 0 when no clipboard copy is wanted */
 	clipboard_image_t clipboard;
 	char clipboard_error[128];
@@ -6535,6 +6538,17 @@ static size_t scr_screenshot_outstanding_bytes;
 static qboolean scr_screenshot_shutdown;
 static char scr_screenshot_last_stamp[24];
 static unsigned int scr_screenshot_stamp_sequence;
+
+/* Main-thread GL state only. Pending GPU copies share the worker's limits. */
+typedef struct
+{
+	scr_screenshot_job_t *job;
+	GLuint buffer;
+	GLsync fence;
+} scr_screenshot_readback_t;
+static scr_screenshot_readback_t scr_screenshot_readbacks[SCR_SCREENSHOT_MAX_OUTSTANDING];
+static int scr_screenshot_readback_count;
+static size_t scr_screenshot_readback_bytes;
 
 static qboolean SCR_ScreenshotWrite (scr_screenshot_job_t *job)
 {
@@ -6578,6 +6592,16 @@ static qboolean SCR_ScreenshotWrite (scr_screenshot_job_t *job)
    are independent, and nothing here touches SDL video or the clipboard. */
 static void SCR_ImageJobProcess (scr_screenshot_job_t *job)
 {
+	if (job->apply_gamma)
+	{
+		size_t i;
+		for (i = 0; i < job->pixel_bytes; i += 3)
+		{
+			job->pixels[i] = job->gamma_table[0][job->pixels[i]];
+			job->pixels[i + 1] = job->gamma_table[1][job->pixels[i + 1]];
+			job->pixels[i + 2] = job->gamma_table[2][job->pixels[i + 2]];
+		}
+	}
 	if (job->save)
 		job->ok = SCR_ScreenshotWrite (job);
 	if (job->clipboard_request && !job->clipboard.data && !job->clipboard_error[0])
@@ -6748,10 +6772,11 @@ static void SCR_ScreenshotConsumeCompleted (void)
    may always queue on its own, so a large screenshot is never refused. */
 static qboolean SCR_ScreenshotRoom (size_t pixel_bytes)
 {
+	size_t queued_bytes = scr_screenshot_outstanding_bytes + scr_screenshot_readback_bytes;
 	return !scr_screenshot_shutdown &&
-		scr_screenshot_outstanding < SCR_SCREENSHOT_MAX_OUTSTANDING &&
-		(!scr_screenshot_outstanding_bytes ||
-			scr_screenshot_outstanding_bytes + pixel_bytes <= SCR_IMAGE_QUEUE_MAX_BYTES);
+		scr_screenshot_outstanding + scr_screenshot_readback_count < SCR_SCREENSHOT_MAX_OUTSTANDING &&
+		(!queued_bytes || (queued_bytes <= SCR_IMAGE_QUEUE_MAX_BYTES &&
+			pixel_bytes <= SCR_IMAGE_QUEUE_MAX_BYTES - queued_bytes));
 }
 
 static qboolean SCR_ScreenshotCanQueue (size_t pixel_bytes)
@@ -6798,8 +6823,117 @@ static qboolean SCR_ScreenshotQueue (scr_screenshot_job_t *job)
 	return true;
 }
 
+/* The CPU never maps a pending transfer during normal play. Only video restart
+   and shutdown wait; both must preserve captures before destroying GL state. */
+static void SCR_ScreenshotCollectReadbacks (qboolean wait)
+{
+	static qboolean collecting;
+	if (collecting || !scr_screenshot_readback_count)
+		return;
+	collecting = true;
+	if (wait)
+		glFinish ();
+	while (scr_screenshot_readback_count)
+	{
+		scr_screenshot_readback_t readback = scr_screenshot_readbacks[0];
+		scr_screenshot_job_t *job = readback.job;
+		GLenum status = GL_ClientWaitSyncFunc (readback.fence, 0, 0);
+		GLint binding;
+		void *pixels;
+		qboolean ok = false;
+
+		if (status == GL_TIMEOUT_EXPIRED && !wait)
+			break;
+		if (status == GL_ALREADY_SIGNALED || status == GL_CONDITION_SATISFIED)
+		{
+			job->pixels = (byte *)malloc (job->pixel_bytes);
+			if (job->pixels)
+			{
+				glGetIntegerv (GL_PIXEL_PACK_BUFFER_BINDING, &binding);
+				GL_BindBufferFunc (GL_PIXEL_PACK_BUFFER, readback.buffer);
+				pixels = GL_MapBufferFunc (GL_PIXEL_PACK_BUFFER, GL_READ_ONLY);
+				if (pixels)
+				{
+					memcpy (job->pixels, pixels, job->pixel_bytes);
+					ok = GL_UnmapBufferFunc (GL_PIXEL_PACK_BUFFER);
+				}
+				GL_BindBufferFunc (GL_PIXEL_PACK_BUFFER, binding);
+			}
+		}
+		GL_DeleteSyncFunc (readback.fence);
+		GL_DeleteBuffersFunc (1, &readback.buffer);
+		scr_screenshot_readback_count--;
+		scr_screenshot_readback_bytes -= job->pixel_bytes;
+		memmove (scr_screenshot_readbacks, scr_screenshot_readbacks + 1,
+			scr_screenshot_readback_count * sizeof(scr_screenshot_readbacks[0]));
+		if (!ok)
+		{
+			Con_SafePrintf ("Couldn't capture %s: GPU readback failed\n", job->name);
+			free (job->pixels);
+			free (job);
+		}
+		else if (!SCR_ScreenshotQueue (job))
+		{
+			SCR_ImageJobProcess (job);
+			SCR_ImageJobFinish (job, !scr_screenshot_shutdown);
+			free (job);
+		}
+	}
+	collecting = false;
+}
+
+void SCR_ScreenshotShutdownGL (void)
+{
+	SCR_ScreenshotCollectReadbacks (true);
+}
+
+/* Capture this framebuffer now, but leave the transfer in GPU-owned memory
+   until its fence signals. Restore GL state also on allocation/driver failure. */
+static qboolean SCR_ScreenshotReadback (scr_screenshot_job_t *job)
+{
+	scr_screenshot_readback_t readback;
+	GLint binding, alignment;
+	GLenum error;
+
+	if (!scr_screenshot_thread || !GL_FenceSyncFunc || !GL_ClientWaitSyncFunc ||
+		!GL_DeleteSyncFunc || scr_screenshot_readback_count == SCR_SCREENSHOT_MAX_OUTSTANDING)
+		return false;
+
+	memset (&readback, 0, sizeof(readback));
+	glGetIntegerv (GL_PIXEL_PACK_BUFFER_BINDING, &binding);
+	glGetIntegerv (GL_PACK_ALIGNMENT, &alignment);
+	while (glGetError () != GL_NO_ERROR) {}
+	GL_GenBuffersFunc (1, &readback.buffer);
+	GL_BindBufferFunc (GL_PIXEL_PACK_BUFFER, readback.buffer);
+	GL_BufferDataFunc (GL_PIXEL_PACK_BUFFER, job->pixel_bytes, NULL, GL_STREAM_READ);
+	error = glGetError ();
+	if (error == GL_NO_ERROR && readback.buffer)
+	{
+		glPixelStorei (GL_PACK_ALIGNMENT, 1);
+		GL_ReadScenePixels (glx, gly, job->width, job->height, GL_RGB,
+			GL_UNSIGNED_BYTE, NULL);
+		error = glGetError ();
+		if (error == GL_NO_ERROR)
+			readback.fence = GL_FenceSyncFunc (GL_SYNC_GPU_COMMANDS_COMPLETE, 0);
+	}
+	GL_BindBufferFunc (GL_PIXEL_PACK_BUFFER, binding);
+	glPixelStorei (GL_PACK_ALIGNMENT, alignment);
+	if (!readback.fence)
+	{
+		if (readback.buffer)
+			GL_DeleteBuffersFunc (1, &readback.buffer);
+		return false;
+	}
+	readback.job = job;
+	scr_screenshot_readbacks[scr_screenshot_readback_count++] = readback;
+	scr_screenshot_readback_bytes += job->pixel_bytes;
+	glFlush (); /* make progress even while minimized or holding a loading plaque */
+	return true;
+}
+
 void SCR_Shutdown (void)
 {
+	SCR_ScreenshotShutdownGL ();
 	if (!scr_screenshot_mutex)
 		return;
 
@@ -6904,6 +7038,7 @@ void SCR_ScreenShot_f (void)
 	time_t systime = time(0);
 	struct tm *local_time = localtime(&systime);
 
+	SCR_ScreenshotCollectReadbacks (false);
 	SCR_ScreenshotConsumeCompleted ();
 	Q_strncpy (ext, "png", sizeof(ext));
 	if (Cmd_Argc () >= 2)
@@ -6930,7 +7065,14 @@ void SCR_ScreenShot_f (void)
 		return;
 	}
 
-	if (!SCR_ScreenshotCanQueue ((size_t)glwidth * (size_t)glheight * 3))
+	if (glwidth <= 0 || glheight <= 0 ||
+		(size_t)glwidth > (size_t)PTRDIFF_MAX / (size_t)glheight / 3)
+	{
+		Con_Printf ("SCR_ScreenShot_f: Invalid screenshot dimensions\n");
+		return;
+	}
+	buffer_size = (size_t)glwidth * (size_t)glheight * 3;
+	if (!SCR_ScreenshotCanQueue (buffer_size))
 	{
 		Con_Printf ("Screenshot queue is busy; try again shortly.\n");
 		return;
@@ -6951,18 +7093,9 @@ void SCR_ScreenShot_f (void)
 	Sys_mkdir(com_gamedir); //  woods create gamedir if not there #screenshots
 	Sys_mkdir(checkname); //  woods create screenshots if not there #screenshots
 
-//get data
-	if (glwidth <= 0 || glheight <= 0 ||
-		(size_t)glwidth > (size_t)-1 / (size_t)glheight / 3)
-	{
-		Con_Printf ("SCR_ScreenShot_f: Invalid screenshot dimensions\n");
-		return;
-	}
-	buffer_size = (size_t)glwidth * (size_t)glheight * 3;
 	job = (scr_screenshot_job_t *)calloc (1, sizeof(*job));
-	if (!job || !(job->pixels = (byte *)malloc (buffer_size)))
+	if (!job)
 	{
-		free (job);
 		Con_Printf ("SCR_ScreenShot_f: Couldn't allocate memory\n");
 		return;
 	}
@@ -6970,7 +7103,6 @@ void SCR_ScreenShot_f (void)
 	if (!SCR_ScreenshotBuildName (str, ext, job->name, sizeof(job->name),
 		job->path, sizeof(job->path)))
 	{
-		free (job->pixels);
 		free (job);
 		Con_Printf ("SCR_ScreenShot_f: Couldn't choose a screenshot filename\n");
 		return;
@@ -6997,16 +7129,29 @@ void SCR_ScreenShot_f (void)
 			job->filtered = false;
 	}
 
-	blocked_sound = S_BlockSound ();
-
-	glPixelStorei (GL_PACK_ALIGNMENT, 1);/* for widths that aren't a multiple of 4 */
-	GL_ReadScenePixels (glx, gly, glwidth, glheight, GL_RGB, GL_UNSIGNED_BYTE,
-		job->pixels);
-	VID_Gamma_ApplyToBuffer(job->pixels, (size_t)glwidth * (size_t)glheight, 3);
 	job->layout = CLIPBOARD_PIXELS_RGB24;
 	job->bottom_up = true;
 	job->save = true;
 	job->clipboard_request = Clipboard_BeginImageRequest ();
+	job->apply_gamma = VID_Gamma_GetCaptureTable (job->gamma_table);
+
+	if (SCR_ScreenshotReadback (job))
+	{
+		SCR_ScreenshotSound ();
+		return;
+	}
+
+	job->pixels = (byte *)malloc (buffer_size);
+	if (!job->pixels)
+	{
+		free (job);
+		Con_Printf ("SCR_ScreenShot_f: Couldn't allocate memory\n");
+		return;
+	}
+	blocked_sound = S_BlockSound ();
+	glPixelStorei (GL_PACK_ALIGNMENT, 1);/* for widths that aren't a multiple of 4 */
+	GL_ReadScenePixels (glx, gly, glwidth, glheight, GL_RGB, GL_UNSIGNED_BYTE,
+		job->pixels);
 
 	if (blocked_sound)
 		S_UnblockSound ();
@@ -8456,6 +8601,7 @@ needs almost the entire 256k of stack space!
 */
 void SCR_UpdateScreen (void)
 {
+	SCR_ScreenshotCollectReadbacks (false);
 	SCR_ScreenshotConsumeCompleted ();
 	Sbar_ScoreboardFrame ();
 	vid.numpages = (gl_triplebuffer.value) ? 3 : 2;

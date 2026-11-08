@@ -292,6 +292,9 @@ extern PFNGLGENBUFFERSARBPROC  GL_GenBuffersFunc;
 extern PFNGLMAPBUFFERARBPROC	GL_MapBufferFunc;
 extern PFNGLUNMAPBUFFERARBPROC	GL_UnmapBufferFunc;
 extern	qboolean	gl_vbo_able;
+extern PFNGLFENCESYNCPROC GL_FenceSyncFunc;
+extern PFNGLCLIENTWAITSYNCPROC GL_ClientWaitSyncFunc;
+extern PFNGLDELETESYNCPROC GL_DeleteSyncFunc;
 //ericw
 
 extern gltexture_t* underwatertexture; // woods #caustics

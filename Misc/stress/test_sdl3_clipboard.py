@@ -160,7 +160,7 @@ static clipboard_image_t make_image (size_t size, int marker) {
 # --- fake SDL clipboard core (SDL 3.2.12 semantics) ---------------------------
 
 FAKE_TEST = COMMON_STUBS + r'''
-#if SDL_VERSION_ATLEAST(3, 4, 0)
+#ifdef TEST_CONST_MIME_LIST
 #define MIME_LIST const char *const *
 #else
 #define MIME_LIST const char **
@@ -485,8 +485,12 @@ LODEPNG_DEFINES = (
 
 # image.c includes lodepng.c for its static allocators, so the extracted
 # encoder gets its own translation unit, as it does in the engine.
-IMAGE_TU = '#include "quakedef.h"\n' + LODEPNG_DEFINES + '#include "lodepng.h"\n#include "lodepng.c"\n'
+IMAGE_TU = ('#include "quakedef.h"\n#ifdef USE_ZLIB\n#include <zlib.h>\n'
+            '#define LODEPNG_NO_COMPILE_ZLIB\n#endif\n'
+            '#define q_min(a,b) ((a) < (b) ? (a) : (b))\n' + LODEPNG_DEFINES
+            + '#include "lodepng.h"\n#include "lodepng.c"\n')
 image_source = read("image.c")
+IMAGE_TU += '#ifdef USE_ZLIB\n' + function(image_source, "static unsigned Image_CompressPNG (") + '#endif\n'
 for declaration in (
     "static byte *CopyFlipped(",
     "static void Image_SetWriteError (",
@@ -708,6 +712,7 @@ static scr_screenshot_job_t *new_job (scr_screenshot_format_t format, const char
     job->pixels = make_pixels(width, height, CLIPBOARD_PIXELS_RGB24, 1);
     job->width = width;
     job->height = height;
+    job->pixel_bytes = (size_t)width * height * 3;
     job->quality = 90;
     job->format = format;
     job->layout = CLIPBOARD_PIXELS_RGB24;
@@ -960,6 +965,24 @@ int main (int argc, char **argv) {
     check_served(7, 3);
     free(job);
 
+    /* Capture-time gamma is applied by the worker to both file and clipboard.
+       Distinct channel tables recover the expected pixels from altered input. */
+    job = new_job(SCR_SCREENSHOT_PNG, path, 7, 3);
+    job->apply_gamma = 1;
+    for (int channel = 0; channel < 3; ++channel)
+        for (int value = 0; value < 256; ++value)
+            job->gamma_table[channel][value] = (byte)(value ^ (0x31 + channel));
+    for (size_t i = 0; i < job->pixel_bytes; ++i)
+        job->pixels[i] ^= 0x31 + i % 3;
+    process(job);
+    assert(job->ok && job->clipboard.data);
+    file = read_file(path, &size);
+    check_png(file, size, 7, 3);
+    free(file);
+    SCR_ImageJobFinish(job, 1);
+    check_served(7, 3);
+    free(job);
+
     /* a failed save still copies */
     snprintf(path, sizeof(path), "%s/missing/shot.png", dir);
     job = new_job(SCR_SCREENSHOT_PNG, path, 5, 2);
@@ -1107,6 +1130,15 @@ def main():
         (work / "stb_tu.c").write_text(
             "#define STB_IMAGE_IMPLEMENTATION\n#define STBI_ONLY_PNG\n#define STBI_ONLY_BMP\n"
             '#include "stb_image.h"\n')
+        # SDL headers in the 3.4 series differ in this parameter's constness.
+        # Match the installed declaration instead of guessing from its version.
+        probe = work / "mime_probe.c"
+        probe.write_text('#include <SDL3/SDL.h>\n'
+                         'bool (*probe)(SDL_ClipboardDataCallback, SDL_ClipboardCleanupCallback, '
+                         'void *, const char *const *, size_t) = SDL_SetClipboardData;\n')
+        if subprocess.run(cc + sdl_cflags + ["-Werror", "-fsyntax-only", str(probe)],
+                          stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode == 0:
+            sdl_cflags.append("-DTEST_CONST_MIME_LIST")
         (work / "fake.c").write_text(FAKE_TEST)
         (work / "real.c").write_text(REAL_TEST)
 
@@ -1129,12 +1161,13 @@ def main():
         subprocess.run([str(fake)], check=True, env=sanitizer_env)
 
         # stb_image uses pow(); Linux requires an explicit math library link.
-        real = build("real", [("real.c", strict), ("clipboard_sdl.c", strict),
-                              ("image_tu.c", ["-w"]), ("stb_tu.c", ["-w"])], sdl_libs + ["-lm"])
         env = dict(sanitizer_env, SDL_VIDEO_DRIVER="dummy")
         # SDL's own teardown is outside this test; ownership is checked by counters
         env["ASAN_OPTIONS"] = "detect_leaks=0:" + env["ASAN_OPTIONS"]
-        subprocess.run([str(real), str(work)], check=True, env=env)
+        for name, image_flags in (("real-builtin", ["-w"]), ("real-zlib", ["-w", "-DUSE_ZLIB"])):
+            real = build(name, [("real.c", strict), ("clipboard_sdl.c", strict),
+                               ("image_tu.c", image_flags), ("stb_tu.c", ["-w"])], sdl_libs + ["-lm", "-lz"])
+            subprocess.run([str(real), str(work)], check=True, env=env)
 
 
 if __name__ == "__main__":

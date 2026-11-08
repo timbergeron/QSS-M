@@ -28,6 +28,7 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 void SCR_Init (void);
 void SCR_ResetTitle (void);
 void SCR_Shutdown (void);
+void SCR_ScreenshotShutdownGL (void); // drain readbacks before changing the GL context
 void SCR_LoadPics (void);
 
 void SCR_UpdateScreen (void);

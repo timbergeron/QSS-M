@@ -139,6 +139,9 @@ PFNGLBINDBUFFERARBPROC GL_BindBufferFunc = NULL; //ericw
 PFNGLBUFFERDATAARBPROC GL_BufferDataFunc = NULL; //ericw
 PFNGLBUFFERSUBDATAARBPROC GL_BufferSubDataFunc = NULL; //ericw
 PFNGLDELETEBUFFERSARBPROC GL_DeleteBuffersFunc = NULL; //ericw
+PFNGLFENCESYNCPROC GL_FenceSyncFunc;
+PFNGLCLIENTWAITSYNCPROC GL_ClientWaitSyncFunc;
+PFNGLDELETESYNCPROC GL_DeleteSyncFunc;
 PFNGLGENBUFFERSARBPROC GL_GenBuffersFunc = NULL; //ericw
 PFNGLMAPBUFFERARBPROC	GL_MapBufferFunc		= NULL; //spike
 PFNGLUNMAPBUFFERARBPROC	GL_UnmapBufferFunc		= NULL; //spike
@@ -656,28 +659,26 @@ void VID_Gamma_Frame (void)
 #endif
 }
 
-void VID_Gamma_ApplyToBuffer (byte *buffer, size_t pixel_count, int bytes_per_pixel)
+qboolean VID_Gamma_GetCaptureTable (byte table[3][256])
 {
 #if USE_GAMMA_RAMPS
-	size_t i;
+	int i;
 
-	if (!buffer || pixel_count == 0 || bytes_per_pixel < 3)
-		return;
 	if (!draw_context || !gammaworks || gl_glsl_gamma_able)
-		return;
+		return false;
 	if (vid_gamma.value == 1.0f && vid_contrast.value == 1.0f)
-		return;
+		return false;
 
-	for (i = 0; i < pixel_count; i++, buffer += bytes_per_pixel)
+	for (i = 0; i < 256; i++)
 	{
-		buffer[0] = (byte)(vid_gamma_red[buffer[0]] >> 8);
-		buffer[1] = (byte)(vid_gamma_green[buffer[1]] >> 8);
-		buffer[2] = (byte)(vid_gamma_blue[buffer[2]] >> 8);
+		table[0][i] = (byte)(vid_gamma_red[i] >> 8);
+		table[1][i] = (byte)(vid_gamma_green[i] >> 8);
+		table[2][i] = (byte)(vid_gamma_blue[i] >> 8);
 	}
+	return true;
 #else
-	(void)buffer;
-	(void)pixel_count;
-	(void)bytes_per_pixel;
+	(void)table;
+	return false;
 #endif
 }
 
@@ -1511,6 +1512,7 @@ static void VID_Restart (void)
 
 	// Mute DMA output while SDL/GL mode changes block regular sound updates.
 	blocked_sound = S_BlockSound ();
+	SCR_ScreenshotShutdownGL ();
 	VID_Gamma_Restore ();
 
 // ericw -- OS X, SDL1: textures, VBO's invalid after mode change
@@ -1816,6 +1818,21 @@ static void GL_CheckExtensions (void)
 		{
 			Con_Warning ("ARB_vertex_buffer_object not available\n");
 		}
+	}
+
+	/* PBO readbacks need GL 2.1 (or ARB_pixel_buffer_object) and sync objects. */
+	GL_FenceSyncFunc = NULL;
+	GL_ClientWaitSyncFunc = NULL;
+	GL_DeleteSyncFunc = NULL;
+	if (gl_vbo_able && GL_MapBufferFunc && GL_UnmapBufferFunc &&
+		(gl_version_major > 2 || (gl_version_major == 2 && gl_version_minor >= 1) ||
+		 GL_ParseExtensionList (gl_extensions, "GL_ARB_pixel_buffer_object")) &&
+		(gl_version_major > 3 || (gl_version_major == 3 && gl_version_minor >= 2) ||
+		 GL_ParseExtensionList (gl_extensions, "GL_ARB_sync")))
+	{
+		GL_FenceSyncFunc = (PFNGLFENCESYNCPROC) SDL_GL_GetProcAddress ("glFenceSync");
+		GL_ClientWaitSyncFunc = (PFNGLCLIENTWAITSYNCPROC) SDL_GL_GetProcAddress ("glClientWaitSync");
+		GL_DeleteSyncFunc = (PFNGLDELETESYNCPROC) SDL_GL_GetProcAddress ("glDeleteSync");
 	}
 
 	if (gl_version_major > 4 || (gl_version_major == 4 && gl_version_minor >= 4) || GL_ParseExtensionList(gl_extensions, "GL_ARB_buffer_storage"))
@@ -2410,6 +2427,7 @@ void	VID_Shutdown (void)
 {
 	if (vid_initialized)
 	{
+		SCR_ScreenshotShutdownGL ();
 		R_MotionBlur_DeleteTexture (); // woods #motionblur
 		GLSLGamma_DeleteTexture ();
 		VID_Gamma_Shutdown (); //johnfitz
