@@ -110,7 +110,8 @@ def fetch(dep, downloads):
         with tempfile.NamedTemporaryFile(dir=downloads, suffix=".partial", delete=False) as output:
             partial = Path(output.name)
         try:
-            run("curl", "--fail", "--location", "--retry", "3", "--max-time", "180",
+            run("curl", "--fail", "--location", "--retry", "3", "--retry-all-errors",
+                "--connect-timeout", "30", "--max-time", "180",
                 url, "--output", partial)
             if hashlib.new(algorithm, partial.read_bytes()).hexdigest() == dep[algorithm]:
                 partial.replace(archive)

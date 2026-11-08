@@ -1,5 +1,6 @@
 """Exercise static dependency recovery, PE imports, and updater validation."""
 
+import hashlib
 import importlib.util
 import io
 import os
@@ -114,6 +115,27 @@ class WindowsVoipTests(unittest.TestCase):
 
 
 class DependencyBuildTests(unittest.TestCase):
+    def test_fetch_retries_tls_errors_and_rejects_corrupt_downloads(self):
+        payload = b"verified archive"
+        dep = {"url": "https://example.invalid/source.tar.gz",
+               "sha256": hashlib.sha256(payload).hexdigest()}
+        with tempfile.TemporaryDirectory() as temp:
+            downloads = Path(temp)
+            def download(*args):
+                self.assertIn("--retry-all-errors", args)
+                self.assertIn("--connect-timeout", args)
+                Path(args[-1]).write_bytes(payload)
+            with mock.patch.object(BUILD, "run", side_effect=download):
+                archive = BUILD.fetch(dep, downloads)
+            self.assertEqual(archive.read_bytes(), payload)
+            archive.unlink()
+            def corrupt(*args):
+                Path(args[-1]).write_bytes(b"truncated")
+            with mock.patch.object(BUILD, "run", side_effect=corrupt):
+                with self.assertRaises(RuntimeError):
+                    BUILD.fetch(dep, downloads)
+            self.assertEqual(list(downloads.iterdir()), [])
+
     def test_native_autotools_uses_the_msys2_shell_beside_gcc(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
