@@ -3416,9 +3416,26 @@ static int COM_FindFile_impl (const char *filename, int *handle, FILE **file,
 	pack_t		*pak;
 	int		i;
 	const char *ext;
+	char		winpath[MAX_OSPATH];
+	size_t		len;
 
 	if (file && handle)
 		Sys_Error ("COM_FindFile: both handle and file set");
+
+	// Windows opens "progs\a.mdl" and "progs/a.mdl " as progs/a.mdl, and
+	// released maps and mods ask for both
+	len = strlen (filename);
+	if (strchr (filename, '\\') || (len && filename[len-1] == ' '))
+	{
+		char *p;
+		q_strlcpy (winpath, filename, sizeof(winpath));
+		for (p = winpath; *p; p++)
+			if (*p == '\\')
+				*p = '/';
+		for (len = strlen (winpath); len && winpath[len-1] == ' '; )
+			winpath[--len] = 0;
+		filename = winpath;
+	}
 
 	file_from_pak = 0;
 	if (source)
