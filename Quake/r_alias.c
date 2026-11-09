@@ -1447,6 +1447,21 @@ float R_CalculateAliasModelOutlineWidth(aliashdr_t* paliashdr, entity_t* e, lerp
 	if (is_xray_outline && r_outline.value <= 0.0f && !isMD5Model)
 		outlineWidth = q_max(outlineWidth, 1.0f / md5OutlineScale);
 
+	// The width above is in MDL mesh units (about extent/255 world units each), but
+	// the shader expands along the normal before the surface's scale is applied. IQM
+	// meshes are stored in world units (scale 1), so they drew roughly ten times
+	// thicker than an MDL of the same size. Give them the world width an MDL with the
+	// same bounds would get, like R_PowerupShellWidth does. MD5 keeps its tuned scale.
+	if (paliashdr->poseverttype == PV_IQM && !isMD5Model)
+	{
+		float mdlstep = ((e->model->maxs[0] - e->model->mins[0]) +
+			(e->model->maxs[1] - e->model->mins[1]) +
+			(e->model->maxs[2] - e->model->mins[2])) / (3.0f * 255.0f);
+		float meshunit = (paliashdr->scale[0] + paliashdr->scale[1] + paliashdr->scale[2]) / 3.0f;
+		if (mdlstep > 0.0f && meshunit > 0.0f)
+			outlineWidth *= mdlstep / meshunit;
+	}
+
 	return outlineWidth;
 }
 
