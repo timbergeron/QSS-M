@@ -30,6 +30,7 @@ int		*snd_p, snd_linear_count;
 short		*snd_out;
 
 static int	snd_vol;
+static float snd_world_gain = 1.0f;
 static float snd_lofreqlevel;
 static float snd_hifreqlevel;
 
@@ -464,8 +465,10 @@ static void SND_PaintChannelFrom16 (channel_t *ch, sfxcache_t *sc, int endtime, 
 
 void S_PaintChannels (int endtime)
 {
-	int		i;
+	int		i, pass;
 	int		end, ltime, count;
+	qboolean paused = S_WorldSoundPaused();
+	float fade_step = 1.0f / q_max(1, shm->speed / 20); /* 50 ms */
 	channel_t	*ch;
 	sfxcache_t	*sc;
 
@@ -481,58 +484,85 @@ void S_PaintChannels (int endtime)
 		if (endtime - paintedtime > PAINTBUFFER_SIZE)
 			end = paintedtime + PAINTBUFFER_SIZE;
 
+		/* Finish the fade before freezing positions, even when a paint block
+		 * straddles the last sample of the ramp. */
+		if (paused && snd_world_gain > 0)
+			end = q_min(end, paintedtime + (int)ceilf(snd_world_gain / fade_step));
+
 	// clear the paint buffer
 		memset(paintbuffer, 0, (end - paintedtime) * sizeof(portable_samplepair_t));
 
-	// paint in the channels.
-		ch = snd_channels;
-		for (i = 0; i < total_channels; i++, ch++)
+		/* Mix and fade the world first; UI, previews and voice bypass it. */
+		for (pass = 0; pass < 2; pass++)
 		{
-			if (!S_SoundPreview_ShouldMixChannel(i))
-				continue;
-			if (!ch->sfx)
-				continue;
-			if (!ch->leftvol && !ch->rightvol && !ch->advance_silently)
-				continue;
-			sc = S_LoadSound (ch->sfx);
-			if (!sc)
-				continue;
-
-			ltime = paintedtime;
-
-			while (ltime < end)
-			{	// paint up to end
-				if (ch->end < end)
-					count = ch->end - ltime;
-				else
-					count = end - ltime;
-
-				if (count > 0)
+		// paint in the channels.
+			ch = snd_channels;
+			for (i = 0; i < total_channels; i++, ch++)
+			{
+				if (S_IsWorldChannel(i) != (pass == 0))
+					continue;
+				if (pass == 0 && paused && snd_world_gain == 0)
 				{
-					// the last param to SND_PaintChannelFrom is the index
-					// to start painting to in the paintbuffer, usually 0.
-					if (sc->width == 1)
-						SND_PaintChannelFrom8(ch, sc, count, ltime - paintedtime);
-					else
-						SND_PaintChannelFrom16(ch, sc, count, ltime - paintedtime);
-
-					ltime += count;
+					if (ch->sfx)
+						ch->end += end - paintedtime;
+					continue;
 				}
+				if (!S_SoundPreview_ShouldMixChannel(i))
+					continue;
+				if (!ch->sfx)
+					continue;
+				if (!ch->leftvol && !ch->rightvol && !ch->advance_silently)
+					continue;
+				sc = S_LoadSound (ch->sfx);
+				if (!sc)
+					continue;
 
-			// if at end of loop, restart
-				if (ltime >= ch->end)
-				{
-					if (ch->looping == SND_LOOP_FORCE ||
-						(ch->looping == SND_LOOP_DEFAULT && sc->loopstart >= 0))
-					{
-						ch->pos = ch->looping == SND_LOOP_FORCE ? 0 : sc->loopstart;
-						ch->end = ltime + sc->length - ch->pos;
-					}
+				ltime = paintedtime;
+
+				while (ltime < end)
+				{	// paint up to end
+					if (ch->end < end)
+						count = ch->end - ltime;
 					else
-					{	// channel just stopped
-						ch->sfx = NULL;
-						break;
+						count = end - ltime;
+
+					if (count > 0)
+					{
+						// the last param to SND_PaintChannelFrom is the index
+						// to start painting to in the paintbuffer, usually 0.
+						if (sc->width == 1)
+							SND_PaintChannelFrom8(ch, sc, count, ltime - paintedtime);
+						else
+							SND_PaintChannelFrom16(ch, sc, count, ltime - paintedtime);
+
+						ltime += count;
 					}
+
+				// if at end of loop, restart
+					if (ltime >= ch->end)
+					{
+						if (ch->looping == SND_LOOP_FORCE ||
+							(ch->looping == SND_LOOP_DEFAULT && sc->loopstart >= 0))
+						{
+							ch->pos = ch->looping == SND_LOOP_FORCE ? 0 : sc->loopstart;
+							ch->end = ltime + sc->length - ch->pos;
+						}
+						else
+						{	// channel just stopped
+							ch->sfx = NULL;
+							break;
+						}
+					}
+				}
+			}
+			if (pass == 0 && (paused ? snd_world_gain > 0 : snd_world_gain < 1.0f))
+			{
+				for (i = 0; i < end - paintedtime; i++)
+				{
+					snd_world_gain = CLAMP(0.0f,
+						snd_world_gain + (paused ? -fade_step : fade_step), 1.0f);
+					paintbuffer[i].left *= snd_world_gain;
+					paintbuffer[i].right *= snd_world_gain;
 				}
 			}
 		}

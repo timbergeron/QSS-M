@@ -66,6 +66,7 @@ static qboolean	snd_initialized = false;
 static qboolean snd_settings_pending;
 static double snd_mixspeed_deadline;
 static int snd_time_buffers, snd_oldsamplepos;
+static qboolean snd_world_was_paused;
 
 static dma_t	sn;
 volatile dma_t	*shm = NULL;
@@ -138,6 +139,34 @@ static qboolean sound_preview_exclusive;
 qboolean S_SoundPreview_ShouldMixChannel(int channel)
 {
 	return !sound_preview_exclusive || channel == SOUND_PREVIEW_CHANNEL;
+}
+
+/* Follow the server's implicit single-player pause, not input focus alone.
+ * Remote multiplayer and demos keep running while their console is open. */
+qboolean S_WorldSoundPaused (void)
+{
+	if (cls.state != ca_connected || cls.signon != SIGNONS)
+		return false;
+	return cl.paused || (cls.demoplayback && cls.demopaused) ||
+		(sv.active && !cls.demoplayback &&
+		 (sv.paused || (svs.maxclients == 1 && key_dest != key_game)));
+}
+
+qboolean S_IsWorldChannel (int channel)
+{
+	return channel != SOUND_PREVIEW_CHANNEL &&
+		channel != NOTIFICATION_SOUND_CHANNEL &&
+		snd_channels[channel].entchannel != -2; /* live voice chat */
+}
+
+/* The device clock keeps moving while world channels are frozen. */
+void S_AdvanceWorldSoundTime (int samples)
+{
+	int i;
+
+	for (i = 0; i < total_channels; i++)
+		if (snd_channels[i].sfx && S_IsWorldChannel(i))
+			snd_channels[i].end += samples;
 }
 
 void S_SoundPreview_SetExclusive(qboolean exclusive)
@@ -548,6 +577,7 @@ S_BackendStarted
 static void S_BackendStarted (void)
 {
 	snd_time_buffers = snd_oldsamplepos = 0;
+	snd_world_was_paused = false;
 	soundtime = paintedtime = 0;
 	if (!sound_started)
 	{
@@ -1595,6 +1625,7 @@ static void S_Update_ (void)
 {
 	unsigned int	endtime;
 	int		samps;
+	qboolean paused;
 
 	if (!sound_started || (snd_blocked > 0))
 		return;
@@ -1606,6 +1637,8 @@ static void S_Update_ (void)
 		return;
 	}
 
+	paused = S_WorldSoundPaused();
+
 // Updates DMA time
 	GetSoundtime();
 
@@ -1613,6 +1646,8 @@ static void S_Update_ (void)
 	if (paintedtime < soundtime)
 	{
 	//	Con_Printf ("S_Update_ : overflow\n");
+		if (paused || snd_world_was_paused)
+			S_AdvanceWorldSoundTime(soundtime - paintedtime);
 		paintedtime = soundtime;
 	}
 
@@ -1622,6 +1657,7 @@ static void S_Update_ (void)
 	endtime = q_min(endtime, (unsigned int)(soundtime + samps));
 
 	S_PaintChannels (endtime);
+	snd_world_was_paused = paused;
 
 	SNDDMA_Submit ();
 }
@@ -1752,20 +1788,9 @@ qboolean CompleteSoundList (const char* partial, void* unused) // woods #iwtabco
 
 void S_LocalSound (const char *name)
 {
-	sfx_t	*sfx;
-
-	if (nosound.value)
-		return;
-	if (!sound_started)
-		return;
-
-	sfx = S_PrecacheSound (name);
-	if (!sfx)
-	{
-		Con_Printf ("S_LocalSound: can't cache %s\n", name);
-		return;
-	}
-	S_StartSound (cl.viewentity, -1, sfx, vec3_origin, 1, 1);
+	/* Menu/console feedback must remain audible during a world pause and
+	 * must not replace the player's frozen weapon channel. */
+	S_NotificationSound(name);
 }
 
 /* Plays UI feedback without consuming or replacing a gameplay sound channel. */

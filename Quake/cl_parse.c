@@ -1330,7 +1330,9 @@ void CL_ParseLocalSound(void)
 	if (sound_num >= MAX_SOUNDS)
 		Host_Error ("CL_ParseLocalSound: %i > MAX_SOUNDS", sound_num);
 
-	S_LocalSound (cl.sound_precache[sound_num]->name);
+	/* Server-triggered local sounds belong to gameplay, not UI feedback.
+	 * Channel zero allows overlap without replacing the player's sounds. */
+	S_StartSound (cl.viewentity, 0, cl.sound_precache[sound_num], vec3_origin, 1, 1);
 }
 
 /*
