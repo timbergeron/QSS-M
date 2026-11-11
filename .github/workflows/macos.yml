@@ -23,10 +23,10 @@ permissions:
 
 jobs:
   build:
-    name: arm64-universal
-    # Pin the major macOS image to avoid surprise `macos-latest` migrations
-    # changing the toolchain and invalidating caches unexpectedly.
-    runs-on: macos-15
+    name: universal (x86_64 + arm64)
+    # Pin the OS and host architecture. The macos-15 arm64 pool has failed
+    # to allocate runners; the Intel host still builds both release slices.
+    runs-on: macos-15-intel
     strategy:
       fail-fast: false
     env:
