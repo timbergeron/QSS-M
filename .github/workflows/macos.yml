@@ -2,7 +2,7 @@ name: macOS
 
 on:
   push:
-    paths-ignore:
+    paths-ignore: &paths-ignore
       - '**/*.md'
       - 'Quakespasm*.txt'
       - 'Quakespasm*.html'
@@ -15,18 +15,7 @@ on:
       - '.github/workflows/map-catalog.yml'
       - '.github/workflows/linux-valgrind.yml'
   pull_request:
-    paths-ignore:
-      - '**/*.md'
-      - 'Quakespasm*.txt'
-      - 'Quakespasm*.html'
-      # Dependency-watch and map-catalog tooling has its own workflows.
-      # build-sdl3-linux.sh stays in scope: linux.yml builds with it.
-      - '.github/scripts/*.js'
-      - '.github/dependency-watch.json'
-      - '.github/map-catalog-snapshot.json'
-      - '.github/workflows/dependency-watch.yml'
-      - '.github/workflows/map-catalog.yml'
-      - '.github/workflows/linux-valgrind.yml'
+    paths-ignore: *paths-ignore
 
 # Keep every qsrebase push and tag build, including pending runs. Other refs
 # share a group so that a newer commit cancels obsolete work in this workflow.
@@ -49,10 +38,7 @@ jobs:
     # A PR from a branch of this repository already builds on push; only
     # fork PRs need the pull_request run.
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.repository
-    strategy:
-      fail-fast: false
     env:
-      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
       HOMEBREW_NO_AUTO_UPDATE: "1"
       VCPKG_CACHE_REV: "v2"
       VCPKG_DEFAULT_BINARY_CACHE: ${{ github.workspace }}/.cache/vcpkg/archives
@@ -60,7 +46,8 @@ jobs:
       VCPKG_DISABLE_METRICS: "1"
 
     steps:
-      - uses: actions/checkout@v6
+      - name: Check out repository
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
 
       - name: Build qssm.pak
         run: bash Misc/qssm_pak/build.sh
@@ -82,7 +69,7 @@ jobs:
 
       - name: Cache vcpkg artifacts
         id: vcpkg-cache-restore
-        uses: actions/cache@v5
+        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
         with:
           path: |
             ${{ env.VCPKG_DEFAULT_BINARY_CACHE }}
@@ -92,17 +79,7 @@ jobs:
             ${{ runner.os }}-${{ runner.arch }}-vcpkg-${{ env.VCPKG_CACHE_REV }}-${{ steps.vcpkg-cache.outputs.image_os }}-${{ steps.vcpkg-cache.outputs.image_version }}-${{ steps.vcpkg-cache.outputs.xcode_hash }}-
             ${{ runner.os }}-${{ runner.arch }}-vcpkg-${{ env.VCPKG_CACHE_REV }}-
 
-      - name: Report cache restore result
-        run: |
-          if [ "${{ steps.vcpkg-cache-restore.outputs.cache-hit }}" = "true" ]; then
-            echo "actions/cache exact key hit"
-          elif [ "${{ steps.vcpkg-cache-restore.outputs.cache-hit }}" = "false" ]; then
-            echo "actions/cache restored from a partial or restore-key match"
-          else
-            echo "actions/cache miss"
-          fi
-
-      - name: Setup Homebrew and install dependencies
+      - name: Install dependencies
         run: |
           set -euo pipefail
           # Intel runners keep Homebrew in /usr/local, Apple Silicon in /opt/homebrew.
@@ -165,7 +142,7 @@ jobs:
             exit "$build_rc"
           fi
 
-      - name: Prepare macOS debug logs
+      - name: Prepare build logs
         if: always()
         run: |
           set -euxo pipefail
@@ -198,24 +175,25 @@ jobs:
           echo "===== Log artifact tree ====="
           find artifact/logs -maxdepth 3 -type f | sort
 
-      - name: Upload macOS ZIP artifact
-        uses: actions/upload-artifact@v7
+      - name: Upload ZIP package
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           path: macOS/build/Release/QSS-M-macOS.zip
           if-no-files-found: error
           archive: false
 
-      - name: Upload macOS DMG artifact
-        uses: actions/upload-artifact@v7
+      - name: Upload DMG package
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           path: macOS/build/Release/QSS-M-macOS.dmg
           if-no-files-found: error
           archive: false
 
-      - name: Upload macOS debug logs
+      - name: Upload build logs
         if: always()
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: QSS-M-macOS-logs
           path: artifact/logs/QSS-M-macOS-logs
           if-no-files-found: warn
+          retention-days: 14

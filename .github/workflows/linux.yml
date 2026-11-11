@@ -2,7 +2,7 @@ name: Linux
 
 on:
   push:
-    paths-ignore:
+    paths-ignore: &paths-ignore
       - '**/*.md'
       - 'Quakespasm*.txt'
       - 'Quakespasm*.html'
@@ -15,18 +15,7 @@ on:
       - '.github/workflows/map-catalog.yml'
       - '.github/workflows/linux-valgrind.yml'
   pull_request:
-    paths-ignore:
-      - '**/*.md'
-      - 'Quakespasm*.txt'
-      - 'Quakespasm*.html'
-      # Dependency-watch and map-catalog tooling has its own workflows.
-      # build-sdl3-linux.sh stays in scope: linux.yml builds with it.
-      - '.github/scripts/*.js'
-      - '.github/dependency-watch.json'
-      - '.github/map-catalog-snapshot.json'
-      - '.github/workflows/dependency-watch.yml'
-      - '.github/workflows/map-catalog.yml'
-      - '.github/workflows/linux-valgrind.yml'
+    paths-ignore: *paths-ignore
 
 # Keep every qsrebase push and tag build, including pending runs. Other refs
 # share a group so that a newer commit cancels obsolete work in this workflow.
@@ -57,12 +46,13 @@ jobs:
           - { version: "3.2.12", commit: "5ac37a8ffcf89da390404c1016833d56e2d67ae4", package: false }
 
     steps:
-      - uses: actions/checkout@v6
+      - name: Check out repository
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
 
       - name: Build qssm.pak
         run: bash Misc/qssm_pak/build.sh
 
-      - name: Install Dependencies
+      - name: Install dependencies
         run: |
           set -eux
           sudo apt-get update
@@ -86,7 +76,8 @@ jobs:
             libcurl4-openssl-dev \
             zip
 
-      # Ubuntu 24.04 has no SDL3 package, so build the pinned release from source.
+      # Build SDL3 from source at the exact pin, not the distro's version, so CI
+    # tests what macOS and Windows ship (and, separately, the oldest supported).
       - name: Resolve SDL3 prefix
         run: |
           set -eux
@@ -95,7 +86,7 @@ jobs:
           echo "SDL3_CACHE_KEY=sdl3-${{ matrix.sdl.version }}-${{ matrix.sdl.commit }}-${ID}-${VERSION_ID}-gcc$(gcc -dumpversion)-shared-no-rpath-v2" >> "$GITHUB_ENV"
 
       - name: Cache SDL3
-        uses: actions/cache@v5
+        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
         with:
           path: ${{ runner.temp }}/sdl3-${{ matrix.sdl.version }}
           key: ${{ env.SDL3_CACHE_KEY }}
@@ -128,7 +119,7 @@ jobs:
             exit 1
           fi
 
-      - name: Prepare Linux debug logs
+      - name: Prepare build logs
         if: always()
         run: |
           set -euxo pipefail
@@ -177,18 +168,19 @@ jobs:
           fi
           readelf -d "$stage/libSDL3.so.0" | grep -F 'SONAME' | grep -F 'libSDL3.so.0'
 
-      - name: Upload artifact
+      - name: Upload package
         if: matrix.sdl.package
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           path: Quake/QSS-M-l64.zip
           if-no-files-found: error
           archive: false
 
-      - name: Upload Linux debug logs
+      - name: Upload build logs
         if: always()
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: QSS-M-l64-logs-sdl${{ matrix.sdl.version }}
           path: artifact/logs/QSS-M-l64-logs
           if-no-files-found: warn
+          retention-days: 14

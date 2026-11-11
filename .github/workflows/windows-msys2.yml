@@ -2,7 +2,7 @@ name: Windows (MSYS2)
 
 on:
   push:
-    paths-ignore:
+    paths-ignore: &paths-ignore
       - '**/*.md'
       - 'Quakespasm*.txt'
       - 'Quakespasm*.html'
@@ -15,18 +15,7 @@ on:
       - '.github/workflows/map-catalog.yml'
       - '.github/workflows/linux-valgrind.yml'
   pull_request:
-    paths-ignore:
-      - '**/*.md'
-      - 'Quakespasm*.txt'
-      - 'Quakespasm*.html'
-      # Dependency-watch and map-catalog tooling has its own workflows.
-      # build-sdl3-linux.sh stays in scope: linux.yml builds with it.
-      - '.github/scripts/*.js'
-      - '.github/dependency-watch.json'
-      - '.github/map-catalog-snapshot.json'
-      - '.github/workflows/dependency-watch.yml'
-      - '.github/workflows/map-catalog.yml'
-      - '.github/workflows/linux-valgrind.yml'
+    paths-ignore: *paths-ignore
 
 # Keep every qsrebase push and tag build, including pending runs. Other refs
 # share a group so that a newer commit cancels obsolete work in this workflow.
@@ -59,10 +48,11 @@ jobs:
             package_arch: i686
             bits: 32
     steps:
-      - uses: actions/checkout@v6
+      - name: Check out repository
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
 
       - name: Set up MSYS2
-        uses: msys2/setup-msys2@v2
+        uses: msys2/setup-msys2@ec48f7c5447b3140e2b088413ae3a55687bccb6e # v2.33.0
         with:
           msystem: MINGW${{ matrix.bits }}
           # The runner image's MSYS2 is recent; a full -Syuu cost ~80s per job.
@@ -90,7 +80,7 @@ jobs:
           echo "fingerprint=$compiler_id" >> "$GITHUB_OUTPUT"
 
       - name: Cache static dependencies
-        uses: actions/cache@v5
+        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
         with:
           path: build/windows-static
           key: windows-static-msys2-${{ matrix.arch }}-${{ steps.compiler.outputs.fingerprint }}-${{ hashFiles('Windows/build-static.py', 'Windows/static-sources.json', 'Windows/static-adapters/*', 'Windows/static-licenses/*') }}
@@ -106,8 +96,8 @@ jobs:
           export CC=gcc CXX=g++ WINDRES=windres STRIP=strip
           sh ./build-${{ matrix.platform }}.sh 2>&1 | tee build-${{ matrix.platform }}.log
 
-      - name: Upload package artifact
-        uses: actions/upload-artifact@v7
+      - name: Upload package
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           path: Quake/QSS-M-${{ matrix.platform }}.zip
           if-no-files-found: error
@@ -115,8 +105,9 @@ jobs:
 
       - name: Upload build logs
         if: always()
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: QSS-M-${{ matrix.platform }}-logs
           path: build-${{ matrix.platform }}.log
           if-no-files-found: warn
+          retention-days: 14
