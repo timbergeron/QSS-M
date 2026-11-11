@@ -51,197 +51,197 @@ jobs:
       matrix:
         platform: [x64, Win32]
     steps:
-    - uses: actions/checkout@v6
+      - uses: actions/checkout@v6
 
-    - name: Build qssm.pak
-      shell: bash
-      run: bash Misc/qssm_pak/build.sh
+      - name: Build qssm.pak
+        shell: bash
+        run: bash Misc/qssm_pak/build.sh
 
-    - name: Set environment variables
-      shell: pwsh
-      env:
-        MATRIX_PLATFORM: ${{ matrix.platform }}
-      run: |
-        $gitrev = (git describe --always)
-        $runtimeGitSha = (git rev-parse --short=7 HEAD)
-        $gitbranch = (git branch --show-current)
-        if ($gitbranch -eq "master" -or $gitbranch -eq "main") {
-          $ver_suffix = "-$gitrev"
-        } else {
-          $ver_suffix = "-$gitbranch-$gitrev"
-        }
-        $platform = $env:MATRIX_PLATFORM
-        if ($platform -eq "x64") {
-          $platform_alt = "win64"
-          $platform_short = "x64"
-          $exe_name = "QSS-M-w64.exe"
-        } else {
-          $platform_alt = "win32"
-          $platform_short = "x86"
-          $exe_name = "QSS-M-w32.exe"
-        }
-        # Branches and tags can contain slashes and other artifact-unsafe characters.
-        $build_artifact = "QSS-M$ver_suffix-$platform_alt" -replace '[^A-Za-z0-9._-]', '-'
-        "VER_SUFFIX=$ver_suffix" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
-        "VERSION_SUFFIX=-$runtimeGitSha" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
-        "BUILD_ARTIFACT=$build_artifact" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
-        "BUILD_DIR=$build_artifact" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
-        "PLATFORM_ALT=$platform_alt" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
-        "PLATFORM_SHORT=$platform_short" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
-        "EXE_NAME=$exe_name" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
-        Write-Host "Computed BUILD_ARTIFACT=$build_artifact"
-        Write-Host "Computed EXE_NAME=$exe_name"
-
-    - name: Identify compiler
-      id: compiler
-      shell: pwsh
-      run: |
-        $compilerId = python Windows/build-static.py --toolchain msvc --arch $env:PLATFORM_SHORT --print-toolchain-id
-        if ($LASTEXITCODE -ne 0) { throw "Compiler identification failed" }
-        "fingerprint=$compilerId" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
-
-    - name: Cache static dependencies
-      uses: actions/cache@v5
-      with:
-        path: build/windows-static
-        key: windows-static-msvc-${{ matrix.platform }}-${{ steps.compiler.outputs.fingerprint }}-${{ hashFiles('Windows/build-static.py', 'Windows/static-sources.json', 'Windows/static-adapters/*', 'Windows/static-licenses/*') }}
-
-    - name: Build static dependencies
-      shell: pwsh
-      run: |
-        python Windows/build-static.py --toolchain msvc --arch $env:PLATFORM_SHORT
-        if ($LASTEXITCODE -ne 0) { throw "Static dependency build failed" }
-
-    - name: Build
-      shell: pwsh
-      run: |
-        $ErrorActionPreference = "Stop"
-        $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
-        $msbuild = (& "$vswhere" -latest -requires Microsoft.Component.MSBuild -find MSBuild\**\Bin\MSBuild.exe | Select-Object -First 1)
-        if (-not $msbuild) { throw "MSBuild not found via vswhere" }
-        Write-Host "MSBuild: $msbuild"
-        $logFile = "msbuild-${{ matrix.platform }}.log"
-        $options = @(
-          "-property:Configuration=Release"
-          "-property:Platform=${{ matrix.platform }}"
-          "-property:QSSMVersionSuffix=$env:VERSION_SUFFIX"
-          "-property:PostBuildEventUseInBuild=false"
-          "-maxcpucount"
-          "-verbosity:normal"
-          "-fileLogger"
-          "-fileLoggerParameters:LogFile=$logFile;Verbosity=diagnostic"
-        )
-        & $msbuild Windows\VisualStudio\quakespasm.vcxproj $options
-        if (-not $?) {
-          Write-Host "MSBuild failed. Dumping likely error lines from $logFile"
-          if (Test-Path $logFile) {
-            Write-Host "===== Error Matches ====="
-            Select-String -Path $logFile -Pattern "(: error | error [A-Z]{1,4}[0-9]{3,6}:|fatal error|LNK[0-9]{4}|MSB[0-9]{4})" -CaseSensitive:$false |
-              Select-Object -Last 200 |
-              ForEach-Object { $_.Line } |
-              Out-Host
-            Write-Host "===== Tail (last 300 lines) ====="
-            Get-Content $logFile -Tail 300 | Out-Host
+      - name: Set environment variables
+        shell: pwsh
+        env:
+          MATRIX_PLATFORM: ${{ matrix.platform }}
+        run: |
+          $gitrev = (git describe --always)
+          $runtimeGitSha = (git rev-parse --short=7 HEAD)
+          $gitbranch = (git branch --show-current)
+          if ($gitbranch -eq "master" -or $gitbranch -eq "main") {
+            $ver_suffix = "-$gitrev"
           } else {
-            Write-Host "MSBuild log file not found: $logFile"
+            $ver_suffix = "-$gitbranch-$gitrev"
           }
-          throw "Build failed"
-        }
-
-    - name: Debug Built Binary
-      shell: pwsh
-      run: |
-        $ErrorActionPreference = "Continue"
-        $compiledir = "Windows\VisualStudio\Build-quakespasm\$($env:PLATFORM_SHORT)\Release"
-        Write-Host "Compiled directory: $compiledir"
-        Get-ChildItem $compiledir -ErrorAction SilentlyContinue
-        $exe = Get-ChildItem "$compiledir\*.exe" -ErrorAction SilentlyContinue | Select-Object -First 1
-        if ($exe) {
-          Write-Host "Built EXE: $($exe.FullName)"
-          $dumpbin = Get-Command dumpbin.exe -ErrorAction SilentlyContinue
-          if ($dumpbin) {
-            & $dumpbin.Path /dependents $exe.FullName | Tee-Object -FilePath "dumpbin-${{ matrix.platform }}.txt"
+          $platform = $env:MATRIX_PLATFORM
+          if ($platform -eq "x64") {
+            $platform_alt = "win64"
+            $platform_short = "x64"
+            $exe_name = "QSS-M-w64.exe"
           } else {
-            Write-Host "dumpbin.exe not found in PATH"
+            $platform_alt = "win32"
+            $platform_short = "x86"
+            $exe_name = "QSS-M-w32.exe"
           }
-        } else {
-          Write-Host "No EXE found in $compiledir"
-        }
+          # Branches and tags can contain slashes and other artifact-unsafe characters.
+          $build_artifact = "QSS-M$ver_suffix-$platform_alt" -replace '[^A-Za-z0-9._-]', '-'
+          "VER_SUFFIX=$ver_suffix" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "VERSION_SUFFIX=-$runtimeGitSha" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "BUILD_ARTIFACT=$build_artifact" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "BUILD_DIR=$build_artifact" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "PLATFORM_ALT=$platform_alt" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "PLATFORM_SHORT=$platform_short" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "EXE_NAME=$exe_name" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          Write-Host "Computed BUILD_ARTIFACT=$build_artifact"
+          Write-Host "Computed EXE_NAME=$exe_name"
 
-    - name: Prepare archive
-      shell: pwsh
-      run: |
-        $compiledir = "Windows\VisualStudio\Build-quakespasm\$($env:PLATFORM_SHORT)\Release"
-        $zipdir = "artifact\$($env:BUILD_ARTIFACT)"
-        mkdir $zipdir -Force
+      - name: Identify compiler
+        id: compiler
+        shell: pwsh
+        run: |
+          $compilerId = python Windows/build-static.py --toolchain msvc --arch $env:PLATFORM_SHORT --print-toolchain-id
+          if ($LASTEXITCODE -ne 0) { throw "Compiler identification failed" }
+          "fingerprint=$compilerId" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
 
-        # Output variables for debugging
-        Write-Host "Compiled directory: $compiledir"
-        Write-Host "Zip directory: $zipdir"
-        Write-Host "Executable name: $env:EXE_NAME"
+      - name: Cache static dependencies
+        uses: actions/cache@v5
+        with:
+          path: build/windows-static
+          key: windows-static-msvc-${{ matrix.platform }}-${{ steps.compiler.outputs.fingerprint }}-${{ hashFiles('Windows/build-static.py', 'Windows/static-sources.json', 'Windows/static-adapters/*', 'Windows/static-licenses/*') }}
 
-        # Move and rename the executable
-        $exeFile = Get-ChildItem "$compiledir\*.exe" | Select-Object -First 1
-        if ($exeFile) {
-          $targetExePath = Join-Path $zipdir $env:EXE_NAME
-          if (Test-Path $targetExePath) {
-            Remove-Item $targetExePath
+      - name: Build static dependencies
+        shell: pwsh
+        run: |
+          python Windows/build-static.py --toolchain msvc --arch $env:PLATFORM_SHORT
+          if ($LASTEXITCODE -ne 0) { throw "Static dependency build failed" }
+
+      - name: Build
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+          $msbuild = (& "$vswhere" -latest -requires Microsoft.Component.MSBuild -find MSBuild\**\Bin\MSBuild.exe | Select-Object -First 1)
+          if (-not $msbuild) { throw "MSBuild not found via vswhere" }
+          Write-Host "MSBuild: $msbuild"
+          $logFile = "msbuild-${{ matrix.platform }}.log"
+          $options = @(
+            "-property:Configuration=Release"
+            "-property:Platform=${{ matrix.platform }}"
+            "-property:QSSMVersionSuffix=$env:VERSION_SUFFIX"
+            "-property:PostBuildEventUseInBuild=false"
+            "-maxcpucount"
+            "-verbosity:normal"
+            "-fileLogger"
+            "-fileLoggerParameters:LogFile=$logFile;Verbosity=diagnostic"
+          )
+          & $msbuild Windows\VisualStudio\quakespasm.vcxproj $options
+          if (-not $?) {
+            Write-Host "MSBuild failed. Dumping likely error lines from $logFile"
+            if (Test-Path $logFile) {
+              Write-Host "===== Error Matches ====="
+              Select-String -Path $logFile -Pattern "(: error | error [A-Z]{1,4}[0-9]{3,6}:|fatal error|LNK[0-9]{4}|MSB[0-9]{4})" -CaseSensitive:$false |
+                Select-Object -Last 200 |
+                ForEach-Object { $_.Line } |
+                Out-Host
+              Write-Host "===== Tail (last 300 lines) ====="
+              Get-Content $logFile -Tail 300 | Out-Host
+            } else {
+              Write-Host "MSBuild log file not found: $logFile"
+            }
+            throw "Build failed"
           }
-          Move-Item $exeFile.FullName $targetExePath
-        } else {
-          Write-Error "Executable file not found in $compiledir"
-        }
 
-        $prefix = "build/windows-static/msvc-$($env:PLATFORM_SHORT)-Release/prefix"
-        Copy-Item "$prefix/third-party-licenses.txt" $zipdir
-        Copy-Item "Windows/static-sources.json" $zipdir
-        python Windows/verify-static.py (Join-Path $zipdir $env:EXE_NAME)
-        if ($LASTEXITCODE -ne 0) { throw "Unexpected DLL dependency" }
-        Copy-Item "Quake\qssm.pak" $zipdir
-        Copy-Item "Quake\quakespasm.pak" $zipdir
-        Copy-Item "Quake\gamecontrollerdb.txt" $zipdir
-        Copy-Item "Quakespasm.html" $zipdir
-        Copy-Item "Quakespasm.txt" $zipdir
-        Copy-Item "Quakespasm-Music.txt" $zipdir
-        Copy-Item "LICENSE.txt" $zipdir
-        Write-Host "Archive staging contents:"
-        Get-ChildItem $zipdir
-        $requiredFiles = @($env:EXE_NAME, "qssm.pak", "quakespasm.pak", "gamecontrollerdb.txt", "third-party-licenses.txt", "static-sources.json")
-        if (Get-ChildItem $zipdir -Filter *.dll) { throw "Static package contains DLLs" }
-        foreach ($requiredFile in $requiredFiles) {
-          if (-not (Test-Path (Join-Path $zipdir $requiredFile))) {
-            throw "Required runtime file missing from archive staging: $requiredFile"
+      - name: Debug Built Binary
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Continue"
+          $compiledir = "Windows\VisualStudio\Build-quakespasm\$($env:PLATFORM_SHORT)\Release"
+          Write-Host "Compiled directory: $compiledir"
+          Get-ChildItem $compiledir -ErrorAction SilentlyContinue
+          $exe = Get-ChildItem "$compiledir\*.exe" -ErrorAction SilentlyContinue | Select-Object -First 1
+          if ($exe) {
+            Write-Host "Built EXE: $($exe.FullName)"
+            $dumpbin = Get-Command dumpbin.exe -ErrorAction SilentlyContinue
+            if ($dumpbin) {
+              & $dumpbin.Path /dependents $exe.FullName | Tee-Object -FilePath "dumpbin-${{ matrix.platform }}.txt"
+            } else {
+              Write-Host "dumpbin.exe not found in PATH"
+            }
+          } else {
+            Write-Host "No EXE found in $compiledir"
           }
-        }
 
-    - name: Prepare MSBuild Logs
-      if: always()
-      shell: pwsh
-      run: |
-        $logdir = "artifact\msbuild-logs-${{ matrix.platform }}"
-        mkdir $logdir -Force
+      - name: Prepare archive
+        shell: pwsh
+        run: |
+          $compiledir = "Windows\VisualStudio\Build-quakespasm\$($env:PLATFORM_SHORT)\Release"
+          $zipdir = "artifact\$($env:BUILD_ARTIFACT)"
+          mkdir $zipdir -Force
 
-        if (Test-Path "msbuild-${{ matrix.platform }}.log") {
-          Copy-Item "msbuild-${{ matrix.platform }}.log" $logdir
-        }
-        if (Test-Path "dumpbin-${{ matrix.platform }}.txt") {
-          Copy-Item "dumpbin-${{ matrix.platform }}.txt" $logdir
-        }
+          # Output variables for debugging
+          Write-Host "Compiled directory: $compiledir"
+          Write-Host "Zip directory: $zipdir"
+          Write-Host "Executable name: $env:EXE_NAME"
 
-        Write-Host "Log staging contents:"
-        Get-ChildItem $logdir -ErrorAction SilentlyContinue
+          # Move and rename the executable
+          $exeFile = Get-ChildItem "$compiledir\*.exe" | Select-Object -First 1
+          if ($exeFile) {
+            $targetExePath = Join-Path $zipdir $env:EXE_NAME
+            if (Test-Path $targetExePath) {
+              Remove-Item $targetExePath
+            }
+            Move-Item $exeFile.FullName $targetExePath
+          } else {
+            Write-Error "Executable file not found in $compiledir"
+          }
 
-    - name: Upload archive
-      uses: actions/upload-artifact@v7
-      with:
-        name: ${{ env.BUILD_ARTIFACT }}
-        path: artifact/${{ env.BUILD_ARTIFACT }}
-        if-no-files-found: error
+          $prefix = "build/windows-static/msvc-$($env:PLATFORM_SHORT)-Release/prefix"
+          Copy-Item "$prefix/third-party-licenses.txt" $zipdir
+          Copy-Item "Windows/static-sources.json" $zipdir
+          python Windows/verify-static.py (Join-Path $zipdir $env:EXE_NAME)
+          if ($LASTEXITCODE -ne 0) { throw "Unexpected DLL dependency" }
+          Copy-Item "Quake\qssm.pak" $zipdir
+          Copy-Item "Quake\quakespasm.pak" $zipdir
+          Copy-Item "Quake\gamecontrollerdb.txt" $zipdir
+          Copy-Item "Quakespasm.html" $zipdir
+          Copy-Item "Quakespasm.txt" $zipdir
+          Copy-Item "Quakespasm-Music.txt" $zipdir
+          Copy-Item "LICENSE.txt" $zipdir
+          Write-Host "Archive staging contents:"
+          Get-ChildItem $zipdir
+          $requiredFiles = @($env:EXE_NAME, "qssm.pak", "quakespasm.pak", "gamecontrollerdb.txt", "third-party-licenses.txt", "static-sources.json")
+          if (Get-ChildItem $zipdir -Filter *.dll) { throw "Static package contains DLLs" }
+          foreach ($requiredFile in $requiredFiles) {
+            if (-not (Test-Path (Join-Path $zipdir $requiredFile))) {
+              throw "Required runtime file missing from archive staging: $requiredFile"
+            }
+          }
 
-    - name: Upload MSBuild Logs
-      if: always()
-      uses: actions/upload-artifact@v7
-      with:
-        name: msbuild-logs-${{ matrix.platform }}
-        path: artifact/msbuild-logs-${{ matrix.platform }}
-        if-no-files-found: warn
+      - name: Prepare MSBuild Logs
+        if: always()
+        shell: pwsh
+        run: |
+          $logdir = "artifact\msbuild-logs-${{ matrix.platform }}"
+          mkdir $logdir -Force
+
+          if (Test-Path "msbuild-${{ matrix.platform }}.log") {
+            Copy-Item "msbuild-${{ matrix.platform }}.log" $logdir
+          }
+          if (Test-Path "dumpbin-${{ matrix.platform }}.txt") {
+            Copy-Item "dumpbin-${{ matrix.platform }}.txt" $logdir
+          }
+
+          Write-Host "Log staging contents:"
+          Get-ChildItem $logdir -ErrorAction SilentlyContinue
+
+      - name: Upload archive
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ env.BUILD_ARTIFACT }}
+          path: artifact/${{ env.BUILD_ARTIFACT }}
+          if-no-files-found: error
+
+      - name: Upload MSBuild Logs
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: msbuild-logs-${{ matrix.platform }}
+          path: artifact/msbuild-logs-${{ matrix.platform }}
+          if-no-files-found: warn

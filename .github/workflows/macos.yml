@@ -60,15 +60,15 @@ jobs:
       VCPKG_DISABLE_METRICS: "1"
 
     steps:
-    - uses: actions/checkout@v6
+      - uses: actions/checkout@v6
 
-    - name: Build qssm.pak
-      run: bash Misc/qssm_pak/build.sh
+      - name: Build qssm.pak
+        run: bash Misc/qssm_pak/build.sh
 
-    - name: Compute vcpkg cache key inputs
-      id: vcpkg-cache
-      shell: bash
-      run: |
+      - name: Compute vcpkg cache key inputs
+        id: vcpkg-cache
+        shell: bash
+        run: |
           image_os="${ImageOS:-$(sw_vers -productVersion)}"
           image_version="${ImageVersion:-unknown}"
           xcode_version="$(xcodebuild -version | tr '\n' ' ' | sed 's/[[:space:]]\+/ /g; s/ $//')"
@@ -80,20 +80,20 @@ jobs:
           echo "Using ImageVersion=$image_version"
           echo "Using Xcode=$xcode_version"
 
-    - name: Cache vcpkg artifacts
-      id: vcpkg-cache-restore
-      uses: actions/cache@v5
-      with:
-        path: |
-          ${{ env.VCPKG_DEFAULT_BINARY_CACHE }}
-          ${{ env.VCPKG_DOWNLOADS }}
-        key: ${{ runner.os }}-${{ runner.arch }}-vcpkg-${{ env.VCPKG_CACHE_REV }}-${{ steps.vcpkg-cache.outputs.image_os }}-${{ steps.vcpkg-cache.outputs.image_version }}-${{ steps.vcpkg-cache.outputs.xcode_hash }}-${{ hashFiles('macOS/setup-vcpkg.sh', 'macOS/custom-triplets/*.cmake') }}
-        restore-keys: |
-          ${{ runner.os }}-${{ runner.arch }}-vcpkg-${{ env.VCPKG_CACHE_REV }}-${{ steps.vcpkg-cache.outputs.image_os }}-${{ steps.vcpkg-cache.outputs.image_version }}-${{ steps.vcpkg-cache.outputs.xcode_hash }}-
-          ${{ runner.os }}-${{ runner.arch }}-vcpkg-${{ env.VCPKG_CACHE_REV }}-
+      - name: Cache vcpkg artifacts
+        id: vcpkg-cache-restore
+        uses: actions/cache@v5
+        with:
+          path: |
+            ${{ env.VCPKG_DEFAULT_BINARY_CACHE }}
+            ${{ env.VCPKG_DOWNLOADS }}
+          key: ${{ runner.os }}-${{ runner.arch }}-vcpkg-${{ env.VCPKG_CACHE_REV }}-${{ steps.vcpkg-cache.outputs.image_os }}-${{ steps.vcpkg-cache.outputs.image_version }}-${{ steps.vcpkg-cache.outputs.xcode_hash }}-${{ hashFiles('macOS/setup-vcpkg.sh', 'macOS/custom-triplets/*.cmake') }}
+          restore-keys: |
+            ${{ runner.os }}-${{ runner.arch }}-vcpkg-${{ env.VCPKG_CACHE_REV }}-${{ steps.vcpkg-cache.outputs.image_os }}-${{ steps.vcpkg-cache.outputs.image_version }}-${{ steps.vcpkg-cache.outputs.xcode_hash }}-
+            ${{ runner.os }}-${{ runner.arch }}-vcpkg-${{ env.VCPKG_CACHE_REV }}-
 
-    - name: Report cache restore result
-      run: |
+      - name: Report cache restore result
+        run: |
           if [ "${{ steps.vcpkg-cache-restore.outputs.cache-hit }}" = "true" ]; then
             echo "actions/cache exact key hit"
           elif [ "${{ steps.vcpkg-cache-restore.outputs.cache-hit }}" = "false" ]; then
@@ -102,8 +102,8 @@ jobs:
             echo "actions/cache miss"
           fi
 
-    - name: Setup Homebrew and install dependencies
-      run: |
+      - name: Setup Homebrew and install dependencies
+        run: |
           set -euo pipefail
           # Intel runners keep Homebrew in /usr/local, Apple Silicon in /opt/homebrew.
           for brew in /opt/homebrew/bin/brew /usr/local/bin/brew; do
@@ -128,11 +128,11 @@ jobs:
             echo "  $cmd: $(command -v "$cmd" || echo MISSING)"
           done
 
-    # Apple Clang can prefer /usr/local/include to vcpkg's -isystem paths.
-    # Keep Homebrew's headers/pkg-config files out of the pinned library build;
-    # unlinking leaves the Cellar and opt paths used by build tools intact.
-    - name: Isolate vcpkg dependencies from Homebrew
-      run: |
+      # Apple Clang can prefer /usr/local/include to vcpkg's -isystem paths.
+      # Keep Homebrew's headers/pkg-config files out of the pinned library build;
+      # unlinking leaves the Cellar and opt paths used by build tools intact.
+      - name: Isolate vcpkg dependencies from Homebrew
+        run: |
           set -euo pipefail
           installed_formulas=$(brew list --formula --versions)
           dependencies=()
@@ -152,8 +152,8 @@ jobs:
             exit 1
           fi
 
-    - name: Build
-      run: |
+      - name: Build
+        run: |
           set -o pipefail
           cd macOS
           echo "=== Running build-macos.sh ==="
@@ -165,9 +165,9 @@ jobs:
             exit "$build_rc"
           fi
 
-    - name: Prepare macOS debug logs
-      if: always()
-      run: |
+      - name: Prepare macOS debug logs
+        if: always()
+        run: |
           set -euxo pipefail
           package_zip="macOS/build/Release/QSS-M-macOS.zip"
           package_dmg="macOS/build/Release/QSS-M-macOS.dmg"
@@ -198,24 +198,24 @@ jobs:
           echo "===== Log artifact tree ====="
           find artifact/logs -maxdepth 3 -type f | sort
 
-    - name: Upload macOS ZIP artifact
-      uses: actions/upload-artifact@v7
-      with:
-        path: macOS/build/Release/QSS-M-macOS.zip
-        if-no-files-found: error
-        archive: false
+      - name: Upload macOS ZIP artifact
+        uses: actions/upload-artifact@v7
+        with:
+          path: macOS/build/Release/QSS-M-macOS.zip
+          if-no-files-found: error
+          archive: false
 
-    - name: Upload macOS DMG artifact
-      uses: actions/upload-artifact@v7
-      with:
-        path: macOS/build/Release/QSS-M-macOS.dmg
-        if-no-files-found: error
-        archive: false
+      - name: Upload macOS DMG artifact
+        uses: actions/upload-artifact@v7
+        with:
+          path: macOS/build/Release/QSS-M-macOS.dmg
+          if-no-files-found: error
+          archive: false
 
-    - name: Upload macOS debug logs
-      if: always()
-      uses: actions/upload-artifact@v7
-      with:
-        name: QSS-M-macOS-logs
-        path: artifact/logs/QSS-M-macOS-logs
-        if-no-files-found: warn
+      - name: Upload macOS debug logs
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: QSS-M-macOS-logs
+          path: artifact/logs/QSS-M-macOS-logs
+          if-no-files-found: warn

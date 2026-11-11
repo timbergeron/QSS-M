@@ -55,54 +55,54 @@ jobs:
           - platform: w32
             arch: x86
     steps:
-    - uses: actions/checkout@v6
+      - uses: actions/checkout@v6
 
-    - name: Install build tools
-      run: |
-        sudo apt-get update
-        sudo apt-get install -y build-essential cmake ninja-build pkg-config \
-          autoconf automake libtool gettext texinfo gperf bison flex \
-          mingw-w64 curl xz-utils zip
+      - name: Install build tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential cmake ninja-build pkg-config \
+            autoconf automake libtool gettext texinfo gperf bison flex \
+            mingw-w64 curl xz-utils zip
 
-    - name: Identify compiler
-      id: compiler
-      shell: bash
-      run: |
-        set -euo pipefail
-        compiler_id=$(python3 Windows/build-static.py --arch ${{ matrix.arch }} --print-toolchain-id)
-        echo "fingerprint=$compiler_id" >> "$GITHUB_OUTPUT"
+      - name: Identify compiler
+        id: compiler
+        shell: bash
+        run: |
+          set -euo pipefail
+          compiler_id=$(python3 Windows/build-static.py --arch ${{ matrix.arch }} --print-toolchain-id)
+          echo "fingerprint=$compiler_id" >> "$GITHUB_OUTPUT"
 
-    - name: Cache static dependencies
-      uses: actions/cache@v5
-      with:
-        path: build/windows-static
-        key: windows-static-${{ runner.os }}-${{ matrix.arch }}-${{ steps.compiler.outputs.fingerprint }}-${{ hashFiles('Windows/build-static.py', 'Windows/static-sources.json', 'Windows/static-adapters/*', 'Windows/static-licenses/*') }}
+      - name: Cache static dependencies
+        uses: actions/cache@v5
+        with:
+          path: build/windows-static
+          key: windows-static-${{ runner.os }}-${{ matrix.arch }}-${{ steps.compiler.outputs.fingerprint }}-${{ hashFiles('Windows/build-static.py', 'Windows/static-sources.json', 'Windows/static-adapters/*', 'Windows/static-licenses/*') }}
 
-    - name: Build qssm.pak
-      run: bash Misc/qssm_pak/build.sh
+      - name: Build qssm.pak
+        run: bash Misc/qssm_pak/build.sh
 
-    - name: Test packaging and update validation
-      run: |
-        python3 -m unittest discover -s Misc/stress -p test_release_archives.py
-        python3 -m unittest discover -s Misc/stress -p test_windows_static.py
+      - name: Test packaging and update validation
+        run: |
+          python3 -m unittest discover -s Misc/stress -p test_release_archives.py
+          python3 -m unittest discover -s Misc/stress -p test_windows_static.py
 
-    - name: Build and verify package
-      shell: bash
-      run: |
-        set -euo pipefail
-        sh ./build-${{ matrix.platform }}.sh 2>&1 | tee build-${{ matrix.platform }}.log
+      - name: Build and verify package
+        shell: bash
+        run: |
+          set -euo pipefail
+          sh ./build-${{ matrix.platform }}.sh 2>&1 | tee build-${{ matrix.platform }}.log
 
-    - name: Upload package artifact
-      uses: actions/upload-artifact@v7
-      with:
-        path: Quake/QSS-M-${{ matrix.platform }}.zip
-        if-no-files-found: error
-        archive: false
+      - name: Upload package artifact
+        uses: actions/upload-artifact@v7
+        with:
+          path: Quake/QSS-M-${{ matrix.platform }}.zip
+          if-no-files-found: error
+          archive: false
 
-    - name: Upload build logs
-      if: always()
-      uses: actions/upload-artifact@v7
-      with:
-        name: QSS-M-${{ matrix.platform }}-logs
-        path: build-${{ matrix.platform }}.log
-        if-no-files-found: warn
+      - name: Upload build logs
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: QSS-M-${{ matrix.platform }}-logs
+          path: build-${{ matrix.platform }}.log
+          if-no-files-found: warn
