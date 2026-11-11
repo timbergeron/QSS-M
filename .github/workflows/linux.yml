@@ -1,6 +1,22 @@
 name: Linux CI
 
-on: [push, pull_request]
+on:
+  push:
+    paths-ignore:
+      - '**/*.md'
+      - 'Quakespasm*.txt'
+      - 'Quakespasm*.html'
+  pull_request:
+    paths-ignore:
+      - '**/*.md'
+      - 'Quakespasm*.txt'
+      - 'Quakespasm*.html'
+
+# Keep every qsrebase push and tag build, including pending runs. Other refs
+# share a group so that a newer commit cancels obsolete work in this workflow.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ (github.ref == 'refs/heads/qsrebase' || startsWith(github.ref, 'refs/tags/')) && github.run_id || github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/qsrebase' && !startsWith(github.ref, 'refs/tags/') }}
 
 permissions:
   contents: read
@@ -70,30 +86,6 @@ jobs:
         export PKG_CONFIG_PATH="$SDL3_PREFIX/lib/pkgconfig"
         python3 Misc/stress/test_download_map_titles.py
         python3 Misc/stress/test_map_categories.py
-
-    - name: Verify gnutls
-      run: |
-        set -eux
-        pkg-config --exists gnutls
-        echo "gnutls found: $(pkg-config --modversion gnutls)"
-        pkg-config --cflags --libs gnutls
-
-    - name: GNUTLS Debug (Linux)
-      run: |
-        set -eux
-        echo "Runner: $(uname -a)"
-        echo "PKG_CONFIG=${PKG_CONFIG:-<unset>}"
-        echo "PKG_CONFIG_PATH=${PKG_CONFIG_PATH:-<unset>}"
-        echo "PKG_CONFIG_LIBDIR=${PKG_CONFIG_LIBDIR:-<unset>}"
-        command -v pkg-config
-        pkg-config --version
-        pkg-config --variable pc_path pkg-config || true
-        dpkg -l | grep -E 'pkg-config|gnutls' || true
-        dpkg -L libgnutls28-dev | grep 'gnutls\\.pc' || true
-        find /usr/lib /usr/share -path "*/pkgconfig/gnutls.pc" -print || true
-        pkg-config --modversion gnutls
-        pkg-config --cflags gnutls
-        pkg-config --libs gnutls
 
     - name: Build
       run: |

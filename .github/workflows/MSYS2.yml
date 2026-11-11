@@ -1,6 +1,22 @@
 name: Windows CI MSYS
 
-on: [push, pull_request]
+on:
+  push:
+    paths-ignore:
+      - '**/*.md'
+      - 'Quakespasm*.txt'
+      - 'Quakespasm*.html'
+  pull_request:
+    paths-ignore:
+      - '**/*.md'
+      - 'Quakespasm*.txt'
+      - 'Quakespasm*.html'
+
+# Keep every qsrebase push and tag build, including pending runs. Other refs
+# share a group so that a newer commit cancels obsolete work in this workflow.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ (github.ref == 'refs/heads/qsrebase' || startsWith(github.ref, 'refs/tags/')) && github.run_id || github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/qsrebase' && !startsWith(github.ref, 'refs/tags/') }}
 
 permissions:
   contents: read

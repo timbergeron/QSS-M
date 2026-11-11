@@ -3,6 +3,7 @@
 import hashlib
 import importlib.util
 import io
+import json
 import os
 from pathlib import Path
 import re
@@ -115,6 +116,89 @@ class WindowsVoipTests(unittest.TestCase):
 
 
 class DependencyBuildTests(unittest.TestCase):
+    def test_cached_cmake_libraries_still_contribute_packaged_licenses(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            manifest = json.loads((BUILD.HERE / "static-sources.json").read_text())
+
+            def source_tree(archive, container):
+                source = container / "source"
+                source.mkdir(parents=True, exist_ok=True)
+                (source / "COPYING").write_text(f"License for {container.name}\n")
+                return source
+
+            with mock.patch.object(BUILD, "ROOT", root), \
+                 mock.patch.object(BUILD, "compiler_identity", return_value={"instance": "test"}), \
+                 mock.patch.object(BUILD, "fetch"), \
+                 mock.patch.object(BUILD, "extract", side_effect=source_tree), \
+                 mock.patch.object(BUILD, "apply_patches"), \
+                 mock.patch.object(BUILD, "build_cmake_dependency") as cached_build, \
+                 mock.patch.object(BUILD, "verify_msvc_archives"), \
+                 mock.patch("sys.argv", ["build-static.py", "--toolchain", "msvc", "--arch", "x64"]):
+                BUILD.main()
+                prefix = root / "build/windows-static/msvc-x64-Release/prefix"
+                licenses = (prefix / "third-party-licenses.txt").read_text()
+                names = {call.args[0] for call in cached_build.call_args_list}
+                self.assertEqual(names, set(manifest) - {"mpg123", "gmp", "nettle", "tasn1", "gnutls"})
+                for name in names:
+                    self.assertIn(f"License for {name}\n", licenses)
+
+    @unittest.skipUnless(shutil.which("cmake") and shutil.which("cc"), "CMake and C compiler required")
+    def test_cmake_cache_reuses_complete_install_and_recovers_missing_files(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "source"
+            source.mkdir()
+            (source / "decoder.c").write_text("int decode(void) { return 1; }\n")
+            (source / "decoder.h").write_text("int decode(void);\n")
+            (source / "CMakeLists.txt").write_text(
+                "cmake_minimum_required(VERSION 3.16)\nproject(decoder C)\n"
+                "add_library(decoder STATIC decoder.c)\n"
+                "install(TARGETS decoder ARCHIVE DESTINATION lib)\n"
+                "install(FILES decoder.h DESTINATION include)\n")
+            prefix = root / "prefix"
+            prefix.mkdir()
+            build = root / "build"
+            dep = {"version": "1.0", "sha256": "original"}
+            args = SimpleNamespace(toolchain="mingw", arch="x64", config="Release", jobs=1)
+            stamp = prefix / "decoder.built"
+
+            def install():
+                BUILD.build_cmake_dependency("decoder", dep, args, source, build, prefix,
+                                             [f"-DCMAKE_INSTALL_PREFIX={prefix}"], [])
+
+            with mock.patch.object(BUILD, "run", wraps=BUILD.run) as run:
+                install()
+                self.assertEqual(run.call_count, 3)
+                library = next((prefix / "lib").iterdir())
+                before = library.stat().st_mtime_ns
+                run.reset_mock()
+                install()
+                run.assert_not_called()
+                self.assertEqual(library.stat().st_mtime_ns, before)
+                for invalidate in (lambda: (prefix / "include/decoder.h").unlink(),
+                                   lambda: library.unlink(),
+                                   lambda: dep.update(sha256="changed"),
+                                   lambda: (build / "install_manifest.txt").write_text("")):
+                    invalidate()
+                    run.reset_mock()
+                    install()
+                    self.assertEqual(run.call_count, 3)
+                    self.assertTrue(library.is_file())
+                    self.assertTrue((prefix / "include/decoder.h").is_file())
+                    self.assertEqual(stamp.read_text(), dep["sha256"])
+
+            # Fail each phase after invalidating an otherwise completed install.
+            for phase in range(3):
+                (build / "install_manifest.txt").write_text("")
+                failure = subprocess.CalledProcessError(1, "cmake")
+                with mock.patch.object(BUILD, "run", side_effect=[None] * phase + [failure]):
+                    with self.assertRaises(subprocess.CalledProcessError):
+                        install()
+                self.assertFalse(stamp.exists(), "a failed build must not retain a valid stamp")
+                install()
+                self.assertTrue(BUILD.cmake_install_is_current(build, stamp, dep["sha256"]))
+
     def test_fetch_retries_tls_errors_and_rejects_corrupt_downloads(self):
         payload = b"verified archive"
         dep = {"url": "https://example.invalid/source.tar.gz",

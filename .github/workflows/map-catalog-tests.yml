@@ -16,6 +16,10 @@ on:
       - '.github/workflows/dependency-watch.yml'
       - 'Misc/qssm_pak/misc/qw_map*'
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: true
+
 permissions:
   contents: read
 

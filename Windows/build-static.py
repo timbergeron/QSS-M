@@ -35,6 +35,15 @@ def write_if_changed(path, content):
         path.write_bytes(data)
 
 
+def cmake_install_is_current(build, stamp, checksum):
+    """Reuse a completed install only while all its installed files exist."""
+    manifest = build / "install_manifest.txt"
+    if not stamp.is_file() or stamp.read_text() != checksum or not manifest.is_file():
+        return False
+    installed = manifest.read_text(encoding="utf-8").splitlines()
+    return bool(installed) and all(Path(path).is_file() for path in installed)
+
+
 def mingw_native():
     return os.name == "nt" or os.environ.get("MSYSTEM", "").startswith("MINGW")
 
@@ -259,6 +268,30 @@ def build_gnutls(args, manifest, downloads, work, prefix, triplet, native):
         stamp.write_text(dep["sha256"])
 
 
+def build_cmake_dependency(name, dep, args, source, build, prefix, common, options):
+    stamp = prefix / (name + ".built")
+    if cmake_install_is_current(build, stamp, dep["sha256"]):
+        print(f"Reusing {name} {dep['version']} ({args.toolchain}, {args.arch})", flush=True)
+        return
+    # Recipes, source pins and compilers are already checked by prepare_build.
+    # Invalidate before starting so failed builds cannot reuse an old stamp.
+    stamp.unlink(missing_ok=True)
+    print(f"Building {name} {dep['version']} ({args.toolchain}, {args.arch})", flush=True)
+    extra = list(options)
+    if name == "opus" and args.toolchain == "msvc":
+        # Opus overrides CMAKE_MSVC_RUNTIME_LIBRARY unless this is enabled.
+        extra += ["OPUS_STATIC_RUNTIME=ON"]
+    if name == "curl":
+        zlib = next(p for p in (prefix / "lib").iterdir()
+                    if p.suffix in (".a", ".lib") and p.stem in ("libzs", "zs", "zsd"))
+        extra += [f"ZLIB_LIBRARY={zlib.as_posix()}", f"ZLIB_INCLUDE_DIR={prefix.as_posix()}/include"]
+    cmake_source = source / "ports/cmake" if name == "mpg123" else source
+    run("cmake", "-S", cmake_source, "-B", build, *common, *("-D" + option for option in extra))
+    run("cmake", "--build", build, "--config", args.config, "--parallel", args.jobs)
+    run("cmake", "--install", build, "--config", args.config)
+    stamp.write_text(dep["sha256"])
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--arch", choices=("x86", "x64"), required=True)
@@ -363,19 +396,7 @@ def main():
                 apply_patches(source, sorted((HERE / "static-adapters").glob("mad-*.patch")))
                 marker.touch()
         build = work / "objects" / name
-        print(f"Building {name} {dep['version']} ({args.toolchain}, {args.arch})", flush=True)
-        extra = list(options[name])
-        if name == "opus" and args.toolchain == "msvc":
-            # Opus overrides CMAKE_MSVC_RUNTIME_LIBRARY unless this is enabled.
-            extra += ["OPUS_STATIC_RUNTIME=ON"]
-        if name == "curl":
-            zlib = next(p for p in (prefix / "lib").iterdir()
-                        if p.suffix in (".a", ".lib") and p.stem in ("libzs", "zs", "zsd"))
-            extra += [f"ZLIB_LIBRARY={zlib.as_posix()}", f"ZLIB_INCLUDE_DIR={prefix.as_posix()}/include"]
-        cmake_source = source / "ports/cmake" if name == "mpg123" else source
-        run("cmake", "-S", cmake_source, "-B", build, *common, *("-D" + option for option in extra))
-        run("cmake", "--build", build, "--config", args.config, "--parallel", args.jobs)
-        run("cmake", "--install", build, "--config", args.config)
+        build_cmake_dependency(name, dep, args, source, build, prefix, common, options[name])
         for license in sorted(source.iterdir()):
             if license.is_file() and license.name.startswith(("COPYING", "LICENSE", "COPYRIGHT", "NOTICE")):
                 license_parts.append(f"\n{'=' * 72}\n{name} {dep['version']}: {license.name}\n{dep['url']}\n\n" + license.read_text(encoding="utf-8", errors="replace"))
