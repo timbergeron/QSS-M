@@ -57,9 +57,9 @@ jobs:
         uses: msys2/setup-msys2@ec48f7c5447b3140e2b088413ae3a55687bccb6e # v2.33.0
         with:
           msystem: MINGW${{ matrix.bits }}
-          # The runner image's MSYS2 is recent; a full -Syuu cost ~80s per job.
-          # Set back to true if pacman reports dependency conflicts.
-          update: false
+          # Keep upgrading: the image's own gcc changes with every runner image,
+          # and a new compiler fingerprint forces a ~25 min static rebuild.
+          update: true
           install: |
             base-devel
             make
