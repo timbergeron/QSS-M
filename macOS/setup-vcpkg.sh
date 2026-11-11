@@ -270,8 +270,18 @@ prefetch_nettle_source() {
 }
 prefetch_nettle_source || true
 
-./vcpkg/vcpkg install --overlay-triplets=custom-triplets --triplet=x64-osx-1013 zlib libogg opus opusfile libvorbis libmad libflac libxmp libgnutls
-./vcpkg/vcpkg install --overlay-triplets=custom-triplets --triplet=arm64-osx-11 zlib libogg opus opusfile libvorbis libmad libflac libxmp libgnutls
+# Reuse the native release triplet for host tools too. Otherwise vcpkg builds
+# GMP and Nettle a second time under its default *-osx host triplet.
+case "$(uname -m)" in
+    x86_64) default_host_triplet=x64-osx-1013 ;;
+    arm64) default_host_triplet=arm64-osx-11 ;;
+    *) echo "Unsupported macOS host architecture: $(uname -m)" >&2; exit 1 ;;
+esac
+host_triplet="${VCPKG_DEFAULT_HOST_TRIPLET:-$default_host_triplet}"
+echo "Using vcpkg host triplet: $host_triplet"
+
+./vcpkg/vcpkg install --overlay-triplets=custom-triplets --host-triplet="$host_triplet" --triplet=x64-osx-1013 zlib libogg opus opusfile libvorbis libmad libflac libxmp libgnutls
+./vcpkg/vcpkg install --overlay-triplets=custom-triplets --host-triplet="$host_triplet" --triplet=arm64-osx-11 zlib libogg opus opusfile libvorbis libmad libflac libxmp libgnutls
 
 mkdir -p libs_universal
 lipo -create ./vcpkg/installed/x64-osx-1013/lib/libogg.a ./vcpkg/installed/arm64-osx-11/lib/libogg.a -output ./libs_universal/libogg.a
