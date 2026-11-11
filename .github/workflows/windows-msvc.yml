@@ -16,6 +16,8 @@ on:
       - '.github/workflows/linux-valgrind.yml'
   pull_request:
     paths-ignore: *paths-ignore
+  # Manual runs, e.g. to rebuild a commit without pushing a new one.
+  workflow_dispatch:
 
 # Keep every qsrebase push and tag build, including pending runs. Other refs
 # share a group so that a newer commit cancels obsolete work in this workflow.
