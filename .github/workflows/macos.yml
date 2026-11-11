@@ -6,11 +6,27 @@ on:
       - '**/*.md'
       - 'Quakespasm*.txt'
       - 'Quakespasm*.html'
+      # Dependency-watch and map-catalog tooling has its own workflows.
+      # build-sdl3-linux.sh stays in scope: linux.yml builds with it.
+      - '.github/scripts/*.js'
+      - '.github/dependency-watch.json'
+      - '.github/map-catalog-snapshot.json'
+      - '.github/workflows/dependency-watch.yml'
+      - '.github/workflows/map-catalog-tests.yml'
+      - '.github/workflows/valgrind.yml'
   pull_request:
     paths-ignore:
       - '**/*.md'
       - 'Quakespasm*.txt'
       - 'Quakespasm*.html'
+      # Dependency-watch and map-catalog tooling has its own workflows.
+      # build-sdl3-linux.sh stays in scope: linux.yml builds with it.
+      - '.github/scripts/*.js'
+      - '.github/dependency-watch.json'
+      - '.github/map-catalog-snapshot.json'
+      - '.github/workflows/dependency-watch.yml'
+      - '.github/workflows/map-catalog-tests.yml'
+      - '.github/workflows/valgrind.yml'
 
 # Keep every qsrebase push and tag build, including pending runs. Other refs
 # share a group so that a newer commit cancels obsolete work in this workflow.
@@ -27,6 +43,11 @@ jobs:
     # Pin the OS and host architecture. The macos-15 arm64 pool has failed
     # to allocate runners; the Intel host still builds both release slices.
     runs-on: macos-15-intel
+    # Generous on purpose: only catches hangs, never a slow cold-cache build.
+    timeout-minutes: 90
+    # A PR from a branch of this repository already builds on push; only
+    # fork PRs need the pull_request run.
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.repository
     strategy:
       fail-fast: false
     env:
@@ -80,67 +101,31 @@ jobs:
             echo "actions/cache miss"
           fi
 
-    - name: Debug environment (pre-install)
-      run: |
-          echo "=== Runner info ==="
-          uname -a
-          sw_vers
-          echo ""
-          echo "=== Current PATH ==="
-          echo "$PATH" | tr ':' '\n'
-          echo ""
-          echo "=== Homebrew location ==="
-          which brew 2>/dev/null || echo "brew not in PATH"
-          ls -la /opt/homebrew/bin/brew 2>/dev/null || echo "/opt/homebrew/bin/brew not found"
-          ls -la /usr/local/bin/brew 2>/dev/null || echo "/usr/local/bin/brew not found"
-          echo ""
-          echo "=== Check tools BEFORE brew install ==="
-          echo "autoconf: $(command -v autoconf 2>/dev/null || echo 'NOT FOUND')"
-          echo "automake: $(command -v automake 2>/dev/null || echo 'NOT FOUND')"
-          echo "libtool:  $(command -v libtool 2>/dev/null || echo 'NOT FOUND')"
-          echo "libtoolize: $(command -v libtoolize 2>/dev/null || echo 'NOT FOUND')"
-          echo "glibtoolize: $(command -v glibtoolize 2>/dev/null || echo 'NOT FOUND')"
-          echo "pkg-config: $(command -v pkg-config 2>/dev/null || echo 'NOT FOUND')"
-          echo "perl: $(command -v perl 2>/dev/null || echo 'NOT FOUND')"
-          echo "git: $(command -v git 2>/dev/null || echo 'NOT FOUND')"
-          echo "lipo: $(command -v lipo 2>/dev/null || echo 'NOT FOUND')"
-          echo "xcodebuild: $(command -v xcodebuild 2>/dev/null || echo 'NOT FOUND')"
-
     - name: Setup Homebrew and install dependencies
       run: |
-          echo "=== Evaluating brew shellenv ==="
-          if [ -x /opt/homebrew/bin/brew ]; then
-            echo "Using /opt/homebrew/bin/brew"
-            eval "$(/opt/homebrew/bin/brew shellenv)"
-          elif [ -x /usr/local/bin/brew ]; then
-            echo "Using /usr/local/bin/brew"
-            eval "$(/usr/local/bin/brew shellenv)"
-          else
-            echo "ERROR: brew not found at either location!"
+          set -euo pipefail
+          # Intel runners keep Homebrew in /usr/local, Apple Silicon in /opt/homebrew.
+          for brew in /opt/homebrew/bin/brew /usr/local/bin/brew; do
+            if [ -x "$brew" ]; then
+              eval "$("$brew" shellenv)"
+              break
+            fi
+          done
+          if ! command -v brew >/dev/null 2>&1; then
+            echo "ERROR: Homebrew not found in /opt/homebrew or /usr/local"
             exit 1
           fi
-          echo ""
-          echo "=== PATH after brew shellenv ==="
-          echo "$PATH" | tr ':' '\n'
-          echo ""
-          echo "=== Removing unused Homebrew runner taps ==="
+          # Later steps see the same Homebrew without re-evaluating shellenv.
+          echo "HOMEBREW_PREFIX=$HOMEBREW_PREFIX" >> "$GITHUB_ENV"
+          echo "$HOMEBREW_PREFIX/sbin" >> "$GITHUB_PATH"
+          echo "$HOMEBREW_PREFIX/bin" >> "$GITHUB_PATH"
           brew untap aws/tap >/dev/null 2>&1 || true
-          echo ""
-          echo "=== Installing packages ==="
           brew install autoconf automake libtool autoconf-archive pkg-config
-          echo ""
-          echo "=== Verify installed tools ==="
-          echo "autoconf: $(command -v autoconf) -> $(autoconf --version | head -1)"
-          echo "automake: $(command -v automake) -> $(automake --version | head -1)"
-          echo "libtoolize: $(command -v libtoolize 2>/dev/null || echo 'NOT FOUND')"
-          echo "glibtoolize: $(command -v glibtoolize 2>/dev/null || echo 'NOT FOUND')"
-          echo "pkg-config: $(command -v pkg-config) -> $(pkg-config --version)"
-          echo ""
-          echo "=== Homebrew prefix ==="
-          brew --prefix
-          echo "=== Homebrew bin contents (autotools related) ==="
-          ls -la "$(brew --prefix)/bin/"*libtool* 2>/dev/null || echo "no libtool binaries in brew bin"
-          ls -la "$(brew --prefix)/bin/"*auto* 2>/dev/null || echo "no auto* binaries in brew bin"
+          echo "Runner: $(uname -m), macOS $(sw_vers -productVersion), Homebrew at $HOMEBREW_PREFIX"
+          # setup-vcpkg.sh requires these and shims glibtoolize as libtoolize.
+          for cmd in git lipo perl autoconf automake glibtoolize pkg-config xcodebuild; do
+            echo "  $cmd: $(command -v "$cmd" || echo MISSING)"
+          done
 
     # Apple Clang can prefer /usr/local/include to vcpkg's -isystem paths.
     # Keep Homebrew's headers/pkg-config files out of the pinned library build;
@@ -148,7 +133,6 @@ jobs:
     - name: Isolate vcpkg dependencies from Homebrew
       run: |
           set -euo pipefail
-          eval "$(/usr/local/bin/brew shellenv)"
           installed_formulas=$(brew list --formula --versions)
           dependencies=()
           while read -r formula versions; do
@@ -167,48 +151,9 @@ jobs:
             exit 1
           fi
 
-    - name: Debug environment (post-install)
-      run: |
-          eval "$(/opt/homebrew/bin/brew shellenv 2>/dev/null || /usr/local/bin/brew shellenv 2>/dev/null || true)"
-          echo "=== PATH in new shell step ==="
-          echo "$PATH" | tr ':' '\n'
-          echo ""
-          echo "=== Tool check in new shell step ==="
-          echo "autoconf: $(command -v autoconf 2>/dev/null || echo 'NOT FOUND')"
-          echo "automake: $(command -v automake 2>/dev/null || echo 'NOT FOUND')"
-          echo "libtoolize: $(command -v libtoolize 2>/dev/null || echo 'NOT FOUND')"
-          echo "glibtoolize: $(command -v glibtoolize 2>/dev/null || echo 'NOT FOUND')"
-          echo "pkg-config: $(command -v pkg-config 2>/dev/null || echo 'NOT FOUND')"
-          echo ""
-          echo "=== setup-vcpkg.sh will check these ==="
-          for cmd in git lipo autoconf automake pkg-config perl; do
-            if command -v "$cmd" >/dev/null 2>&1; then
-              echo "  $cmd: OK ($(command -v $cmd))"
-            else
-              echo "  $cmd: MISSING"
-            fi
-          done
-          echo ""
-          echo "=== libtoolize shim logic preview ==="
-          if command -v libtoolize >/dev/null 2>&1; then
-            echo "  libtoolize found natively at $(command -v libtoolize)"
-          elif command -v glibtoolize >/dev/null 2>&1; then
-            echo "  glibtoolize found at $(command -v glibtoolize) -- shim will be created"
-          else
-            echo "  NEITHER libtoolize NOR glibtoolize found -- this will FAIL"
-          fi
-
     - name: Build
       run: |
           set -o pipefail
-          echo "=== Build step starting ==="
-          eval "$(/opt/homebrew/bin/brew shellenv 2>/dev/null || /usr/local/bin/brew shellenv 2>/dev/null || true)"
-          echo "PATH: $PATH"
-          echo "autoconf: $(command -v autoconf 2>/dev/null || echo 'NOT FOUND')"
-          echo "automake: $(command -v automake 2>/dev/null || echo 'NOT FOUND')"
-          echo "glibtoolize: $(command -v glibtoolize 2>/dev/null || echo 'NOT FOUND')"
-          echo "pkg-config: $(command -v pkg-config 2>/dev/null || echo 'NOT FOUND')"
-          echo ""
           cd macOS
           echo "=== Running build-macos.sh ==="
           build_rc=0

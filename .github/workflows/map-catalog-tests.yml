@@ -27,6 +27,9 @@ jobs:
   validate:
     runs-on: ubuntu-latest
     timeout-minutes: 5
+    # A PR from a branch of this repository already builds on push; only
+    # fork PRs need the pull_request run.
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.repository
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0

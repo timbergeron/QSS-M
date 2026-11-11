@@ -6,11 +6,27 @@ on:
       - '**/*.md'
       - 'Quakespasm*.txt'
       - 'Quakespasm*.html'
+      # Dependency-watch and map-catalog tooling has its own workflows.
+      # build-sdl3-linux.sh stays in scope: linux.yml builds with it.
+      - '.github/scripts/*.js'
+      - '.github/dependency-watch.json'
+      - '.github/map-catalog-snapshot.json'
+      - '.github/workflows/dependency-watch.yml'
+      - '.github/workflows/map-catalog-tests.yml'
+      - '.github/workflows/valgrind.yml'
   pull_request:
     paths-ignore:
       - '**/*.md'
       - 'Quakespasm*.txt'
       - 'Quakespasm*.html'
+      # Dependency-watch and map-catalog tooling has its own workflows.
+      # build-sdl3-linux.sh stays in scope: linux.yml builds with it.
+      - '.github/scripts/*.js'
+      - '.github/dependency-watch.json'
+      - '.github/map-catalog-snapshot.json'
+      - '.github/workflows/dependency-watch.yml'
+      - '.github/workflows/map-catalog-tests.yml'
+      - '.github/workflows/valgrind.yml'
 
 # Keep every qsrebase push and tag build, including pending runs. Other refs
 # share a group so that a newer commit cancels obsolete work in this workflow.
@@ -25,6 +41,11 @@ jobs:
   build:
     name: Windows / ${{ matrix.platform }}
     runs-on: windows-2022
+    # Generous on purpose: only catches hangs, never a slow cold-cache build.
+    timeout-minutes: 90
+    # A PR from a branch of this repository already builds on push; only
+    # fork PRs need the pull_request run.
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.repository
     strategy:
       fail-fast: false
       matrix:
