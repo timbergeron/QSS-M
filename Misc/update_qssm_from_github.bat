@@ -104,22 +104,32 @@ $DefaultRepo = 'QSS-M'
 $PlatformPresets = @{
     windows = @{
         Label = 'Windows 64-bit'
-        WorkflowName = 'Windows CI (MinGW Linux Cross)'
-        JobName = 'w64'
+        WorkflowName = 'Windows (MinGW)'
+        WorkflowFile = 'windows-mingw.yml'
+        JobName = 'x64'
+        # Names used before the 2026-11 CI rename, still found in saved configs.
+        LegacyWorkflowNames = @('Windows CI (MinGW Linux Cross)', 'windows.yml')
+        LegacyJobNames = @('w64')
         ArtifactNameHint = 'QSS-M-w64.zip'
         LaunchGlob = '*.exe'
     }
     macos = @{
         Label = 'macOS universal'
-        WorkflowName = 'macOS CI (Xcode)'
-        JobName = 'arm64-universal'
+        WorkflowName = 'macOS'
+        WorkflowFile = 'macos.yml'
+        JobName = 'Universal'
+        LegacyWorkflowNames = @('macOS CI (Xcode)')
+        LegacyJobNames = @('arm64-universal', 'universal (x86_64 + arm64)')
         ArtifactNameHint = 'QSS-M-macOS.zip'
         LaunchGlob = '*.app'
     }
     linux = @{
         Label = 'Linux 64-bit'
-        WorkflowName = 'Linux CI'
+        WorkflowName = 'Linux'
+        WorkflowFile = 'linux.yml'
         JobName = 'x64'
+        LegacyWorkflowNames = @('Linux CI')
+        LegacyJobNames = @()
         ArtifactNameHint = 'QSS-M-l64.zip'
         LaunchGlob = 'qss-m*'
     }
@@ -832,6 +842,23 @@ function Get-BranchHeadSha {
     return [string]$data.commit.sha
 }
 
+function Test-RunMatchesWorkflow {
+    # Match a run by display name or workflow file; files survive display renames.
+    param($Run, [string]$WorkflowName, [string[]]$Aliases)
+    $wanted = @($WorkflowName) + @($Aliases) | Where-Object { $_ } | ForEach-Object { $_.ToLowerInvariant() }
+    $runFile = ([string]$Run.path).Split('/')[-1].ToLowerInvariant()
+    return ($wanted -contains ([string]$Run.name).ToLowerInvariant()) -or ($wanted -contains $runFile)
+}
+
+function Get-CurrentPresetValue {
+    # Upgrade a workflow/job name saved by an older updater to the current one.
+    param([string]$Value, [string]$Current, [string[]]$Legacy)
+    foreach ($name in @($Legacy)) {
+        if ($Value -ieq $name) { return $Current }
+    }
+    return $Value
+}
+
 function Find-MatchingRun {
     param(
         [string]$Owner,
@@ -840,7 +867,8 @@ function Find-MatchingRun {
         [string]$HeadSha,
         [string]$WorkflowName,
         [string]$Token,
-        [bool]$AllowOlder
+        [bool]$AllowOlder,
+        [string[]]$WorkflowAliases = @()
     )
 
     $runs = Get-PagedList "/repos/$Owner/$Repo/actions/runs" 'workflow_runs' $Token @{
@@ -849,7 +877,7 @@ function Find-MatchingRun {
         status = 'completed'
     } 5
 
-    $matching = @($runs | Where-Object { ([string]$_.name) -ieq $WorkflowName -and $_.event -eq 'push' })
+    $matching = @($runs | Where-Object { (Test-RunMatchesWorkflow $_ $WorkflowName $WorkflowAliases) -and $_.event -eq 'push' })
     if ($matching.Count -eq 0) {
         throw (New-UpdaterError "No completed push runs found for workflow '$WorkflowName' on branch '$Branch'.")
     }
@@ -876,14 +904,18 @@ function Find-MatchingRun {
 }
 
 function Confirm-JobSuccess {
-    param([string]$Owner, [string]$Repo, [int64]$RunId, [string]$JobName, [string]$Token)
+    param([string]$Owner, [string]$Repo, [int64]$RunId, [string]$JobName, [string]$Token, [string[]]$JobAliases = @())
 
     $jobs = Get-PagedList "/repos/$Owner/$Repo/actions/runs/$RunId/jobs" 'jobs' $Token @{} 3
-    $exact = @($jobs | Where-Object { ([string]$_.name) -ieq $JobName })
-    $partial = @($jobs | Where-Object { ([string]$_.name).ToLowerInvariant().Contains($JobName.ToLowerInvariant()) })
-    $candidates = $exact
-    if ($candidates.Count -eq 0) {
-        $candidates = $partial
+    $candidates = @()
+    # Older runs (e.g. with --allow-older) may carry a job's pre-rename name.
+    foreach ($name in (@($JobName) + @($JobAliases))) {
+        if (-not $name) { continue }
+        $candidates = @($jobs | Where-Object { ([string]$_.name) -ieq $name })
+        if ($candidates.Count -eq 0) {
+            $candidates = @($jobs | Where-Object { ([string]$_.name).ToLowerInvariant().Contains($name.ToLowerInvariant()) })
+        }
+        if ($candidates.Count -gt 0) { break }
     }
 
     if ($candidates.Count -eq 0) {
@@ -1805,12 +1837,22 @@ function Get-EffectiveOptions {
         $artifactNameHint = First-NonEmpty (Get-ConfigValue $Config 'artifact_name_hint') $preset['ArtifactNameHint']
     }
 
+    $workflowName = Get-CurrentPresetValue (First-NonEmpty $Options['WorkflowName'] (Get-ConfigValue $Config 'workflow_name') $preset['WorkflowName']) $preset['WorkflowName'] $preset['LegacyWorkflowNames']
+    # Only the preset's own workflow may also be matched by file; a custom
+    # --workflow-name must not pick up the preset's runs.
+    $workflowAliases = @()
+    if ($workflowName -ceq $preset['WorkflowName']) {
+        $workflowAliases = @($preset['WorkflowFile']) + @($preset['LegacyWorkflowNames'])
+    }
+
     return @{
         Platform = $platformKey
         Owner = First-NonEmpty $Options['Owner'] (Get-ConfigValue $Config 'owner') $DefaultOwner
         Repo = First-NonEmpty $Options['Repo'] (Get-ConfigValue $Config 'repo') $DefaultRepo
-        WorkflowName = First-NonEmpty $Options['WorkflowName'] (Get-ConfigValue $Config 'workflow_name') $preset['WorkflowName']
-        JobName = First-NonEmpty $Options['JobName'] (Get-ConfigValue $Config 'job_name') $preset['JobName']
+        WorkflowName = $workflowName
+        WorkflowAliases = $workflowAliases
+        JobName = Get-CurrentPresetValue (First-NonEmpty $Options['JobName'] (Get-ConfigValue $Config 'job_name') $preset['JobName']) $preset['JobName'] $preset['LegacyJobNames']
+        JobAliases = @($preset['LegacyJobNames'])
         ArtifactNameHint = $artifactNameHint
         Dest = Expand-PathSafe ([string](First-NonEmpty $Options['Dest'] (Get-ConfigValue $Config 'dest') (Get-DefaultDest)))
         LaunchGlob = $launchGlob
@@ -1882,7 +1924,7 @@ try {
     Write-UiKv 'Branch' $branch '🌿'
     Write-UiKv 'Latest commit' ($headSha.Substring(0, [Math]::Min(12, $headSha.Length))) '🧬'
 
-    $run = Find-MatchingRun $owner $repo $branch $headSha $opts['WorkflowName'] $tokenInfo['Token'] $Options['AllowOlder']
+    $run = Find-MatchingRun $owner $repo $branch $headSha $opts['WorkflowName'] $tokenInfo['Token'] $Options['AllowOlder'] $opts['WorkflowAliases']
     $runId = [int64]$run.id
     $runSha = [string]$run.head_sha
 
@@ -1891,7 +1933,7 @@ try {
         Write-UiKv 'Run URL' ($run.html_url) '🔗'
     }
 
-    $job = Confirm-JobSuccess $owner $repo $runId $opts['JobName'] $tokenInfo['Token']
+    $job = Confirm-JobSuccess $owner $repo $runId $opts['JobName'] $tokenInfo['Token'] $opts['JobAliases']
     Write-UiLine "Confirmed job success: $($job.name)" '✅' 'Green'
 
     $artifacts = @(Get-Artifacts $owner $repo $runId $tokenInfo['Token'] $opts['JobName'] $opts['ArtifactNameHint'] $Options['IncludeLogs'])

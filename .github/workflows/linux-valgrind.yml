@@ -1,4 +1,4 @@
-name: Linux Valgrind
+name: Linux (Valgrind)
 
 # Runtime diagnostics are opt-in; push/PR CI only builds and packages.
 on: [workflow_dispatch]
@@ -8,6 +8,7 @@ permissions:
 
 jobs:
   valgrind:
+    name: x64
     runs-on: ubuntu-latest
     timeout-minutes: 30
     env:

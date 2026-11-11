@@ -42,22 +42,32 @@ USER_AGENT = "qssm-latest-artifact-downloader"
 PLATFORM_PRESETS = {
     "windows": {
         "label": "Windows 64-bit",
-        "workflow_name": "Windows CI (MinGW Linux Cross)",
-        "job_name": "w64",
+        "workflow_name": "Windows (MinGW)",
+        "workflow_file": "windows-mingw.yml",
+        "job_name": "x64",
+        # Names used before the 2026-11 CI rename, still found in saved configs.
+        "legacy_workflow_names": ["Windows CI (MinGW Linux Cross)", "windows.yml"],
+        "legacy_job_names": ["w64"],
         "artifact_name_hint": "QSS-M-w64.zip",
         "launch_glob": "*.exe",
     },
     "macos": {
         "label": "macOS universal",
-        "workflow_name": "macOS CI (Xcode)",
-        "job_name": "arm64-universal",
+        "workflow_name": "macOS",
+        "workflow_file": "macos.yml",
+        "job_name": "Universal",
+        "legacy_workflow_names": ["macOS CI (Xcode)"],
+        "legacy_job_names": ["arm64-universal", "universal (x86_64 + arm64)"],
         "artifact_name_hint": "QSS-M-macOS.zip",
         "launch_glob": "*.app",
     },
     "linux": {
         "label": "Linux 64-bit",
-        "workflow_name": "Linux CI",
+        "workflow_name": "Linux",
+        "workflow_file": "linux.yml",
         "job_name": "x64",
+        "legacy_workflow_names": ["Linux CI"],
+        "legacy_job_names": [],
         "artifact_name_hint": "QSS-M-l64.zip",
         "launch_glob": "qss-m*,quakespasm*",
     },
@@ -490,6 +500,18 @@ def branch_head_sha(owner: str, repo: str, branch: str, token: str | None) -> st
     return str(sha)
 
 
+def run_matches_workflow(run: dict, workflow_name: str, aliases: list[str]) -> bool:
+    """Match a run by display name or workflow file; files survive display renames."""
+    wanted = {name.lower() for name in [workflow_name, *aliases]}
+    run_file = str(run.get("path", "")).rsplit("/", 1)[-1].lower()
+    return str(run.get("name", "")).lower() in wanted or run_file in wanted
+
+
+def current_preset_value(value: str, current: str, legacy: list[str]) -> str:
+    """Upgrade a workflow/job name saved by an older updater to the current one."""
+    return current if value.lower() in (name.lower() for name in legacy) else value
+
+
 def find_matching_run(
     owner: str,
     repo: str,
@@ -498,6 +520,7 @@ def find_matching_run(
     workflow_name: str,
     token: str | None,
     allow_older: bool,
+    workflow_aliases: list[str] | None = None,
 ) -> dict:
     runs = paged_list(
         f"/repos/{owner}/{repo}/actions/runs",
@@ -506,7 +529,7 @@ def find_matching_run(
         {"branch": branch, "event": "push", "status": "completed"},
         5,
     )
-    matching = [run for run in runs if str(run.get("name", "")).lower() == workflow_name.lower() and run.get("event") == "push"]
+    matching = [run for run in runs if run_matches_workflow(run, workflow_name, workflow_aliases or []) and run.get("event") == "push"]
     if not matching:
         raise UpdaterError(f"No completed push runs found for workflow '{workflow_name}' on branch '{branch}'.")
 
@@ -534,11 +557,17 @@ def find_matching_run(
     return older_successes[0]
 
 
-def confirm_job_success(owner: str, repo: str, run_id: int, job_name: str, token: str | None) -> dict:
+def confirm_job_success(owner: str, repo: str, run_id: int, job_name: str, token: str | None,
+                        job_aliases: list[str] | None = None) -> dict:
     jobs = paged_list(f"/repos/{owner}/{repo}/actions/runs/{run_id}/jobs", "jobs", token, {}, 3)
-    exact = [job for job in jobs if str(job.get("name", "")).lower() == job_name.lower()]
-    partial = [job for job in jobs if job_name.lower() in str(job.get("name", "")).lower()]
-    candidates = exact or partial
+    candidates = []
+    # Older runs (e.g. with --allow-older) may carry a job's pre-rename name.
+    for name in [job_name, *(job_aliases or [])]:
+        exact = [job for job in jobs if str(job.get("name", "")).lower() == name.lower()]
+        partial = [job for job in jobs if name.lower() in str(job.get("name", "")).lower()]
+        candidates = exact or partial
+        if candidates:
+            break
     if not candidates:
         names = "\n".join(f"  - {job.get('name')}" for job in jobs)
         raise UpdaterError(f"Could not find job '{job_name}' in this workflow run.\nJobs found:\n{names}")
@@ -1279,12 +1308,22 @@ def effective_options(args: argparse.Namespace, config: dict) -> dict:
     artifact_hint = args.artifact_name_hint
     if artifact_hint is None:
         artifact_hint = first_non_empty(get_config_value(config, "artifact_name_hint"), preset["artifact_name_hint"])
+    workflow_name = current_preset_value(
+        first_non_empty(args.workflow_name, get_config_value(config, "workflow_name"), preset["workflow_name"]),
+        preset["workflow_name"], preset["legacy_workflow_names"])
     return {
         "platform": platform_key,
         "owner": first_non_empty(args.owner, get_config_value(config, "owner"), DEFAULT_OWNER),
         "repo": first_non_empty(args.repo, get_config_value(config, "repo"), DEFAULT_REPO),
-        "workflow_name": first_non_empty(args.workflow_name, get_config_value(config, "workflow_name"), preset["workflow_name"]),
-        "job_name": first_non_empty(args.job_name, get_config_value(config, "job_name"), preset["job_name"]),
+        "workflow_name": workflow_name,
+        # Only the preset's own workflow may also be matched by file; a custom
+        # --workflow-name must not pick up the preset's runs.
+        "workflow_aliases": ([preset["workflow_file"], *preset["legacy_workflow_names"]]
+                             if workflow_name == preset["workflow_name"] else []),
+        "job_aliases": preset["legacy_job_names"],
+        "job_name": current_preset_value(
+            first_non_empty(args.job_name, get_config_value(config, "job_name"), preset["job_name"]),
+            preset["job_name"], preset["legacy_job_names"]),
         "artifact_name_hint": artifact_hint,
         "dest": expand_path(first_non_empty(args.dest, get_config_value(config, "dest"), default_dest())),
         "launch_glob": launch_glob,
@@ -1363,14 +1402,15 @@ def main(argv: list[str] | None = None) -> int:
         ui_kv("Branch", branch, "🌿")
         ui_kv("Latest commit", head_sha[:12], "🧬")
 
-        run = find_matching_run(owner, repo, branch, head_sha, opts["workflow_name"], token_info["token"], args.allow_older)
+        run = find_matching_run(owner, repo, branch, head_sha, opts["workflow_name"], token_info["token"], args.allow_older,
+                                opts["workflow_aliases"])
         run_id = int(run["id"])
         run_sha = str(run.get("head_sha") or "")
         ui_kv("Using run", f"#{run.get('run_number')} id={run_id} sha={run_sha[:12]}", "🏃")
         if run.get("html_url"):
             ui_kv("Run URL", run["html_url"], "🔗")
 
-        job = confirm_job_success(owner, repo, run_id, opts["job_name"], token_info["token"])
+        job = confirm_job_success(owner, repo, run_id, opts["job_name"], token_info["token"], opts["job_aliases"])
         ui_line(f"Confirmed job success: {job.get('name')}", "✅", "green")
 
         artifacts = get_artifacts(

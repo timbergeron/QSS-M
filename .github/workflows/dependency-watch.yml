@@ -1,4 +1,4 @@
-name: Bundled dependency update watch
+name: Dependency Watch
 
 on:
   # Dependency monitoring runs separately from push/PR build CI.

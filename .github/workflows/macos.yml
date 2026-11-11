@@ -1,4 +1,4 @@
-name: macOS CI (Xcode)
+name: macOS
 
 on:
   push:
@@ -12,8 +12,8 @@ on:
       - '.github/dependency-watch.json'
       - '.github/map-catalog-snapshot.json'
       - '.github/workflows/dependency-watch.yml'
-      - '.github/workflows/map-catalog-tests.yml'
-      - '.github/workflows/valgrind.yml'
+      - '.github/workflows/map-catalog.yml'
+      - '.github/workflows/linux-valgrind.yml'
   pull_request:
     paths-ignore:
       - '**/*.md'
@@ -25,8 +25,8 @@ on:
       - '.github/dependency-watch.json'
       - '.github/map-catalog-snapshot.json'
       - '.github/workflows/dependency-watch.yml'
-      - '.github/workflows/map-catalog-tests.yml'
-      - '.github/workflows/valgrind.yml'
+      - '.github/workflows/map-catalog.yml'
+      - '.github/workflows/linux-valgrind.yml'
 
 # Keep every qsrebase push and tag build, including pending runs. Other refs
 # share a group so that a newer commit cancels obsolete work in this workflow.
@@ -39,7 +39,8 @@ permissions:
 
 jobs:
   build:
-    name: universal (x86_64 + arm64)
+    # One job builds both slices into the universal app.
+    name: Universal
     # Pin the OS and host architecture. The macos-15 arm64 pool has failed
     # to allocate runners; the Intel host still builds both release slices.
     runs-on: macos-15-intel

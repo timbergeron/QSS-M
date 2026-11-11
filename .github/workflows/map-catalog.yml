@@ -1,18 +1,18 @@
-name: Map catalog validation
+name: Map Catalog
 
 on:
   push:
     paths:
       - '.github/scripts/**'
       - '.github/map-catalog-snapshot.json'
-      - '.github/workflows/map-catalog-tests.yml'
+      - '.github/workflows/map-catalog.yml'
       - '.github/workflows/dependency-watch.yml'
       - 'Misc/qssm_pak/misc/qw_map*'
   pull_request:
     paths:
       - '.github/scripts/**'
       - '.github/map-catalog-snapshot.json'
-      - '.github/workflows/map-catalog-tests.yml'
+      - '.github/workflows/map-catalog.yml'
       - '.github/workflows/dependency-watch.yml'
       - 'Misc/qssm_pak/misc/qw_map*'
 
@@ -25,6 +25,7 @@ permissions:
 
 jobs:
   validate:
+    name: Validate
     runs-on: ubuntu-latest
     timeout-minutes: 5
     # A PR from a branch of this repository already builds on push; only

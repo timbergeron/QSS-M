@@ -1,4 +1,4 @@
-name: Windows CI (MinGW Linux Cross)
+name: Windows (MinGW)
 
 on:
   push:
@@ -12,8 +12,8 @@ on:
       - '.github/dependency-watch.json'
       - '.github/map-catalog-snapshot.json'
       - '.github/workflows/dependency-watch.yml'
-      - '.github/workflows/map-catalog-tests.yml'
-      - '.github/workflows/valgrind.yml'
+      - '.github/workflows/map-catalog.yml'
+      - '.github/workflows/linux-valgrind.yml'
   pull_request:
     paths-ignore:
       - '**/*.md'
@@ -25,8 +25,8 @@ on:
       - '.github/dependency-watch.json'
       - '.github/map-catalog-snapshot.json'
       - '.github/workflows/dependency-watch.yml'
-      - '.github/workflows/map-catalog-tests.yml'
-      - '.github/workflows/valgrind.yml'
+      - '.github/workflows/map-catalog.yml'
+      - '.github/workflows/linux-valgrind.yml'
 
 # Keep every qsrebase push and tag build, including pending runs. Other refs
 # share a group so that a newer commit cancels obsolete work in this workflow.
@@ -39,7 +39,7 @@ permissions:
 
 jobs:
   build:
-    name: ${{ matrix.platform }}
+    name: ${{ matrix.arch }}
     runs-on: ubuntu-latest
     # Generous on purpose: only catches hangs, never a slow cold-cache build.
     timeout-minutes: 90
