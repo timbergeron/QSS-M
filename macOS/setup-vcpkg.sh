@@ -280,7 +280,9 @@ esac
 host_triplet="${VCPKG_DEFAULT_HOST_TRIPLET:-$default_host_triplet}"
 echo "Using vcpkg host triplet: $host_triplet"
 
-./vcpkg/vcpkg install --overlay-triplets=custom-triplets --host-triplet="$host_triplet" --triplet=x64-osx-1013 zlib libogg opus opusfile libvorbis libmad libflac libxmp libgnutls
+# Native GMP otherwise tunes assembly to the build machine's CPU. Its fat
+# build dispatches at runtime so the Intel release works across x86 CPUs.
+./vcpkg/vcpkg install --overlay-triplets=custom-triplets --host-triplet="$host_triplet" --triplet=x64-osx-1013 'gmp[fat]' zlib libogg opus opusfile libvorbis libmad libflac libxmp libgnutls
 ./vcpkg/vcpkg install --overlay-triplets=custom-triplets --host-triplet="$host_triplet" --triplet=arm64-osx-11 zlib libogg opus opusfile libvorbis libmad libflac libxmp libgnutls
 
 mkdir -p libs_universal

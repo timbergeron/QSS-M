@@ -149,14 +149,20 @@ jobs:
       run: |
           set -euo pipefail
           eval "$(/usr/local/bin/brew shellenv)"
-          for formula in flac gmp gnutls libidn2 libmad libogg libtasn1 libunistring libvorbis libxmp nettle opus opusfile zlib; do
-            installed=$(brew list --formula --versions "$formula" 2>/dev/null || true)
-            if [ -n "$installed" ]; then
-              echo "$installed"
-              brew unlink "$formula"
-            fi
-          done
-          if [ -e "$(brew --prefix)/include/nettle/sha3.h" ]; then
+          installed_formulas=$(brew list --formula --versions)
+          dependencies=()
+          while read -r formula versions; do
+            case "$formula" in
+              flac|gmp|gnutls|libidn2|libmad|libogg|libtasn1|libunistring|libvorbis|libxmp|nettle|opus|opusfile|zlib)
+                echo "$formula $versions"
+                dependencies+=("$formula")
+                ;;
+            esac
+          done <<< "$installed_formulas"
+          if [ -n "${dependencies[*]-}" ]; then
+            brew unlink "${dependencies[@]}"
+          fi
+          if [ -e "$HOMEBREW_PREFIX/include/nettle/sha3.h" ]; then
             echo "Non-vcpkg Nettle headers remain visible in the Homebrew include directory."
             exit 1
           fi
