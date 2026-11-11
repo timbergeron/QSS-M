@@ -12,7 +12,7 @@ shared public headers.
 All DLLs are **MSVCRT-based** MinGW builds (they import `msvcrt.dll`, not the
 UCRT `api-ms-win-crt-*` DLLs). Keep it that way: every other bundled DLL —
 curl, zlib, the whole codec set, and the main `QSS-M-w*.exe` (built by
-`MSYS2.yml` / `build-w*.sh` on the MINGW toolchain) — is MSVCRT, and MSVCRT is
+`windows-msys2.yml` / `build-w*.sh` on the MINGW toolchain) — is MSVCRT, and MSVCRT is
 present on all supported Windows versions. The official `SDL3.dll` imports no C
 runtime DLL at all. A UCRT DLL would be the odd one out
 and would need Windows 10+ (or the UCRT redistributable on 7/8.1).
@@ -132,7 +132,7 @@ kept as-is.
    - `Quake/update.c` — `update_win_files[]` and `update_win_helper_runtime_files[]`
      (the in-app auto-updater). Missing files are tolerated per-arch, so an
      x86-only DLL listed here is simply skipped on win64.
-   - `.github/workflows/msvs.yml` — the required-runtime-file assertion in the
+   - `.github/workflows/windows-msvc.yml` — the required-runtime-file assertion in the
      "Prepare archive" step.
    - Hardcoded version strings (libraries without a runtime version API):
      the shared `M_Version_EnumerateLocal()` collector in `Quake/menu.c`, which

@@ -1,14 +1,43 @@
-name: Linux CI
+name: Linux
 
-on: [push, pull_request]
+on:
+  push:
+    paths-ignore: &paths-ignore
+      - '**/*.md'
+      - 'Quakespasm*.txt'
+      - 'Quakespasm*.html'
+      # Dependency-watch and map-catalog tooling has its own workflows.
+      # build-sdl3-linux.sh stays in scope: linux.yml builds with it.
+      - '.github/scripts/*.js'
+      - '.github/dependency-watch.json'
+      - '.github/map-catalog-snapshot.json'
+      - '.github/workflows/dependency-watch.yml'
+      - '.github/workflows/map-catalog.yml'
+      - '.github/workflows/linux-valgrind.yml'
+  pull_request:
+    paths-ignore: *paths-ignore
+  # Manual runs, e.g. to rebuild a commit without pushing a new one.
+  workflow_dispatch:
+
+# Keep every qsrebase push and tag build, including pending runs. Other refs
+# share a group so that a newer commit cancels obsolete work in this workflow.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ (github.ref == 'refs/heads/qsrebase' || startsWith(github.ref, 'refs/tags/')) && github.run_id || github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/qsrebase' && !startsWith(github.ref, 'refs/tags/') }}
 
 permissions:
   contents: read
 
 jobs:
   build:
-    name: x64 (SDL ${{ matrix.sdl.version }})
+    # The packaged build is plain x64; the minimum-SDL check names its pin.
+    name: ${{ matrix.sdl.package && 'x64' || format('x64, SDL {0}', matrix.sdl.version) }}
     runs-on: ubuntu-latest
+    # Generous on purpose: only catches hangs, never a slow cold-cache build.
+    timeout-minutes: 45
+    # A PR from a branch of this repository already builds on push; only
+    # fork PRs need the pull_request run.
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.repository
     strategy:
       fail-fast: false
       matrix:
@@ -19,162 +48,141 @@ jobs:
           - { version: "3.2.12", commit: "5ac37a8ffcf89da390404c1016833d56e2d67ae4", package: false }
 
     steps:
-    - uses: actions/checkout@v6
+      - name: Check out repository
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
 
-    - name: Build qssm.pak
-      run: bash Misc/qssm_pak/build.sh
+      - name: Build qssm.pak
+        run: bash Misc/qssm_pak/build.sh
 
-    - name: Install Dependencies
-      run: |
-        set -eux
-        sudo apt-get update
-        sudo apt-get install -y \
-          build-essential \
-          python3 \
-          pkg-config \
-          cmake \
-          ninja-build \
-          libasound2-dev libpulse-dev libpipewire-0.3-dev libaudio-dev libjack-dev libsndio-dev \
-          libx11-dev libxext-dev libxrandr-dev libxcursor-dev libxfixes-dev libxi-dev libxss-dev libxtst-dev \
-          libxkbcommon-dev libwayland-dev libdecor-0-dev libdrm-dev libgbm-dev \
-          libgl1-mesa-dev libgles2-mesa-dev libegl1-mesa-dev \
-          libdbus-1-dev libibus-1.0-dev libudev-dev libusb-1.0-0-dev libfribidi-dev libthai-dev liburing-dev \
-          libgnutls28-dev \
-          libmad0-dev \
-          libopus-dev \
-          libopusfile-dev \
-          libvorbis-dev \
-          zlib1g-dev \
-          libcurl4-openssl-dev \
-          zip
+      - name: Install dependencies
+        run: |
+          set -eux
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential \
+            python3 \
+            pkg-config \
+            cmake \
+            ninja-build \
+            libasound2-dev libpulse-dev libpipewire-0.3-dev libaudio-dev libjack-dev libsndio-dev \
+            libx11-dev libxext-dev libxrandr-dev libxcursor-dev libxfixes-dev libxi-dev libxss-dev libxtst-dev \
+            libxkbcommon-dev libwayland-dev libdecor-0-dev libdrm-dev libgbm-dev \
+            libgl1-mesa-dev libgles2-mesa-dev libegl1-mesa-dev \
+            libdbus-1-dev libibus-1.0-dev libudev-dev libusb-1.0-0-dev libfribidi-dev libthai-dev liburing-dev \
+            libgnutls28-dev \
+            libmad0-dev \
+            libopus-dev \
+            libopusfile-dev \
+            libvorbis-dev \
+            zlib1g-dev \
+            libcurl4-openssl-dev \
+            zip
 
-    # Ubuntu 24.04 has no SDL3 package, so build the pinned release from source.
-    - name: Resolve SDL3 prefix
-      run: |
-        set -eux
-        . /etc/os-release
-        echo "SDL3_PREFIX=${RUNNER_TEMP}/sdl3-${{ matrix.sdl.version }}" >> "$GITHUB_ENV"
-        echo "SDL3_CACHE_KEY=sdl3-${{ matrix.sdl.version }}-${{ matrix.sdl.commit }}-${ID}-${VERSION_ID}-gcc$(gcc -dumpversion)-shared-no-rpath-v2" >> "$GITHUB_ENV"
+      # Build SDL3 from source at the exact pin, not the distro's version, so CI
+    # tests what macOS and Windows ship (and, separately, the oldest supported).
+      - name: Resolve SDL3 prefix
+        run: |
+          set -eux
+          . /etc/os-release
+          echo "SDL3_PREFIX=${RUNNER_TEMP}/sdl3-${{ matrix.sdl.version }}" >> "$GITHUB_ENV"
+          echo "SDL3_CACHE_KEY=sdl3-${{ matrix.sdl.version }}-${{ matrix.sdl.commit }}-${ID}-${VERSION_ID}-gcc$(gcc -dumpversion)-shared-no-rpath-v2" >> "$GITHUB_ENV"
 
-    - name: Cache SDL3
-      uses: actions/cache@v5
-      with:
-        path: ${{ runner.temp }}/sdl3-${{ matrix.sdl.version }}
-        key: ${{ env.SDL3_CACHE_KEY }}
+      - name: Cache SDL3
+        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
+        with:
+          path: ${{ runner.temp }}/sdl3-${{ matrix.sdl.version }}
+          key: ${{ env.SDL3_CACHE_KEY }}
 
-    - name: Build SDL3
-      run: sh .github/scripts/build-sdl3-linux.sh "${{ matrix.sdl.version }}" "${{ matrix.sdl.commit }}" "$SDL3_PREFIX"
+      - name: Build SDL3
+        run: sh .github/scripts/build-sdl3-linux.sh "${{ matrix.sdl.version }}" "${{ matrix.sdl.commit }}" "$SDL3_PREFIX"
 
-    - name: Test download map titles and map menu
-      run: |
-        export PKG_CONFIG_PATH="$SDL3_PREFIX/lib/pkgconfig"
-        python3 Misc/stress/test_download_map_titles.py
-        python3 Misc/stress/test_map_categories.py
+      - name: Test download map titles and map menu
+        run: |
+          export PKG_CONFIG_PATH="$SDL3_PREFIX/lib/pkgconfig"
+          python3 Misc/stress/test_download_map_titles.py
+          python3 Misc/stress/test_map_categories.py
 
-    - name: Verify gnutls
-      run: |
-        set -eux
-        pkg-config --exists gnutls
-        echo "gnutls found: $(pkg-config --modversion gnutls)"
-        pkg-config --cflags --libs gnutls
-
-    - name: GNUTLS Debug (Linux)
-      run: |
-        set -eux
-        echo "Runner: $(uname -a)"
-        echo "PKG_CONFIG=${PKG_CONFIG:-<unset>}"
-        echo "PKG_CONFIG_PATH=${PKG_CONFIG_PATH:-<unset>}"
-        echo "PKG_CONFIG_LIBDIR=${PKG_CONFIG_LIBDIR:-<unset>}"
-        command -v pkg-config
-        pkg-config --version
-        pkg-config --variable pc_path pkg-config || true
-        dpkg -l | grep -E 'pkg-config|gnutls' || true
-        dpkg -L libgnutls28-dev | grep 'gnutls\\.pc' || true
-        find /usr/lib /usr/share -path "*/pkgconfig/gnutls.pc" -print || true
-        pkg-config --modversion gnutls
-        pkg-config --cflags gnutls
-        pkg-config --libs gnutls
-
-    - name: Build
-      run: |
-        set -euxo pipefail
-        export PKG_CONFIG=pkg-config
-        export PKG_CONFIG_PATH="$SDL3_PREFIX/lib/pkgconfig:/usr/lib/x86_64-linux-gnu/pkgconfig:/usr/share/pkgconfig"
-        export PKG_CONFIG_LIBDIR="$SDL3_PREFIX/lib/pkgconfig:/usr/lib/x86_64-linux-gnu/pkgconfig:/usr/share/pkgconfig"
-        echo "Using PKG_CONFIG=$(command -v "$PKG_CONFIG")"
-        "$PKG_CONFIG" --modversion gnutls
-        test "$("$PKG_CONFIG" --modversion sdl3)" = "${{ matrix.sdl.version }}"
-        if [ "${{ matrix.sdl.package }}" = "true" ]; then
-          export SDL3_RUNTIME="$SDL3_PREFIX/lib/libSDL3.so.0"
-        fi
-        chmod 755 build-linux.sh
-        ./build-linux.sh 2>&1 | tee build-linux.log
-        if grep -q "gnutls requested but not found via pkg-config" build-linux.log; then
-          echo "ERROR: Linux build fell back to non-GNUTLS build."
-          exit 1
-        fi
-
-    - name: Prepare Linux debug logs
-      if: always()
-      run: |
-        set -euxo pipefail
-        package_zip="Quake/QSS-M-l64.zip"
-        log_root="artifact/logs/QSS-M-l64-logs"
-
-        rm -rf "$log_root"
-        mkdir -p "$log_root"
-
-        if [ -f build-linux.log ]; then
-          cp build-linux.log "$log_root/"
-        fi
-        if [ -d Quake ]; then
-          find Quake -maxdepth 1 -type f | sort > "$log_root/quake-files.txt"
-        fi
-        if [ -f "$package_zip" ]; then
-          unzip -l "$package_zip" > "$log_root/QSS-M-l64-zip-contents.txt"
-          required_files="gamecontrollerdb.txt"
+      - name: Build
+        run: |
+          set -euxo pipefail
+          export PKG_CONFIG=pkg-config
+          export PKG_CONFIG_PATH="$SDL3_PREFIX/lib/pkgconfig:/usr/lib/x86_64-linux-gnu/pkgconfig:/usr/share/pkgconfig"
+          export PKG_CONFIG_LIBDIR="$SDL3_PREFIX/lib/pkgconfig:/usr/lib/x86_64-linux-gnu/pkgconfig:/usr/share/pkgconfig"
+          echo "Using PKG_CONFIG=$(command -v "$PKG_CONFIG")"
+          "$PKG_CONFIG" --modversion gnutls
+          test "$("$PKG_CONFIG" --modversion sdl3)" = "${{ matrix.sdl.version }}"
           if [ "${{ matrix.sdl.package }}" = "true" ]; then
-            required_files="$required_files libSDL3.so.0"
+            export SDL3_RUNTIME="$SDL3_PREFIX/lib/libSDL3.so.0"
           fi
-          for required_file in $required_files; do
-            unzip -Z1 "$package_zip" | grep -Fx "$required_file" >/dev/null || {
-              echo "Required file missing from archive: $required_file"
-              exit 1
-            }
-          done
-        fi
+          chmod 755 build-linux.sh
+          ./build-linux.sh 2>&1 | tee build-linux.log
+          if grep -q "gnutls requested but not found via pkg-config" build-linux.log; then
+            echo "ERROR: Linux build fell back to non-GNUTLS build."
+            exit 1
+          fi
 
-        echo "===== Log artifact tree ====="
-        find artifact/logs -maxdepth 3 -type f | sort
+      - name: Prepare build logs
+        if: always()
+        run: |
+          set -euxo pipefail
+          package_zip="Quake/QSS-M-l64.zip"
+          log_root="artifact/logs/QSS-M-l64-logs"
 
-    # Launching from the source tree could hide a missing bundled runtime; the
-    # runner has no system SDL3, so check resolution from a clean unpack.
-    - name: Verify bundled SDL3 runtime
-      if: matrix.sdl.package
-      run: |
-        set -euxo pipefail
-        stage=$(mktemp -d)
-        unzip -q Quake/QSS-M-l64.zip -d "$stage"
-        readelf -d "$stage/QSS-M-l64" | grep -E 'R(UN)?PATH.*\[\$ORIGIN\]'
-        ldd "$stage/QSS-M-l64" | tee "$stage/ldd.txt"
-        grep -F "libSDL3.so.0 => $stage/libSDL3.so.0" "$stage/ldd.txt"
-        if grep -q "not found" "$stage/ldd.txt"; then
-          exit 1
-        fi
-        readelf -d "$stage/libSDL3.so.0" | grep -F 'SONAME' | grep -F 'libSDL3.so.0'
+          rm -rf "$log_root"
+          mkdir -p "$log_root"
 
-    - name: Upload artifact
-      if: matrix.sdl.package
-      uses: actions/upload-artifact@v7
-      with:
-        path: Quake/QSS-M-l64.zip
-        if-no-files-found: error
-        archive: false
+          if [ -f build-linux.log ]; then
+            cp build-linux.log "$log_root/"
+          fi
+          if [ -d Quake ]; then
+            find Quake -maxdepth 1 -type f | sort > "$log_root/quake-files.txt"
+          fi
+          if [ -f "$package_zip" ]; then
+            unzip -l "$package_zip" > "$log_root/QSS-M-l64-zip-contents.txt"
+            required_files="gamecontrollerdb.txt"
+            if [ "${{ matrix.sdl.package }}" = "true" ]; then
+              required_files="$required_files libSDL3.so.0"
+            fi
+            for required_file in $required_files; do
+              unzip -Z1 "$package_zip" | grep -Fx "$required_file" >/dev/null || {
+                echo "Required file missing from archive: $required_file"
+                exit 1
+              }
+            done
+          fi
 
-    - name: Upload Linux debug logs
-      if: always()
-      uses: actions/upload-artifact@v7
-      with:
-        name: QSS-M-l64-logs-sdl${{ matrix.sdl.version }}
-        path: artifact/logs/QSS-M-l64-logs
-        if-no-files-found: warn
+          echo "===== Log artifact tree ====="
+          find artifact/logs -maxdepth 3 -type f | sort
+
+      # Launching from the source tree could hide a missing bundled runtime; the
+      # runner has no system SDL3, so check resolution from a clean unpack.
+      - name: Verify bundled SDL3 runtime
+        if: matrix.sdl.package
+        run: |
+          set -euxo pipefail
+          stage=$(mktemp -d)
+          unzip -q Quake/QSS-M-l64.zip -d "$stage"
+          readelf -d "$stage/QSS-M-l64" | grep -E 'R(UN)?PATH.*\[\$ORIGIN\]'
+          ldd "$stage/QSS-M-l64" | tee "$stage/ldd.txt"
+          grep -F "libSDL3.so.0 => $stage/libSDL3.so.0" "$stage/ldd.txt"
+          if grep -q "not found" "$stage/ldd.txt"; then
+            exit 1
+          fi
+          readelf -d "$stage/libSDL3.so.0" | grep -F 'SONAME' | grep -F 'libSDL3.so.0'
+
+      - name: Upload package
+        if: matrix.sdl.package
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          path: Quake/QSS-M-l64.zip
+          if-no-files-found: error
+          archive: false
+
+      - name: Upload build logs
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: QSS-M-l64-logs-sdl${{ matrix.sdl.version }}
+          path: artifact/logs/QSS-M-l64-logs
+          if-no-files-found: warn
+          retention-days: 14

@@ -1,0 +1,13 @@
+# Keeps the SHA-pinned actions in .github/workflows current. One grouped PR a
+# month; a release must be two weeks old before it is proposed.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly
+    cooldown:
+      default-days: 14
+    groups:
+      actions:
+        patterns: ["*"]

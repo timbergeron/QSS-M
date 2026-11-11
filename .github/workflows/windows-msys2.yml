@@ -1,0 +1,115 @@
+name: Windows (MSYS2)
+
+on:
+  push:
+    paths-ignore: &paths-ignore
+      - '**/*.md'
+      - 'Quakespasm*.txt'
+      - 'Quakespasm*.html'
+      # Dependency-watch and map-catalog tooling has its own workflows.
+      # build-sdl3-linux.sh stays in scope: linux.yml builds with it.
+      - '.github/scripts/*.js'
+      - '.github/dependency-watch.json'
+      - '.github/map-catalog-snapshot.json'
+      - '.github/workflows/dependency-watch.yml'
+      - '.github/workflows/map-catalog.yml'
+      - '.github/workflows/linux-valgrind.yml'
+  pull_request:
+    paths-ignore: *paths-ignore
+  # Manual runs, e.g. to rebuild a commit without pushing a new one.
+  workflow_dispatch:
+
+# Keep every qsrebase push and tag build, including pending runs. Other refs
+# share a group so that a newer commit cancels obsolete work in this workflow.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ (github.ref == 'refs/heads/qsrebase' || startsWith(github.ref, 'refs/tags/')) && github.run_id || github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/qsrebase' && !startsWith(github.ref, 'refs/tags/') }}
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: ${{ matrix.arch }}
+    runs-on: windows-latest
+    # Generous on purpose: only catches hangs, never a slow cold-cache build.
+    timeout-minutes: 90
+    # A PR from a branch of this repository already builds on push; only
+    # fork PRs need the pull_request run.
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.repository
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: w64
+            arch: x64
+            package_arch: x86_64
+            bits: 64
+          - platform: w32
+            arch: x86
+            package_arch: i686
+            bits: 32
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+
+      - name: Set up MSYS2
+        uses: msys2/setup-msys2@ec48f7c5447b3140e2b088413ae3a55687bccb6e # v2.33.0
+        with:
+          msystem: MINGW${{ matrix.bits }}
+          # Keep upgrading: the image's own gcc changes with every runner image,
+          # and a new compiler fingerprint forces a ~25 min static rebuild.
+          update: true
+          install: |
+            base-devel
+            make
+            git
+            curl
+            zip
+            mingw-w64-${{ matrix.package_arch }}-gcc
+            mingw-w64-${{ matrix.package_arch }}-binutils
+            mingw-w64-${{ matrix.package_arch }}-cmake
+            mingw-w64-${{ matrix.package_arch }}-ninja
+            mingw-w64-${{ matrix.package_arch }}-python
+            mingw-w64-${{ matrix.package_arch }}-pkgconf
+
+      - name: Identify compiler
+        id: compiler
+        shell: msys2 {0}
+        run: |
+          set -euo pipefail
+          compiler_id=$(python3 Windows/build-static.py --arch ${{ matrix.arch }} --print-toolchain-id)
+          echo "fingerprint=$compiler_id" >> "$GITHUB_OUTPUT"
+
+      - name: Cache static dependencies
+        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
+        with:
+          path: build/windows-static
+          key: windows-static-msys2-${{ matrix.arch }}-${{ steps.compiler.outputs.fingerprint }}-${{ hashFiles('Windows/build-static.py', 'Windows/static-sources.json', 'Windows/static-adapters/*', 'Windows/static-licenses/*') }}
+
+      - name: Build qssm.pak
+        shell: msys2 {0}
+        run: bash Misc/qssm_pak/build.sh
+
+      - name: Build and verify package
+        shell: msys2 {0}
+        run: |
+          set -euo pipefail
+          export CC=gcc CXX=g++ WINDRES=windres STRIP=strip
+          sh ./build-${{ matrix.platform }}.sh 2>&1 | tee build-${{ matrix.platform }}.log
+
+      - name: Upload package
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          path: Quake/QSS-M-${{ matrix.platform }}.zip
+          if-no-files-found: error
+          archive: false
+
+      - name: Upload build logs
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: QSS-M-${{ matrix.platform }}-logs
+          path: build-${{ matrix.platform }}.log
+          if-no-files-found: warn
+          retention-days: 14

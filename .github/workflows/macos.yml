@@ -1,22 +1,46 @@
-name: macOS CI (Xcode)
+name: macOS
 
 on:
   push:
+    paths-ignore: &paths-ignore
+      - '**/*.md'
+      - 'Quakespasm*.txt'
+      - 'Quakespasm*.html'
+      # Dependency-watch and map-catalog tooling has its own workflows.
+      # build-sdl3-linux.sh stays in scope: linux.yml builds with it.
+      - '.github/scripts/*.js'
+      - '.github/dependency-watch.json'
+      - '.github/map-catalog-snapshot.json'
+      - '.github/workflows/dependency-watch.yml'
+      - '.github/workflows/map-catalog.yml'
+      - '.github/workflows/linux-valgrind.yml'
   pull_request:
+    paths-ignore: *paths-ignore
+  # Manual runs, e.g. to rebuild a commit without pushing a new one.
+  workflow_dispatch:
+
+# Keep every qsrebase push and tag build, including pending runs. Other refs
+# share a group so that a newer commit cancels obsolete work in this workflow.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ (github.ref == 'refs/heads/qsrebase' || startsWith(github.ref, 'refs/tags/')) && github.run_id || github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/qsrebase' && !startsWith(github.ref, 'refs/tags/') }}
 
 permissions:
   contents: read
 
 jobs:
   build:
-    name: arm64-universal
-    # Pin the major macOS image to avoid surprise `macos-latest` migrations
-    # changing the toolchain and invalidating caches unexpectedly.
-    runs-on: macos-15
-    strategy:
-      fail-fast: false
+    # One job builds both slices into the universal app.
+    name: Universal
+    # Pin the OS and host architecture. The macos-15 arm64 pool has failed
+    # to allocate runners; the Intel host still builds both release slices.
+    runs-on: macos-15-intel
+    # Generous on purpose: only catches hangs, never a slow cold-cache build.
+    timeout-minutes: 90
+    # A PR from a branch of this repository already builds on push; only
+    # fork PRs need the pull_request run.
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.repository
     env:
-      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
       HOMEBREW_NO_AUTO_UPDATE: "1"
       VCPKG_CACHE_REV: "v2"
       VCPKG_DEFAULT_BINARY_CACHE: ${{ github.workspace }}/.cache/vcpkg/archives
@@ -24,15 +48,16 @@ jobs:
       VCPKG_DISABLE_METRICS: "1"
 
     steps:
-    - uses: actions/checkout@v6
+      - name: Check out repository
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
 
-    - name: Build qssm.pak
-      run: bash Misc/qssm_pak/build.sh
+      - name: Build qssm.pak
+        run: bash Misc/qssm_pak/build.sh
 
-    - name: Compute vcpkg cache key inputs
-      id: vcpkg-cache
-      shell: bash
-      run: |
+      - name: Compute vcpkg cache key inputs
+        id: vcpkg-cache
+        shell: bash
+        run: |
           image_os="${ImageOS:-$(sw_vers -productVersion)}"
           image_version="${ImageVersion:-unknown}"
           xcode_version="$(xcodebuild -version | tr '\n' ' ' | sed 's/[[:space:]]\+/ /g; s/ $//')"
@@ -44,132 +69,71 @@ jobs:
           echo "Using ImageVersion=$image_version"
           echo "Using Xcode=$xcode_version"
 
-    - name: Cache vcpkg artifacts
-      id: vcpkg-cache-restore
-      uses: actions/cache@v5
-      with:
-        path: |
-          ${{ env.VCPKG_DEFAULT_BINARY_CACHE }}
-          ${{ env.VCPKG_DOWNLOADS }}
-        key: ${{ runner.os }}-${{ runner.arch }}-vcpkg-${{ env.VCPKG_CACHE_REV }}-${{ steps.vcpkg-cache.outputs.image_os }}-${{ steps.vcpkg-cache.outputs.image_version }}-${{ steps.vcpkg-cache.outputs.xcode_hash }}-${{ hashFiles('macOS/setup-vcpkg.sh', 'macOS/custom-triplets/*.cmake') }}
-        restore-keys: |
-          ${{ runner.os }}-${{ runner.arch }}-vcpkg-${{ env.VCPKG_CACHE_REV }}-${{ steps.vcpkg-cache.outputs.image_os }}-${{ steps.vcpkg-cache.outputs.image_version }}-${{ steps.vcpkg-cache.outputs.xcode_hash }}-
-          ${{ runner.os }}-${{ runner.arch }}-vcpkg-${{ env.VCPKG_CACHE_REV }}-
+      - name: Cache vcpkg artifacts
+        id: vcpkg-cache-restore
+        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
+        with:
+          path: |
+            ${{ env.VCPKG_DEFAULT_BINARY_CACHE }}
+            ${{ env.VCPKG_DOWNLOADS }}
+          key: ${{ runner.os }}-${{ runner.arch }}-vcpkg-${{ env.VCPKG_CACHE_REV }}-${{ steps.vcpkg-cache.outputs.image_os }}-${{ steps.vcpkg-cache.outputs.image_version }}-${{ steps.vcpkg-cache.outputs.xcode_hash }}-${{ hashFiles('macOS/setup-vcpkg.sh', 'macOS/custom-triplets/*.cmake') }}
+          restore-keys: |
+            ${{ runner.os }}-${{ runner.arch }}-vcpkg-${{ env.VCPKG_CACHE_REV }}-${{ steps.vcpkg-cache.outputs.image_os }}-${{ steps.vcpkg-cache.outputs.image_version }}-${{ steps.vcpkg-cache.outputs.xcode_hash }}-
+            ${{ runner.os }}-${{ runner.arch }}-vcpkg-${{ env.VCPKG_CACHE_REV }}-
 
-    - name: Report cache restore result
-      run: |
-          if [ "${{ steps.vcpkg-cache-restore.outputs.cache-hit }}" = "true" ]; then
-            echo "actions/cache exact key hit"
-          elif [ "${{ steps.vcpkg-cache-restore.outputs.cache-hit }}" = "false" ]; then
-            echo "actions/cache restored from a partial or restore-key match"
-          else
-            echo "actions/cache miss"
-          fi
-
-    - name: Debug environment (pre-install)
-      run: |
-          echo "=== Runner info ==="
-          uname -a
-          sw_vers
-          echo ""
-          echo "=== Current PATH ==="
-          echo "$PATH" | tr ':' '\n'
-          echo ""
-          echo "=== Homebrew location ==="
-          which brew 2>/dev/null || echo "brew not in PATH"
-          ls -la /opt/homebrew/bin/brew 2>/dev/null || echo "/opt/homebrew/bin/brew not found"
-          ls -la /usr/local/bin/brew 2>/dev/null || echo "/usr/local/bin/brew not found"
-          echo ""
-          echo "=== Check tools BEFORE brew install ==="
-          echo "autoconf: $(command -v autoconf 2>/dev/null || echo 'NOT FOUND')"
-          echo "automake: $(command -v automake 2>/dev/null || echo 'NOT FOUND')"
-          echo "libtool:  $(command -v libtool 2>/dev/null || echo 'NOT FOUND')"
-          echo "libtoolize: $(command -v libtoolize 2>/dev/null || echo 'NOT FOUND')"
-          echo "glibtoolize: $(command -v glibtoolize 2>/dev/null || echo 'NOT FOUND')"
-          echo "pkg-config: $(command -v pkg-config 2>/dev/null || echo 'NOT FOUND')"
-          echo "perl: $(command -v perl 2>/dev/null || echo 'NOT FOUND')"
-          echo "git: $(command -v git 2>/dev/null || echo 'NOT FOUND')"
-          echo "lipo: $(command -v lipo 2>/dev/null || echo 'NOT FOUND')"
-          echo "xcodebuild: $(command -v xcodebuild 2>/dev/null || echo 'NOT FOUND')"
-
-    - name: Setup Homebrew and install dependencies
-      run: |
-          echo "=== Evaluating brew shellenv ==="
-          if [ -x /opt/homebrew/bin/brew ]; then
-            echo "Using /opt/homebrew/bin/brew"
-            eval "$(/opt/homebrew/bin/brew shellenv)"
-          elif [ -x /usr/local/bin/brew ]; then
-            echo "Using /usr/local/bin/brew"
-            eval "$(/usr/local/bin/brew shellenv)"
-          else
-            echo "ERROR: brew not found at either location!"
-            exit 1
-          fi
-          echo ""
-          echo "=== PATH after brew shellenv ==="
-          echo "$PATH" | tr ':' '\n'
-          echo ""
-          echo "=== Removing unused Homebrew runner taps ==="
-          brew untap aws/tap >/dev/null 2>&1 || true
-          echo ""
-          echo "=== Installing packages ==="
-          brew install autoconf automake libtool autoconf-archive pkg-config
-          echo ""
-          echo "=== Verify installed tools ==="
-          echo "autoconf: $(command -v autoconf) -> $(autoconf --version | head -1)"
-          echo "automake: $(command -v automake) -> $(automake --version | head -1)"
-          echo "libtoolize: $(command -v libtoolize 2>/dev/null || echo 'NOT FOUND')"
-          echo "glibtoolize: $(command -v glibtoolize 2>/dev/null || echo 'NOT FOUND')"
-          echo "pkg-config: $(command -v pkg-config) -> $(pkg-config --version)"
-          echo ""
-          echo "=== Homebrew prefix ==="
-          brew --prefix
-          echo "=== Homebrew bin contents (autotools related) ==="
-          ls -la "$(brew --prefix)/bin/"*libtool* 2>/dev/null || echo "no libtool binaries in brew bin"
-          ls -la "$(brew --prefix)/bin/"*auto* 2>/dev/null || echo "no auto* binaries in brew bin"
-
-    - name: Debug environment (post-install)
-      run: |
-          eval "$(/opt/homebrew/bin/brew shellenv 2>/dev/null || /usr/local/bin/brew shellenv 2>/dev/null || true)"
-          echo "=== PATH in new shell step ==="
-          echo "$PATH" | tr ':' '\n'
-          echo ""
-          echo "=== Tool check in new shell step ==="
-          echo "autoconf: $(command -v autoconf 2>/dev/null || echo 'NOT FOUND')"
-          echo "automake: $(command -v automake 2>/dev/null || echo 'NOT FOUND')"
-          echo "libtoolize: $(command -v libtoolize 2>/dev/null || echo 'NOT FOUND')"
-          echo "glibtoolize: $(command -v glibtoolize 2>/dev/null || echo 'NOT FOUND')"
-          echo "pkg-config: $(command -v pkg-config 2>/dev/null || echo 'NOT FOUND')"
-          echo ""
-          echo "=== setup-vcpkg.sh will check these ==="
-          for cmd in git lipo autoconf automake pkg-config perl; do
-            if command -v "$cmd" >/dev/null 2>&1; then
-              echo "  $cmd: OK ($(command -v $cmd))"
-            else
-              echo "  $cmd: MISSING"
+      - name: Install dependencies
+        run: |
+          set -euo pipefail
+          # Intel runners keep Homebrew in /usr/local, Apple Silicon in /opt/homebrew.
+          for brew in /opt/homebrew/bin/brew /usr/local/bin/brew; do
+            if [ -x "$brew" ]; then
+              eval "$("$brew" shellenv)"
+              break
             fi
           done
-          echo ""
-          echo "=== libtoolize shim logic preview ==="
-          if command -v libtoolize >/dev/null 2>&1; then
-            echo "  libtoolize found natively at $(command -v libtoolize)"
-          elif command -v glibtoolize >/dev/null 2>&1; then
-            echo "  glibtoolize found at $(command -v glibtoolize) -- shim will be created"
-          else
-            echo "  NEITHER libtoolize NOR glibtoolize found -- this will FAIL"
+          if ! command -v brew >/dev/null 2>&1; then
+            echo "ERROR: Homebrew not found in /opt/homebrew or /usr/local"
+            exit 1
+          fi
+          # Later steps see the same Homebrew without re-evaluating shellenv.
+          echo "HOMEBREW_PREFIX=$HOMEBREW_PREFIX" >> "$GITHUB_ENV"
+          echo "$HOMEBREW_PREFIX/sbin" >> "$GITHUB_PATH"
+          echo "$HOMEBREW_PREFIX/bin" >> "$GITHUB_PATH"
+          brew untap aws/tap >/dev/null 2>&1 || true
+          brew install autoconf automake libtool autoconf-archive pkg-config
+          echo "Runner: $(uname -m), macOS $(sw_vers -productVersion), Homebrew at $HOMEBREW_PREFIX"
+          # setup-vcpkg.sh requires these and shims glibtoolize as libtoolize.
+          for cmd in git lipo perl autoconf automake glibtoolize pkg-config xcodebuild; do
+            echo "  $cmd: $(command -v "$cmd" || echo MISSING)"
+          done
+
+      # Apple Clang can prefer /usr/local/include to vcpkg's -isystem paths.
+      # Keep Homebrew's headers/pkg-config files out of the pinned library build;
+      # unlinking leaves the Cellar and opt paths used by build tools intact.
+      - name: Isolate vcpkg dependencies from Homebrew
+        run: |
+          set -euo pipefail
+          installed_formulas=$(brew list --formula --versions)
+          dependencies=()
+          while read -r formula versions; do
+            case "$formula" in
+              flac|gmp|gnutls|libidn2|libmad|libogg|libtasn1|libunistring|libvorbis|libxmp|nettle|opus|opusfile|zlib)
+                echo "$formula $versions"
+                dependencies+=("$formula")
+                ;;
+            esac
+          done <<< "$installed_formulas"
+          if [ -n "${dependencies[*]-}" ]; then
+            brew unlink "${dependencies[@]}"
+          fi
+          if [ -e "$HOMEBREW_PREFIX/include/nettle/sha3.h" ]; then
+            echo "Non-vcpkg Nettle headers remain visible in the Homebrew include directory."
+            exit 1
           fi
 
-    - name: Build
-      run: |
+      - name: Build
+        run: |
           set -o pipefail
-          echo "=== Build step starting ==="
-          eval "$(/opt/homebrew/bin/brew shellenv 2>/dev/null || /usr/local/bin/brew shellenv 2>/dev/null || true)"
-          echo "PATH: $PATH"
-          echo "autoconf: $(command -v autoconf 2>/dev/null || echo 'NOT FOUND')"
-          echo "automake: $(command -v automake 2>/dev/null || echo 'NOT FOUND')"
-          echo "glibtoolize: $(command -v glibtoolize 2>/dev/null || echo 'NOT FOUND')"
-          echo "pkg-config: $(command -v pkg-config 2>/dev/null || echo 'NOT FOUND')"
-          echo ""
           cd macOS
           echo "=== Running build-macos.sh ==="
           build_rc=0
@@ -180,9 +144,9 @@ jobs:
             exit "$build_rc"
           fi
 
-    - name: Prepare macOS debug logs
-      if: always()
-      run: |
+      - name: Prepare build logs
+        if: always()
+        run: |
           set -euxo pipefail
           package_zip="macOS/build/Release/QSS-M-macOS.zip"
           package_dmg="macOS/build/Release/QSS-M-macOS.dmg"
@@ -213,24 +177,25 @@ jobs:
           echo "===== Log artifact tree ====="
           find artifact/logs -maxdepth 3 -type f | sort
 
-    - name: Upload macOS ZIP artifact
-      uses: actions/upload-artifact@v7
-      with:
-        path: macOS/build/Release/QSS-M-macOS.zip
-        if-no-files-found: error
-        archive: false
+      - name: Upload ZIP package
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          path: macOS/build/Release/QSS-M-macOS.zip
+          if-no-files-found: error
+          archive: false
 
-    - name: Upload macOS DMG artifact
-      uses: actions/upload-artifact@v7
-      with:
-        path: macOS/build/Release/QSS-M-macOS.dmg
-        if-no-files-found: error
-        archive: false
+      - name: Upload DMG package
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          path: macOS/build/Release/QSS-M-macOS.dmg
+          if-no-files-found: error
+          archive: false
 
-    - name: Upload macOS debug logs
-      if: always()
-      uses: actions/upload-artifact@v7
-      with:
-        name: QSS-M-macOS-logs
-        path: artifact/logs/QSS-M-macOS-logs
-        if-no-files-found: warn
+      - name: Upload build logs
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: QSS-M-macOS-logs
+          path: artifact/logs/QSS-M-macOS-logs
+          if-no-files-found: warn
+          retention-days: 14

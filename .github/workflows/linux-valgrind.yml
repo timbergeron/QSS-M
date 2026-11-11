@@ -1,0 +1,138 @@
+name: Linux (Valgrind)
+
+# Runtime diagnostics are opt-in; push/PR CI only builds and packages.
+on: [workflow_dispatch]
+
+permissions:
+  contents: read
+
+jobs:
+  valgrind:
+    name: x64
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      SDL3_VERSION: "3.4.20"
+      SDL3_COMMIT: "f00dc919ca35b9756316e86c4777392de442f9b2"
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+
+      - name: Install dependencies
+        run: |
+          set -eux
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential \
+            cmake \
+            ninja-build \
+            libasound2-dev libpulse-dev libpipewire-0.3-dev libaudio-dev libjack-dev libsndio-dev \
+            libx11-dev libxext-dev libxrandr-dev libxcursor-dev libxfixes-dev libxi-dev libxss-dev libxtst-dev \
+            libxkbcommon-dev libwayland-dev libdecor-0-dev libdrm-dev libgbm-dev \
+            libgl1-mesa-dev libgles2-mesa-dev libegl1-mesa-dev \
+            libdbus-1-dev libibus-1.0-dev libudev-dev libusb-1.0-0-dev libfribidi-dev libthai-dev liburing-dev \
+            libmad0-dev \
+            libmpg123-dev \
+            libopus-dev \
+            libopusfile-dev \
+            libvorbis-dev \
+            libogg-dev \
+            zlib1g-dev \
+            libcurl4-openssl-dev \
+            libarchive-tools \
+            xvfb \
+            pkg-config \
+            libgnutls28-dev \
+            zip \
+            valgrind \
+            wget \
+            unzip
+
+      # Build SDL3 from source at the exact pin that macOS and Windows ship.
+      - name: Resolve SDL3 prefix
+        run: |
+          set -eux
+          . /etc/os-release
+          echo "SDL3_PREFIX=${RUNNER_TEMP}/sdl3-${SDL3_VERSION}" >> "$GITHUB_ENV"
+          echo "SDL3_CACHE_KEY=sdl3-${SDL3_VERSION}-${SDL3_COMMIT}-${ID}-${VERSION_ID}-gcc$(gcc -dumpversion)-shared-no-rpath-v2" >> "$GITHUB_ENV"
+
+      - name: Cache SDL3
+        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
+        with:
+          path: ${{ runner.temp }}/sdl3-${{ env.SDL3_VERSION }}
+          key: ${{ env.SDL3_CACHE_KEY }}
+
+      - name: Build SDL3
+        run: sh .github/scripts/build-sdl3-linux.sh "$SDL3_VERSION" "$SDL3_COMMIT" "$SDL3_PREFIX"
+
+      - name: Build CRMod7 progs.dat
+        run: |
+          set -eux
+          workdir=$(mktemp -d)
+          curl -L -o "$workdir/crmod7.zip" https://github.com/quakeone/CRMod7/archive/refs/heads/master.zip
+          unzip -q "$workdir/crmod7.zip" -d "$workdir"
+          cd "$workdir"/CRMod7-*
+          curl -L -o fteqcc_linux64.zip https://www.fteqcc.org/dl/fteqcc_linux64.zip
+          unzip -q fteqcc_linux64.zip fteqcc64
+          chmod +x fteqcc64
+          ./fteqcc64 -src src
+          dest="$GITHUB_WORKSPACE/Quake/crmod7"
+          mkdir -p "$dest"
+          if [ -f src/progs.dat ]; then cp src/progs.dat "$dest/"; fi
+          if [ -f src/csprogs.dat ]; then cp src/csprogs.dat "$dest/"; fi
+          if [ -d release ]; then cp -a release/. "$dest/"; fi
+
+      - name: Fetch Quake shareware PAK
+        run: |
+          set -eux
+          mkdir -p Quake/id1
+          if [ ! -f Quake/id1/pak0.pak ]; then
+            tmpdir=$(mktemp -d)
+            url="https://github.com/Jason2Brownlee/QuakeOfficialArchive/raw/main/bin/quake106.zip"
+            wget -O "$tmpdir/quake106.zip" "$url"
+            unzip -o "$tmpdir/quake106.zip" -d "$tmpdir"
+            bsdtar -xf "$tmpdir/resource.1" -C "$tmpdir"
+            pak=$(find "$tmpdir" -iname 'pak0.pak' | head -n 1 || true)
+            if [ -z "$pak" ]; then
+              echo "pak0.pak not found in downloaded archive" >&2
+              exit 1
+            fi
+            cp "$pak" Quake/id1/pak0.pak
+          fi
+
+      - name: Build debug binary for valgrind
+        run: |
+          set -eux
+          export PKG_CONFIG_PATH="$SDL3_PREFIX/lib/pkgconfig${PKG_CONFIG_PATH:+:$PKG_CONFIG_PATH}"
+          test "$(pkg-config --modversion sdl3)" = "$SDL3_VERSION"
+          chmod +x Misc/valgrind/build-linux-valgrind.sh
+          ./Misc/valgrind/build-linux-valgrind.sh
+
+      - name: Run valgrind
+        run: |
+          export LD_LIBRARY_PATH="$SDL3_PREFIX/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+          set -eux
+          chmod +x Misc/valgrind/run-valgrind.sh
+          ./Misc/valgrind/run-valgrind.sh
+
+      - name: Upload valgrind logs
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: valgrind-logs
+          path: |
+            artifacts/valgrind.log
+            artifacts/valgrind-combined.log
+            artifacts/valgrind-server-local.log
+            artifacts/server-local.log
+          if-no-files-found: warn
+          retention-days: 14
+
+      - name: Upload valgrind binary
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: quakespasm-valgrind
+          path: |
+            Quake/quakespasm-valgrind
+            QSS-M-Revision.txt
