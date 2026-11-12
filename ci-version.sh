@@ -12,11 +12,42 @@ qssm_git_short_revision() {
 	fi
 }
 
+# Prints MAJOR.MINOR.PATCH from Quake/quakedef.h, or nothing if unreadable.
+qssm_source_version() {
+	top=$(git rev-parse --show-toplevel 2>/dev/null) || return 0
+	header="$top/Quake/quakedef.h"
+	[ -f "$header" ] || return 0
+	awk '$1 == "#define" && $2 == "QSSM_VER_MAJOR" { maj = $3 }
+		$1 == "#define" && $2 == "QSSM_VER_MINOR" { min = $3 }
+		$1 == "#define" && $2 == "QSSM_VER_PATCH" { pat = $3 }
+		END { if (maj != "" && min != "" && pat != "") printf "%s.%s.%s", maj, min, pat }' "$header"
+}
+
+# True when CI is building a release tag (X.Y.Z or vX.Y.Z) that matches the
+# source version. Release builds carry no suffix: the updater treats any "-"
+# suffix as a prerelease, so a suffixed 1.7.0 would keep offering tag 1.7.0.
+qssm_ci_is_release_tag() {
+	[ "${GITHUB_REF_TYPE:-}" = "tag" ] || return 1
+	tag=${GITHUB_REF_NAME:-}
+	tag=${tag#v}
+	case "$tag" in
+		''|*[!0-9.]*) return 1 ;;
+	esac
+	source_version=$(qssm_source_version)
+	if [ "$tag" != "$source_version" ]; then
+		echo "warning: tag ${GITHUB_REF_NAME:-} does not match source version '${source_version}'; keeping commit suffix" >&2
+		return 1
+	fi
+	return 0
+}
+
 qssm_ci_version_suffix() {
 	if [ -n "${QSSM_VERSION_SUFFIX:-}" ]; then
 		printf '%s' "$QSSM_VERSION_SUFFIX"
 	elif [ "${GITHUB_ACTIONS:-}" = "true" ]; then
-		printf -- '-%s' "$(qssm_git_short_revision)"
+		if ! qssm_ci_is_release_tag; then
+			printf -- '-%s' "$(qssm_git_short_revision)"
+		fi
 	fi
 }
 

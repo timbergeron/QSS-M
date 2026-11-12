@@ -74,7 +74,23 @@ jobs:
           }
           # Branches and tags can contain slashes and other artifact-unsafe characters.
           $build_artifact = "QSS-M$ver_suffix-$platform_alt" -replace '[^A-Za-z0-9._-]', '-'
-          "VERSION_SUFFIX=-$runtimeGitSha" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          # Release tags (X.Y.Z / vX.Y.Z matching quakedef.h) build without a
+          # suffix; the updater treats "-" suffixes as prereleases.
+          $runtimeSuffix = "-$runtimeGitSha"
+          if ($env:GITHUB_REF_TYPE -eq "tag" -and $env:GITHUB_REF_NAME -match '^v?(\d+\.\d+\.\d+)$') {
+            $tagVersion = $Matches[1]
+            $header = Get-Content "Quake/quakedef.h" -Raw
+            $sourceVersion = "{0}.{1}.{2}" -f `
+              ([regex]::Match($header, '#define\s+QSSM_VER_MAJOR\s+(\d+)').Groups[1].Value),
+              ([regex]::Match($header, '#define\s+QSSM_VER_MINOR\s+(\d+)').Groups[1].Value),
+              ([regex]::Match($header, '#define\s+QSSM_VER_PATCH\s+(\d+)').Groups[1].Value)
+            if ($tagVersion -eq $sourceVersion) {
+              $runtimeSuffix = ""
+            } else {
+              Write-Host "::warning::tag $env:GITHUB_REF_NAME does not match source version $sourceVersion; keeping commit suffix"
+            }
+          }
+          "VERSION_SUFFIX=$runtimeSuffix" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
           "BUILD_ARTIFACT=$build_artifact" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
           "PLATFORM_SHORT=$platform_short" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
           "EXE_NAME=$exe_name" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append

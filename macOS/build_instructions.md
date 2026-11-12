@@ -131,11 +131,22 @@ Opening `QuakeSpasm.xcodeproj` in Xcode uses the same generated dependencies.
 
 ## Distribution signing
 
-The default build is ad-hoc signed so macOS can verify bundle integrity. It is
-not Developer ID signed or notarized, so downloaded archives may still require
-the quarantine-removal step documented in `macos_instructions.html`. A
-Gatekeeper-clean public distribution requires a separate credentialed signing
-and notarization pipeline.
+The default build (including CI) is ad-hoc signed so macOS can verify bundle
+integrity. It is not Developer ID signed or notarized, so downloaded archives
+may still require the quarantine-removal step documented in
+`macos_instructions.html`.
+
+Public releases are re-signed locally with `sign-macos-release.sh`, which
+`Misc/releases/publish-release.sh` runs on the CI zip. It signs the nested
+SDL3 framework and Dock tile plugin, then the app with hardened runtime and
+`Resources/QSS-M-Release.entitlements` (microphone access for VoIP). It then
+notarizes, staples and re-zips the app. It needs a Developer ID Application
+certificate in the keychain and a notarytool profile, created once with:
+
+    xcrun notarytool store-credentials notary --apple-id <apple id> --team-id <team id>
+
+A stable Developer ID signature also keeps Input Monitoring and Microphone
+grants across updates; ad-hoc signatures change every build, which resets them.
 
 ## Troubleshooting
 
