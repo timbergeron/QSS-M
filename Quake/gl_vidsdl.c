@@ -1659,9 +1659,10 @@ void VID_Lock (void)
 GL_MakeNiceExtensionsList -- johnfitz
 ===============
 */
-static void GL_PrintNiceExtensionsList (const char *in)
+static void GL_PrintNiceExtensionsList (const char *in, const char *filter)
 {
 	char *copy, *token;
+	int shown = 0;
 	if (!in) {
 		Con_SafePrintf("(none)");
 		return;
@@ -1669,7 +1670,32 @@ static void GL_PrintNiceExtensionsList (const char *in)
 
 	copy = (char *) Z_Strdup(in);
 	for (token = strtok(copy, " "); token; token = strtok(NULL, " "))
+	{
+		if (filter && *filter && !q_strcasestr (token, filter)) // woods #iwtabcomplete -- gl_info <filter> (ironwail)
+			continue;
 		Con_SafePrintf("\n   %s", token);
+		shown++;
+	}
+	Z_Free (copy);
+	if (!shown && filter && *filter)
+		Con_SafePrintf ("(no extensions matching \"%s\")", filter);
+}
+
+/*
+===============
+GL_Info_Completion_f -- woods #iwtabcomplete (ironwail)
+===============
+*/
+static void GL_Info_Completion_f (const char *partial)
+{
+	char *copy, *token;
+
+	if (Cmd_Argc () != 2 || !gl_extensions)
+		return;
+
+	copy = (char *) Z_Strdup (gl_extensions);
+	for (token = strtok (copy, " "); token; token = strtok (NULL, " "))
+		Con_AddToTabList (token, partial, NULL, NULL);
 	Z_Free (copy);
 }
 
@@ -1684,7 +1710,7 @@ static void GL_Info_f (void)
 	Con_SafePrintf ("GL_RENDERER: %s\n", gl_renderer);
 	Con_SafePrintf ("GL_VERSION: %s\n", gl_version);
 	Con_SafePrintf ("GL_EXTENSIONS: ");
-	GL_PrintNiceExtensionsList(gl_extensions);
+	GL_PrintNiceExtensionsList(gl_extensions, Cmd_Argc () >= 2 ? Cmd_Argv (1) : NULL);
 	Con_SafePrintf ("\n");
 }
 
@@ -2689,6 +2715,7 @@ void	VID_Init (void)
 	int		p, width, height, refreshrate, bpp;
 	int		display_width, display_height, display_refreshrate, display_bpp;
 	qboolean	fullscreen, validmode;
+	cmd_function_t	*cmd;
 	cvar_t *v;
 	extern cvar_t gl_load24bit, gl_load24bit_hud;
 	size_t i;
@@ -2890,6 +2917,9 @@ void	VID_Init (void)
 	GL_Init ();
 	GL_SetupState ();
 	Cmd_AddCommand ("gl_info", GL_Info_f); //johnfitz
+	cmd = Cmd_FindCommand ("gl_info"); // boot-time Cmd_AddCommand returns NULL
+	if (cmd)
+		cmd->completion = GL_Info_Completion_f; // woods #iwtabcomplete
 
 	//johnfitz -- removed code creating "glquake" subdirectory
 

@@ -1962,9 +1962,12 @@ void SV_Init (void)
 
 	Cvar_RegisterVariable (&sv_sound_watersplash); //spike
 	Cvar_RegisterVariable (&sv_sound_land); //spike
+	Cvar_SetCompletion (&sv_sound_watersplash, &Con_SoundPath_Completion_f); // woods #iwtabcomplete
+	Cvar_SetCompletion (&sv_sound_land, &Con_SoundPath_Completion_f); // woods #iwtabcomplete
 
 	Cvar_RegisterVariable (&sv_adminnick); // woods (darkpaces) #adminnick
 	Cvar_RegisterVariable (&sv_map_rotation); // woods #maprotation
+	Cvar_SetCompletion (&sv_map_rotation, &Con_MapName_Completion_f); // woods #iwtabcomplete
 	Cvar_RegisterVariable (&sv_defaultmap); // woods #mapchangeprotect
 	Cvar_SetCompletion (&sv_defaultmap, &Extralevels_Completion_f); // woods #iwtabcomplete
 	Cvar_RegisterVariable (&sv_mapcrc); // Map CRC handshake feature

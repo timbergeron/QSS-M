@@ -2563,6 +2563,20 @@ qboolean S_Voip_Speaking(unsigned int plno)
 	return s_voip.lastspoke[plno] > realtime;
 }
 
+/* woods #iwtabcomplete -- values match the VOIP_* codec ids above */
+static void S_Voip_Codec_Completion_f (cvar_t *cvar, const char *partial)
+{
+	(void) cvar;
+	Con_AddToTabList ("2", partial, "opus (default)", NULL);
+	Con_AddToTabList ("0", partial, "speex, legacy", NULL);
+	Con_AddToTabList ("1", partial, "raw 16-bit pcm", NULL);
+	Con_AddToTabList ("3", partial, "speex narrowband", NULL);
+	Con_AddToTabList ("4", partial, "speex wideband", NULL);
+	Con_AddToTabList ("5", partial, "speex ultrawideband", NULL);
+	Con_AddToTabList ("6", partial, "g.711 a-law", NULL);
+	Con_AddToTabList ("7", partial, "g.711 u-law", NULL);
+}
+
 void S_Voip_Init(void)
 {
 	int i;
@@ -2581,6 +2595,7 @@ void S_Voip_Init(void)
 	Cvar_RegisterVariable(&cl_voip_micamp);
 #ifndef FORCE_ENCODER
 	Cvar_RegisterVariable(&cl_voip_codec);
+	Cvar_SetCompletion(&cl_voip_codec, S_Voip_Codec_Completion_f); // woods #iwtabcomplete
 #endif
 	Cvar_RegisterVariable(&cl_voip_bitrate);
 	Cvar_RegisterVariable(&cl_voip_noisefilter);

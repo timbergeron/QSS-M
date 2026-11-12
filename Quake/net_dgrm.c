@@ -2457,6 +2457,7 @@ int Datagram_Init (void)
 	Cmd_AddCommand ("net_stats", NET_Stats_f);
 
 	Cvar_RegisterVariable(&rcon_address);	// woods #remotecmd
+	Cvar_SetCompletion(&rcon_address, &Con_ServerHistory_Completion_f); // woods #iwtabcomplete
 	Cvar_RegisterVariable(&cl_portpingprobe_enable);
 	Cvar_RegisterVariable(&cl_portpingprobe_probes);
 	Cvar_RegisterVariable(&cl_portpingprobe_port_probes);

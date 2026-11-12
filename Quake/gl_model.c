@@ -187,6 +187,8 @@ void Mod_Init (void)
 	Cvar_RegisterVariable (&external_ents_dir);
 	Cvar_RegisterVariable (&external_lits_dir); // woods #litdir
 	Cvar_SetCallback (&external_lits_dir, Mod_LightingChanged);
+	Cvar_SetCompletion (&external_ents_dir, &Con_MapsSubdir_Completion_f); // woods #iwtabcomplete
+	Cvar_SetCompletion (&external_lits_dir, &Con_MapsSubdir_Completion_f); // woods #iwtabcomplete
 	Cvar_RegisterVariable (&gl_load24bit);
 	Cvar_SetCallback (&gl_load24bit, Mod_TextureModeChanged);
 	Cvar_RegisterVariable (&mod_retain_textures);

@@ -39,6 +39,7 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 #include <errno.h> // woods
 #include "net_curl.h"
 #include "json.h"
+#include "bgmusic.h" // woods #iwtabcomplete -- music_preview extensions
 
 static SDL_Cursor *con_cursor_arrow = NULL; // woods #conselection
 static SDL_Cursor *con_cursor_ibeam = NULL; // woods #conselection
@@ -4029,12 +4030,12 @@ static qboolean CompleteFileListDemo (const char* partial, void* param) // woods
 #define MAX_LENGTH 60 // woods #iwtabcomplete
 char truncatedStrings[MAX_KEYS][MAX_LENGTH] = { 0 }; // woods #iwtabcomplete
 
-static void ProcessKeyBinding (int i, const char* partial) // woods #iwtabcomplete
+static void ProcessKeyBindingMap (int bindmap, int i, const char* partial) // woods #iwtabcomplete
 {
 	const char* name = Key_KeynumToString(i);
 	if (strcmp(name, "<UNKNOWN KEYNUM>") != 0)
 	{
-		char* keybindingValue = keybindings[0][i];
+		char* keybindingValue = keybindings[bindmap][i];
 		if (keybindingValue && strlen(keybindingValue) > MAX_LENGTH) 
 		{
 			int copyLength = MAX_LENGTH - 4; 
@@ -4045,6 +4046,11 @@ static void ProcessKeyBinding (int i, const char* partial) // woods #iwtabcomple
 		}
 		Con_AddToTabList(name, partial, keybindingValue, NULL);
 	}
+}
+
+static void ProcessKeyBinding (int i, const char* partial) // woods #iwtabcomplete
+{
+	ProcessKeyBindingMap (0, i, partial);
 }
 
 static qboolean CompleteBindKeys (const char* partial, void* unused) // woods #iwtabcomplete
@@ -6058,6 +6064,517 @@ static qboolean CompleteMarkDemo(const char* partial, void* unused)
 	return true;
 }
 
+/*
+==============================================================================
+
+GAME PATH TREE COMPLETION -- woods #iwtabcomplete
+
+Recursive listing of files (or directories) below a game root such as sound/
+or music/, merged across loose directories and packages. Autohint rebuilds
+the tab list on every keystroke, so each scan is cached briefly.
+
+==============================================================================
+*/
+
+#define CON_PATHTREE_MAX_DEPTH		6
+#define CON_PATHTREE_CACHE_SECONDS	2.0
+#define CON_PATHTREE_CACHE_SLOTS	4
+
+typedef struct
+{
+	char		key[MAX_QPATH * 2];
+	double		built;
+	char		**names;
+	int			count;
+	int			capacity;
+} con_pathtree_t;
+
+static con_pathtree_t con_pathtrees[CON_PATHTREE_CACHE_SLOTS];
+static int con_pathtree_next;
+
+static const char *const con_sound_exts[] = { "wav", "ogg", "mp3", "flac", "opus", NULL };
+
+static qboolean Con_PathTree_ExtOk (const char *name, const char *const *exts)
+{
+	const char *ext = COM_FileGetExtension (name);
+	int i;
+
+	if (!exts)
+		return true;
+	for (i = 0; exts[i]; i++)
+		if (!q_strcasecmp (ext, exts[i]))
+			return true;
+	return false;
+}
+
+static void Con_PathTree_Add (con_pathtree_t *tree, const char *name)
+{
+	char *copy;
+
+	if (!name[0])
+		return;
+	if (tree->count == tree->capacity)
+	{
+		int newcap = tree->capacity ? tree->capacity * 2 : 64;
+		char **grown = (char **) realloc (tree->names, newcap * sizeof (*grown));
+		if (!grown)
+			return;
+		tree->names = grown;
+		tree->capacity = newcap;
+	}
+	copy = strdup (name);
+	if (copy)
+		tree->names[tree->count++] = copy;
+}
+
+static void Con_PathTree_Clear (con_pathtree_t *tree)
+{
+	int i;
+
+	for (i = 0; i < tree->count; i++)
+		free (tree->names[i]);
+	free (tree->names);
+	memset (tree, 0, sizeof (*tree));
+}
+
+static void Con_PathTree_ScanDir (con_pathtree_t *tree, const char *basepath, const char *relpath,
+	const char *const *exts, qboolean dirs_only, int depth)
+{
+	char path[MAX_OSPATH];
+
+	if (depth >= CON_PATHTREE_MAX_DEPTH)
+		return;
+
+	if (relpath[0])
+		q_snprintf (path, sizeof (path), "%s/%s", basepath, relpath);
+	else
+		q_strlcpy (path, basepath, sizeof (path));
+
+#ifdef _WIN32
+	{
+		char searchpath[MAX_OSPATH];
+		WIN32_FIND_DATA fdat;
+		HANDLE fhnd;
+
+		q_snprintf (searchpath, sizeof (searchpath), "%s/*", path);
+		fhnd = FindFirstFile (searchpath, &fdat);
+		if (fhnd == INVALID_HANDLE_VALUE)
+			return;
+		do
+		{
+			char child[MAX_QPATH];
+
+			if (fdat.cFileName[0] == '.')
+				continue;
+			if (fdat.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT)
+				continue;
+			if (relpath[0])
+				q_snprintf (child, sizeof (child), "%s/%s", relpath, fdat.cFileName);
+			else
+				q_strlcpy (child, fdat.cFileName, sizeof (child));
+
+			if (fdat.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)
+			{
+				if (dirs_only)
+					Con_PathTree_Add (tree, child);
+				Con_PathTree_ScanDir (tree, basepath, child, exts, dirs_only, depth + 1);
+			}
+			else if (!dirs_only && Con_PathTree_ExtOk (child, exts))
+				Con_PathTree_Add (tree, child);
+		} while (FindNextFile (fhnd, &fdat));
+		FindClose (fhnd);
+	}
+#else
+	{
+		DIR *dir_p;
+		struct dirent *dir_t;
+
+		dir_p = opendir (path);
+		if (!dir_p)
+			return;
+		while ((dir_t = readdir (dir_p)) != NULL)
+		{
+			char fullpath[MAX_OSPATH];
+			char child[MAX_QPATH];
+			struct stat st;
+
+			if (dir_t->d_name[0] == '.')
+				continue;
+			q_snprintf (fullpath, sizeof (fullpath), "%s/%s", path, dir_t->d_name);
+			if (stat (fullpath, &st) < 0)
+				continue;
+			if (relpath[0])
+				q_snprintf (child, sizeof (child), "%s/%s", relpath, dir_t->d_name);
+			else
+				q_strlcpy (child, dir_t->d_name, sizeof (child));
+
+			if (S_ISDIR (st.st_mode))
+			{
+				if (dirs_only)
+					Con_PathTree_Add (tree, child);
+				Con_PathTree_ScanDir (tree, basepath, child, exts, dirs_only, depth + 1);
+			}
+			else if (S_ISREG (st.st_mode) && !dirs_only && Con_PathTree_ExtOk (child, exts))
+				Con_PathTree_Add (tree, child);
+		}
+		closedir (dir_p);
+	}
+#endif
+}
+
+static void Con_PathTree_ScanPack (con_pathtree_t *tree, pack_t *pak, const char *root,
+	const char *const *exts, qboolean dirs_only)
+{
+	size_t rootlen = strlen (root);
+	int i;
+
+	for (i = 0; i < pak->numfiles; i++)
+	{
+		const char *name = pak->files[i].name;
+		const char *rel;
+
+		if (q_strncasecmp (name, root, rootlen) || name[rootlen] != '/')
+			continue;
+		rel = name + rootlen + 1;
+
+		if (dirs_only)
+		{
+			// packages carry no directory entries; derive them from file paths
+			const char *slash;
+			int depth = 0;
+
+			for (slash = strchr (rel, '/'); slash && depth < CON_PATHTREE_MAX_DEPTH;
+				slash = strchr (slash + 1, '/'), depth++)
+			{
+				char dir[MAX_QPATH];
+				size_t len = (size_t)(slash - rel);
+
+				if (len >= sizeof (dir))
+					break;
+				memcpy (dir, rel, len);
+				dir[len] = 0;
+				Con_PathTree_Add (tree, dir);
+			}
+		}
+		else if (Con_PathTree_ExtOk (rel, exts))
+			Con_PathTree_Add (tree, rel);
+	}
+}
+
+static const con_pathtree_t *Con_PathTree_Get (const char *root, const char *const *exts, qboolean dirs_only)
+{
+	char key[sizeof (con_pathtrees[0].key)];
+	con_pathtree_t *tree;
+	searchpath_t *search;
+	int i;
+
+	q_snprintf (key, sizeof (key), "%s|%s|%p", root, dirs_only ? "dirs" : "files", (const void *) exts);
+
+	for (i = 0; i < CON_PATHTREE_CACHE_SLOTS; i++)
+	{
+		tree = &con_pathtrees[i];
+		if (tree->key[0] && !strcmp (tree->key, key))
+		{
+			if (realtime - tree->built >= 0 && realtime - tree->built < CON_PATHTREE_CACHE_SECONDS)
+				return tree;
+			break;
+		}
+	}
+	if (i == CON_PATHTREE_CACHE_SLOTS)
+	{
+		i = con_pathtree_next;
+		con_pathtree_next = (con_pathtree_next + 1) % CON_PATHTREE_CACHE_SLOTS;
+	}
+
+	tree = &con_pathtrees[i];
+	Con_PathTree_Clear (tree);
+	q_strlcpy (tree->key, key, sizeof (tree->key));
+	tree->built = realtime;
+
+	for (search = com_searchpaths; search; search = search->next)
+	{
+		if (search->pack)
+			Con_PathTree_ScanPack (tree, search->pack, root, exts, dirs_only);
+		else
+		{
+			char basepath[MAX_OSPATH];
+			q_snprintf (basepath, sizeof (basepath), "%s/%s", search->filename, root);
+			Con_PathTree_ScanDir (tree, basepath, "", exts, dirs_only, 0);
+		}
+	}
+
+	return tree;
+}
+
+static void Con_AddPathTreeToTabList (const char *partial, const char *root,
+	const char *const *exts, qboolean dirs_only, const char *type)
+{
+	const con_pathtree_t *tree = Con_PathTree_Get (root, exts, dirs_only);
+	int i;
+
+	for (i = 0; i < tree->count; i++)
+		Con_AddToTabList (tree->names[i], partial, type, NULL); // tab list drops duplicates
+}
+
+static const char *const *Con_MusicExts (void)
+{
+	static const char *exts[16];
+	int i, n = 0;
+
+	for (i = 0; wanted_handlers[i].ext && n < (int) Q_COUNTOF (exts) - 1; i++)
+		exts[n++] = wanted_handlers[i].ext;
+	exts[n] = NULL;
+	return exts;
+}
+
+/* cvar completions shared with the files that own the cvars */
+void Con_SoundPath_Completion_f (cvar_t *cvar, const char *partial)
+{
+	(void) cvar;
+	Con_AddPathTreeToTabList (partial, "sound", con_sound_exts, false, NULL);
+}
+
+void Con_MapsSubdir_Completion_f (cvar_t *cvar, const char *partial)
+{
+	(void) cvar;
+	Con_AddPathTreeToTabList (partial, "maps", NULL, true, "folder");
+}
+
+void Con_SkyName_Completion_f (cvar_t *cvar, const char *partial)
+{
+	(void) cvar;
+	CompleteFileList (partial, &skylist);
+}
+
+void Con_MapName_Completion_f (cvar_t *cvar, const char *partial)
+{
+	(void) cvar;
+	ContentList_EnsureInit (&extralevels);
+	{
+		filelist_item_t *file;
+		for (file = extralevels; file; file = file->next)
+			Con_AddToTabList (file->name, partial, NULL, NULL);
+	}
+}
+
+void Con_ServerHistory_Completion_f (cvar_t *cvar, const char *partial)
+{
+	(void) cvar;
+	CompleteServerHistory (partial, NULL);
+}
+
+/*
+==============================================================================
+
+MORE COMMAND ARGUMENT COMPLETIONS -- woods #iwtabcomplete
+
+==============================================================================
+*/
+
+// voicetarg/vignore take scoreboard slot numbers, not names
+static void Con_AddPlayerSlotsToTabList (const char *partial)
+{
+	int i;
+
+	if (cls.state != ca_connected)
+		return;
+	for (i = 0; i < cl.maxclients && i < MAX_SCOREBOARD; i++)
+	{
+		char num[8];
+
+		if (!cl.scores[i].name[0])
+			continue;
+		q_snprintf (num, sizeof (num), "%d", i);
+		Con_AddToTabList (num, partial, cl.scores[i].name, NULL);
+	}
+}
+
+static qboolean CompleteVoiceTarget (const char *partial, void *unused)
+{
+	(void) unused;
+	if (Cmd_Argc () != 2)
+		return false;
+	Con_AddToTabList ("team", partial, NULL, NULL);
+	Con_AddToTabList ("all", partial, NULL, NULL);
+	Con_AddToTabList ("nonmuted", partial, NULL, NULL);
+	Con_AddPlayerSlotsToTabList (partial);
+	return true;
+}
+
+static qboolean CompleteVoiceIgnore (const char *partial, void *unused)
+{
+	(void) unused;
+	if (Cmd_Argc () == 2)
+	{
+		Con_AddPlayerSlotsToTabList (partial);
+		return true;
+	}
+	if (Cmd_Argc () == 3)
+	{
+		Con_AddToTabList ("0", partial, "unmute", NULL);
+		Con_AddToTabList ("1", partial, "mute", NULL);
+		return true;
+	}
+	return false;
+}
+
+static qboolean CompleteMapshot (const char *partial, void *unused)
+{
+	(void) unused;
+	if (Cmd_Argc () == 2)
+		return CompleteFileList (partial, &extralevels);
+	if (Cmd_Argc () == 3)
+	{
+		Con_AddToTabList ("force", partial, NULL, NULL);
+		return true;
+	}
+	return false;
+}
+
+// shared by sfx_preview (paths under sound/) and music_preview (under music/)
+static qboolean CompletePreview (const char *partial, void *param)
+{
+	static const char *const keywords[] = { "pause", "resume", "stop", "info", "loop", "gain", "seek" };
+	qboolean music = (param != NULL);
+	size_t i;
+
+	if (Cmd_Argc () == 2)
+	{
+		for (i = 0; i < Q_COUNTOF (keywords); i++)
+			Con_AddToTabList (keywords[i], partial, "command", NULL);
+		if (music)
+			Con_AddPathTreeToTabList (partial, "music", Con_MusicExts (), false, NULL);
+		else
+			Con_AddPathTreeToTabList (partial, "sound", con_sound_exts, false, NULL);
+		return true;
+	}
+	if (Cmd_Argc () == 3)
+	{
+		const char *sub = Cmd_Argv (1);
+
+		if (!q_strcasecmp (sub, "loop"))
+		{
+			Con_AddToTabList ("0", partial, "off", NULL);
+			Con_AddToTabList ("1", partial, "on", NULL);
+			return true;
+		}
+		if (!q_strcasecmp (sub, "gain") || !q_strcasecmp (sub, "seek"))
+		{
+			Con_AddToTabList ("0", partial, NULL, NULL);
+			Con_AddToTabList ("0.25", partial, NULL, NULL);
+			Con_AddToTabList ("0.5", partial, NULL, NULL);
+			Con_AddToTabList ("0.75", partial, NULL, NULL);
+			Con_AddToTabList ("1", partial, NULL, NULL);
+			return true;
+		}
+	}
+	return false;
+}
+
+// in_bind <bindmap> <key> [command] / in_unbind <bindmap> <key>
+static qboolean CompleteInBind (const char *partial, void *unused)
+{
+	int i, bindmap;
+
+	(void) unused;
+	if (Cmd_Argc () == 2)
+	{
+		for (i = 0; i < MAX_BINDMAPS; i++)
+			Con_AddToTabList (va ("%d", i), partial, i ? NULL : "default", NULL);
+		return true;
+	}
+	if (Cmd_Argc () != 3)
+		return false;
+
+	bindmap = atoi (Cmd_Argv (1));
+	if (bindmap < 0 || bindmap >= MAX_BINDMAPS)
+		return true;
+
+	for (i = 0; i < MAX_KEYS; i++)
+	{
+		// in_unbind only offers keys that are bound in that map
+		if (!q_strcasecmp (Cmd_Argv (0), "in_unbind") &&
+			(!keybindings[bindmap][i] || !keybindings[bindmap][i][0]))
+			continue;
+		ProcessKeyBindingMap (bindmap, i, partial);
+	}
+	return true;
+}
+
+static qboolean CompleteBan (const char *partial, void *unused)
+{
+	(void) unused;
+
+	if (Cmd_Argc () == 2)
+	{
+		int i;
+
+		Con_AddToTabList ("off", partial, NULL, NULL);
+		if (!sv.active)
+			return true;
+		for (i = 0; i < svs.maxclients; i++)
+		{
+			client_t *client = &svs.clients[i];
+			const char *addr;
+			const char *colon;
+			char ip[64];
+
+			if (!client->active || !client->netconnection)
+				continue;
+			addr = NET_QSocketGetTrueAddressString (client->netconnection);
+			if (!addr || !addr[0])
+				continue;
+			// ban is IPv4 only: drop a single trailing :port
+			q_strlcpy (ip, addr, sizeof (ip));
+			colon = strchr (ip, ':');
+			if (colon && !strchr (colon + 1, ':'))
+				ip[colon - ip] = 0;
+			if (!q_strcasecmp (ip, "LOCAL") || strchr (ip, ':'))
+				continue;
+			Con_AddToTabList (ip, partial, client->name, NULL);
+		}
+		return true;
+	}
+	if (Cmd_Argc () == 3)
+	{
+		Con_AddToTabList ("255.255.255.255", partial, "exact", NULL);
+		Con_AddToTabList ("255.255.255.0", partial, "/24", NULL);
+		Con_AddToTabList ("255.255.0.0", partial, "/16", NULL);
+		return true;
+	}
+	return false;
+}
+
+static qboolean CompleteCondump (const char *partial, void *unused)
+{
+	char str[64];
+	time_t systime = time (0);
+	struct tm loct = *localtime (&systime);
+
+	(void) unused;
+	if (Cmd_Argc () != 2)
+		return false;
+
+	strftime (str, sizeof (str), "condump-%m-%d-%Y-%H%M%S.txt", &loct);
+	Con_AddToTabList ("condump.txt", partial, "default", NULL);
+	Con_AddToTabList (str, partial, NULL, NULL);
+	return true;
+}
+
+static void CompleteSetinfo_Key (void *ctx, const char *key, const char *value)
+{
+	Con_AddToTabList (key, (const char *) ctx, value, NULL);
+}
+
+static qboolean CompleteSetinfo (const char *partial, void *unused)
+{
+	(void) unused;
+	if (Cmd_Argc () != 2)
+		return false;
+	Info_Enumerate (cls.userinfo, CompleteSetinfo_Key, (void *) partial);
+	return true;
+}
+
 extern qboolean CompletePAKList(const char* partial, void* unused); // woods #unpak
 
 qboolean CompleteImageList (const char* partial, void* unused); // woods
@@ -6144,7 +6661,23 @@ static const arg_completion_type_t arg_completion_types[] =
 	{ "save",					CompleteSave,			NULL },
 	{ "load",					CompleteLoad,			NULL },
 	{ "give",					CompleteGive,			NULL },
-	{ "mapsize",				CompleteMapSize,		NULL }
+	{ "mapsize",				CompleteMapSize,		NULL },
+	{ "kick",					CompleteClients,		NULL },
+	{ "user",					CompleteClients,		NULL },
+	{ "voicetarg",				CompleteVoiceTarget,	NULL },
+	{ "vignore",				CompleteVoiceIgnore,	NULL },
+	{ "unalias",				CompleteAliasEditList,	NULL },
+	{ "inc",					CompleteCvarList,		NULL },
+	{ "setfl",					CompleteCvarList,		NULL },
+	{ "mapshot",				CompleteMapshot,		NULL },
+	{ "sfx_preview",			CompletePreview,		NULL },
+	{ "music_preview",			CompletePreview,		&musiclist },
+	{ "in_bind",				CompleteInBind,			NULL },
+	{ "in_unbind",				CompleteInBind,			NULL },
+	{ "rcon",					CompleteCmd,			NULL },
+	{ "ban",					CompleteBan,			NULL },
+	{ "condump",				CompleteCondump,		NULL },
+	{ "setinfo",				CompleteSetinfo,		NULL }
 };
 
 static const int num_arg_completion_types =

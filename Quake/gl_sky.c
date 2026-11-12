@@ -2821,6 +2821,36 @@ static void Sky_SkyRoomCommand_f (void)
 }
 
 /*
+=================
+Sky_SkyRoomCommand_Completion_f -- woods #iwtabcomplete
+
+skyroom <x> <y> <z> [parallax] [speed] [axis x] [axis y] [axis z]: offer the
+view position for the coordinates plus whatever skyroom is active now.
+=================
+*/
+static void Sky_SkyRoomCommand_Completion_f (const char *partial)
+{
+	int arg = Cmd_Argc () - 1;
+	char buf[32];
+
+	if (arg >= 1 && arg <= 3 && cls.state == ca_connected)
+	{
+		q_snprintf (buf, sizeof (buf), "%.0f", r_refdef.vieworg[arg - 1]);
+		Con_AddToTabList (buf, partial, "your position", NULL);
+	}
+	if (arg == 4)
+		Con_AddToTabList ("0", partial, "no parallax", NULL);
+
+	if (skyroom_enabled && arg >= 1 && arg <= 8)
+	{
+		float value = arg <= 4 ? skyroom_origin[arg - 1] :
+			arg == 5 ? skyroom_orientation[3] : skyroom_orientation[arg - 6];
+		q_snprintf (buf, sizeof (buf), "%g", value);
+		Con_AddToTabList (buf, partial, "current", NULL);
+	}
+}
+
+/*
 ====================
 R_SetSkyfog_f -- ericw
 ====================
@@ -2905,6 +2935,7 @@ Sky_Init
 void Sky_Init (void)
 {
 	int		i;
+	cmd_function_t	*cmd;
 
 	Cvar_RegisterVariable (&r_fastsky);
 	Cvar_SetCompletion (&r_fastsky, &Sky_FastSky_Completion_f);
@@ -2919,12 +2950,16 @@ void Sky_Init (void)
 	Cvar_RegisterVariable (&allow_download_sky); // woods automatic skybox downloading #skydownloads
 	Cvar_RegisterVariable (&r_globalsky);
 	Cvar_SetCallback (&r_globalsky, Sky_GlobalSkyboxChanged);
+	Cvar_SetCompletion (&r_globalsky, &Con_SkyName_Completion_f); // woods #iwtabcomplete
 	Cvar_RegisterVariable (&r_skywind);
 	Cvar_SetCompletion (&r_skywind, &Skywind_Cvar_Completion_f); // woods #iwtabcomplete
 	Cvar_SetCallback (&r_skywind, &Skywind_Cvar_OnChange);
 
 	Cmd_AddCommand ("sky",Sky_SkyCommand_f);
 	Cmd_AddCommand ("skyroom",Sky_SkyRoomCommand_f);
+	cmd = Cmd_FindCommand ("skyroom"); // boot-time Cmd_AddCommand returns NULL
+	if (cmd)
+		cmd->completion = Sky_SkyRoomCommand_Completion_f; // woods #iwtabcomplete
 	Cmd_AddCommand ("skywind",Skywind_f);
 	Cmd_AddCommand ("skywind_save",Skywind_Save_f);
 	Cmd_AddCommand ("skywind_load",Skywind_Load_f);

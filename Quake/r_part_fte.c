@@ -1026,6 +1026,41 @@ static void P_PartRedirect_f(void)
 
 	r_plooksdirty = true;
 }
+
+/*
+P_PartRedirect_Completion_f -- woods #iwtabcomplete
+
+r_partredirect <from> <to>: the source offers active redirects and every
+loaded effect name; the target offers the namespaced config.name forms.
+*/
+static void P_PartRedirect_Completion_f(const char *partial)
+{
+	struct partalias_s *l;
+	int i;
+
+	if (Cmd_Argc() == 2)
+	{
+		for (l = partaliaslist; l; l = l->next)
+			Con_AddToTabList(l->from, partial, "redirected", NULL);
+		for (i = 0; i < numparticletypes; i++)
+			if (part_type[i].name[0] != '+')	// skip internal chained sub-effects
+				Con_AddToTabList(part_type[i].name, partial, part_type[i].config, NULL);
+	}
+	else if (Cmd_Argc() == 3)
+	{
+		for (i = 0; i < numparticletypes; i++)
+		{
+			char full[MAX_QPATH * 2 + 1];
+			if (part_type[i].name[0] == '+')
+				continue;
+			if (part_type[i].config[0])
+				q_snprintf(full, sizeof(full), "%s.%s", part_type[i].config, part_type[i].name);
+			else
+				q_strlcpy(full, part_type[i].name, sizeof(full));
+			Con_AddToTabList(full, partial, NULL, NULL);
+		}
+	}
+}
 void PScript_UpdateModelEffects(qmodel_t *mod)
 {
 	associatedeffect_t *ae;
@@ -3637,6 +3672,8 @@ R_InitParticles
 */
 void PScript_InitParticles (void)
 {
+	cmd_function_t *cmd;
+
 	Cvar_RegisterVariable(&r_bouncysparks);
 	Cvar_RegisterVariable(&r_part_rain);
 #if UNSUPPORTED
@@ -3663,6 +3700,9 @@ void PScript_InitParticles (void)
 	Cvar_RegisterVariable(&r_lightflicker);
 
 	Cmd_AddCommand("r_partredirect", P_PartRedirect_f);
+	cmd = Cmd_FindCommand("r_partredirect"); // boot-time Cmd_AddCommand returns NULL
+	if (cmd)
+		cmd->completion = P_PartRedirect_Completion_f; // woods #iwtabcomplete
 
 //#if _DEBUG
 	Cmd_AddCommand("r_partinfo", P_PartInfo_f);

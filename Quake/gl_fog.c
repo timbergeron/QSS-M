@@ -360,6 +360,53 @@ void Fog_WaterFogCommand_f (void)
 
 /*
 ===============
+Fog_Command_Completion -- woods #iwtabcomplete
+
+Offers the current value for each position of "<density> <red> <green> <blue>",
+so Tab fills in what is active and only the part being changed needs typing.
+===============
+*/
+static void Fog_AddValueHint (const char *partial, float value, const char *label)
+{
+	char buf[32];
+
+	q_snprintf (buf, sizeof (buf), "%g", value);
+	Con_AddToTabList (buf, partial, label, NULL);
+}
+
+static void Fog_Command_Completion (const char *partial, float d, float r, float g, float b)
+{
+	switch (Cmd_Argc ())
+	{
+	case 2:
+		Fog_AddValueHint (partial, d, "current density");
+		if (d != 0.f)
+			Con_AddToTabList ("0", partial, "off", NULL);
+		break;
+	case 3:
+		Fog_AddValueHint (partial, r, "current red");
+		break;
+	case 4:
+		Fog_AddValueHint (partial, g, "current green");
+		break;
+	case 5:
+		Fog_AddValueHint (partial, b, "current blue");
+		break;
+	}
+}
+
+static void Fog_FogCommand_Completion_f (const char *partial)
+{
+	Fog_Command_Completion (partial, fog_density, fog_red, fog_green, fog_blue);
+}
+
+static void Fog_WaterFogCommand_Completion_f (const char *partial)
+{
+	Fog_Command_Completion (partial, waterfog_density, waterfog_red, waterfog_green, waterfog_blue);
+}
+
+/*
+===============
 Fog_WaterFog_Cvar_Completion_f
 ===============
 */
@@ -742,8 +789,16 @@ called when quake initializes
 */
 void Fog_Init (void)
 {
+        cmd_function_t *cmd;
+
         Cmd_AddCommand ("fog",Fog_FogCommand_f);
+        cmd = Cmd_FindCommand ("fog"); // boot-time Cmd_AddCommand returns NULL
+        if (cmd)
+                cmd->completion = Fog_FogCommand_Completion_f; // woods #iwtabcomplete
         Cmd_AddCommand ("waterfog",Fog_WaterFogCommand_f);
+        cmd = Cmd_FindCommand ("waterfog");
+        if (cmd)
+                cmd->completion = Fog_WaterFogCommand_Completion_f; // woods #iwtabcomplete
 
         Cvar_RegisterVariable(&r_fogalpha); // woods #fogalpha
         Cvar_RegisterVariable(&gl_waterfog);

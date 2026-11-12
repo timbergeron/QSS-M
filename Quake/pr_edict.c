@@ -971,6 +971,51 @@ static void ED_PrintEdict_f (void)
 
 /*
 =============
+ED_PrintEdict_Completion_f -- woods #iwtabcomplete (ironwail-style)
+
+edict <num> [field [value]]: numbers are tagged with their classname; the
+field form only works in single player, matching ED_PrintEdict_f.
+=============
+*/
+static void ED_PrintEdict_Completion_f (const char *partial)
+{
+	int i;
+
+	if (!sv.active || qcvm)
+		return;
+
+	PR_SwitchQCVM (&sv.qcvm);
+	if (Cmd_Argc () == 2)
+	{
+		for (i = 0; i < qcvm->num_edicts; i++)
+		{
+			edict_t *ed = EDICT_NUM (i);
+			const char *classname;
+
+			if (ed->free)
+				continue;
+			classname = PR_GetString (ed->v.classname);
+			Con_AddToTabList (va ("%d", i), partial, (classname && *classname) ? classname : NULL, NULL);
+		}
+	}
+	else if (Cmd_Argc () == 3 && svs.maxclients == 1)
+	{
+		for (i = 1; i < qcvm->progs->numfielddefs; i++)
+		{
+			const char *name = PR_GetString (qcvm->fielddefs[i].s_name);
+			size_t len = strlen (name);
+
+			// skip the _x/_y/_z component aliases of vector fields
+			if (len > 2 && name[len - 2] == '_' && (name[len - 1] == 'x' || name[len - 1] == 'y' || name[len - 1] == 'z'))
+				continue;
+			Con_AddToTabList (name, partial, "field", NULL);
+		}
+	}
+	PR_SwitchQCVM (NULL);
+}
+
+/*
+=============
 ED_Count
 
 For debugging
@@ -2106,7 +2151,12 @@ PR_Init
 */
 void PR_Init (void)
 {
+	cmd_function_t *cmd;
+
 	Cmd_AddCommand ("edict", ED_PrintEdict_f);
+	cmd = Cmd_FindCommand ("edict"); // boot-time Cmd_AddCommand returns NULL
+	if (cmd)
+		cmd->completion = ED_PrintEdict_Completion_f; // woods #iwtabcomplete
 	Cmd_AddCommand ("edicts", ED_PrintEdicts);
 	Cmd_AddCommand ("edictcount", ED_Count);
 	Cmd_AddCommand ("profile", PR_Profile_f);
