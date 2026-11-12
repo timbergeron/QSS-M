@@ -899,7 +899,6 @@ it is not returned at all.
 name checkclient ()
 =================
 */
-#define	MAX_CHECK	16
 static int c_invis, c_notvis;
 static void PF_sv_checkclient (void)
 {

@@ -142,14 +142,6 @@ void InsertLinkBefore (link_t *l, link_t *before)
 	l->next->prev = l;
 }
 
-void InsertLinkAfter (link_t *l, link_t *after)
-{
-	l->next = after->next;
-	l->prev = after;
-	l->prev->next = l;
-	l->next->prev = l;
-}
-
 /*
 ============================================================================
 
@@ -344,15 +336,6 @@ int q_sortdemos (const char* s1, const char* s2) // woods #demolistsort
 	return strcmp(s1, s2);
 }
 
-char* Q_strnset(char* str, int c, size_t n) // woods
-{
-	size_t i;
-	for (i = 0; i < n && str[i]; i++) {
-		str[i] = c;
-	}
-	return str;
-}
-
 // woods strstr case in-sensitive (written by chatGPT)
 
 char* Q_strcasestr(const char* haystack, const char* needle)
@@ -393,21 +376,6 @@ char* Q_strcasestr(const char* haystack, const char* needle)
 
 #define SWAP(T, a, b) \
     do { T save = (a); (a) = (b); (b) = save; } while (0)
-
-char* Q_strrev(char* s)
-{
-	size_t len = strlen(s);
-
-	if (len > 1) {
-		char* a = s;
-		char* b = s + len - 1;
-
-		for (; a < b; ++a, --b)
-			SWAP(char, *a, *b);
-	}
-
-	return s;
-}
 
 // woods string remove
 
@@ -495,24 +463,10 @@ char *q_strlwr (char *str)
 	return str;
 }
 
-char *q_strupr (char *str)
-{
-	char	*c;
-	c = str;
-	while (*c)
-	{
-		*c = q_toupper(*c);
-		c++;
-	}
-	return str;
-}
-
-/* platform dependant (v)snprintf function names: */
+/* platform dependant vsnprintf function name: */
 #if defined(_WIN32)
-#define	snprintf_func		_snprintf
 #define	vsnprintf_func		_vsnprintf
 #else
-#define	snprintf_func		snprintf
 #define	vsnprintf_func		vsnprintf
 #endif
 
@@ -573,17 +527,6 @@ void Q_memcpy (void *dest, const void *src, size_t count)
 	else
 		for (i = 0; i < count; i++)
 			((byte *)dest)[i] = ((byte *)src)[i];
-}
-
-int Q_memcmp (const void *m1, const void *m2, size_t count)
-{
-	while(count)
-	{
-		count--;
-		if (((byte *)m1)[count] != ((byte *)m2)[count])
-			return -1;
-	}
-	return 0;
 }
 
 void Q_strcpy (char *dest, const char *src)
@@ -1267,12 +1210,6 @@ void MSG_WriteCoord24 (sizebuf_t *sb, float f)
 	MSG_WriteByte (sb, (int)(f*255)%255);
 }
 
-//johnfitz -- 32-bit float coords
-void MSG_WriteCoord32f (sizebuf_t *sb, float f)
-{
-	MSG_WriteFloat (sb, f);
-}
-
 void MSG_WriteCoord (sizebuf_t *sb, float f, unsigned int flags)
 {
 	if (flags & PRFL_FLOATCOORD)
@@ -1510,12 +1447,6 @@ float MSG_ReadCoord24 (void)
 	return MSG_ReadShort() + MSG_ReadByte() * (1.0/255);
 }
 
-//johnfitz -- 32-bit float coords
-float MSG_ReadCoord32f (void)
-{
-	return MSG_ReadFloat();
-}
-
 float MSG_ReadCoord (unsigned int flags)
 {
 	if (flags & PRFL_FLOATCOORD)
@@ -1587,14 +1518,6 @@ void SZ_Alloc (sizebuf_t *buf, int startsize)
 	buf->cursize = 0;
 }
 
-
-void SZ_Free (sizebuf_t *buf)
-{
-//	Z_Free (buf->data);
-//	buf->data = NULL;
-//	buf->maxsize = 0;
-	buf->cursize = 0;
-}
 
 void SZ_Clear (sizebuf_t *buf)
 {
@@ -1733,20 +1656,6 @@ const char *COM_FileGetExtension (const char *in)
 		return "";	/* no extension, or parent directory has a dot */
 
 	return src;
-}
-
-/*
-============
-COM_ExtractExtension
-============
-*/
-void COM_ExtractExtension (const char *in, char *out, size_t outsize)
-{
-	const char *ext = COM_FileGetExtension (in);
-	if (! *ext)
-		*out = '\0';
-	else
-		q_strlcpy (out, ext, outsize);
 }
 
 /*
@@ -8196,24 +8105,6 @@ static int LOC_ParseArg (const char **pstr)
 
 /*
 ================
-LOC_HasPlaceholders
-================
-*/
-qboolean LOC_HasPlaceholders (const char *str)
-{
-	if (!localization.numindices)
-		return false;
-	while (*str)
-	{
-		if (LOC_ParseArg(&str) >= 0)
-			return true;
-		str++;
-	}
-	return false;
-}
-
-/*
-================
 LOC_Format
 
 Replaces placeholders (of the form {} or {N}) with the corresponding arguments
@@ -8267,18 +8158,6 @@ size_t LOC_Format (const char *format, const char* (*getarg_fn) (int idx, void* 
 	out[written] = 0;
 
 	return written;
-}
-
-// woods #demopercent (Baker Fitzquake Mark V)
-
-int COM_Minutes(int seconds)
-{
-	return seconds / 60;
-}
-
-int COM_Seconds(int seconds)
-{
-	return seconds % 60;
 }
 
 qboolean isSpecialMap (const char* name) // woods for bmodels

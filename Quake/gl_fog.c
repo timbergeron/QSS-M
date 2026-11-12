@@ -687,9 +687,6 @@ void Fog_StopAdditive (void)
 //
 //==============================================================================
 
-cvar_t r_vfog = {"r_vfog", "1", CVAR_NONE};
-
-void Fog_DrawVFog (void){}
 void Fog_MarkModels (void){}
 
 //==============================================================================
@@ -753,8 +750,6 @@ void Fog_Init (void)
         Cvar_SetCompletion(&gl_waterfog, Fog_WaterFog_Cvar_Completion_f); // woods #iwtabcomplete
         Cvar_RegisterVariable(&gl_waterfog_density);
         Cvar_SetCompletion(&gl_waterfog_density, Fog_WaterFogDensity_Cvar_Completion_f); // woods #iwtabcomplete
-
-	//Cvar_RegisterVariable (&r_vfog);
 
 	//set up global fog
 	fog_density = DEFAULT_DENSITY;

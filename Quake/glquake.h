@@ -146,7 +146,7 @@ typedef struct particle_s
 
 //====================================================
 
-extern	vec3_t		modelorg, r_entorigin;
+extern	vec3_t		modelorg;
 extern	entity_t	*currententity;
 extern	int		r_visframecount;	// ??? what difs?
 extern	int		r_framecount;

@@ -6,7 +6,6 @@
 #include "quakedef.h"
 
 #define VectorSet(v, x, y, z) ((v)[0] = (x), (v)[1] = (y), (v)[2] = (z))
-#define VectorClear(a) ((a)[0] = (a)[1] = (a)[2] = 0)
 
 location_t	*locations, *temploc;
 
@@ -481,7 +480,6 @@ QW LOC Creation Functions (ezquake) -- woods #locext
 */
 
 #define MAX_LOC_NAME		64
-#define MAX_MACRO_STRING 	2048
 #define MAX_ENTITIES 1024 // Maximum number of entities to store
 #define MAX_NAME_LENGTH 64 // Maximum length for the entity name
 #define SKIPBLANKS(ptr) while (*ptr == ' ' || *ptr == '\t' || *ptr == '\r') ptr++

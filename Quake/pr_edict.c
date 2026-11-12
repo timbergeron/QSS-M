@@ -1018,37 +1018,6 @@ FIXME: need to tag constants, doesn't really work
 ==============================================================================
 */
 
-/*
-=============
-ED_WriteGlobals
-=============
-*/
-void ED_WriteGlobals (FILE *f)
-{
-	ddef_t		*def;
-	int			i;
-	const char		*name;
-	int			type;
-
-	fprintf (f, "{\n");
-	for (i = 0; i < qcvm->progs->numglobaldefs; i++)
-	{
-		def = &qcvm->globaldefs[i];
-		type = def->type;
-		if ( !(def->type & DEF_SAVEGLOBAL) )
-			continue;
-		type &= ~DEF_SAVEGLOBAL;
-
-		if (type != ev_string && type != ev_float && type != ev_ext_double && type != ev_ext_integer && type != ev_ext_uint32 && type != ev_ext_sint64 && type != ev_ext_uint64 && type != ev_entity)
-			continue;
-
-		name = PR_GetString(def->s_name);
-		fprintf (f, "\"%s\" ", name);
-		fprintf (f, "\"%s\"\n", PR_UglyValueString(type, (eval_t *)&qcvm->globals[def->ofs]));
-	}
-	fprintf (f, "}\n");
-}
-
 void ED_WriteSaveGlobals (savedata_t *save)
 {
 	ddef_t		*def;

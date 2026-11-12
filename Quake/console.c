@@ -5396,11 +5396,6 @@ const char *QWMapList_StateName(void)
 	}
 }
 
-const char *QWMapList_Path(void)
-{
-	return qw_maplist_path[0] ? qw_maplist_path : "";
-}
-
 const char *QWMapList_NameAt(int index)
 {
 	if (qw_maplist_state != QW_MAPLIST_LOADED || index < 0 || index >= qw_maplist_count)
@@ -5412,11 +5407,6 @@ const char *QWMapList_NameAt(int index)
 int QWMapList_Count(void)
 {
 	return qw_maplist_count;
-}
-
-int QWMapList_MinChars(void)
-{
-	return QW_MAPLIST_MIN_CHARS;
 }
 
 int QWMapList_CompletionCap(void)
@@ -7109,44 +7099,6 @@ void Con_DrawConsole (int lines, qboolean drawinput)
 	Con_DrawBirthdayMessage (); // woods #qbday - show quake's birthday for 30 seconds on june 22
 }
 
-
-/*
-==================
-Con_NotifyBox
-==================
-*/
-void Con_NotifyBox (const char *text)
-{
-	double		t1, t2;
-	int		lastkey, lastchar;
-
-// during startup for sound / cd warnings
-	Con_Printf ("\n\n%s", Con_Quakebar(40)); //johnfitz
-	Con_Printf ("%s", text);
-	Con_Printf ("Press a key.\n");
-	Con_Printf ("%s", Con_Quakebar(40)); //johnfitz
-
-	key_dest = key_console;
-	IN_UpdateGrabs();
-
-	Key_BeginInputGrab ();
-	do
-	{
-		t1 = Sys_DoubleTime ();
-		SCR_UpdateScreen ();
-		Sys_SendKeyEvents ();
-		Key_GetGrabbedInput (&lastkey, &lastchar);
-		Sys_Sleep (16);
-		t2 = Sys_DoubleTime ();
-		realtime += t2-t1;		// make the cursor blink
-	} while (lastkey == -1 && lastchar == -1);
-	Key_EndInputGrab ();
-
-	Con_Printf ("\n");
-	key_dest = key_game;
-	realtime = 0;		// put the cursor back to invisible
-	IN_UpdateGrabs();
-}
 
 
 void LOG_Init (quakeparms_t *parms) // woods #debuglogsize

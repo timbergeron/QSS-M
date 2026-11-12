@@ -3300,59 +3300,6 @@ qboolean CL_GithubReleasesUrls(const char *repopath,
 
 /*
 ==============================================================================
-* CL_GithubContentsUrl
-*     Builds the GitHub Contents API URL for a subdirectory of a
-*     "user/repo[/branch]" path, e.g.
-*     "https://api.github.com/repos/USER/REPO/contents/SUBDIR[?ref=BRANCH]".
-*     A branch is only added when the path supplies one explicitly; with a bare
-*     "user/repo" the ref is omitted so GitHub uses the repo's default branch
-*     (which need not be "main"). Returns false on a non-repo path or overflow.
-==============================================================================
-*/
-qboolean CL_GithubContentsUrl(const char *repopath, const char *subdir,
-	char *out, size_t outsize)
-{
-	char user[64], repo[64], branch[128];
-	const char *s1, *s2;
-	size_t blen;
-	qboolean have_branch = false;
-
-	if (!subdir || !*subdir)
-		return false;
-	if (!GithubExtractUserRepo(repopath, user, sizeof(user), repo, sizeof(repo)))
-		return false;
-
-	/* An explicit branch is the third path segment of the original value, i.e.
-	 * the text after the second '/'. Don't use NormalizeGithubRepoPath here: it
-	 * fabricates "/main", which would wrongly pin repos whose default differs.
-	 * Only this single segment is used as the ref; a branch containing '/'
-	 * isn't supported (it is ambiguous with the cvar's branch/subpath form used
-	 * elsewhere), and such repos should rely on the default branch instead. */
-	s1 = strchr(repopath, '/');
-	s2 = s1 ? strchr(s1 + 1, '/') : NULL;
-	if (s2 && s2[1])
-	{
-		blen = strcspn(s2 + 1, "/");
-		if (blen > 0 && blen < sizeof(branch))
-		{
-			memcpy(branch, s2 + 1, blen);
-			branch[blen] = '\0';
-			have_branch = true;
-		}
-	}
-
-	if (have_branch)
-		return (size_t)q_snprintf(out, outsize,
-			"https://api.github.com/repos/%s/%s/contents/%s?ref=%s",
-			user, repo, subdir, branch) < outsize;
-
-	return (size_t)q_snprintf(out, outsize,
-		"https://api.github.com/repos/%s/%s/contents/%s",
-		user, repo, subdir) < outsize;
-}
-
-/*
-==============================================================================
 * CL_GithubRawPrefix
 *     Builds the raw.githubusercontent.com URL prefix for a "user/repo" path,
 *     e.g. "https://raw.githubusercontent.com/USER/REPO/", for validating that a
@@ -3394,8 +3341,7 @@ qboolean CL_GithubRawFileUrl(const char *repopath, const char *subpath,
 	if (!GithubExtractUserRepo(repopath, user, sizeof(user), repo, sizeof(repo)))
 		return false;
 
-	/* An explicit branch is the third path segment (after the second '/'), the
-	 * same convention CL_GithubContentsUrl uses. */
+	/* An explicit branch is the third path segment (after the second '/'). */
 	s1 = strchr(repopath, '/');
 	s2 = s1 ? strchr(s1 + 1, '/') : NULL;
 	if (s2 && s2[1])

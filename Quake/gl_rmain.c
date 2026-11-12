@@ -25,7 +25,7 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 #include "glquake.h"
 #include <math.h> // woods #beamspoly
 
-vec3_t		modelorg, r_entorigin;
+vec3_t		modelorg;
 
 static entity_t r_worldentity;	//so we can make sure currententity is valid
 entity_t	*currententity;
@@ -144,7 +144,6 @@ cvar_t	r_player_xray = {"r_player_xray", "0xFF0000 1.0 0", CVAR_ARCHIVE}; // woo
 cvar_t	r_remove_collinear_vertices = {"r_remove_collinear_vertices", "1", CVAR_ARCHIVE};
 #endif
 
-extern cvar_t	r_vfog;
 //johnfitz
 
 cvar_t	gl_zfix = {"gl_zfix", "0", CVAR_ARCHIVE}; // QuakeSpasm z-fighting fix
@@ -2311,44 +2310,6 @@ void R_EmitWireBox (vec3_t mins, vec3_t maxs, uint32_t color) // woods #iwshowbb
 	glVertex3f (mins[0], mins[1], mins[2]);
 	glVertex3f (mins[0], mins[1], maxs[2]);
 	glEnd ();
-}
-
-void R_EmitFullSphere (vec3_t origin, float radius, uint32_t color, int segments) // woods #locext
-{
-	float r = ((color >> 24) & 0xFF) / 255.0f;
-	float g = ((color >> 16) & 0xFF) / 255.0f;
-	float b = ((color >> 8) & 0xFF) / 255.0f;
-	float a = (color & 0xFF) / 255.0f;
-
-	glPushMatrix();
-	glTranslatef(origin[0], origin[1], origin[2]);
-
-	glColor4f(r, g, b, a);
-
-	for (int i = 0; i < segments; i++)
-	{
-		float lat0 = M_PI * (-0.5 + (float)(i) / segments);
-		float z0 = sin(lat0);
-		float zr0 = cos(lat0);
-
-		float lat1 = M_PI * (-0.5 + (float)(i + 1) / segments);
-		float z1 = sin(lat1);
-		float zr1 = cos(lat1);
-
-		glBegin(GL_TRIANGLE_STRIP);
-		for (int j = 0; j <= segments; j++)
-		{
-			float lng = 2 * M_PI * (float)(j) / segments;
-			float x = cos(lng);
-			float y = sin(lng);
-
-			glVertex3f(x * zr0 * radius, y * zr0 * radius, z0 * radius);
-			glVertex3f(x * zr1 * radius, y * zr1 * radius, z1 * radius);
-		}
-		glEnd();
-	}
-
-	glPopMatrix();
 }
 
 void R_EmitPin (vec3_t origin, float radius, uint32_t color, int segments) // woods #locext

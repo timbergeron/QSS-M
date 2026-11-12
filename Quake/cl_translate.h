@@ -45,7 +45,6 @@ int CL_Translate_LanguageCount (void);
 const char *CL_Translate_LanguageName (int language);
 const char *CL_Translate_LanguageCode (int language);
 const char *CL_Translate_MenuNotice (void);
-void CL_Translate_MenuStatus (char *out, size_t size);
 cl_translate_send_state_t CL_Translate_SendState (unsigned int *id, char *out, size_t size);
 /* Preference for newly added players; never changes existing watches. */
 void CL_Translate_MenuReadLanguage (int language);

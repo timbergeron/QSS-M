@@ -2081,14 +2081,6 @@ static void Host_UpdateDockBadge(void)
 	}
 }
 
-//used for cl.qcvm.GetModel (so ssqc+csqc can share builtins)
-qmodel_t *CL_ModelForIndex(int index)
-{
-	if (index < 0 || index >= MAX_MODELS)
-		return NULL;
-	return cl.model_precache[index];
-}
-
 static qboolean CL_QueueClientStringCommand(const char *command)
 {
 	size_t needed;

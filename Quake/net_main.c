@@ -491,10 +491,6 @@ const char *NET_QSocketGetOwnerString(const qsocket_t *s)
 	return s ? NET_QSocketGetTrueAddressString(s) : "unknown";
 }
 
-const char *NET_QSocketGetMaskedAddressString (const qsocket_t *s)
-{
-	return s->maskedaddress;
-}
 static qboolean NET_FormatMaskedAddressStringForDisplay(const char *addr, char *out, size_t outsize)
 {
 	const char *scan;
@@ -707,57 +703,7 @@ void NET_Slist_f (void)
 }
 
 
-void NET_SlistSort (void)
-{
-	if (hostCacheCount > 1)
-	{
-		size_t	i, j;
-		hostcache_t temp;
-		for (i = 0; i < hostCacheCount; i++)
-		{
-			for (j = i + 1; j < hostCacheCount; j++)
-			{
-				if (strcmp(hostcache[j].name, hostcache[i].name) < 0)
-				{
-					memcpy(&temp, &hostcache[j], sizeof(hostcache_t));
-					memcpy(&hostcache[j], &hostcache[i], sizeof(hostcache_t));
-					memcpy(&hostcache[i], &temp, sizeof(hostcache_t));
-				}
-			}
-		}
-	}
-}
 
-
-const char *NET_SlistPrintServer (size_t idx)
-{
-	static char	string[64];
-
-	if (idx >= hostCacheCount)
-		return "";
-
-	if (hostcache[idx].maxusers)
-	{
-		q_snprintf(string, sizeof(string), "%-15.15s %-15.15s %2u/%2u\n",
-					hostcache[idx].name, hostcache[idx].map,
-					hostcache[idx].users, hostcache[idx].maxusers);
-	}
-	else
-	{
-		q_snprintf(string, sizeof(string), "%-15.15s %-15.15s\n",
-					hostcache[idx].name, hostcache[idx].map);
-	}
-
-	return string;
-}
-
-
-const char *NET_SlistPrintServerName (size_t idx)
-{
-	if (idx >= hostCacheCount)
-		return "";
-	return hostcache[idx].cname;
-}
 
 const char* NET_SlistPrintServerInfo (size_t idx, ServerInfoType type) // woods #serversmenu
 {

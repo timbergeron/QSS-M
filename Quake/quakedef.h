@@ -502,7 +502,6 @@ void MusicList_Rebuild (void); // woods #musiclist
 void TextList_Rebuild (void); // woods #textlist
 void FileList_Add_MapDesc (const char* levelName); // woods #mapdescriptions
 void FileList_Add (const char *name, const char* data, filelist_item_t **list); // woods #moddownloads
-void BookmarksList_Rebuild (void); // woods #bookmarksjson
 void BookmarksList_Write (void); // woods #bookmarksjson
 void BookmarkData_Parse (const char* data, char* alias, size_t alias_size, qboolean* pinned); // woods #bookmarksjson
 void BookmarkData_Format (char* dest, size_t dest_size, const char* alias, qboolean pinned); // woods #bookmarksjson

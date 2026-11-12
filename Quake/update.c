@@ -91,11 +91,6 @@ qboolean M_Version_ParseTagFull(const char *tag, int *major, int *minor,
 	return true;
 }
 
-int M_Version_ParseTag(const char *tag, int *major, int *minor, int *patch)
-{
-	return M_Version_ParseTagFull(tag, major, minor, patch, NULL, 0);
-}
-
 int M_Version_CompareWithSuffix(int l_major, int l_minor, int l_patch,
 	const char *l_suffix, qboolean l_prerelease, int r_major, int r_minor,
 	int r_patch, const char *r_suffix, qboolean r_prerelease)
@@ -456,11 +451,6 @@ qboolean M_Version_ParseTagFull(const char *tag, int *major, int *minor,
 	if (suffix && suffix_size)
 		q_strlcpy(suffix, p, suffix_size);
 	return true;
-}
-
-int M_Version_ParseTag(const char *tag, int *major, int *minor, int *patch)
-{
-	return M_Version_ParseTagFull(tag, major, minor, patch, NULL, 0);
 }
 
 static qboolean M_Version_SuffixIsPrerelease(const char *suffix,

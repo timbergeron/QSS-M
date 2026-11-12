@@ -377,32 +377,6 @@ int VectorCompare (const vec3_t v1, const vec3_t v2)
 	return 1;
 }
 
-vec_t _DotProduct (const vec3_t v1, const vec3_t v2)
-{
-	return v1[0]*v2[0] + v1[1]*v2[1] + v1[2]*v2[2];
-}
-
-void _VectorSubtract (const vec3_t veca, const vec3_t vecb, vec3_t out)
-{
-	out[0] = veca[0]-vecb[0];
-	out[1] = veca[1]-vecb[1];
-	out[2] = veca[2]-vecb[2];
-}
-
-void _VectorAdd (const vec3_t veca, const vec3_t vecb, vec3_t out)
-{
-	out[0] = veca[0]+vecb[0];
-	out[1] = veca[1]+vecb[1];
-	out[2] = veca[2]+vecb[2];
-}
-
-void _VectorCopy (const vec3_t in, vec3_t out)
-{
-	out[0] = in[0];
-	out[1] = in[1];
-	out[2] = in[2];
-}
-
 void CrossProduct (const vec3_t v1, const vec3_t v2, vec3_t cross)
 {
 	cross[0] = v1[1]*v2[2] - v1[2]*v2[1];
@@ -453,14 +427,6 @@ void VectorScale (const vec3_t in, vec_t scale, vec3_t out)
 	out[2] = in[2]*scale;
 }
 
-
-int Q_log2(int val)
-{
-	int answer=0;
-	while (val>>=1)
-		answer++;
-	return answer;
-}
 
 float GetFraction (float val, float minval, float maxval)
 {
@@ -536,96 +502,7 @@ void R_ConcatTransforms (float in1[3][4], float in2[3][4], float out[3][4])
 }
 
 
-/*
-===================
-FloorDivMod
 
-Returns mathematically correct (floor-based) quotient and remainder for
-numer and denom, both of which should contain no fractional part. The
-quotient must fit in 32 bits.
-====================
-*/
-
-void FloorDivMod (double numer, double denom, int *quotient,
-		int *rem)
-{
-	int		q, r;
-	double	x;
-
-#ifndef PARANOID
-	if (denom <= 0.0)
-		Sys_Error ("FloorDivMod: bad denominator %f\n", denom);
-
-//	if ((floor(numer) != numer) || (floor(denom) != denom))
-//		Sys_Error ("FloorDivMod: non-integer numer or denom %f %f\n",
-//				numer, denom);
-#endif
-
-	if (numer >= 0.0)
-	{
-
-		x = floor(numer / denom);
-		q = (int)x;
-		r = (int)floor(numer - (x * denom));
-	}
-	else
-	{
-	//
-	// perform operations with positive values, and fix mod to make floor-based
-	//
-		x = floor(-numer / denom);
-		q = -(int)x;
-		r = (int)floor(-numer - (x * denom));
-		if (r != 0)
-		{
-			q--;
-			r = (int)denom - r;
-		}
-	}
-
-	*quotient = q;
-	*rem = r;
-}
-
-
-/*
-===================
-GreatestCommonDivisor
-====================
-*/
-int GreatestCommonDivisor (int i1, int i2)
-{
-	if (i1 > i2)
-	{
-		if (i2 == 0)
-			return (i1);
-		return GreatestCommonDivisor (i2, i1 % i2);
-	}
-	else
-	{
-		if (i1 == 0)
-			return (i2);
-		return GreatestCommonDivisor (i1, i2 % i1);
-	}
-}
-
-
-/*
-===================
-Invert24To16
-
-Inverts an 8.24 value to a 16.16 value
-====================
-*/
-
-fixed16_t Invert24To16(fixed16_t val)
-{
-	if (val < 256)
-		return (0xFFFFFFFF);
-
-	return (fixed16_t)
-			(((double)0x10000 * (double)0x1000000 / (double)val) + 0.5);
-}
 
 vec_t DistanceBetween2Points(vec3_t v1, vec3_t v2) // woods #texturepointer
 {

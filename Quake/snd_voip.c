@@ -2513,11 +2513,6 @@ void S_Voip_Transmit(unsigned char clc, sizebuf_t *buf)
 		s_voip.capturepos -= encpos;
 	}
 }
-void S_Voip_Ignore(unsigned int slot, qboolean ignore)
-{
-	MSG_WriteByte (&cls.message, clc_stringcmd);
-	MSG_WriteString (&cls.message, va("vignore %i %i", slot, ignore));
-}
 static void S_Voip_Enable_f(void)
 {
 	s_voip.voipsendbutton = true;

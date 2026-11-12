@@ -69,7 +69,6 @@ void Draw_Pic (int x, int y, qpic_t *pic);
 void Draw_ScaledPic (int x, int y, qpic_t *pic, float scale); // woods #shownet
 void Draw_Pic_RGBA_Outline (int x, int y, qpic_t* pic, plcolour_t c, float alpha, float outlineThickness); // woods #varmatchclock
 void Draw_SubPic (float x, float y, float w, float h, qpic_t *pic, float s1, float t1, float s2, float t2);
-void Draw_TransPicTranslate (int x, int y, qpic_t *pic, plcolour_t top, plcolour_t bottom); //johnfitz -- more parameters
 void Draw_ConsoleBackground (void); //johnfitz -- removed parameter int lines
 void Draw_TileClear (int x, int y, int w, int h);
 void Draw_Fill (int x, int y, int w, int h, int c, float alpha); //johnfitz -- added alpha
@@ -79,7 +78,6 @@ void Draw_FillPlayer (int x, int y, int w, int h, plcolour_t c, float alpha); //
 #define DRAW_CORNER_BR 0x4
 #define DRAW_CORNER_BL 0x8
 #define DRAW_CORNERS_ALL (DRAW_CORNER_TL | DRAW_CORNER_TR | DRAW_CORNER_BR | DRAW_CORNER_BL)
-void Draw_Fill_Plus (int x, int y, int w, int h, plcolour_t c, float alpha, qboolean roundcorners, unsigned char roundmask);
 void Draw_Fill_Plus_Radius (int x, int y, int w, int h, plcolour_t c, float alpha, qboolean roundcorners, unsigned char roundmask, float radius);
 void Draw_Fill_Ex (int x, int y, int w, int h, plcolour_t c, float alpha, qboolean roundcorners, unsigned char roundmask, float radius, float feather);
 void Draw_FillRoundedRGBA (float x, float y, float w, float h, const float rgba[4], qboolean roundcorners, unsigned char roundmask, float radius, float feather);
@@ -93,7 +91,6 @@ void Draw_String (int x, int y, const char *str);
 void Draw_StringMasked (int x, int y, const char *str);
 void Draw_StringAnimatedDots(int x, int y, const char* str); // woods
 void Draw_StringGradientSweep(int x, int y, const char* str, float speed, float span_px, float alpha, qboolean masked); // woods
-void Draw_StringSaturnShine(int x, int y, const char* str, float speed, float alpha, qboolean masked); // woods
 void Draw_StringRGBA (int x, int y, const char* str, plcolour_t c, float alpha); // woods
 void Draw_ScaledPicAlpha (int x, int y, qpic_t* pic, float scale, float alpha); // woods #observerhud #eyemouse
 extern qpic_t *pic_nul; //johnfitz -- for missing gfx, don't crash

@@ -1416,18 +1416,6 @@ int CL_Translate_MenuSelections (cl_translate_player_t *players, int capacity)
 int CL_Translate_ReadLanguage (void) { return tr_read_language; }
 int CL_Translate_WriteLanguage (void) { return tr_write_language; }
 
-void CL_Translate_MenuStatus (char *out, size_t size)
-{
-	int i, count = 0;
-	Uint64 now = SDL_GetTicks();
-	for (i = 0; i < MAX_SCOREBOARD; i++) if (tr_watch[i]) count++;
-	if (tr_worker_failed) q_strlcpy(out, "Unavailable; restart to retry.", size);
-	else if (now < tr_backoff_until)
-		q_snprintf(out, size, "Paused; retry in %u seconds.", (unsigned int)((tr_backoff_until-now+999)/1000));
-	else if (count) q_snprintf(out, size, "Following %d player%s; public chat.", count, count == 1 ? "" : "s");
-	else q_strlcpy(out, "Translation is off.", size);
-}
-
 cl_translate_send_state_t CL_Translate_SendState (unsigned int *id, char *out, size_t size)
 {
 	if (id) *id = tr_send_id;

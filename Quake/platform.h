@@ -155,9 +155,6 @@ qboolean PL_SearchProgressUpdate(pl_search_progress_t *progress,
 void PL_SearchProgressEnd(pl_search_progress_t *progress);
 #endif
 
-/* Compatibility wrapper for older callers. */
-qboolean PL_ConfirmDialog(const char *title, const char *text);
-
 #if defined(_WIN32)
 /* Forward a raw engine Ctrl-W transition to the native hold-to-quit UI. */
 void PL_ControlWEvent(int down);

@@ -68,7 +68,6 @@ void SV_LinkEdict (edict_t *ent, qboolean touch_triggers);
 
 int SV_PointContentsAllBsps(vec3_t p, edict_t *forent); //check all SOLID_BSP ents
 int SV_PointContents (vec3_t p);
-int SV_TruePointContents (vec3_t p);
 // returns the CONTENTS_* value from the world at the given point.
 // does not check any entities at all
 // the non-true version remaps the water current contents to content_water

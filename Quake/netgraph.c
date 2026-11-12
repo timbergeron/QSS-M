@@ -3591,7 +3591,6 @@ Panels
 #define NGC_FRAME_Y	(NGC_LATE_Y + NGC_LANE_H + 2)
 #define NGC_RAIL_Y	(NGC_FRAME_Y + NGC_LANE_H + 2)
 #define NGC_FOOT_Y	(NGC_RAIL_Y + 8 + 4)
-#define NGC_FOOT_CHARS ((NGC_W - 2 * NG_PAD) / 8 - 8)	// before the "HITCH n" slot
 
 // Detailed: 384 wide, PING, LATE, FRAME, IN/OUT over 10 s
 #define NGD_W		384

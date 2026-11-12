@@ -122,7 +122,6 @@ void	Cvar_SetValue (const char *var_name, const float value);
 // expands value to a string and calls Cvar_Set
 
 void	Cvar_SetROM (const char *var_name, const char *value);
-void	Cvar_SetValueROM (const char *var_name, const float value);
 // sets a CVAR_ROM variable from within the engine
 
 void Cvar_SetQuick (cvar_t *var, const char *value);
@@ -150,9 +149,6 @@ void	Cvar_WriteVariables (FILE *f);
 cvar_t	*Cvar_FindVar (const char *var_name);
 cvar_t	*Cvar_FindVarAfter (const char *prev_name, unsigned int with_flags);
 
-void	Cvar_LockVar (const char *var_name);
-void	Cvar_UnlockVar (const char *var_name);
-void	Cvar_UnlockAll (void);
 void	Cvar_MapLock_Set (const char *var_name, const char *value);
 void	Cvar_MapLock_RestoreAll (void);
 qboolean Cvar_MapLock_ParseWorldspawnKey (const char *key, const char *value);
@@ -161,10 +157,6 @@ qboolean Cvar_MapScoped_MarkServerStuffCmd (const char *cmd, const char *arg1, i
 const char *Cvar_MapScoped_CommitCommand (void);
 
 void	Cvar_Init (void);
-
-const char	*Cvar_CompleteVariable (const char *partial);
-// attempts to match a partial variable name for command line completion
-// returns NULL if nothing fits
 
 #endif	/* __CVAR_H__ */
 

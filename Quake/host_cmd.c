@@ -3484,18 +3484,6 @@ static void Host_NameHistory_f (void)
 filelist_item_t* bookmarkslist;
 static qboolean bookmarkslist_initialized;
 
-static void BookmarksList_Clear(void)
-{
-	FileList_Clear(&bookmarkslist);
-	bookmarkslist_initialized = false;
-}
-
-void BookmarksList_Rebuild(void)
-{
-	BookmarksList_Clear();
-	BookmarksList_Init();
-}
-
 /*
 ================
 BookmarkData_Parse

@@ -781,11 +781,6 @@ int CL_CountDemoFramesInBufferLimit(const byte *data, int length, int limit)
 	return count;
 }
 
-int CL_CountDemoFramesInBuffer(const byte *data, int length)
-{
-	return CL_CountDemoFramesInBufferLimit(data, length, 0);
-}
-
 static int CL_CountDemoFramesInStreamLimit(FILE *f, int limit)
 {
 	int c;
@@ -872,11 +867,6 @@ int CL_CountDemoFramesInFileLimit(const char *path, int limit)
 		fclose(f);
 		return frames;
 	}
-}
-
-int CL_CountDemoFramesInFile(const char *path)
-{
-	return CL_CountDemoFramesInFileLimit(path, 0);
 }
 
 int CL_DemoMinFramesThreshold(qboolean *auto_delete)

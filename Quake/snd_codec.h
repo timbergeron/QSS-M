@@ -71,9 +71,6 @@ snd_stream_t *S_CodecOpenStreamType (const char *filename, unsigned int type,
 							  qboolean loop);
 	/* Decides according to the required type. */
 
-snd_stream_t *S_CodecOpenStreamAny (const char *filename, qboolean loop);
-	/* Decides according to file extension. if the
-	 * name has no extension, try all available. */
 
 snd_stream_t *S_CodecOpenStreamExt (const char *filename, qboolean loop);
 	/* Decides according to file extension. the name

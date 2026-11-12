@@ -5523,7 +5523,6 @@ void GL_DrawAliasShadow (entity_t *e)
 qboolean R_QueueBrushShadow (const brushshadow_rec_t *rec)
 {
 	shadowq_entry_t *q;
-	entity_t *e = rec->e;
 
 	if (!r_shadowq_collecting)
 		return false;

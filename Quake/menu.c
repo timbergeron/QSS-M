@@ -1067,11 +1067,6 @@ void M_DrawSubpic (int x, int y, qpic_t* pic, int left, int top, int width, int 
 	Draw_SubPic (x, y, width, height, pic, s1, t1, s2, t2);
 }
 
-void M_DrawTransPicTranslate (int x, int y, qpic_t *pic, plcolour_t top, plcolour_t bottom) //johnfitz -- more parameters
-{
-	Draw_TransPicTranslate (x, y, pic, top, bottom); //johnfitz -- simplified becuase centering is handled elsewhere
-}
-
 void M_DrawTextBox (int x, int y, int width, int lines)
 {
 	qpic_t	*p;
@@ -1395,11 +1390,6 @@ static void M_PrintScrollOnceMasked(int x, int y, int maxwidth,
 	}
 	Draw_EndCharacterBatch (&batch);
 	glPopMatrix();
-}
-
-void M_PrintScrollOnce(int x, int y, int maxwidth, const char *str, double time, qboolean color)
-{
-	M_PrintScrollOnceMasked(x, y, maxwidth, str, time, color ? 128 : 0);
 }
 
 static void M_PrintScrollOnce2(int x, int y, int maxwidth,
@@ -2020,31 +2010,6 @@ void M_UpdateCursor(int mousey, int starty, int itemheight, int numitems, int* c
 	if (pos < 0)
 		pos = 0;
 	*cursor = pos;
-}
-
-void M_UpdateCursorXY(int mousex, int mousey, int startx, int starty, int itemwidth, int itemheight, int numitems, int* cursorX, int* cursorY)
-{
-	int posx = (mousex - startx) / itemwidth;
-	int posy = (mousey - starty) / itemheight;
-
-	// Calculate the total number of rows based on the number of items and columns
-	//int numrows = (numitems + numcolumns - 1) / numcolumns; // Ceiling division to ensure full coverage of items
-
-	// Clamping posx to the range [0, numcolumns - 1]
-	if (posx > numitems - 1)
-		posx = numitems - 1;
-	if (posx < 0)
-		posx = 0;
-
-	// Clamping posy to the range [0, numrows - 1]
-	if (posy > numitems - 1)
-		posy = numitems - 1;
-	if (posy < 0)
-		posy = 0;
-
-	// Updating the cursor position
-	*cursorX = posx;
-	*cursorY = posy;
 }
 
 
@@ -5693,8 +5658,6 @@ int		load_cursor;		// 0 < load_cursor < MAX_SAVEGAMES
 #define	LOADGAME_INFO_Y				164
 #define	LOADGAME_SEARCH_BOX_Y		176
 #define	LOADGAME_SEARCH_TEXT_Y		184
-char	m_filenames[MAX_SAVEGAMES][SAVEGAME_COMMENT_LENGTH+1];
-int		loadable[MAX_SAVEGAMES];
 
 typedef struct {
 	char name[SAVEGAME_COMMENT_LENGTH + 1];
@@ -25758,9 +25721,6 @@ void M_MenuSearch_CloseForVideoRestart(void)
 
 /* end MENU SEARCH */
 
-#define TOOLS_BACKGROUND_TOP 16
-#define TOOLS_BACKGROUND_HEIGHT 184
-
 #define TOOLS_PICKER_WIDTH 192
 #define TOOLS_PICKER_HEIGHT 96
 #define TOOLS_SLIDER_HEIGHT 12
@@ -29495,7 +29455,6 @@ Version Menu
 */
 
 #define MAX_VIS_VERSION	17
-#define VERSION_GITHUB_URL VERSION_GITHUB_RELEASE_URL
 
 typedef struct
 {
@@ -35268,13 +35227,6 @@ int ProcessPingQueue(void* data)
 	serversmenu.pingThreadRunning = false;
 	SDL_UnlockMutex(pingMutex);
 
-	return 0;
-}
-
-int PingSingleServerThread(void* data)
-{
-	int index = (int)(intptr_t)data;
-	PingSingleServer(index);
 	return 0;
 }
 
@@ -42333,12 +42285,6 @@ static qboolean M_FindDemoMapNameInData(const byte *data, int start, int length,
 	}
 
 	return false;
-}
-
-static inline int SkipCStringOffset(const byte* base, int off, int limit)
-{
-	const void* p = memchr(base + off, 0, (size_t)(limit - off));
-	return p ? (int)((const byte*)p - base) + 1 : limit;
 }
 
 static int CompareFrags(const void* a, const void* b)

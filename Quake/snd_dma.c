@@ -1864,13 +1864,3 @@ void S_ClearPrecache (void)
 	memset (known_sfx, 0, MAX_SFX * sizeof(*known_sfx));
 	num_sfx = 0;
 }
-
-
-void S_BeginPrecaching (void)
-{
-}
-
-
-void S_EndPrecaching (void)
-{
-}

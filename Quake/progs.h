@@ -116,7 +116,6 @@ void ED_Print (edict_t *ed);
 void ED_Write (FILE *f, edict_t *ed);
 const char *ED_ParseEdict (const char *data, edict_t *ent);
 
-void ED_WriteGlobals (FILE *f);
 const char *ED_ParseGlobals (const char *data, qboolean quiet_unknowns);
 
 void ED_LoadFromFile (const char *data);
@@ -540,13 +539,6 @@ extern int const pr_menunumbuiltins;
 /* Pixel-aligned: rect args are screen pixels (relative to window).
    Keeps preview magneted to 2D menu items regardless of scr_menuscale. */
 void DrawSpinningModelToMenuPixels(const char* modelname,
-	float pixel_x, float pixel_y,
-	float pixel_w, float pixel_h,
-	float afov,
-	float zbias,
-	float firstframe, float framecount,
-	float shootframe, float shootframes);
-void DrawSpinningModelToMenuPixelsFit(const char* modelname,
 	float pixel_x, float pixel_y,
 	float pixel_w, float pixel_h,
 	float afov,

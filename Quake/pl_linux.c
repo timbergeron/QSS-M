@@ -186,12 +186,6 @@ int PL_MessageDialog(const char *title, const char *message,
 	return selected;
 }
 
-qboolean PL_ConfirmDialog(const char *title, const char *text)
-{
-	static const pl_dialog_button_t buttons[] = {{1, "Yes"}, {0, "No"}};
-	return PL_MessageDialog(title, text, buttons, 2, 1, 0) == 1;
-}
-
 typedef enum
 {
 	PL_PICKER_UNAVAILABLE = -1,

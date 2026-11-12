@@ -72,7 +72,6 @@ const char *NET_ResolveCacheName(const char *host);
 double NET_QSocketGetTime (const struct qsocket_s *sock);
 const char *NET_QSocketGetResolvedAddressString (const struct qsocket_s *sock);
 const char *NET_QSocketGetTrueAddressString (const struct qsocket_s *sock);
-const char *NET_QSocketGetMaskedAddressString (const struct qsocket_s *sock);
 const char *NET_QSocketGetMaskedAddressStringForDisplay (const struct qsocket_s *sock);
 qboolean NET_QSocketGetProQuakeAngleHack (const struct qsocket_s *sock);
 int NET_QSocketGetSequenceIn (const struct qsocket_s *sock);
@@ -156,9 +155,6 @@ const char* NET_SlistPrintServerInfo(size_t idx, ServerInfoType type); // woods 
 extern	size_t		hostCacheCount;
 
 void	NET_Slist_f (void);
-void	NET_SlistSort (void);
-const char *NET_SlistPrintServer (size_t n);
-const char *NET_SlistPrintServerName (size_t n);
 
 // woods #localscan -- probe loopback across a port range for local servers.
 // Loopback probes are free, so the range is a constant rather than a cvar; to

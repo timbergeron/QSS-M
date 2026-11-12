@@ -156,10 +156,6 @@ void Cbuf_AddText (const char *text)
 {
 	Cbuf_AddTextOrigin (text, Q_strlen (text), Cmd_IsUntrusted ());
 }
-void Cbuf_AddTextLen (const char *text, int l)
-{
-	Cbuf_AddTextOrigin (text, l, Cmd_IsUntrusted ());
-}
 void Cbuf_AddTextUntrusted (const char *text)
 {
 	Cbuf_AddTextOrigin (text, Q_strlen (text), true);
@@ -1829,29 +1825,6 @@ qboolean	Cmd_Exists2(const char* cmd_name)
 	return false;
 }
 
-/*
-============
-Cmd_CompleteCommand
-============
-*/
-const char *Cmd_CompleteCommand (const char *partial)
-{
-	cmd_function_t	*cmd;
-	int		len;
-
-	len = Q_strlen(partial);
-
-	if (!len)
-		return NULL;
-
-// check functions
-	for (cmd=cmd_functions ; cmd ; cmd=cmd->next)
-		if (!Q_strncmp (partial,cmd->name, len))
-			return cmd->name;
-
-	return NULL;
-}
-
 qboolean Cmd_IsQuitMistype (const char* input) // woods -- #smartquit
 {
 	if (!input)
@@ -2539,28 +2512,3 @@ void Cmd_ForwardToServer (void)
 	else
 		SZ_Print (&cls.message, "\n");
 }
-
-
-/*
-================
-Cmd_CheckParm
-
-Returns the position (1 to argc-1) in the command's argument list
-where the given parameter apears, or 0 if not present
-================
-*/
-
-int Cmd_CheckParm (const char *parm)
-{
-	int i;
-
-	if (!parm)
-		Sys_Error ("Cmd_CheckParm: null input\n");
-
-	for (i = 1; i < Cmd_Argc (); i++)
-		if ( !q_strcasecmp (parm, Cmd_Argv (i)) )
-			return i;
-
-	return 0;
-}
-

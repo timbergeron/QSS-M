@@ -139,8 +139,6 @@ void S_ExtraUpdate (void);
 int S_GetMasterVolumeScale (void);
 void S_SetMasterVolumeScale (float scale);
 void S_ClearPrecache (void);
-void S_BeginPrecaching (void);
-void S_EndPrecaching (void);
 qboolean S_SoundPreview_Play (const char *name, float gain, qboolean loop);
 void S_SoundPreview_Stop (void);
 void S_SoundPreview_SetPaused (qboolean paused);

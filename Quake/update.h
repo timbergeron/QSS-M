@@ -40,7 +40,6 @@ typedef qboolean (*m_sha256_cancel_fn_t)(void);
 
 int M_Version_Compare(int l_major, int l_minor, int l_patch,
 	int r_major, int r_minor, int r_patch);
-int M_Version_ParseTag(const char *tag, int *major, int *minor, int *patch);
 qboolean M_Version_GitHubHttpGet(const char *url, versionhttpmem_t *mem,
 	char *error, size_t errorsz, size_t max_bytes);
 qboolean M_Version_ParseTagFull(const char *tag, int *major, int *minor,

@@ -44,7 +44,6 @@ The game starts with a Cbuf_AddText ("exec quake.rc\n"); Cbuf_Execute ();
 void Cbuf_Init (void);
 // allocates an initial text buffer that will grow as needed
 
-void Cbuf_AddTextLen (const char *text, int l);
 void Cbuf_AddText (const char *text);
 // as new commands are generated from the console or keybindings,
 // the text is added to the end of the command buffer.
@@ -134,10 +133,6 @@ qboolean Cmd_IsQuitMistype (const char *input); // woods -- #smartquit -- called
 
 cmd_function_t* Cmd_FindCommand (const char* cmd_name); // woods #iwtabcomplete
 
-const char	*Cmd_CompleteCommand (const char *partial);
-// attempts to match a partial command for automatic command line completion
-// returns NULL if nothing fits
-
 int		Cmd_Argc (void);
 const char	*Cmd_Argv (int arg);
 const char	*Cmd_Args (void);
@@ -145,10 +140,6 @@ const char	*Cmd_RawArgs (void);
 // The functions that execute commands get their parameters with these
 // functions. Cmd_Argv () will return an empty string, not a NULL
 // if arg > argc, so string operations are allways safe.
-
-int Cmd_CheckParm (const char *parm);
-// Returns the position (1 to argc-1) in the command's argument list
-// where the given parameter apears, or 0 if not present
 
 void Cmd_TokenizeString (const char *text);
 // Takes a null terminated string.  Does not need to be /n terminated.

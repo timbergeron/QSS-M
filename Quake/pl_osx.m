@@ -178,12 +178,6 @@ int PL_MessageDialog(const char *title, const char *message,
 	return buttons[i].id;
 }
 
-qboolean PL_ConfirmDialog(const char *title, const char *text)
-{
-	static const pl_dialog_button_t buttons[] = {{1, "Yes"}, {0, "No"}};
-	return PL_MessageDialog(title, text, buttons, 2, 1, 0) == 1;
-}
-
 qboolean PL_SelectDirectory(const char *title, const char *initial_path,
 	char *result, size_t result_size)
 {

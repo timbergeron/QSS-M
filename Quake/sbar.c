@@ -3135,38 +3135,6 @@ void Sbar_Draw (void)
 
 //=============================================================================
 
-/*
-==================
-Sbar_IntermissionNumber
-
-==================
-*/
-void Sbar_IntermissionNumber (int x, int y, int num, int digits, int color)
-{
-	char	str[12];
-	char	*ptr;
-	int	l, frame;
-
-	l = Sbar_itoa (num, str);
-	ptr = str;
-	if (l > digits)
-		ptr += (l-digits);
-	if (l < digits)
-		x += (digits-l)*24;
-
-	while (*ptr)
-	{
-		if (*ptr == '-')
-			frame = STAT_MINUS;
-		else
-			frame = *ptr -'0';
-
-		Draw_Pic (x,y,sb_nums[color][frame]); //johnfitz -- stretched menus
-		x += 24;
-		ptr++;
-	}
-}
-
 qboolean flash () // woods #smartstatus
 {
 	Uint64 ticks = SDL_GetTicks();

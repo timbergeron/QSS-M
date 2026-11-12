@@ -54,8 +54,6 @@ qboolean Con_IsRedirected(void);	//returns true if its redirected. this generall
 void Con_Redirect(void(*flush)(const char *text));
 #define CON_REDIRECT_BUFFER_SIZE 8192
 
-void Con_NotifyBox (const char *text);	// during startup for sound / cd warnings
-
 typedef enum { // woods #iwtabcomplete
 	TABCOMPLETE_AUTOHINT,
 	TABCOMPLETE_USER,
@@ -90,7 +88,6 @@ void QWMapList_Reload (void);
 qw_maplist_state_t QWMapList_State (void);
 qboolean QWMapList_IsRefreshing (void);
 const char *QWMapList_StateName (void);
-const char *QWMapList_Path (void);
 const char *QWMapList_NameAt (int index);
 int QWMapList_Count (void);
 unsigned int QWMapList_Generation (void);
@@ -98,7 +95,6 @@ unsigned int QWMapList_Generation (void);
 void QWMapTitles_LoadOnce (void);
 void QWMapTitles_Invalidate (void);
 const char *QWMapTitles_TitleForName (const char *name);
-int QWMapList_MinChars (void);
 int QWMapList_CompletionCap (void);
 
 // woods #conselection

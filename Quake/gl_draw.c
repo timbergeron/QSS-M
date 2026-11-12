@@ -92,30 +92,6 @@ byte pic_nul_data[8][8] =
 	{  0,  0,  0,  0,252,252,252,252},
 	{  0,  0,  0,  0,252,252,252,252},
 };
-
-byte pic_stipple_data[8][8] =
-{
-	{255,  0,  0,  0,255,  0,  0,  0},
-	{  0,  0,255,  0,  0,  0,255,  0},
-	{255,  0,  0,  0,255,  0,  0,  0},
-	{  0,  0,255,  0,  0,  0,255,  0},
-	{255,  0,  0,  0,255,  0,  0,  0},
-	{  0,  0,255,  0,  0,  0,255,  0},
-	{255,  0,  0,  0,255,  0,  0,  0},
-	{  0,  0,255,  0,  0,  0,255,  0},
-};
-
-byte pic_crosshair_data[8][8] =
-{
-	{255,255,255,255,255,255,255,255},
-	{255,255,255,  8,  9,255,255,255},
-	{255,255,255,  6,  8,  2,255,255},
-	{255,  6,  8,  8,  6,  8,  8,255},
-	{255,255,  2,  8,  8,  2,  2,  2},
-	{255,255,255,  7,  8,  2,255,255},
-	{255,255,255,255,  2,  2,255,255},
-	{255,255,255,255,255,255,255,255},
-};
 //johnfitz
 
 /* qpic_t::data may only be four-byte aligned. Copy this metadata into a
@@ -2298,170 +2274,6 @@ void Draw_StringGradientSweep(int x, int y, const char* str, float speed, float 
 	Draw_RestoreStringState ();
 }
 
-/*
-================
-Draw_CharacterQuadSlice -- woods
-One horizontal eighth of a conchars glyph, so a character can be shaded with a
-vertical gradient.  slice is 0 (top) .. 7 (bottom).
-================
-*/
-static void Draw_CharacterQuadSlice (int x, int y, char num, int slice)
-{
-	int				row, col;
-	float			frow, fcol, xsize, ysize, ystep;
-
-	if (char_hexen2)
-	{
-		row = (byte)num>>5;
-		col = (byte)num&31;
-		if (row >= 4)	//urgh... haxx...
-			row += 8-4;
-
-		xsize = 1.0/32;
-		ysize = 1.0/16;
-	}
-	else
-	{
-		row = num>>4;
-		col = num&15;
-
-		xsize = ysize = 0.0625;
-	}
-	fcol = col*xsize;
-	ystep = ysize * 0.125f;
-	frow = row*ysize + slice*ystep;
-
-	glTexCoord2f (fcol, frow);
-	glVertex2f (x, y + slice);
-	glTexCoord2f (fcol + xsize, frow);
-	glVertex2f (x+8, y + slice);
-	glTexCoord2f (fcol + xsize, frow + ystep);
-	glVertex2f (x+8, y + slice + 1);
-	glTexCoord2f (fcol, frow + ystep);
-	glVertex2f (x, y + slice + 1);
-}
-
-/*
-================
-Draw_StringSaturnShine -- woods
-Sega Saturn style text shine, ported from qrustyquake (cyanbun96, 348af76).
-There a lit scanline ping-pongs through the eight rows of every glyph, nudging
-each pixel up and down its own 16 colour palette ramp so the text lights up
-without changing hue.  We have no palette to walk in GL, so each character is
-sliced into its eight source rows: rows away from the lit line are darkened with
-a MODULATE pass, rows near it get a second additive pass that scales the glyph's
-own colour -- which keeps the hue for both the white and the red charset.
-
-speed  -- rows per second; the sweep is a 16 row ping-pong, so 40 matches the
-          original's pace
-masked -- true to use the red/brown half of the charset
-================
-*/
-void Draw_StringSaturnShine (int x, int y, const char* str, float speed, float alpha, qboolean masked)
-{
-	int		i, s, len;
-	float	litline, shine[8];
-	qboolean batching;
-
-	if (!str || !*str)
-		return;
-
-	len = (int)strlen(str);
-	if (!len)
-		return;
-
-	const int	char_w = 8;
-	const float	draw_alpha = CLAMP(0.0f, alpha, 1.0f) * gl_menu_alpha;
-
-	// Tunables (in-function "knobs")
-	const float	band = 3.5f;	// how many rows the lit line reaches
-	const float	dim_floor = 0.70f;	// brightness of the rows furthest from the line
-	const float	add_gain = 0.35f;	// additive lift at the centre of the line
-
-	// 16 row ping-pong, same cycle the software version steps through
-	if (speed > 0.0f)
-	{
-		float phase = fmodf ((float)realtime * speed, 16.0f);
-		litline = (phase <= 8.0f) ? phase : 16.0f - phase;
-	}
-	else
-		litline = 4.0f;
-
-	// the lit line is the same for every glyph, so shade the rows once
-	for (s = 0; s < 8; s++)
-	{
-		float u = 1.0f - fabsf ((float)s + 0.5f - litline) / band;
-		shine[s] = (u > 0.0f) ? u * u * (3.0f - 2.0f * u) : 0.0f;
-	}
-
-	glEnable(GL_BLEND);
-	glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-	glDisable(GL_ALPHA_TEST);
-	glTexEnvf(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_MODULATE);
-
-	GL_Bind(char_texture);
-	glBegin(GL_QUADS);
-
-	for (i = 0; i < len; ++i)
-	{
-		unsigned char ch = (unsigned char)str[i];
-		int glyph;
-
-		if (ch == 32)
-			continue;
-
-		glyph = masked ? ((int)ch + 128) & 255 : (int)ch;
-
-		for (s = 0; s < 8; s++)
-		{
-			float lum = dim_floor + (1.0f - dim_floor) * shine[s];
-			glColor4f(lum, lum, lum, draw_alpha);
-			Draw_CharacterQuadSlice(x + i * char_w, y, (char)glyph, s);
-		}
-	}
-
-	glEnd();
-
-	// additive pass over the lit rows only -- white colour under MODULATE adds the
-	// glyph's own texel back on top, brightening it without washing out the hue
-	batching = false;
-	for (i = 0; i < len; ++i)
-	{
-		unsigned char ch = (unsigned char)str[i];
-		int glyph;
-
-		if (ch == 32)
-			continue;
-
-		glyph = masked ? ((int)ch + 128) & 255 : (int)ch;
-
-		for (s = 0; s < 8; s++)
-		{
-			float add_amt = shine[s] * add_gain;
-			if (add_amt <= 0.0f)
-				continue;
-
-			if (!batching)
-			{
-				glBlendFunc(GL_SRC_ALPHA, GL_ONE); // additive
-				glBegin(GL_QUADS);
-				batching = true;
-			}
-
-			glColor4f(1.0f, 1.0f, 1.0f, CLAMP(0.0f, add_amt * draw_alpha, 1.0f));
-			Draw_CharacterQuadSlice(x + i * char_w, y, (char)glyph, s);
-		}
-	}
-
-	if (batching)
-	{
-		glEnd();
-		glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-	}
-
-	Draw_RestoreStringState ();
-}
-
 
 /*
 =============
@@ -2786,30 +2598,6 @@ void Draw_PicPolygon(qpic_t *pic, unsigned int numverts, polygonvert_t *verts)
 		verts++;
 	}
 	glEnd ();
-}
-
-/*
-=============
-Draw_TransPicTranslate -- johnfitz -- rewritten to use texmgr to do translation
-
-Only used for the player color selection menu
-=============
-*/
-void Draw_TransPicTranslate (int x, int y, qpic_t *pic, plcolour_t top, plcolour_t bottom)
-{
-	static plcolour_t oldtop = {{-2}};
-	static plcolour_t oldbottom = {{-2}};
-
-	if (!CL_PLColours_Equals(top, oldtop) || !CL_PLColours_Equals(bottom, oldbottom))
-	{
-		glpic_t p;
-		memcpy (&p, pic->data, sizeof(p));
-		gltexture_t *glt = p.gltexture;
-		oldtop = top;
-		oldbottom = bottom;
-		TexMgr_ReloadImage (glt, top, bottom);
-	}
-	Draw_Pic (x, y, pic);
 }
 
 extern cvar_t scr_concolor; // woods #concolor
@@ -3269,20 +3057,6 @@ void Draw_FillPlayer (int x, int y, int w, int h, plcolour_t c, float alpha)
 		glDisable (GL_BLEND); //johnfitz -- for alpha
 		glEnable (GL_ALPHA_TEST); //johnfitz -- for alpha
 	}
-}
-
-/*
-=============
-Draw_Fill_Plus
-
-Fills a box with a single color. If roundcorners is true, draws rounded corners.
-radius: corner radius in pixels. Use -1 for auto (25% of smallest dimension).
-roundmask: bitmask of which corners to round (DRAW_CORNER_TL, etc). 0 = all corners.
-=============
-*/
-void Draw_Fill_Plus (int x, int y, int w, int h, plcolour_t c, float alpha, qboolean roundcorners, unsigned char roundmask)
-{
-	Draw_Fill_Ex (x, y, w, h, c, alpha, roundcorners, roundmask, -1.0f, 1.0f);
 }
 
 void Draw_Fill_Plus_Radius (int x, int y, int w, int h, plcolour_t c, float alpha, qboolean roundcorners, unsigned char roundmask, float radius)

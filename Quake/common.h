@@ -125,7 +125,6 @@ typedef struct sizebuf_s
 } sizebuf_t;
 
 void SZ_Alloc (sizebuf_t *buf, int startsize);
-void SZ_Free (sizebuf_t *buf);
 void SZ_Clear (sizebuf_t *buf);
 void *SZ_GetSpace (sizebuf_t *buf, int length);
 void SZ_Write (sizebuf_t *buf, const void *data, int length);
@@ -142,7 +141,6 @@ typedef struct link_s
 void ClearLink (link_t *l);
 void RemoveLink (link_t *l);
 void InsertLinkBefore (link_t *l, link_t *before);
-void InsertLinkAfter (link_t *l, link_t *after);
 
 // (type *)STRUCT_FROM_LINK(link_t *link, type, member)
 // ent = STRUCT_FROM_LINK(link,entity_t,order)
@@ -232,7 +230,6 @@ void COM_Effectinfo_Enumerate(int (*cb)(const char *pname));	//spike -- for dp c
 
 void Q_memset (void *dest, int fill, size_t count);
 void Q_memcpy (void *dest, const void *src, size_t count);
-int Q_memcmp (const void *m1, const void *m2, size_t count);
 void Q_strcpy (char *dest, const char *src);
 void Q_strncpy (char *dest, const char *src, int count);
 int Q_strlen (const char *str);
@@ -264,18 +261,15 @@ int q_sortdemos (const char* s1, const char* s2); // woods #demolistsort
 /* locale-insensitive case-insensitive alternative to strstr */
 extern char *q_strcasestr(const char *haystack, const char *needle);
 
-/* locale-insensitive strlwr/upr replacement functions: */
+/* locale-insensitive strlwr replacement function: */
 extern char *q_strlwr (char *str);
-extern char *q_strupr (char *str);
 
 /* snprintf, vsnprintf : always use our versions. */
 extern int q_snprintf (char *str, size_t size, const char *format, ...) FUNC_PRINTF(3,4);
 extern int q_vsnprintf(char *str, size_t size, const char *format, va_list args) FUNC_PRINTF(3,0);
 
-extern char* Q_strrev (char* s); // woods
 extern char* strremove(char* str, char* sub); // woods
 extern char* Q_strcasestr(const char* haystack, const char* needle); // woods
-char* Q_strnset (char* str, int c, size_t n); // woods
 void ServerHistory_Record (const char *server);
 void* q_memmem(const void* haystack, size_t haystack_len,
 	const void* needle, size_t needle_len); // woods #botdetect
@@ -329,7 +323,6 @@ qboolean COM_DownloadPackageNameOkay(const char *filename);
 /* COM_DefaultExtension can be dangerous */
 void COM_DefaultExtension (char *path, const char *extension, size_t len); // woods #locext
 const char *COM_FileGetExtension (const char *in); /* doesn't return NULL */
-void COM_ExtractExtension (const char *in, char *out, size_t outsize);
 void COM_CreatePath (char *path);
 qboolean ZIP_Extract(const char *zipfile, const char *outdir);
 qboolean ZIP_ExtractQuiet(const char *zipfile, const char *outdir);
@@ -350,7 +343,6 @@ void LOC_Reload (void);
 void LOC_Shutdown (void);
 const char* LOC_GetRawString (const char *key);
 const char* LOC_GetString (const char *key);
-qboolean LOC_HasPlaceholders (const char *str);
 size_t LOC_Format (const char *format, const char* (*getarg_fn)(int idx, void* userdata), void* userdata, char* out, size_t len);
 qboolean isSpecialMap (const char* name); // woods for bmodels
 qboolean FS_IsCaseSensitive(void); // woods #filesystemsens

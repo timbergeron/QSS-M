@@ -698,7 +698,6 @@ qboolean CL_ModDownloadRepo(char *out, size_t outsize);
 qboolean CL_ModDownloadsAvailable(void);
 qboolean CL_DownloadRepoIsQ1Tools(void);
 qboolean CL_GithubReleasesUrls(const char *repopath, char *api_url, size_t api_sz, char *asset_prefix, size_t prefix_sz);
-qboolean CL_GithubContentsUrl(const char *repopath, const char *subdir, char *out, size_t outsize);
 qboolean CL_GithubRawPrefix(const char *repopath, char *out, size_t outsize);
 qboolean CL_GithubRawFileUrl(const char *repopath, const char *subpath, char *out, size_t outsize);
 qboolean CL_QWMapListDownloadsAvailable(void);
@@ -770,9 +769,7 @@ int CL_GetDemoTotalFrameCount(void); // woods #demoframes
 byte *CL_LoadDemoBuffer(const char *name, int *length_out);
 byte *CL_LoadDemoBufferFromFile(const char *path, int *length_out);
 int CL_CountDemoFramesInBufferLimit(const byte *data, int length, int limit);
-int CL_CountDemoFramesInBuffer(const byte *data, int length);
 int CL_CountDemoFramesInFileLimit(const char *path, int limit);
-int CL_CountDemoFramesInFile(const char *path);
 int CL_DemoMinFramesThreshold(qboolean *auto_delete);
 
 //
@@ -814,7 +811,6 @@ extern	cvar_t	cl_demo_eyecam; // woods #demoeyecam
 
 void Chase_Init (void);
 void TraceLine (vec3_t start, vec3_t end, float pushoff, vec3_t impact);
-void Chase_UpdateForClient (void);	//johnfitz
 void Chase_UpdateForDrawing (void);	//johnfitz
 qboolean Chase_GetPlayerModelAngleOffset (entity_t *e, vec3_t out);
 #endif	/* _CLIENT_H_ */

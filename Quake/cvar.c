@@ -661,38 +661,6 @@ cvar_t *Cvar_FindVarAfter (const char *prev_name, unsigned int with_flags)
 	return var;
 }
 
-/*
-============
-Cvar_LockVar
-============
-*/
-void Cvar_LockVar (const char *var_name)
-{
-	cvar_t	*var = Cvar_FindVar (var_name);
-	if (var)
-		var->flags |= CVAR_LOCKED;
-}
-
-void Cvar_UnlockVar (const char *var_name)
-{
-	cvar_t	*var = Cvar_FindVar (var_name);
-	if (var)
-		var->flags &= ~CVAR_LOCKED;
-}
-
-void Cvar_UnlockAll (void)
-{
-	cvar_t	*var;
-
-	// Map-scoped overrides carry saved values, so restoring is part of fully unlocking them.
-	Cvar_MapLock_RestoreAll ();
-
-	for (var = cvar_vars ; var ; var = var->next)
-	{
-		var->flags &= ~CVAR_LOCKED;
-	}
-}
-
 static mapcvar_t *Cvar_MapLock_FindInList (mapcvar_t *list, const cvar_t *var)
 {
 	mapcvar_t	*curr;
@@ -1233,37 +1201,6 @@ const char *Cvar_VariableString (const char *var_name)
 
 /*
 ============
-Cvar_CompleteVariable
-============
-*/
-const char *Cvar_CompleteVariable (const char *partial)
-{
-	cvar_t	*cvar;
-	struct cvaralias_s	*cvaralias;
-	int	len;
-
-	len = Q_strlen(partial);
-	if (!len)
-		return NULL;
-
-// check functions
-	for (cvar = cvar_vars ; cvar ; cvar = cvar->next)
-	{
-		if (!Q_strncmp(partial, cvar->name, len))
-			return cvar->name;
-	}
-
-	for (cvaralias = cvar_aliases ; cvaralias ; cvaralias = cvaralias->next)
-	{
-		if (!Q_strncmp(partial, cvaralias->name, len))
-			return cvaralias->name;
-	}
-
-	return NULL;
-}
-
-/*
-============
 Cvar_Reset -- johnfitz
 ============
 */
@@ -1475,22 +1412,6 @@ void Cvar_SetROM (const char *var_name, const char *value)
 	{
 		var->flags &= ~CVAR_ROM;
 		Cvar_SetQuick (var, value);
-		var->flags |= CVAR_ROM;
-	}
-}
-
-/*
-============
-Cvar_SetValueROM
-============
-*/
-void Cvar_SetValueROM (const char *var_name, const float value)
-{
-	cvar_t *var = Cvar_FindVar (var_name);
-	if (var)
-	{
-		var->flags &= ~CVAR_ROM;
-		Cvar_SetValueQuick (var, value);
 		var->flags |= CVAR_ROM;
 	}
 }

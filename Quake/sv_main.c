@@ -3268,24 +3268,6 @@ qboolean SV_EdictInPVS (edict_t* test, byte* pvs)
 	return false;
 }
 
-/*
-=============
-SV_VisibleToClient -- johnfitz -- woods #iwshowbboxes
-
-PVS test encapsulated in a nice function
-=============
-*/
-qboolean SV_VisibleToClient (edict_t *client, edict_t *test, qmodel_t *worldmodel)
-{
-	byte	*pvs;
-	vec3_t	org;
-
-	VectorAdd (client->v.origin, client->v.view_ofs, org);
-	pvs = SV_FatPVS (org, worldmodel);
-
-	return SV_EdictInPVS (test, pvs);
-}
-
 //=============================================================================
 
 /*

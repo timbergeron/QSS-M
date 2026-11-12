@@ -282,33 +282,6 @@ char *Z_Strdup (const char *s)
 }
 
 
-/*
-========================
-Z_Print
-========================
-*/
-void Z_Print (memzone_t *zone)
-{
-	memblock_t	*block;
-
-	Con_Printf ("zone size: %i  location: %p\n",mainzone->size,mainzone);
-
-	for (block = zone->blocklist.next ; ; block = block->next)
-	{
-		Con_Printf ("block:%p    size:%7i    tag:%3i\n",
-			block, block->size, block->tag);
-
-		if (block->next == &zone->blocklist)
-			break;			// all blocks have been hit
-		if ( (byte *)block + block->size != (byte *)block->next)
-			Con_Printf ("ERROR: block size does not touch the next block\n");
-		if ( block->next->prev != block)
-			Con_Printf ("ERROR: next block doesn't have proper back link\n");
-		if (!block->tag && !block->next->tag)
-			Con_Printf ("ERROR: two consecutive free blocks\n");
-	}
-}
-
 
 //============================================================================
 
@@ -959,22 +932,6 @@ void Cache_Shutdown (void)
 void Cache_Flush_f (cvar_t* var) // woods #loadskins
 {
 	Cache_Flush();
-}
-
-/*
-============
-Cache_Print
-
-============
-*/
-void Cache_Print (void)
-{
-	cache_system_t	*cd;
-
-	for (cd = cache_head.next ; cd != &cache_head ; cd = cd->next)
-	{
-		Con_Printf ("%8i : %s\n", cd->size, cd->name);
-	}
 }
 
 /*

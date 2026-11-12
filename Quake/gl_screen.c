@@ -244,9 +244,7 @@ int			scr_erase_center;
 #define CPRINT_TYPEWRITER	(1u<<0)
 #define CPRINT_PERSIST		(1u<<1)
 #define CPRINT_TALIGN		(1u<<2)
-unsigned int scr_centerprint_flags;
 
-int paused = 0; // woods #showpaused
 qboolean	countdown; // #clearcrxcountdown
 qboolean	cameras; // woods #crxcamera
 qboolean	qeintermission; // woods #qeintermission
@@ -1920,8 +1918,6 @@ SCR_DrawMatchClock    woods (Adapted from Sbar_DrawFrags from r00k) draw match c
 ====================
 */
 
-#define MATCHCLOCK_REF_W 1920.0f
-#define MATCHCLOCK_REF_H 1080.0f
 #define MATCHCLOCK_MAX_ELAPSED_SECONDS (999.0 * 60.0 + 59.0)
 
 // Track current minute-digit count (1-3) for the numeric match clock (modes 1/2)
@@ -8959,27 +8955,6 @@ void FXAA_ApplySettings (void)
     if (!fxaa_frame_level && fxaa.framebuffer)
         FXAA_DeleteFramebuffer();
     fxaa.current = fxaa_presets[fxaa_frame_level];
-}
-
-/*
-===============
-FXAA_CvarClamp01
-===============
-*/
-void FXAA_CvarClamp01(cvar_t *v)
-{
-    if (v->value < 0.0f)  Cvar_SetValueQuick(v, 0.0f);
-    if (v->value > 1.0f)  Cvar_SetValueQuick(v, 1.0f);
-}
-
-/*
-===============
-FXAA_CvarChanged
-===============
-*/
-void FXAA_CvarChanged(cvar_t *v)
-{
-    /* Resources follow the settings snapshot at the start of the next frame. */
 }
 
 /*

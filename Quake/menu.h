@@ -206,7 +206,6 @@ typedef struct
 void M_OneScroll_Init(menuonescroll_t *scroll);
 void M_OneScroll_Update(menuonescroll_t *scroll, int selected_item);
 void M_OneScroll_Reset(menuonescroll_t *scroll);
-void M_PrintScrollOnce(int x, int y, int maxwidth, const char *str, double time, qboolean color);
 
 void M_Draw (void);
 void M_Menu_NetGraph_f (qboolean from_menu); // woods #netgraph -- netgraph.c

@@ -187,12 +187,6 @@ nohitmeshsupport:
 	return hull;
 }
 
-hull_t *SV_HullForEntity (edict_t *ent, vec3_t mins, vec3_t maxs, vec3_t offset)
-{
-	return SV_HullForEntityAtOrigin(ent, mins, maxs, ent->v.origin,
-		ent->v.mins, ent->v.maxs, offset);
-}
-
 /*
 ===============================================================================
 
@@ -764,11 +758,6 @@ int SV_PointContents (vec3_t p)
 	if (cont <= CONTENTS_CURRENT_0 && cont >= CONTENTS_CURRENT_DOWN)
 		cont = CONTENTS_WATER;
 	return cont;
-}
-
-int SV_TruePointContents (vec3_t p)
-{
-	return SV_HullPointContents (&qcvm->worldmodel->hulls[0], 0, p);
 }
 
 int SV_PointContentsAllBsps(vec3_t p, edict_t *forent)

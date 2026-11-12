@@ -1797,7 +1797,6 @@ static void CL_ParseUpdate (unsigned int bits)
 	//copy the baseline into the netstate for the rest of the code to use.
 	//do NOT copy the origin/angles values, so we don't forget them when hipnotic sends a random pointless fastupdate[playerent] at us with its angles. this way our deltas won't forget it.
 	//we don't worry too much about extension stuff going stale, because mods tend not to know about that stuff anyway.
-#define netstate_start offsetof(entity_state_t, scale)
 	memcpy((char*)&ent->netstate + offsetof(entity_state_t, modelindex), (const char*)&ent->baseline + offsetof(entity_state_t, modelindex), sizeof(ent->baseline) - offsetof(entity_state_t, modelindex));
 
 	if (bits & U_MODEL)

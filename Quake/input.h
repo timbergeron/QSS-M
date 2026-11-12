@@ -76,9 +76,6 @@ void IN_StartGyroCalibration (void);
 qboolean IN_IsCalibratingGyro (void);
 float IN_GetGyroCalibrationProgress (void);
 
-float IN_GetRawLookMagnitude (void);
-float IN_GetRawMoveMagnitude (void);
-float IN_GetRawTriggerMagnitude (void);
 void IN_GetRawLookAxis (float *x, float *y);
 void IN_GetRawMoveAxis (float *x, float *y);
 void IN_GetRawTriggerAxis (float *left, float *right);

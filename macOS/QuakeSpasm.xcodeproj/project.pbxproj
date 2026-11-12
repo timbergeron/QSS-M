@@ -394,7 +394,6 @@
 		631F459F26EA4AF60054208C /* snd_mpg123.c */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.c; name = snd_mpg123.c; path = ../Quake/snd_mpg123.c; sourceTree = SOURCE_ROOT; };
 		6348AF7D26EA437E00E036E2 /* default_cfg.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; name = default_cfg.h; path = ../Quake/default_cfg.h; sourceTree = SOURCE_ROOT; };
 		6348AF7E26EA438E00E036E2 /* arch_def.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; name = arch_def.h; path = ../Quake/arch_def.h; sourceTree = SOURCE_ROOT; };
-		6348AF7F26EA439C00E036E2 /* filenames.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; name = filenames.h; path = ../Quake/filenames.h; sourceTree = SOURCE_ROOT; };
 		6348AF8026EA45A600E036E2 /* lodepng.c */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.c; name = lodepng.c; path = ../Quake/lodepng.c; sourceTree = SOURCE_ROOT; };
 		6348AF8126EA45A600E036E2 /* lodepng.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; name = lodepng.h; path = ../Quake/lodepng.h; sourceTree = SOURCE_ROOT; };
 		6348AF8826EA466800E036E2 /* net_sys.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; name = net_sys.h; path = ../Quake/net_sys.h; sourceTree = SOURCE_ROOT; };
@@ -832,7 +831,6 @@
 				85C58F452B9D79680010F658 /* json.h */,
 				85C58F472B9D7AAB0010F658 /* jsmn.h */,
 				85AC9B2E2A70522300228EF3 /* pmove.h */,
-				6348AF7F26EA439C00E036E2 /* filenames.h */,
 				FD07DF952782B4FE005CB9D9 /* location.h */,
 				483A77EB0D2EE97700CB2E4C /* mathlib.h */,
 				483A77EC0D2EE97700CB2E4C /* menu.h */,

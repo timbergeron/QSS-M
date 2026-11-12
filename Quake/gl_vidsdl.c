@@ -44,10 +44,6 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 #define MAX_RATES_LIST	MAX_MODE_LIST // retain every refresh rate in modelist
 #define WARP_WIDTH		320
 #define WARP_HEIGHT		200
-#define MAXWIDTH		10000
-#define MAXHEIGHT		10000
-
-#define DEFAULT_SDL_FLAGS	SDL_OPENGL
 
 #define DEFAULT_REFRESHRATE	60
 

@@ -2472,11 +2472,6 @@ static void PF_getsurfacetexture(void)
 		G_INT(OFS_RETURN) = 0;
 }
 
-#define TriangleNormal(a,b,c,n) ( \
-	(n)[0] = ((a)[1] - (b)[1]) * ((c)[2] - (b)[2]) - ((a)[2] - (b)[2]) * ((c)[1] - (b)[1]), \
-	(n)[1] = ((a)[2] - (b)[2]) * ((c)[0] - (b)[0]) - ((a)[0] - (b)[0]) * ((c)[2] - (b)[2]), \
-	(n)[2] = ((a)[0] - (b)[0]) * ((c)[1] - (b)[1]) - ((a)[1] - (b)[1]) * ((c)[0] - (b)[0]) \
-	)
 static float getsurface_clippointpoly(qmodel_t *model, msurface_t *surf, vec3_t point, vec3_t bestcpoint, float bestdist)
 {
 	int e, edge;
@@ -6478,7 +6473,6 @@ static void PF_cl_drawroundedrect(void)
 }
 
 static qpic_t *polygon_pic;
-#define MAX_POLYVERTS
 static polygonvert_t polygon_verts[256];
 static unsigned int polygon_numverts;
 static void PF_R_PolygonBegin(void)
@@ -9265,22 +9259,6 @@ void DrawSpinningModelToMenuPixels(const char* modelname,
 		afov, zbias,
 		firstframe, framecount, shootframe, shootframes,
 		false,
-		true, 0.0f, 0.0f, 1.0f);
-}
-
-void DrawSpinningModelToMenuPixelsFit(const char* modelname,
-	float pixel_x, float pixel_y,
-	float pixel_w, float pixel_h,
-	float afov,
-	float zbias,
-	float firstframe, float framecount,
-	float shootframe, float shootframes)
-{
-	DrawSpinningModelToMenuPixelsInternal(modelname,
-		pixel_x, pixel_y, pixel_w, pixel_h,
-		afov, zbias,
-		firstframe, framecount, shootframe, shootframes,
-		true,
 		true, 0.0f, 0.0f, 1.0f);
 }
 

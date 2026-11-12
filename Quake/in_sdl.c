@@ -400,13 +400,13 @@ static io_connect_t IN_GetIOHandle(void)
 {
 	io_connect_t iohandle = MACH_PORT_NULL;
 	io_service_t iohidsystem = MACH_PORT_NULL;
-	kern_return_t status;
 
 	iohidsystem = IORegistryEntryFromPath(MACH_PORT_NULL, kIOServicePlane ":/IOResources/IOHIDSystem");
 	if (!iohidsystem)
 		return 0;
 
-	status = IOServiceOpen(iohidsystem, mach_task_self(), kIOHIDParamConnectType, &iohandle);
+	if (IOServiceOpen(iohidsystem, mach_task_self(), kIOHIDParamConnectType, &iohandle) != KERN_SUCCESS)
+		iohandle = MACH_PORT_NULL;
 	IOObjectRelease(iohidsystem);
 
 	return iohandle;
@@ -1871,30 +1871,6 @@ void IN_GetRawTriggerAxis (float *left, float *right)
 		*left = CLAMP(0.f, IN_GetControllerAxis(SDL_GAMEPAD_AXIS_LEFT_TRIGGER), 1.f);
 	if (right)
 		*right = CLAMP(0.f, IN_GetControllerAxis(SDL_GAMEPAD_AXIS_RIGHT_TRIGGER), 1.f);
-}
-
-float IN_GetRawLookMagnitude (void)
-{
-	float x, y;
-
-	IN_GetRawLookAxis(&x, &y);
-	return sqrtf(x * x + y * y);
-}
-
-float IN_GetRawMoveMagnitude (void)
-{
-	float x, y;
-
-	IN_GetRawMoveAxis(&x, &y);
-	return sqrtf(x * x + y * y);
-}
-
-float IN_GetRawTriggerMagnitude (void)
-{
-	float left, right;
-
-	IN_GetRawTriggerAxis(&left, &right);
-	return q_max(left, right);
 }
 
 void IN_StartGyroCalibration (void)

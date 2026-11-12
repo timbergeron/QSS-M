@@ -78,11 +78,6 @@ static inline int IS_NAN (float x) {
 void TurnVector (vec3_t out, const vec3_t forward, const vec3_t side, float angle); //johnfitz
 void VectorAngles (const vec3_t forward, float *up, vec3_t angles); //johnfitz, spike(up is optional)
 
-vec_t _DotProduct (const vec3_t v1, const vec3_t v2);
-void _VectorSubtract (const vec3_t veca, const vec3_t vecb, vec3_t out);
-void _VectorAdd (const vec3_t veca, const vec3_t vecb, vec3_t out);
-void _VectorCopy (const vec3_t in, vec3_t out);
-
 int VectorCompare (const vec3_t v1, const vec3_t v2);
 vec_t VectorLength (const vec3_t v);
 float VecLength2 (vec3_t v1, vec3_t v2); // woods #chase_transparent
@@ -90,7 +85,6 @@ void CrossProduct (const vec3_t v1, const vec3_t v2, vec3_t cross);
 float VectorNormalize (vec3_t v);		// returns vector length
 void VectorInverse (vec3_t v);
 void VectorScale (const vec3_t in, vec_t scale, vec3_t out);
-int Q_log2(int val);
 float GetFraction (float val, float minval, float maxval);
 float GetClampedFraction (float val, float minval, float maxval);
 
@@ -104,13 +98,9 @@ qboolean Matrix4_Invert(const mat4_t m, mat4_t out);
 void Matrix4_ViewMatrix(const vec3_t viewangles, const vec3_t vieworg, mat4_t out);
 void Matrix4_ProjectionMatrix(float fovx, float fovy, float neard, float fard, qboolean d3d, float xskew, float yskew, mat4_t out);
 
-void FloorDivMod (double numer, double denom, int *quotient,
-		int *rem);
-fixed16_t Invert24To16(fixed16_t val);
 vec_t DistanceBetween2Points(vec3_t v1, vec3_t v2); // woods #texturepointer
 void VectorAverage(vec3_t v1, vec3_t v2, vec3_t out); // woods #texturepointer
 void VectorExtendLimits(vec3_t newvalue, vec3_t minlimit, vec3_t maxlimit); // woods #texturepointer
-int GreatestCommonDivisor (int i1, int i2);
 
 void AngleVectors (vec3_t angles, vec3_t forward, vec3_t right, vec3_t up);
 int BoxOnPlaneSide (vec3_t emins, vec3_t emaxs, struct mplane_s *plane);

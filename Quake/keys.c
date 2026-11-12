@@ -861,32 +861,6 @@ void Char_Console2(int key) // woods #ezsay add leading space for mode 2
 	}
 }
 
-void Word_Delete (void) // woods from ezquake
-{
-	size_t len = 0;
-
-	while (key_linepos > 1 && key_lines[edit_line][key_linepos - 1] == ' ')
-	{
-		key_linepos--;
-		len++;
-	}
-
-	while (key_linepos > 1 && key_lines[edit_line][key_linepos - 1] != ' ')
-	{
-		key_linepos--;
-		len++;
-	}
-
-	// remove spaces after this word leaving only last one
-	while (key_linepos < strlen(key_lines[edit_line]) && key_lines[edit_line][key_linepos - 1] == ' ' && key_lines[edit_line][key_linepos - 2] == ' ')
-	{
-		key_linepos--;
-		len++;
-	}
-
-	memmove(key_lines[edit_line] + key_linepos, key_lines[edit_line] + key_linepos + len, strlen(key_lines[edit_line] + key_linepos + len) + 1);
-}
-
 static qboolean Key_IsWordSeparator(char c) // woods (ironwail)
 {
 	switch (c)

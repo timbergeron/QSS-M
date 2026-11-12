@@ -58,8 +58,6 @@ cvar_t	sv_sound_land			= {"sv_sound_land",			"demon/dland2.wav", CVAR_NONE};
 cvar_t	sv_pushcache = {"sv_pushcache","1",CVAR_NONE};	//0=off, 1=on, 2=on+verify against the plain scan, 3=+force the fallback path
 
 
-#define	MOVE_EPSILON	0.01
-
 void SV_Physics_Toss (edict_t *ent);
 
 static void World_StartSound (edict_t *entity, float *origin, int channel, const char *sample, int volume, float attenuation)
@@ -178,32 +176,6 @@ static void SV_CheckResurrectInvuln (client_t *client, edict_t *ent)
 		val->_float = 0.0f;
 
 	client->powerup_warn_flags &= ~PWARN_RESURRECT_INVULN;
-}
-
-/*
-================
-SV_CheckAllEnts
-================
-*/
-void SV_CheckAllEnts (void)
-{
-	int			e;
-	edict_t		*check;
-
-// see if any solid entities are inside the final position
-	check = NEXT_EDICT(qcvm->edicts);
-	for (e=1 ; e<qcvm->num_edicts ; e++, check = NEXT_EDICT(check))
-	{
-		if (check->free)
-			continue;
-		if (check->v.movetype == MOVETYPE_PUSH
-		|| check->v.movetype == MOVETYPE_NONE
-		|| check->v.movetype == MOVETYPE_NOCLIP)
-			continue;
-
-		if (SV_TestEntityPosition (check))
-			Con_Printf ("entity in invalid position\n");
-	}
 }
 
 /*
@@ -1979,8 +1951,6 @@ void SV_Physics (double frametime)
 		pr_global_struct->time = qcvm->time;
 		PR_ExecuteProgram (pr_global_struct->StartFrame);
 	}
-
-//SV_CheckAllEnts ();
 
 //
 // treat each object in turn
