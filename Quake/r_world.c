@@ -522,6 +522,21 @@ static void R_ClearBatch ()
 
 /*
 ================
+R_SetCausticsTexScale
+
+Caustics sample in texel space normalized to a 64px texture, so the pattern
+keeps one world scale across textures of different sizes. -- woods #caustics
+================
+*/
+static void R_SetCausticsTexScale (GLint loc, const texture_t *t)
+{
+	if (loc == -1 || !t || !t->width || !t->height)
+		return;
+	GL_Uniform2fFunc (loc, t->width * (1.0f / 64.0f), t->height * (1.0f / 64.0f));
+}
+
+/*
+================
 R_FlushBatch
 
 Draw the current batch if non-empty and clears it, ready for more R_BatchSurface calls.
@@ -537,7 +552,7 @@ static void R_FlushBatch (surfacetype surftype) // woods #caustics
 			GL_Bind(underwatertexture);
 			GL_Uniform1iFunc(useCausticsTexLoc, 1);
 		}
-		else
+		else if (surftype != IS_WATER) // the water programs don't have this uniform
 			GL_Uniform1iFunc(useCausticsTexLoc, 0);
 		
 		glDrawElements (GL_TRIANGLES, num_vbo_indices, GL_UNSIGNED_INT, vbo_indices);
@@ -736,6 +751,7 @@ static GLuint useTexturelessDitherLoc;
 static GLuint alphaLoc;
 GLuint clTimeLoc; // woods #caustics
 static GLuint causticsOpacityLoc; // woods #caustics
+static GLint causticsTexScaleLoc = -1; // woods #caustics
 static GLint useGrassLoc; // woods #grass
 static GLint grassAmountLoc; // woods #grass
 static GLint grassTimeLoc; // woods #grass
@@ -762,6 +778,7 @@ static GLint instUseTexturelessDitherLoc;
 static GLint instAlphaLoc;
 static GLint instClTimeLoc;
 static GLint instCausticsOpacityLoc;
+static GLint instCausticsTexScaleLoc = -1;
 static GLint instGrassAmountLoc;
 static GLint instGrassTimeLoc;
 static GLint instGrassBaseColorLoc;
@@ -1371,6 +1388,7 @@ qboolean R_DrawBModelDrawCache (qmodel_t *model, entity_t *ent)
 			}
 			else
 				GL_Uniform1iFunc (useGrassLoc, 0);
+			R_SetCausticsTexScale (causticsTexScaleLoc, t);
 
 			lasttex = batch->texture;
 			lastlm = -1;
@@ -1747,6 +1765,7 @@ static void R_DrawBrushModelInstancedGroup (entity_t **ents, int count)
 				GL_Uniform1iFunc(instUseFullbrightTexLoc, 0);
 
 			GL_Uniform1iFunc(instUseGrassLoc, 0);
+			R_SetCausticsTexScale(instCausticsTexScaleLoc, t);
 			lasttex = batch->texture;
 			lastlm = -1;
 		}
@@ -1877,6 +1896,7 @@ static void GLWorld_DeleteShaderPrograms (void)
 	alphaLoc = 0;
 	clTimeLoc = 0;
 	causticsOpacityLoc = 0;
+	causticsTexScaleLoc = -1;
 	useGrassLoc = -1;
 	grassAmountLoc = -1;
 	grassTimeLoc = -1;
@@ -1903,6 +1923,7 @@ static void GLWorld_DeleteShaderPrograms (void)
 	instAlphaLoc = -1;
 	instClTimeLoc = -1;
 	instCausticsOpacityLoc = -1;
+	instCausticsTexScaleLoc = -1;
 	instGrassAmountLoc = -1;
 	instGrassTimeLoc = -1;
 	instGrassBaseColorLoc = -1;
@@ -5841,6 +5862,7 @@ void R_SolidRunDrawModel (qmodel_t *model, entity_t *ent, texchain_t chain)
 						}
 						GL_SelectTexture (GL_TEXTURE0);
 						GL_Bind (animt->gltexture);
+						R_SetCausticsTexScale (causticsTexScaleLoc, t);
 						if (grasstex)
 						{
 							if (!r_solidrun.grassuniform)
@@ -6005,12 +6027,14 @@ void GLWorld_CreateShaders (void)
 		"varying vec2 tc_tex;\n"
 		"varying vec2 tc_lm;\n"
 		"varying vec4 tc_lmbounds;\n"
+		"varying vec3 EyePos;\n"
 		"\n"
 		"void main()\n"
 		"{\n"
 		"	tc_tex = TexCoords;\n"
 		"	tc_lm = LMCoords;\n"
 		"	tc_lmbounds = LMBounds;\n"
+		"	EyePos = (gl_ModelViewMatrix * Vert).xyz;\n"
 		"	gl_Position = gl_ModelViewProjectionMatrix * Vert;\n"
 		"	FogFragCoord = gl_Position.w;\n"
 		"}\n";
@@ -6030,11 +6054,13 @@ void GLWorld_CreateShaders (void)
 		"varying vec2 tc_tex;\n"
 		"varying vec2 tc_lm;\n"
 		"varying vec4 tc_lmbounds;\n"
+		"varying vec3 EyePos;\n"
 		"\n"
 		"void main()\n"
 		"{\n"
 		"	mat4 instance = mat4(InstanceMat0, InstanceMat1, InstanceMat2, InstanceMat3);\n"
 		"	vec4 worldVert = instance * Vert;\n"
+		"	EyePos = (gl_ModelViewMatrix * worldVert).xyz;\n"
 		"	tc_tex = TexCoords;\n"
 		"	tc_lm = LMCoords;\n"
 		"	tc_lmbounds = LMBounds;\n"
@@ -6064,6 +6090,7 @@ void GLWorld_CreateShaders (void)
 		"uniform float Alpha;\n"
 		"uniform float ClTime;\n"
 		"uniform float CausticsOpacity;\n"
+		"uniform vec2 CausticsTexScale;\n"
 		"uniform float GrassAmount;\n"
 		"uniform float GrassTime;\n"
 		"uniform vec3 GrassBaseColor;\n"
@@ -6076,6 +6103,7 @@ void GLWorld_CreateShaders (void)
 		"varying vec2 tc_tex;\n"
 		"varying vec2 tc_lm;\n"
 		"varying vec4 tc_lmbounds;\n"
+		"varying vec3 EyePos;\n"
 		"\n"
 		"float FogFactor(float dist)\n"
 		"{\n"
@@ -6237,17 +6265,16 @@ void GLWorld_CreateShaders (void)
 		"		vec3 grassMix = mix(result.rgb * 0.65, grassColor, 0.75);\n"
 		"		result.rgb = mix(result.rgb, grassMix, grassAlpha);\n"
 		"	}\n"
-		"	if (UseFullbrightTex)\n"
-		"		result += texture2D(FullbrightTex, tc_tex.xy);\n"
-		"\n"
 		"	if (UseCausticsTex)\n"
 		"	{\n"
 		"       // --- Chromatic Aberration Start --- \n"
 		"       const float aberrationAmount = 0.0015; // Hardcoded faint aberration strength \n"
 		"       float causticsSpeed = 0.5; \n"
+		"       // texel-space coords (64px reference) so pattern scale doesn't jump between textures\n"
+		"       vec2 ctc = tc_tex * CausticsTexScale;\n"
 		"		vec2 causticsCoord = vec2(\n"
-		"			(tc_tex.x + sin(0.465 * (causticsSpeed * ClTime + tc_tex.y))) * -0.1234375,\n"
-		"			(tc_tex.y + sin(0.465 * (causticsSpeed * ClTime + tc_tex.x))) * -0.1234375\n"
+		"			(ctc.x + sin(0.465 * (causticsSpeed * ClTime + ctc.y))) * -0.1234375,\n"
+		"			(ctc.y + sin(0.465 * (causticsSpeed * ClTime + ctc.x))) * -0.1234375\n"
 		"		);\n"
 		"       vec2 offsetR = vec2(aberrationAmount, 0.0);\n"
 		"       vec2 offsetB = vec2(-aberrationAmount, 0.0);\n"
@@ -6259,17 +6286,30 @@ void GLWorld_CreateShaders (void)
 		"\n"
 		"       // --- Second Layer ----------------------------------------------------- \n"
 		"       vec2 causticsCoord2 = vec2(\n"
-		"           (tc_tex.x + sin(0.395 * (causticsSpeed * ClTime - tc_tex.y))) * -0.093,\n"
-		"           (tc_tex.y + sin(0.475 * (causticsSpeed * ClTime - tc_tex.x))) * -0.093\n"
+		"           (ctc.x + sin(0.395 * (causticsSpeed * ClTime - ctc.y))) * -0.093,\n"
+		"           (ctc.y + sin(0.475 * (causticsSpeed * ClTime - ctc.x))) * -0.093\n"
 		"       );\n"
 		"       vec3 c2 = texture2D(CausticsTex, causticsCoord2).rgb;\n"
 		"       vec3 causticsRGB = max(caustics.rgb, c2);\n"
 		"\n"
 		"       // --- Blend using Light Factor --- \n"
-		"       // Modulate the base CausticsOpacity by the calculated lightFactor\n"
-		"       float finalCausticsOpacity = CausticsOpacity * surfaceLightFactor;\n"
+		"       // flat face normal from derivatives, oriented toward the viewer\n"
+		"       vec3 cn = cross(dFdx(EyePos), dFdy(EyePos));\n"
+		"       cn *= inversesqrt(max(dot(cn, cn), 1e-20));\n"
+		"       if (dot(cn, EyePos) > 0.0)\n"
+		"           cn = -cn;\n"
+		"       vec3 worldUp = normalize((gl_ModelViewMatrix * vec4(0.0, 0.0, 1.0, 0.0)).xyz);\n"
+		"       float upness = dot(cn, worldUp);\n"
+		"       // full on floors, ~35% on walls, none on ceilings\n"
+		"       float facingFade = mix(0.35, 1.0, clamp(upness, 0.0, 1.0)) * smoothstep(-0.5, 0.0, upness);\n"
+		"       // fade out far away where tiling repeats and shimmers\n"
+		"       float distFade = 1.0 - smoothstep(1200.0, 2400.0, FogFragCoord);\n"
+		"       float finalCausticsOpacity = CausticsOpacity * surfaceLightFactor * facingFade * distFade;\n"
 		"       result.rgb = mix(result.rgb, causticsRGB * result.rgb * 2.0, finalCausticsOpacity);\n"
 		"	}\n"
+		"\n"
+		"	if (UseFullbrightTex)\n"
+		"		result += texture2D(FullbrightTex, tc_tex.xy);\n"
 		"\n"
 		"	result = clamp(result, 0.0, 1.0);\n"
 		"	float fog = FogFactor(FogFragCoord);\n"
@@ -6310,6 +6350,7 @@ void GLWorld_CreateShaders (void)
 		alphaLoc = GL_GetUniformLocation (&r_world_program, "Alpha");
 		clTimeLoc = GL_GetUniformLocation(&r_world_program, "ClTime"); // woods #caustics
 		causticsOpacityLoc = GL_GetUniformLocation(&r_world_program, "CausticsOpacity"); // woods #caustics
+		causticsTexScaleLoc = GL_GetUniformLocation(&r_world_program, "CausticsTexScale"); // woods #caustics
 		grassAmountLoc = GL_GetUniformLocation (&r_world_program, "GrassAmount"); // woods #grass
 		grassTimeLoc = GL_GetUniformLocation (&r_world_program, "GrassTime"); // woods #grass
 		grassBaseColorLoc = GL_GetUniformLocation (&r_world_program, "GrassBaseColor"); // woods #grass
@@ -6350,6 +6391,7 @@ void GLWorld_CreateShaders (void)
 			instAlphaLoc = GL_GetUniformLocation (&r_world_instanced_program, "Alpha");
 			instClTimeLoc = GL_GetUniformLocation(&r_world_instanced_program, "ClTime"); // woods #caustics
 			instCausticsOpacityLoc = GL_GetUniformLocation(&r_world_instanced_program, "CausticsOpacity"); // woods #caustics
+			instCausticsTexScaleLoc = GL_GetUniformLocation(&r_world_instanced_program, "CausticsTexScale"); // woods #caustics
 			instGrassAmountLoc = GL_GetUniformLocation (&r_world_instanced_program, "GrassAmount"); // woods #grass
 			instGrassTimeLoc = GL_GetUniformLocation (&r_world_instanced_program, "GrassTime"); // woods #grass
 			instGrassBaseColorLoc = GL_GetUniformLocation (&r_world_instanced_program, "GrassBaseColor"); // woods #grass
@@ -6475,6 +6517,7 @@ void R_DrawTextureChains_GLSL (qmodel_t *model, entity_t *ent, texchain_t chain)
 		//bind the appropriate diffuse
 		GL_SelectTexture (GL_TEXTURE0);
 		GL_Bind (animt->gltexture);
+		R_SetCausticsTexScale (causticsTexScaleLoc, t); // woods #caustics
 		if (R_TextureUsesSurfaceGrass(t) && R_GrassEntityAllowsGrass(ent))
 		{
 			GL_Uniform1iFunc (useGrassLoc, 1); // woods #grass
@@ -8776,6 +8819,7 @@ static void RSceneCache_Draw(qboolean water)
 						   // GL_Uniform1iFunc(causticsTexLoc, 0); // Maybe set to a dummy texture/unit?
 						}
 					}
+					R_SetCausticsTexScale (causticsTexScaleLoc, cache->worldmodel->textures[i]); // woods #caustics
 					GL_Uniform1iFunc (useAlphaTestLoc, *tex->name == '{');	//update alphatest. some future qbsps might actually support it properly on the worldmodel. plus there's lots of buggy bsps where it was used anyway.
 					if (R_TextureUsesSurfaceGrass(cache->worldmodel->textures[i]))
 					{
