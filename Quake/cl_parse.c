@@ -4003,6 +4003,20 @@ static const char *CL_MacOSDescription(void)
 }
 #endif
 
+// woods -- f_ chat replies stay quiet only during a real match. cl.matchinp alone
+// also trips on any running timelimit clock (pubs, normal/dm modes), which
+// silenced f_version and friends everywhere.
+static qboolean CL_SuppressFReplies (void)
+{
+	char playmode[32];
+
+	if (cls.demoplayback)
+		return true;
+	if (!cl.matchinp)
+		return false;
+	return !q_strcasecmp(Info_GetKey(cl.serverinfo, "playmode", playmode, sizeof(playmode)), "match");
+}
+
 //warning: this text might not even be a complete line.
 //we're screwed if someone names themselves something that triggers this or some such
 //however, that's what has become standard for nq clients
@@ -4087,7 +4101,7 @@ if (!strcmp(printtext, "Client ping times:\n") && (cl.expectingpingtimes > realt
 	}*/
 
 	//woods #f_random
-	if (!cls.demoplayback && !cl.matchinp && *printtext == 1 && e - printtext > 13 && (!strcmp(e - 11, ": f_random\n")))
+	if (!CL_SuppressFReplies() && *printtext == 1 && e - printtext > 13 && (!strcmp(e - 11, ": f_random\n")))
 	{
 		if (realtime > cl.printrandom)
 		{
@@ -4142,7 +4156,7 @@ if (!strcmp(printtext, "Client ping times:\n") && (cl.expectingpingtimes > realt
 	}
 
 	//woods #f_config check for chat messages of the form 'name: f_config'
-	if (!cls.demoplayback && !cl.matchinp && *printtext == 1 && e - printtext > 13 && (!strcmp(e - 11, ": f_config\n")))
+	if (!CL_SuppressFReplies() && *printtext == 1 && e - printtext > 13 && (!strcmp(e - 11, ": f_config\n")))
 	{
 		if (realtime > cl.printconfig)
 		{
@@ -4220,7 +4234,7 @@ if (!strcmp(printtext, "Client ping times:\n") && (cl.expectingpingtimes > realt
 
 	//check for chat messages of the form 'name: q_version'
 	
-	if (!cls.demoplayback && !cl.matchinp && *printtext == 1 && e-printtext > 13 && (!strcmp(e-12, ": f_version\n") || !strcmp(e-12, ": q_version\n")))
+	if (!CL_SuppressFReplies() && *printtext == 1 && e-printtext > 13 && (!strcmp(e-12, ": f_version\n") || !strcmp(e-12, ": q_version\n")))
 	{
 		if (realtime > cl.printversionresponse)
 		{
@@ -4241,7 +4255,7 @@ if (!strcmp(printtext, "Client ping times:\n") && (cl.expectingpingtimes > realt
 		}
 	}
 
-	if (!cls.demoplayback && !cl.matchinp && *printtext == 1 && e-printtext > 14 && !strcmp(e-13, ": f_modified\n"))
+	if (!CL_SuppressFReplies() && *printtext == 1 && e-printtext > 14 && !strcmp(e-13, ": f_modified\n"))
 	{
 		if (realtime > cl.printmodifiedresponse)
 		{
@@ -4251,7 +4265,7 @@ if (!strcmp(printtext, "Client ping times:\n") && (cl.expectingpingtimes > realt
 		}
 	}
 
-	if (!cls.demoplayback && !cl.matchinp && *printtext == 1 && e - printtext > 13 && (!strcmp(e - 12, ": q_sysinfo\n") || !strcmp(e - 11, ": f_system\n"))) // woods #q_sysinfo (qrack)
+	if (!CL_SuppressFReplies() && *printtext == 1 && e - printtext > 13 && (!strcmp(e - 12, ": q_sysinfo\n") || !strcmp(e - 11, ": f_system\n"))) // woods #q_sysinfo (qrack)
 	{
 		if (realtime > cl.printqsys)
 		{
