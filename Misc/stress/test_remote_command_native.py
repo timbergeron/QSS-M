@@ -75,6 +75,7 @@ typedef enum { key_game, key_console, key_message, key_menu } keydest_t;
 
 static qcvm_t *qcvm;
 static struct { qcvm_t qcvm; } cl;
+static struct { qcvm_t qcvm; } sv;
 static char out[1 << 16];
 static jmp_buf fatal;
 static int host_initialized = 1;
@@ -287,11 +288,27 @@ static void test_files(void) {
         {"particles/fx.cfg", true}, {"huds/hud.cfg", true}, {"models/m.cfg", true},
         {"readme.txt", true}, {"maps/e1m1.ent", true},
     };
+    qcvm = &cl.qcvm;
     for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); i++) {
         assert(QC_FixFileName(cases[i].in, &name, &fallback));
         assert(!strncmp(name, "data/", 5));
         if ((fallback != NULL) != cases[i].fallback) { fprintf(stderr, "fallback wrong: %s\n", cases[i].in); abort(); }
     }
+    /* Server gamecode reads the admin's own configs/, but never the user's config files. */
+    struct { const char *in; qboolean fallback; } server_cases[] = {
+        {"configs/levels.cfg", true}, {"configs/warp.cfg", true}, {"configs/maps/dm3.cfg", true},
+        {"CONFIGS/levels.cfg", true}, {"configs/bookmarks.txt", true},
+        {"configs/config.cfg", false}, {"configs/autoexec.cfg", false}, {"CONFIGS/Config.cfg", false},
+        {"config.cfg", false}, {"server.cfg", false}, {"maps/x.cfg", false},
+        {"particles/fx.cfg", true}, {"readme.txt", true},
+    };
+    qcvm = &sv.qcvm;
+    for (size_t i = 0; i < sizeof(server_cases) / sizeof(server_cases[0]); i++) {
+        assert(QC_FixFileName(server_cases[i].in, &name, &fallback));
+        assert(!strncmp(name, "data/", 5));
+        if ((fallback != NULL) != server_cases[i].fallback) { fprintf(stderr, "server fallback wrong: %s\n", server_cases[i].in); abort(); }
+    }
+    qcvm = NULL;
     assert(!QC_FixFileName("../x", &name, &fallback) && !QC_FixFileName("/etc/passwd", &name, &fallback));
     /* Spellings that dodge the prefix/extension checks are refused outright. */
     const char *ambiguous[] = {

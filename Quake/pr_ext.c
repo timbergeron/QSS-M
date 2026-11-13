@@ -3411,9 +3411,22 @@ static qboolean QC_FixFileName(const char *name, const char **result, const char
 	*fallbackread = name;
 	//if its a user config, ban any fallback locations so that csqc can't read passwords or whatever.
 	// woods #remotecmd -- QSS-M keeps the user's config.cfg and autoexec.cfg in
-	// configs/, which the upstream rule exempted. Ban everything there, and any
+	// configs/, which the upstream rule exempted. Client gamecode (CSQC, menu)
+	// can come from a remote server, so ban everything there for it, and any
 	// other .cfg outside the content directories mods legitimately ship.
-	if (!q_strncasecmp(name, "configs/", 8) ||
+	// Server gamecode is installed by the server admin and reads its own
+	// configs/ (levels, warp lists, map settings), so it keeps the upstream
+	// exemption; only the user's own config files stay off limits to it.
+	if (!q_strcasecmp(name, "configs/config.cfg") || !q_strcasecmp(name, "configs/autoexec.cfg"))
+		*fallbackread = NULL;
+	else if (qcvm == &sv.qcvm)
+	{
+		if ((!strchr(name, '/') || q_strncasecmp(name, "configs/", 8))
+			&& !q_strcasecmp(COM_FileGetExtension(name), "cfg")
+			&& q_strncasecmp(name, "particles/", 10) && q_strncasecmp(name, "huds/", 5) && q_strncasecmp(name, "models/", 7))
+			*fallbackread = NULL;
+	}
+	else if (!q_strncasecmp(name, "configs/", 8) ||
 		(!q_strcasecmp(COM_FileGetExtension(name), "cfg")
 		&& q_strncasecmp(name, "particles/", 10) && q_strncasecmp(name, "huds/", 5) && q_strncasecmp(name, "models/", 7)))
 		*fallbackread = NULL;
