@@ -612,25 +612,30 @@ void CL_FinishMove(usercmd_t *cmd, qboolean isfinal)
 
 // woods #pqlag
 
-sizebuf_t lag_buff[32]; // JPG - support for synthetic lag
-byte lag_data[32][1024];  // JPG - support for synthetic lag // woods -- 1024 to match CL_SendMove and the maxsize set in CL_SendMove2
+// Room for the longest pq_lag (400 ms) at the fastest move rate (150 Hz) = 60 queued moves.
+// 32 overwrote still-queued moves past ~213 ms at 150 Hz, which wrecked the server-measured ping.
+#define LAG_SLOTS	128	// must be a power of two
+#define LAG_MASK	(LAG_SLOTS - 1)
+
+sizebuf_t lag_buff[LAG_SLOTS]; // JPG - support for synthetic lag
+byte lag_data[LAG_SLOTS][1024];  // JPG - support for synthetic lag // woods -- 1024 to match CL_SendMove and the maxsize set in CL_SendMove2
 unsigned int lag_head, lag_tail; // JPG - support for synthetic lag
-double lag_sendtime[32]; // JPG - support for synthetic lag
-static int lag_seq[32]; // woods #netgraph -- movement sequence in each delayed slot, -1 none
+double lag_sendtime[LAG_SLOTS]; // JPG - support for synthetic lag
+static int lag_seq[LAG_SLOTS]; // woods #netgraph -- movement sequence in each delayed slot, -1 none
 
 /* JPG - this function sends delayed move messages
 ==============
 CL_SendLagMove
 ==============
 */
-void CL_SendLagMove(void)
+static void CL_SendQueuedLagMoves(qboolean all)
 {
 	if (cls.demoplayback || (cls.state != ca_connected) /* || (cls.signon != SIGNONS)*/)
 		return;
 
-	while ((lag_tail < lag_head) && (lag_sendtime[lag_tail & 31] <= realtime))
+	while ((lag_tail < lag_head) && (all || lag_sendtime[lag_tail & LAG_MASK] <= realtime))
 	{
-		unsigned int lag_index = lag_tail++ & 31;
+		unsigned int lag_index = lag_tail++ & LAG_MASK;
 		if (cl.movemessages <= 2)
 		{
 			lag_head = lag_tail = 0;  // JPG - hack: if cl.movemessages has been reset, we should reset these too
@@ -643,10 +648,36 @@ void CL_SendLagMove(void)
 		{
 			Con_Printf("CL_SendMove: lost server connection\n");
 			CL_Disconnect();
+			return;
 		}
 		else if (netdiag_active && lag_seq[lag_index] >= 0) // woods #netgraph -- actual wire time, after pq_lag
 			NetDiag_CmdSent (lag_seq[lag_index]);
 	}
+}
+
+void CL_SendLagMove(void)
+{
+	CL_SendQueuedLagMoves (false);
+}
+
+/*
+==============
+CL_FlushLagMoves
+
+Lag was switched off with moves still queued. Send them now, in order, before
+any undelayed move: dropping them would lose those inputs, and leaving them
+would send them stale (after newer moves) once lag is switched back on.
+==============
+*/
+void CL_FlushLagMoves(void)
+{
+	if (lag_tail < lag_head)
+		CL_SendQueuedLagMoves (true);
+}
+
+void CL_ResetLagMoves(void)
+{
+	lag_head = lag_tail = 0;	// a new connection must never send the old one's moves
 }
 
 /*
@@ -797,12 +828,14 @@ void CL_SendMove2 (const usercmd_t *cmd)
 	sizebuf_t* buf;	// JPG - turned into a pointer (made corresponding changes below) 
 	//byte		data[1024];
 
-	buf = &lag_buff[lag_head & 31];
+	if (lag_head - lag_tail >= LAG_SLOTS)	// never reuse a slot that hasn't gone out yet; drop the oldest instead
+		lag_tail++;
+	buf = &lag_buff[lag_head & LAG_MASK];
 	buf->maxsize = 1024;
 	buf->cursize = 0;
-	buf->data = lag_data[lag_head & 31]; // JPG - added head index
-	lag_sendtime[lag_head++ & 31] = realtime + (pq_lag.value / 1000.0);
-	lag_seq[(lag_head - 1) & 31] = -1; // woods #netgraph -- set below once a move is written
+	buf->data = lag_data[lag_head & LAG_MASK]; // JPG - added head index
+	lag_sendtime[lag_head++ & LAG_MASK] = realtime + (pq_lag.value / 1000.0);
+	lag_seq[(lag_head - 1) & LAG_MASK] = -1; // woods #netgraph -- set below once a move is written
 
 	for (i = 0; i < cl.ackframes_count; i++)
 	{
@@ -898,7 +931,7 @@ void CL_SendMove2 (const usercmd_t *cmd)
 	// allways dump the first two message, because it may contain leftover inputs
 	// from the last level
 	//
-		lag_seq[(lag_head - 1) & 31] = cl.movemessages >= 2 ? cl.movemessages : -1; // woods #netgraph -- this move's sequence, once it's sent for real
+		lag_seq[(lag_head - 1) & LAG_MASK] = cl.movemessages >= 2 ? cl.movemessages : -1; // woods #netgraph -- this move's sequence, once it's sent for real
 		if (++cl.movemessages <= 2)
 			buf->cursize = dump;
 		else

@@ -675,6 +675,8 @@ void CL_SendCmd (void);
 void CL_SendMove (const usercmd_t *cmd);
 void CL_SendMove2 (const usercmd_t* cmd); // woods #pqlag
 void CL_SendLagMove (void); // JPG - synthetic lag // woods #pqlag
+void CL_FlushLagMoves (void); // woods #pqlag -- send everything still queued (lag switched off)
+void CL_ResetLagMoves (void); // woods #pqlag -- discard the queue (disconnect)
 int  CL_ReadFromServer (void);
 void CL_AdjustAngles (void);
 void CL_BaseMove (usercmd_t *cmd, qboolean isfinal);

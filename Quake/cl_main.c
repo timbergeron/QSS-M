@@ -799,6 +799,7 @@ static void CL_DisconnectInternal(const char *transferhost)
 	NET_PortPingProbe_RequestAbort();
 	CL_CancelConnect();
 	CL_ClearTypingState();
+	CL_ResetLagMoves(); // woods #pqlag
 	cls.netdrops_request_time = 0; // woods - drop any pending netdrops timeout
 
 	// Idempotent with CL_StopPlayback; needed for non-demo disconnect paths.
@@ -6843,6 +6844,13 @@ void CL_SendCmd (void)
 		PR_ExecuteProgram(cl.qcvm.extfuncs.CSQC_Input_Frame);
 		PR_GetSetInputs(&cmd, false);
 		PR_SwitchQCVM(NULL);
+	}
+
+	if (!pq_lag.value) // woods #pqlag -- moves still queued from before lag was switched off go first
+	{
+		CL_FlushLagMoves();
+		if (cls.state != ca_connected)
+			return;	// the flush lost the connection
 	}
 
 	if (cls.signon == SIGNONS)
