@@ -2688,10 +2688,156 @@ static void SCR_DrawFFADifferential(void) // woods
 }
 
 /*====================
-SCR_DrawTeamDifferential -- woods - draw the team differential display #capturediff #matchhud
+1v1 match hud #duelhud
+
+With exactly two players, each score row also names its player, drawn as the
+scoreboard draws it and right-justified against the score box; the
+differential moves to the left of your own name. CANVAS_TOPRIGHT4 coords.
 ====================*/
-void SCR_DrawTeamDifferential(int y, qboolean use_demo_calculation, int redteamplayers, int blueteamplayers, int l)
+#define SCR_DUEL_NAME_RIGHT	120		// names end here, just left of the score boxes
+#define SCR_DUEL_ROW_Y(i)	(32 + (i) * 18)	// a 1x text line centred on each 2x score row
+
+static qboolean SCR_IsDuelPlayer(const scoreboard_t *s)
+{
+	return s->name[0] && !s->spectator && s->frags != -99;
+}
+
+// exactly two players in the game (spectators/observers ignored)
+static qboolean SCR_GetDuelPlayers(int *players)
+{
+	int i, n = 0;
+
+	for (i = 0; i < cl.maxclients; i++)
+	{
+		if (!SCR_IsDuelPlayer(&cl.scores[i]))
+			continue;
+		if (n == 2)
+			return false;
+		players[n++] = i;
+	}
+
+	return n == 2;
+}
+
+static const char *SCR_DuelDisplayName(const scoreboard_t *s, char *buf, size_t size)
+{
+	if (cl_contentfilter.value == 2 && WordFilter_Check(s->name, buf, size)) // woods #contentfilter
+	{
+		buf[size - 1] = '\0';
+		return buf;
+	}
+	return s->name;
+}
+
+// draws the name for score row 'row'; returns the x where the name starts
+static int SCR_DrawDuelName(int row, const scoreboard_t *s)
+{
+	char filtered[64];
+	const char *name = SCR_DuelDisplayName(s, filtered, sizeof(filtered));
+	int x = SCR_DUEL_NAME_RIGHT - ((int)strlen(name) << 3);
+
+	GL_SetCanvas(CANVAS_TOPRIGHT4);
+	Draw_String(x, SCR_DUEL_ROW_Y(row), name);
+	return x;
+}
+
+// team 1v1: two teams with one player each; fills the player per score row
+static qboolean SCR_GetTeamDuelRows(int l, int *row_player)
+{
+	int players[2], i, j;
+
+	if (l != 2 || !SCR_GetDuelPlayers(players))
+		return false;
+
+	for (i = 0; i < 2; i++)
+	{
+		int team = cl.teamcolor[i] & 15; // live keeps both nibbles, demo calc just pants
+		row_player[i] = -1;
+		for (j = 0; j < 2; j++)
+		{
+			if (cl.scores[players[j]].pants.basic == team)
+				row_player[i] = players[j];
+		}
+		if (row_player[i] < 0)
+			return false;
+	}
+
+	return row_player[0] != row_player[1];
+}
+
+// ffa 1v1: frag boxes in the player's own colours, names, and your differential
+static void SCR_DrawFFADuel(const int *players)
+{
+	int rows[2], i, my_row = -1, name_x = SCR_DUEL_NAME_RIGHT;
+	char num[16];
+
+	// leader on top, like the team rows
+	if (cl.scores[players[1]].frags > cl.scores[players[0]].frags)
+	{
+		rows[0] = players[1];
+		rows[1] = players[0];
+	}
+	else
+	{
+		rows[0] = players[0];
+		rows[1] = players[1];
+	}
+
+	for (i = 0; i < 2; i++)
+	{
+		scoreboard_t *s = &cl.scores[rows[i]];
+		int y = i * 9;
+		int x;
+
+		GL_SetCanvas(CANVAS_TOPRIGHT3);
+		Draw_FillPlayer(11, y + 1, 32, 6, s->shirt, .6);
+		Draw_FillPlayer(11, y + 7, 32, 3, s->pants, .6);
+
+		sprintf(num, "%3i", s->frags);
+		Sbar_DrawCharacter(15, y - 23, num[0]);
+		Sbar_DrawCharacter(23, y - 23, num[1]);
+		Sbar_DrawCharacter(31, y - 23, num[2]);
+
+		x = SCR_DrawDuelName(i, s);
+		if (rows[i] == cl.viewentity - 1)
+		{
+			my_row = i;
+			name_x = x;
+		}
+	}
+
+	if (my_row < 0 || cl.intermission || qeintermission || crxintermission || scr_viewsize.value >= 120)
+		return;
+
+	{
+		int diff = cl.scores[rows[my_row]].frags - cl.scores[rows[!my_row]].frags;
+		int right = name_x - 8;
+
+		if (!diff)
+			return; // don't show ties
+
+		GL_SetCanvas(CANVAS_TOPRIGHT4);
+		if (diff > 0)
+		{
+			q_snprintf(num, sizeof(num), "+%d", diff);
+			SCR_DrawPositiveDiffString(right - ((int)strlen(num) << 3), SCR_DUEL_ROW_Y(my_row), num);
+		}
+		else
+		{
+			q_snprintf(num, sizeof(num), "%d", diff);
+			M_Print(right - ((int)strlen(num) << 3), SCR_DUEL_ROW_Y(my_row), num);
+		}
+	}
+}
+
+/*====================
+SCR_DrawTeamDifferential -- woods - draw the team differential display #capturediff #matchhud
+row_right/row_y: where the top/bottom row's differential ends, NULL for the default spot
+====================*/
+void SCR_DrawTeamDifferential(int y, qboolean use_demo_calculation, int redteamplayers, int blueteamplayers, int l, const int *row_right, const int *row_y)
 			{
+	static const int default_right[2] = { 120, 120 };
+	static const int default_y[2] = { 32, 32 + 20 };
 	int i, k, l2, ts1, ts2, tc1, tc2, diff;
 	int totalteamplayers = 0, capturepoints = 0, capdiff = 0;
 	char tcolor[12];
@@ -2703,6 +2849,11 @@ void SCR_DrawTeamDifferential(int y, qboolean use_demo_calculation, int redteamp
 
 	if (cl.teamcolor[2]) // only for two colors
 		return;
+
+	if (!row_right)
+		row_right = default_right;
+	if (!row_y)
+		row_y = default_y;
 
 					ts1 = cl.teamscore[0]; // high score
 					ts2 = cl.teamscore[1]; // low score
@@ -2777,7 +2928,7 @@ void SCR_DrawTeamDifferential(int y, qboolean use_demo_calculation, int redteamp
 						else
 							snprintf(num, sizeof(num), "+%-i", diff);
 
-					SCR_DrawPositiveDiffString(120 - (strlen(num) << 3), 32, num);
+					SCR_DrawPositiveDiffString(row_right[0] - (strlen(num) << 3), row_y[0], num);
 					}
 
 					else if ((atoi(tcolor) == tc2) || atoi(tcolor) == (tc2 / 17)) // bottom score [color] is the same as your color
@@ -2786,7 +2937,7 @@ void SCR_DrawTeamDifferential(int y, qboolean use_demo_calculation, int redteamp
 							snprintf(num, sizeof(num), "-%-i (%i)", diff, capdiff);
 						else
 							snprintf(num, sizeof(num), "-%-i", diff);
-						M_Print(120 - (strlen(num) << 3), 32 + 20, num);
+						M_Print(row_right[1] - (strlen(num) << 3), row_y[1], num);
 					}				
 				}
 
@@ -2828,7 +2979,12 @@ void SCR_DrawMatchScores(void)
 	{
 		if (!q_strcasecmp(uiplaymode, "ffa") || !q_strcasecmp(siplaymode, "ffa"))
 		{
-			SCR_DrawFFADifferential();
+			int players[2];
+
+			if (cl.modetype != 8 && SCR_GetDuelPlayers(players)) // #duelhud, not headhunters (head count sits there)
+				SCR_DrawFFADuel(players);
+			else
+				SCR_DrawFFADifferential();
 		}
 	}
 
@@ -2928,8 +3084,23 @@ void SCR_DrawMatchScores(void)
 
 		if (scr_match_hud.value)   // woods for console var off and on
 		{
+			int row_player[2];
+
 			y = SCR_DrawTeamScores(x, y, l, use_demo_calculation, team_colors, team_scores);
-			SCR_DrawTeamDifferential(y, use_demo_calculation, redteamplayers, blueteamplayers, l);
+
+			if (SCR_GetTeamDuelRows(l, row_player)) // #duelhud
+			{
+				int row_right[2], row_y[2], i;
+
+				for (i = 0; i < 2; i++)
+				{
+					row_right[i] = SCR_DrawDuelName(i, &cl.scores[row_player[i]]) - 8;
+					row_y[i] = SCR_DUEL_ROW_Y(i);
+				}
+				SCR_DrawTeamDifferential(y, use_demo_calculation, redteamplayers, blueteamplayers, l, row_right, row_y);
+			}
+			else
+				SCR_DrawTeamDifferential(y, use_demo_calculation, redteamplayers, blueteamplayers, l, NULL, NULL);
 		}
 	}
 }
