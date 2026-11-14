@@ -2307,6 +2307,22 @@ static void Sky_AsyncDownload_Finish(void)
 		Sky_ApplyGlobalSkybox();
 }
 
+/* face_path is "gfx/env/<name><suffix>" without an extension. #siblingcopy */
+static qboolean Sky_CopyFaceFromOtherGameDir(const char *face_path)
+{
+	char filename[MAX_QPATH];
+
+	for (int i = 0; i < (int)ARRAY_COUNT(skybox_download_extensions); i++)
+	{
+		if ((size_t)q_snprintf(filename, sizeof(filename), "%s.%s", face_path,
+			skybox_download_extensions[i]) >= sizeof(filename))
+			continue;
+		if (CL_CopyFromOtherGameDir(filename))
+			return true;
+	}
+	return false;
+}
+
 static void Sky_AsyncDownload_StartNext(void)
 {
 	while (skybox_async_download.active && !skybox_async_download.attempt_active)
@@ -2345,6 +2361,15 @@ static void Sky_AsyncDownload_StartNext(void)
 		{
 			Con_DPrintf("Skybox face path too long for %s%s\n", name,
 				suf[skybox_async_download.face_index]);
+			Sky_AsyncDownload_NextFace();
+			continue;
+		}
+
+		/* First visit to this face: borrow it from another game dir before
+		 * touching the mirrors. #siblingcopy */
+		if (skybox_async_download.mirror_index == 0 && skybox_async_download.extension_index == 0 &&
+			Sky_CopyFaceFromOtherGameDir(skybox_async_download.face_path))
+		{
 			Sky_AsyncDownload_NextFace();
 			continue;
 		}

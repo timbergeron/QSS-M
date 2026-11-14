@@ -4802,6 +4802,166 @@ qboolean COM_GameDirHasPlayableContent(const char *game_path)
 	return false;
 }
 
+/*
+=================
+COM_FindLooseFileInOtherGameDirs -- woods #siblingcopy
+
+Looks for relpath as a loose file in game directories that are not on the
+current search path (anything there COM_FileExists already sees).  Scans
+<root>, <root>/games and <root>/mods for the basedir and, when different, the
+userdir.  Packages are not searched.  When companion is set, a directory only
+matches if it holds that file too (a .lit is taken beside its own .bsp).  On
+success *out receives the full path of the file found.
+=================
+*/
+static qboolean COM_DirIsOnSearchPath(const char *dir)
+{
+	searchpath_t *search;
+
+	for (search = com_searchpaths; search; search = search->next)
+	{
+		if (!search->pack && !strcmp(search->filename, dir))
+			return true;
+	}
+	return false;
+}
+
+static qboolean COM_FindLooseFileInGameDir(const char *root, const char *name,
+	const char *relpath, const char *companion, char *out, size_t outsize)
+{
+	char dir[MAX_OSPATH];
+	char candidate[MAX_OSPATH];
+
+	if (name[0] == '.')
+		return false;
+	if (!q_strcasecmp(name, "qssm-downloads") || !q_strcasecmp(name, "qssm-updates") ||
+		!q_strcasecmp(COM_FileGetExtension(name), "app"))
+		return false;
+	if ((size_t)q_snprintf(dir, sizeof(dir), "%s/%s", root, name) >= sizeof(dir))
+		return false;
+	if (COM_DirIsOnSearchPath(dir))
+		return false;
+	if ((size_t)q_snprintf(candidate, sizeof(candidate), "%s/%s", dir, relpath) >= sizeof(candidate))
+		return false;
+	if (!(Sys_FileType(candidate) & FS_ENT_FILE))
+		return false;
+	if (companion)
+	{
+		char other[MAX_OSPATH];
+
+		if ((size_t)q_snprintf(other, sizeof(other), "%s/%s", dir, companion) >= sizeof(other) ||
+			!(Sys_FileType(other) & FS_ENT_FILE))
+			return false;
+	}
+
+	q_strlcpy(out, candidate, outsize);
+	return true;
+}
+
+static qboolean COM_FindLooseFileInRoot(const char *root, const char *relpath,
+	const char *companion, char *out, size_t outsize)
+{
+	qboolean found = false;
+#ifdef _WIN32
+	WIN32_FIND_DATA fdat;
+	HANDLE fhnd;
+	char pattern[MAX_OSPATH];
+
+	if ((size_t)q_snprintf(pattern, sizeof(pattern), "%s/*", root) >= sizeof(pattern))
+		return false;
+	fhnd = FindFirstFile(pattern, &fdat);
+	if (fhnd == INVALID_HANDLE_VALUE)
+		return false;
+	do
+	{
+		if (!(fdat.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY))
+			continue;
+		found = COM_FindLooseFileInGameDir(root, fdat.cFileName, relpath, companion, out, outsize);
+	} while (!found && FindNextFile(fhnd, &fdat));
+	FindClose(fhnd);
+#else
+	DIR *dir_p;
+	struct dirent *dir_t;
+
+	dir_p = opendir(root);
+	if (!dir_p)
+		return false;
+	while (!found && (dir_t = readdir(dir_p)) != NULL)
+		found = COM_FindLooseFileInGameDir(root, dir_t->d_name, relpath, companion, out, outsize);
+	closedir(dir_p);
+#endif
+	return found;
+}
+
+/*
+=================
+COM_PackFileHeaderOkay -- woods #siblingcopy
+
+Checks the parts of a .pak that COM_LoadPackFile treats as fatal (header id,
+directory bounds, file count) so a damaged file can be refused before it is
+installed and mounted.
+=================
+*/
+qboolean COM_PackFileHeaderOkay(const char *path)
+{
+	dpackheader_t header;
+	FILE *f;
+	long size;
+	unsigned int dirofs, dirlen, numfiles;
+	qboolean ok;
+
+	f = fopen(path, "rb");
+	if (!f)
+		return false;
+	ok = fread(&header, 1, sizeof(header), f) == sizeof(header) &&
+		fseek(f, 0, SEEK_END) == 0 && (size = ftell(f)) >= 0;
+	fclose(f);
+	if (!ok)
+		return false;
+	if (memcmp(header.id, "PACK", 4))
+		return false;
+
+	dirofs = LittleLong(header.dirofs);
+	dirlen = LittleLong(header.dirlen);
+	if ((int)dirofs < 0 || (int)dirlen < 0)
+		return false;
+	numfiles = dirlen / sizeof(dpackfile_t);
+	if (!numfiles || numfiles > MAX_FILES_IN_PACK)
+		return false;
+	return (unsigned long)dirofs + dirlen <= (unsigned long)size;
+}
+
+qboolean COM_FindLooseFileInOtherGameDirs(const char *relpath, const char *companion,
+	char *out, size_t outsize)
+{
+	static const char *prefixes[] = { "", "/games", "/mods" };
+	const char *roots[2];
+	int root_count = 0;
+	int i, j;
+
+	if (!relpath || !*relpath || !out || !outsize)
+		return false;
+
+	roots[root_count++] = com_basedir;
+	if (host_parms && host_parms->userdir && host_parms->userdir != host_parms->basedir &&
+		strcmp(host_parms->userdir, com_basedir))
+		roots[root_count++] = host_parms->userdir;
+
+	for (i = 0; i < root_count; i++)
+	{
+		for (j = 0; j < (int)countof(prefixes); j++)
+		{
+			char root[MAX_OSPATH];
+
+			if ((size_t)q_snprintf(root, sizeof(root), "%s%s", roots[i], prefixes[j]) >= sizeof(root))
+				continue;
+			if (COM_FindLooseFileInRoot(root, relpath, companion, out, outsize))
+				return true;
+		}
+	}
+	return false;
+}
+
 qboolean COM_GameDirNameHasPlayableContent(const char *game)
 {
 	char game_path[MAX_OSPATH];

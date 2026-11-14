@@ -4208,6 +4208,129 @@ static qboolean CL_FinalizeDownloadFile(const char *relative_path, const char *t
 	return true;
 }
 
+/*
+=================
+CL_CopyFromOtherGameDir -- woods #siblingcopy
+
+Before downloading a file the current game can't see, look for it as a loose
+file in another game directory and copy it over.  The web mirrors only match by
+name too, so a same-named copy is no less trustworthy than a fresh download.
+Limited to map, lit, loc, skybox files and paks/ctf.pak: progs, sounds and skins are
+routinely overridden per mod, so borrowing those would be wrong.
+=================
+*/
+static qboolean CL_SiblingCopyPathAllowed(const char *relpath)
+{
+	const char *ext = COM_FileGetExtension(relpath);
+
+	/* The one package CL_CheckDownload fetches on its own (see progs/star.mdl). */
+	if (!q_strcasecmp(relpath, "paks/ctf.pak"))
+		return true;
+	if (!q_strncasecmp(relpath, "maps/", 5))
+		return !q_strcasecmp(ext, "bsp") || !q_strcasecmp(ext, "lit");
+	/* Same formats the mirrors serve; COM_DownloadNameOkay rejects the rest. */
+	if (!q_strncasecmp(relpath, "gfx/env/", 8))
+		return !q_strcasecmp(ext, "tga") || !q_strcasecmp(ext, "png") ||
+			!q_strcasecmp(ext, "jpg") || !q_strcasecmp(ext, "dds");
+	return CL_DownloadNameIsLoc(relpath);
+}
+
+qboolean CL_CopyFromOtherGameDir(const char *relpath)
+{
+	static byte buffer[64 * 1024];
+	char source[MAX_OSPATH];
+	char companion[MAX_QPATH];
+	const char *ext;
+	char temp[MAX_OSPATH];
+	char sourcegame[MAX_OSPATH];
+	size_t relpath_len, source_len, count, total = 0;
+	FILE *in, *out;
+	qboolean ok = true;
+
+	/* Shareware never resolves loose files under subdirectories, so a copy
+	 * would stay invisible and get repeated on every signon poll. */
+	if (!registered.value)
+		return false;
+	if (!relpath || !CL_SiblingCopyPathAllowed(relpath) || !CL_DownloadNameIsValid(relpath))
+		return false;
+
+	/* A .lit only matches lighting from the same build of the map.  The .lit
+	 * is fetched first and must sit beside a .bsp; the .bsp then prefers a
+	 * directory that also has the .lit, so both land from the same mod. */
+	companion[0] = '\0';
+	ext = COM_FileGetExtension(relpath);
+	if (!q_strncasecmp(relpath, "maps/", 5) &&
+		(!q_strcasecmp(ext, "lit") || !q_strcasecmp(ext, "bsp")))
+	{
+		size_t baselen = (size_t)(ext - relpath);
+
+		if (baselen + 4 > sizeof(companion))
+			return false;
+		memcpy(companion, relpath, baselen);
+		q_strlcpy(companion + baselen, q_strcasecmp(ext, "lit") ? "lit" : "bsp",
+			sizeof(companion) - baselen);
+	}
+
+	if (!COM_FindLooseFileInOtherGameDirs(relpath, companion[0] ? companion : NULL,
+		source, sizeof(source)))
+	{
+		/* A .bsp without a .lit anywhere is still fine on its own. */
+		if (q_strcasecmp(ext, "bsp") ||
+			!COM_FindLooseFileInOtherGameDirs(relpath, NULL, source, sizeof(source)))
+			return false;
+	}
+	/* COM_LoadPackFile Sys_Errors on a damaged package; refuse it here. */
+	if (COM_IsPackageExtension(ext) && !COM_PackFileHeaderOkay(source))
+	{
+		Con_DPrintf("Not copying damaged package %s\n", source);
+		return false;
+	}
+	if ((size_t)q_snprintf(temp, sizeof(temp), "%s/%s.tmp", com_gamedir, relpath) >= sizeof(temp))
+		return false;
+
+	in = fopen(source, "rb");
+	if (!in)
+		return false;
+	COM_CreatePath(temp);
+	out = fopen(temp, "wb");
+	if (!out)
+	{
+		fclose(in);
+		return false;
+	}
+
+	while ((count = fread(buffer, 1, sizeof(buffer), in)) > 0)
+	{
+		if (fwrite(buffer, 1, count, out) != count)
+		{
+			ok = false;
+			break;
+		}
+		total += count;
+	}
+	if (ferror(in) || total == 0)
+		ok = false;
+	fclose(in);
+	if (fclose(out) != 0)
+		ok = false;
+
+	if (!ok || !CL_FinalizeDownloadFile(relpath, temp))
+	{
+		unlink(temp);
+		Con_DPrintf("Couldn't copy %s from %s, downloading instead\n", relpath, source);
+		return false;
+	}
+
+	/* source is "<root>/<game>/<relpath>"; report just <game>. */
+	q_strlcpy(sourcegame, source, sizeof(sourcegame));
+	relpath_len = strlen(relpath);
+	source_len = strlen(sourcegame);
+	if (source_len > relpath_len + 1)
+		sourcegame[source_len - relpath_len - 1] = '\0';
+	Con_Printf("Copied ^m%s^m from %s\n", COM_SkipPath(relpath), COM_SkipPath(sourcegame));
+	return true;
+}
+
 static qboolean DL_SendDownloadCommand(const char *command)
 {
 	size_t needed;
@@ -6060,6 +6183,11 @@ qboolean CL_CheckDownload(const char *filename)
 		return false;
 	if (COM_FileExists(filename, NULL))
 		return false;
+	/* Report a copy like a finished download: one more poll, so the signon
+	 * stages ahead of this one (the skybox prefetch waits on the BSP) see the
+	 * new file.  The next call finds it via COM_FileExists. #siblingcopy */
+	if (CL_CopyFromOtherGameDir(filename) && COM_FileExists(filename, NULL))
+		return true;
 
 	is_loc = CL_DownloadNameIsLoc(filename);
 	if (is_loc && CL_OptionalDownloadCache_ShouldSkip(filename))

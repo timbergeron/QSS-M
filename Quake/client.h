@@ -686,6 +686,7 @@ void CL_Download_Data(void);
 void CL_Download_Chunked(void);
 qboolean CL_Download_ShouldParseChunked(void);
 qboolean CL_CheckDownloads(void);
+qboolean CL_CopyFromOtherGameDir(const char *relpath); // woods #siblingcopy
 void CL_InitWebDownloads(qboolean run_checks);
 qboolean CL_CancelActiveDownload(void);
 void CL_AsyncDownload_Cancel(void);
