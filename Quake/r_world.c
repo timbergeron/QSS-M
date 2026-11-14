@@ -255,6 +255,10 @@ void R_MarkSurfaces (void)
 
 	r_visframecount++;
 
+	// client-side misc_emitter entities (main view only; they run once per frame)
+	if (!r_teleport_view)
+		PScript_RunMapEmitters (vis);
+
 	// set all chains to null
 	for (i=0 ; i<cl.worldmodel->numtextures ; i++)
 		if (cl.worldmodel->textures[i])

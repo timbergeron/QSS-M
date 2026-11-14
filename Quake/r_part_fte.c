@@ -455,6 +455,9 @@ static void FinishParticleType(part_type_t *ptype);
 
 static void R_ParticleDesc_Callback(struct cvar_s *var);
 static void R_MapDecals_Callback(struct cvar_s *var);
+static void R_MapEmitters_Callback(struct cvar_s *var);
+static void PScript_ClearMapEmitters(void);
+static void PScript_SpawnMapEmitters(void);
 static cvar_t r_bouncysparks = {"r_bouncysparks", "1"};
 static cvar_t r_part_rain = {"r_part_rain", "1"};
 #if UNSUPPORTED
@@ -462,6 +465,7 @@ static cvar_t r_bloodstains = {"r_bloodstains", "1"};
 #endif
 static cvar_t r_decal_noperpendicular = {"r_decal_noperpendicular", "1"};
 static cvar_t r_part_mapdecals = {"r_part_mapdecals", "1", CVAR_ARCHIVE};
+static cvar_t r_part_mapemitters = {"r_part_mapemitters", "1", CVAR_ARCHIVE};
 cvar_t r_particledesc = {"r_particledesc", "classic", CVAR_ARCHIVE};
 /* particle config parse cache -- a full re-parse of the r_particledesc configs
 costs 100ms+ per map load, so PScript_Startup skips it when the resulting state
@@ -3682,6 +3686,8 @@ void PScript_InitParticles (void)
 	Cvar_RegisterVariable(&r_decal_noperpendicular);
 	Cvar_RegisterVariable(&r_part_mapdecals);
 	Cvar_SetCallback(&r_part_mapdecals, R_MapDecals_Callback);
+	Cvar_RegisterVariable(&r_part_mapemitters);
+	Cvar_SetCallback(&r_part_mapemitters, R_MapEmitters_Callback);
 	Cvar_RegisterVariable(&r_particledesc);
 	Cvar_SetCompletion (&r_particledesc, &Particles_Completion_f); // woods #particlelist
 	Cvar_RegisterVariable(&r_part_rain_quantity);
@@ -3734,6 +3740,7 @@ void PScript_Shutdown (void)
 	PScript_ShutdownGL();
 
 	CL_ClearTrailStates();
+	PScript_ClearMapEmitters();	// before the trailstate pool they point into is freed
 
 //	if (fallback)
 //		fallback->ShutdownParticles();
@@ -3813,6 +3820,7 @@ void PScript_MapCleanup (void)
 		return;
 
 	CL_ClearTrailStates();
+	PScript_ClearMapEmitters();	// they belong to the old map's entity lump
 
 	while (pscript_mapdecal_type_cache)
 	{
@@ -4452,6 +4460,168 @@ static int PScript_ParseMapDecalFlip(const char *value)
 	return atoi(value) & (MAPDECAL_FLIP_H | MAPDECAL_FLIP_V);
 }
 
+/*
+misc_emitter: client-owned continuous particle emitters, read from the client's
+own copy of the map entities (so a local maps/<map>.ent works on any server and
+in demos, like sky keys and misc_decal; the server ignores the classname).
+
+	"classname" "misc_emitter"
+	"origin"    "x y z"
+	"effect"    "cfg/name.effect"	(loads particles/cfg/name.cfg on demand)
+	"angles"    "pitch yaw roll"	(or "angle"/"mangle") -> emit along that forward
+	"dir"       "x y z"				explicit emit direction instead
+with no angle or dir the effect points straight down, matching r_effect's
+default for models. Each emitter runs like a static entity's r_effect: count is
+the frame time, culled by the view PVS and frustum, once per rendered frame.
+*/
+typedef struct
+{
+	vec3_t org;
+	vec3_t dir;
+	int effect;
+	int cluster;	// PVS bit index of the emitter's leaf, -1 = always passes the PVS test
+	trailstate_t *ts;
+} pscript_mapemitter_t;
+static pscript_mapemitter_t *pscript_mapemitters;
+static int pscript_nummapemitters;
+static int pscript_mapemitter_frame = -1;
+
+#define MAPEMITTER_CULL 64	// effects reach a few dozen units from their origin
+
+static void PScript_ClearMapEmitters(void)
+{
+	int i;
+
+	for (i = 0; i < pscript_nummapemitters; i++)
+		if (trailstates)
+			PScript_DelinkTrailstate(&pscript_mapemitters[i].ts);
+	Z_Free(pscript_mapemitters);
+	pscript_mapemitters = NULL;
+	pscript_nummapemitters = 0;
+}
+
+static void PScript_SpawnMapEmitters(void)
+{
+	const char *data;
+	char key[128], value[256], classname[64], effect[MAX_QPATH];
+	vec3_t origin, angles, dir, up, right;
+	qboolean has_origin, has_angles, has_dir;
+	int maxemitters = 0, typenum;
+	mleaf_t *leaf;
+	pscript_mapemitter_t *em;
+
+	PScript_ClearMapEmitters();
+	if (!r_part_mapemitters.value || !part_type || !cl.worldmodel || !cl.worldmodel->entities)
+		return;
+
+	data = cl.worldmodel->entities;
+	while ((data = COM_Parse(data)) && com_token[0] == '{')
+	{
+		classname[0] = effect[0] = 0;
+		VectorClear(origin);
+		VectorClear(angles);
+		VectorClear(dir);
+		has_origin = has_angles = has_dir = false;
+
+		while ((data = COM_Parse(data)) && com_token[0] != '}')
+		{
+			q_strlcpy(key, com_token, sizeof(key));
+			if (!(data = COM_Parse(data)))
+				return;
+			q_strlcpy(value, com_token, sizeof(value));
+
+			if (!strcmp(key, "classname"))
+				q_strlcpy(classname, value, sizeof(classname));
+			else if (!strcmp(key, "effect"))
+				q_strlcpy(effect, value, sizeof(effect));
+			else if (!strcmp(key, "origin"))
+				has_origin = sscanf(value, "%f %f %f", &origin[0], &origin[1], &origin[2]) == 3;
+			else if (!strcmp(key, "angles") || !strcmp(key, "mangle"))
+				has_angles = sscanf(value, "%f %f %f", &angles[0], &angles[1], &angles[2]) >= 2;
+			else if (!strcmp(key, "angle"))
+			{
+				angles[1] = atof(value);
+				has_angles = true;
+			}
+			else if (!strcmp(key, "dir"))
+				has_dir = sscanf(value, "%f %f %f", &dir[0], &dir[1], &dir[2]) == 3;
+		}
+		if (!data)
+			break;
+
+		if (strcmp(classname, "misc_emitter"))
+			continue;
+		if (!has_origin || !*effect)
+		{
+			Con_DPrintf("misc_emitter missing origin or effect\n");
+			continue;
+		}
+		typenum = PScript_FindParticleType(effect);
+		if (typenum == P_INVALID)
+		{
+			Con_DPrintf("misc_emitter: unknown effect \"%s\"\n", effect);
+			continue;
+		}
+
+		if (has_dir && VectorNormalize(dir))
+			;
+		else if (has_angles)
+			AngleVectors(angles, dir, right, up);
+		else
+			VectorSet(dir, 0, 0, -1);
+
+		if (pscript_nummapemitters == maxemitters)
+		{
+			maxemitters = maxemitters ? maxemitters * 2 : 8;
+			pscript_mapemitters = Z_Realloc(pscript_mapemitters, maxemitters * sizeof(*pscript_mapemitters));
+		}
+		em = &pscript_mapemitters[pscript_nummapemitters++];
+		memset(em, 0, sizeof(*em));
+		VectorCopy(origin, em->org);
+		VectorCopy(dir, em->dir);
+		em->effect = typenum;
+		leaf = Mod_PointInLeaf(em->org, cl.worldmodel);
+		em->cluster = (leaf && leaf->contents != CONTENTS_SOLID) ? (int)(leaf - cl.worldmodel->leafs) - 1 : -1;
+		Con_DPrintf("misc_emitter \"%s\" at %.1f %.1f %.1f\n", effect, origin[0], origin[1], origin[2]);
+	}
+}
+
+/* called from R_MarkSurfaces with the view's PVS; runs at most once per frame */
+void PScript_RunMapEmitters(byte *vis)
+{
+	int i;
+	float t;
+	vec3_t mins, maxs;
+	pscript_mapemitter_t *em;
+
+	if (!pscript_nummapemitters || pscript_mapemitter_frame == r_framecount)
+		return;
+	pscript_mapemitter_frame = r_framecount;
+
+	t = cl.time - cl.oldtime;
+	if (t <= 0)
+		return;
+	if (t > 0.1)
+		t = 0.1;
+
+	for (i = 0, em = pscript_mapemitters; i < pscript_nummapemitters; i++, em++)
+	{
+		if (vis && em->cluster >= 0 && !(vis[em->cluster >> 3] & (1 << (em->cluster & 7))))
+			continue;
+		VectorSet(mins, em->org[0] - MAPEMITTER_CULL, em->org[1] - MAPEMITTER_CULL, em->org[2] - MAPEMITTER_CULL);
+		VectorSet(maxs, em->org[0] + MAPEMITTER_CULL, em->org[1] + MAPEMITTER_CULL, em->org[2] + MAPEMITTER_CULL);
+		if (R_CullBox(mins, maxs))
+			continue;
+		PScript_RunParticleEffectState(em->org, em->dir, t, em->effect, &em->ts);
+	}
+}
+
+static void R_MapEmitters_Callback(cvar_t *var)
+{
+	(void)var;
+	PScript_SpawnMapEmitters();
+}
+
 void PScript_SpawnMapDecals(void)
 {
 	const char *data;
@@ -4460,6 +4630,9 @@ void PScript_SpawnMapDecals(void)
 	float scale, alpha, rotate;
 	int flip;
 	qboolean has_origin, has_scale, has_alpha, has_blend;
+
+	// emitters share the decals' (re)spawn points: new map, particle config reload
+	PScript_SpawnMapEmitters();
 
 	if (!decals || !r_numdecals || !pscript_mapdecal_surfaces_ready)
 		return;

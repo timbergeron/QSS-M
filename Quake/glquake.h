@@ -122,6 +122,7 @@ typedef struct particle_s
 	void PScript_InvalidateTextures (void);	//call after TexMgr_NewGame purges textures; particle types re-resolve theirs lazily
 	void PScript_MapDecalsReady (qboolean ready);
 	void PScript_SpawnMapDecals (void);
+	void PScript_RunMapEmitters (byte *vis);	//client-side misc_emitter entities, once per frame
 	void PScript_UpdateModelEffects(qmodel_t *mod);
 	void PScript_ClearSurfaceParticles(qmodel_t *mod);	//model is being unloaded.
 	extern int r_trace_line_cache_counter;
@@ -141,6 +142,7 @@ typedef struct particle_s
 	#define PScript_DelinkTrailstate(tsp)
 	#define PScript_MapDecalsReady(ready)
 	#define PScript_SpawnMapDecals()
+	#define PScript_RunMapEmitters(vis)
 	#define InvalidateTraceLineCache()
 #endif
 

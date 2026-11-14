@@ -1690,8 +1690,8 @@ void ED_LoadFromFile (const char *data)
 			const char *classname = PR_GetString(ent->v.classname);
 			if (!strcmp(classname, "misc_model"))
 				PR_spawnfunc_misc_model(ent);
-			else if (!strcmp(classname, "misc_decal"))
-				ED_Free(ent);
+			else if (!strcmp(classname, "misc_decal") || !strcmp(classname, "misc_emitter"))
+				ED_Free(ent);	// client-side only (read from the client's own entity lump)
 			else
 			{
 				Con_SafePrintf ("No spawn function for:\n"); //johnfitz -- was Con_Printf
