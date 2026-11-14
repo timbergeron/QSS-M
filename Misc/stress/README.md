@@ -52,6 +52,17 @@ client limits and rejecting missing entries without reading adjacent fields.
 It requires a C compiler and SDL3; no window or game data is needed.
 Use `--baseline REV --case NAME` to reproduce an individual pre-fix failure.
 
+## Triggers in collision lists
+
+`python3 Misc/stress/test_trigger_clipping.py` checks production area-list
+collision filtering with address and undefined behavior sanitizers. It covers
+ordinary and BSP triggers whose solidity changed after linking, traversal past
+triggers to real blockers, child area nodes, owner/self exclusions, and restored
+solidity without modifying entity fields or links. Narrow-phase collision is a
+recording stub; these tests isolate filtering and do not validate Malice gameplay.
+It requires a C compiler and SDL3, with no window or game data.
+Use `--baseline REV` to reproduce the old fatal check.
+
 ## Requirements
 
 For chunked download pacing and standalone regression tests, see

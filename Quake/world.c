@@ -1288,8 +1288,10 @@ static void SV_ClipToLinks ( areanode_t *node, moveclip_t *clip )
 			continue;
 		if (touch == clip->passedict || touch == clip->lagowner)
 			continue;
+		/* QuakeC can change solidity without relinking, including temporarily
+		 * around a trace. Ignore triggers without changing their area links. */
 		if (touch->v.solid == SOLID_TRIGGER || touch->v.solid == SOLID_EXT_BSPTRIGGER)
-			Sys_Error ("Trigger in clipping list");
+			continue;
 
 		if (clip->laggedents)
 		{
