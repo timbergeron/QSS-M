@@ -233,8 +233,8 @@ Z_Realloc
 */
 void *Z_Realloc(void *ptr, int size)
 {
-	int old_size;
-	void *old_ptr;
+	int old_size, keep_size;
+	void *old_ptr, *keep;
 	memblock_t *block;
 
 	if (!ptr)
@@ -250,10 +250,30 @@ void *Z_Realloc(void *ptr, int size)
 	old_size -= (4 + (int)sizeof(memblock_t));	/* see Z_TagMalloc() */
 	old_ptr = ptr;
 
-	Z_Free (ptr);
+	// allocate while the old block still holds its data: freeing first lets
+	// Z_TagMalloc place the new block in a merged free neighbour and write its
+	// trailer and the next fragment's header over data not yet moved
+	keep_size = q_min(old_size, size);
 	ptr = Z_TagMalloc (size, 1);
-	if (!ptr)
-		Sys_Error ("Z_Realloc: failed on allocation of %i bytes", size);
+	if (ptr)
+	{
+		memcpy (ptr, old_ptr, keep_size);
+		Z_Free (old_ptr);
+	}
+	else
+	{	// no room for both blocks: park the data on the heap so the
+		// retry can reuse the old block's space
+		keep = malloc (keep_size);
+		if (!keep)
+			Sys_Error ("Z_Realloc: failed to keep %i bytes", keep_size);
+		memcpy (keep, old_ptr, keep_size);
+		Z_Free (old_ptr);
+		ptr = Z_TagMalloc (size, 1);
+		if (!ptr)
+			Sys_Error ("Z_Realloc: failed on allocation of %i bytes", size);
+		memcpy (ptr, keep, keep_size);
+		free (keep);
+	}
 
 	//Spike -- fix a bug where alignment resulted in no 0-initialisation
 	block = (memblock_t *) ((byte *) ptr - sizeof (memblock_t));
@@ -261,8 +281,6 @@ void *Z_Realloc(void *ptr, int size)
 	size -= (4 + (int)sizeof(memblock_t));	/* see Z_TagMalloc() */
 	//Spike -- end fix
 
-	if (ptr != old_ptr)
-		memmove (ptr, old_ptr, q_min(old_size, size));
 	if (old_size < size)
 		memset ((byte *)ptr + old_size, 0, size - old_size);
 
