@@ -3207,6 +3207,11 @@ static void P_ImportEffectInfo(const char *config, char *line, qboolean part_par
 	qboolean blooddecalonimpact = false;	//tracked separately because it needs to override another field
 
 	float teximages[256][4];
+	char setname[MAX_QPATH];
+
+	//config usually points at com_token, which the parsing below overwrites.
+	q_strlcpy(setname, config, sizeof(setname));
+	config = setname;
 
 	{
 		int i;
@@ -3239,7 +3244,7 @@ static void P_ImportEffectInfo(const char *config, char *line, qboolean part_par
 				s2 = atof(com_token);
 				line = COM_Parse(line);
 				t2 = atof(com_token);
-				if (line)
+				if (line && i >= 0 && i < (int)countof(teximages))
 				{
 					teximages[i][0] = s1;
 					teximages[i][1] = s2;
@@ -3436,6 +3441,13 @@ static void P_ImportEffectInfo(const char *config, char *line, qboolean part_par
 		{
 			int mini = atoi(arg[1]);
 			int maxi = atoi(arg[2]);
+			if (mini < 0 || mini >= (int)countof(teximages))
+			{
+				Con_Printf("effectinfo 'tex %s %s' out of range\n", arg[1], arg[2]);
+				continue;
+			}
+			if (maxi > (int)countof(teximages))
+				maxi = countof(teximages);
 			ptype->s1 = teximages[mini][0];
 			ptype->s2 = teximages[mini][1];
 			ptype->t1 = teximages[mini][2];
@@ -6074,6 +6086,9 @@ static int Fragment_ClipPolyToPlane(vec3_t *inverts, vec3_t *outverts, int incou
 	for (i = 0; i < incount; i++)
 	{
 		p1 = inverts[i];
+		//a non-convex input can gain a vertex per crossing edge; give up rather than overrun.
+		if (outcount + 2 > MAXFRAGMENTVERTS)
+			return 0;
 		if (keep[i] == KEEP_BORDER)
 		{
 			out = outverts[outcount++];
@@ -6149,11 +6164,10 @@ static void Fragment_ClipPoly(fragmentdecal_t *dec, int numverts, vec3_t *invert
 	numtris = 0;
 	while(numverts-->2)
 	{
-		if (numtris+3 > MAXFRAGMENTVERTS)
-		{
+		if ((numtris+1)*3 > MAXFRAGMENTVERTS)
+		{	//buffer full: flush and keep going
 			dec->callback(dec->ctx, decalfragmentverts, numtris);
 			numtris = 0;
-			break;
 		}
 
 		VectorCopy(verts[flip][0],			decalfragmentverts[numtris*3+0]);
