@@ -2690,12 +2690,35 @@ static void SCR_DrawFFADifferential(void) // woods
 /*====================
 1v1 match hud #duelhud
 
-With exactly two players, each score row also names its player, drawn as the
+With exactly two players and us observing (or a demo), each score row also names its player, drawn as the
 scoreboard draws it and right-justified against the score box; the
 differential moves to the left of your own name. CANVAS_TOPRIGHT4 coords.
 ====================*/
 #define SCR_DUEL_NAME_RIGHT	120		// names end here, just left of the score boxes
 #define SCR_DUEL_ROW_Y(i)	(32 + (i) * 18)	// a 1x text line centred on each 2x score row
+
+static qboolean SCR_InfoKeyIsOn(const char *userinfo, const char *key)
+{
+	char buf[32];
+	const char *value = Info_GetKey(userinfo, key, buf, sizeof(buf));
+
+	return value[0] && q_strcasecmp(value, "off");
+}
+
+// names only help an observer or demo viewer; a player knows which row is theirs.
+// reads our observer keys every frame: cl.notobserver only updates on server prints
+static qboolean SCR_ShowDuelNames(void)
+{
+	const char *userinfo;
+
+	if (cls.demoplayback)
+		return true;
+
+	userinfo = CL_GetSafeRealViewEntityUserinfo();
+	return SCR_InfoKeyIsOn(userinfo, "observer") ||
+		SCR_InfoKeyIsOn(userinfo, "*observer") ||
+		SCR_InfoKeyIsOn(userinfo, "observing");
+}
 
 static qboolean SCR_IsDuelPlayer(const scoreboard_t *s)
 {
@@ -2719,14 +2742,26 @@ static qboolean SCR_GetDuelPlayers(int *players)
 	return n == 2;
 }
 
+// the server pads names to 15 chars and appends 'ready'/'afk' status after them;
+// keep just the name part, without its padding
 static const char *SCR_DuelDisplayName(const scoreboard_t *s, char *buf, size_t size)
 {
-	if (cl_contentfilter.value == 2 && WordFilter_Check(s->name, buf, size)) // woods #contentfilter
+	char filtered[64];
+	const char *name = s->name;
+	int len;
+
+	if (cl_contentfilter.value == 2 && WordFilter_Check(s->name, filtered, sizeof(filtered))) // woods #contentfilter
 	{
-		buf[size - 1] = '\0';
-		return buf;
+		filtered[sizeof(filtered) - 1] = '\0';
+		name = filtered;
 	}
-	return s->name;
+
+	q_snprintf(buf, size, "%.15s", name);
+	len = (int)strlen(buf);
+	while (len > 0 && buf[len - 1] == ' ')
+		buf[--len] = '\0';
+
+	return buf;
 }
 
 // draws the name for score row 'row'; returns the x where the name starts
@@ -2981,7 +3016,7 @@ void SCR_DrawMatchScores(void)
 		{
 			int players[2];
 
-			if (cl.modetype != 8 && SCR_GetDuelPlayers(players)) // #duelhud, not headhunters (head count sits there)
+			if (cl.modetype != 8 && SCR_ShowDuelNames() && SCR_GetDuelPlayers(players)) // #duelhud, not headhunters (head count sits there)
 				SCR_DrawFFADuel(players);
 			else
 				SCR_DrawFFADifferential();
@@ -3088,7 +3123,7 @@ void SCR_DrawMatchScores(void)
 
 			y = SCR_DrawTeamScores(x, y, l, use_demo_calculation, team_colors, team_scores);
 
-			if (SCR_GetTeamDuelRows(l, row_player)) // #duelhud
+			if (SCR_ShowDuelNames() && SCR_GetTeamDuelRows(l, row_player)) // #duelhud
 			{
 				int row_right[2], row_y[2], i;
 
