@@ -63,9 +63,6 @@ static const char *gl_extensions;
 
 qboolean gl_texture_s3tc, gl_texture_rgtc, gl_texture_bptc, gl_texture_etc2, gl_texture_astc, gl_texture_e5bgr9;
 
-char	videosetg[50];	// woods #q_sysinfo (qrack)
-char	videoc[40];		// woods #q_sysinfo (qrack)
-
 static vmode_t	modelist[MAX_MODE_LIST];
 static int		nummodes;
 
@@ -730,7 +727,7 @@ static void VID_Gamma_Init (void)
 VID_GetCurrentWidth
 ======================
 */
-static int VID_GetCurrentWidth (void)
+int VID_GetCurrentWidth (void)
 {
 	int w = 0, h = 0;
 	SDL_GetWindowSize(draw_context, &w, &h);
@@ -742,7 +739,7 @@ static int VID_GetCurrentWidth (void)
 VID_GetCurrentHeight
 =======================
 */
-static int VID_GetCurrentHeight (void)
+int VID_GetCurrentHeight (void)
 {
 	int w = 0, h = 0;
 	SDL_GetWindowSize(draw_context, &w, &h);
@@ -768,7 +765,7 @@ static SDL_DisplayID VID_GetDisplay (void)
 VID_GetCurrentRefreshRate
 ====================
 */
-static int VID_GetCurrentRefreshRate (void)
+int VID_GetCurrentRefreshRate (void)
 {
 	const SDL_DisplayMode *mode = SDL_GetCurrentDisplayMode(VID_GetDisplay());
 
@@ -788,6 +785,11 @@ static int VID_GetCurrentBPP (void)
 {
 	const Uint32 pixelFormat = SDL_GetWindowPixelFormat(draw_context);
 	return SDL_BITSPERPIXEL(pixelFormat);
+}
+
+const char *VID_GetRendererName (void)
+{
+	return gl_renderer;
 }
 
 /*
@@ -1380,18 +1382,6 @@ EnableDarkModeForSDLWindow(draw_context); // woods #darkmode - apply dark mode t
 				VID_GetCurrentDisplayScale(), // woods add display scale
 				depthbits,
 				fsaa_obtained);
-
-	char videoset[50]; // woods #q_sysinfo (qrack)
-
-	sprintf(videoset, "%dx%dx%d %dHz (%d-bit z-buffer, %dx FSAA)",  // woods #q_sysinfo (qrack)
-		VID_GetCurrentWidth(),
-		VID_GetCurrentHeight(),
-		VID_GetCurrentBPP(),
-		VID_GetCurrentRefreshRate(),
-		depthbits,
-		fsaa_obtained);
-
-	strcpy(videosetg, videoset); // woods #q_sysinfo (qrack)
 
 	vid.recalc_refdef = 1;
 
@@ -2340,8 +2330,6 @@ static void GL_Init (void)
 	gl_version = (const char *) glGetString (GL_VERSION);
 	gl_extensions = (const char *) glGetString (GL_EXTENSIONS);
 
-	snprintf(videoc, sizeof(videoc), "%s", gl_renderer); // woods #q_sysinfo (qrack)
-
 	if (cls.state == ca_disconnected) // woods #supressvidmsgs
 	{
 		Con_SafePrintf("GL_VENDOR: %s\n", gl_vendor);
@@ -2578,9 +2566,6 @@ static void VID_FSAA_f (cvar_t *var)
 void VID_UpdateFSAA (int samples)
 {
 	fsaa_obtained = samples;
-	q_snprintf (videosetg, sizeof(videosetg), "%dx%dx%d %dHz (%d-bit z-buffer, %dx FSAA)",
-		VID_GetCurrentWidth(), VID_GetCurrentHeight(), VID_GetCurrentBPP(),
-		VID_GetCurrentRefreshRate(), vid_depthbits, samples);
 }
 
 //==========================================================================

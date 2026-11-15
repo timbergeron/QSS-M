@@ -329,6 +329,50 @@ extern	char mute[2]; // woods for mute to memory #usermute
 qboolean windowhasfocus = true;	//just in case sdl fails to tell us... // woods #pong -- remove static
 static qboolean	textmode;
 static keydevice_t lastactivetype = KD_NONE;
+static SDL_KeyboardID last_keyboard;
+static SDL_MouseID last_mouse;
+
+static const char *IN_FindInputDeviceName(const Uint32 *devices, int count,
+	Uint32 active, const char *other, const char *(*get_name)(Uint32))
+{
+	const char *first = NULL;
+	const char *distinct = NULL;
+
+	for (int i = 0; i < count; i++)
+	{
+		const char *name = get_name(devices[i]);
+		if (!name || !*name || !q_strcasecmp(name, "Keyboard") || !q_strcasecmp(name, "Mouse") ||
+			!q_strncasecmp(name, "HID", 3) || !q_strncasecmp(name, "USB Input Device", 16) ||
+			q_strcasestr(name, " (0x") || q_strcasestr(name, "dongle"))
+			continue;
+		if (devices[i] == active)
+			return name;
+		if (!first)
+			first = name;
+		if (!distinct && (!other || q_strcasecmp(name, other)))
+			distinct = name;
+	}
+
+	return distinct ? distinct : first;
+}
+
+void IN_GetInputDeviceNames(char *keyboard, size_t keyboard_size, char *mouse, size_t mouse_size)
+{
+	int mouse_count = 0, keyboard_count = 0;
+	SDL_MouseID *mice = SDL_GetMice(&mouse_count);
+	SDL_KeyboardID *keyboards = SDL_GetKeyboards(&keyboard_count);
+	const char *mouse_name = IN_FindInputDeviceName(mice, mouse_count, last_mouse,
+		NULL, SDL_GetMouseNameForID);
+	// Composite devices can appear in both lists.
+	const char *keyboard_name = IN_FindInputDeviceName(keyboards, keyboard_count, last_keyboard,
+		mouse_name, SDL_GetKeyboardNameForID);
+
+	q_strlcpy(keyboard, keyboard_name ? keyboard_name : "", keyboard_size);
+	q_strlcpy(mouse, mouse_name ? mouse_name : "", mouse_size);
+	SDL_free(keyboards);
+	SDL_free(mice);
+}
+
 extern qboolean	bind_grab;	//from the menu code, so that we regrab the mouse in order to pass inputs through
 
 static cvar_t in_debugkeys = {"in_debugkeys", "0", CVAR_NONE};
@@ -6232,6 +6276,8 @@ void IN_SendKeyEvents (void)
 		case SDL_EVENT_KEY_DOWN:
 		case SDL_EVENT_KEY_UP:
 			down = (event.key.down);
+			if (down && event.key.which)
+				last_keyboard = event.key.which;
 			lastactivetype = KD_KEYBOARD;
 
 			if (in_debugkeys.value)
@@ -6254,6 +6300,8 @@ void IN_SendKeyEvents (void)
 
 		case SDL_EVENT_MOUSE_BUTTON_DOWN:
 		case SDL_EVENT_MOUSE_BUTTON_UP:
+			if (event.button.down && event.button.which && event.button.which != SDL_TOUCH_MOUSEID)
+				last_mouse = event.button.which;
 			if (event.button.button < 1 ||
 				event.button.button > sizeof(buttonremap) / sizeof(buttonremap[0]))
 			{
@@ -6341,6 +6389,8 @@ void IN_SendKeyEvents (void)
 			break;
 
 		case SDL_EVENT_MOUSE_MOTION:
+			if (event.motion.which && event.motion.which != SDL_TOUCH_MOUSEID)
+				last_mouse = event.motion.which;
 			lastactivetype = KD_MOUSE;
 			if (IN_DemoScrubHandleMotion(&event))
 				break;

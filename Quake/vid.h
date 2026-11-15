@@ -101,6 +101,10 @@ void *VID_GetWindow (void);
 qboolean VID_HasMouseOrInputFocus (void);
 qboolean VID_HasInputFocus (void);
 qboolean VID_IsMinimized (void);
+int VID_GetCurrentWidth (void);
+int VID_GetCurrentHeight (void);
+int VID_GetCurrentRefreshRate (void);
+const char *VID_GetRendererName (void);
 float VID_GetCurrentDisplayScale (void); // content scale of the window's display, for diagnostics
 void	VID_Lock (void);
 void	VID_SetWindowCaption(const char *newcaption);

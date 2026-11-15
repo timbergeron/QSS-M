@@ -53,8 +53,6 @@ int grenadecache = -1, rocketcache = -1; // woods #r2g
 
 
 extern Uint64	maptime; // woods connected map time #maptime
-extern char videosetg[50];	// woods #q_sysinfo (qrack)
-extern char videoc[40];		// woods #q_sysinfo (qrack)
 qboolean	endscoreprint = false; // woods pq_confilter+
 extern qboolean pausedprint; // woods
 extern qboolean countdown; // woods #clearcrxcountdown
@@ -4003,6 +4001,70 @@ static const char *CL_MacOSDescription(void)
 }
 #endif
 
+// Hardware names can come from peripherals and drivers.
+static void CL_SysinfoChatName(char *name)
+{
+	char *end = name;
+	for (char *p = name; *p; p++)
+	{
+		if ((unsigned char)*p < ' ' || *p == 127 || *p == '"' || *p == ';')
+			*p = ' ';
+		if (*p != ' ')
+			end = p + 1;
+	}
+	*end = 0;
+}
+
+static qboolean CL_SysinfoSpecificAudio(const char *name)
+{
+	static const char *generic[] = {
+		"Default", "System default", "Default Output Device", "Speakers",
+		"Headphones", "Headphone", "Headset", "Headset Earphone", "Bluetooth Headset",
+		"Line Out", "Digital Audio", "HDMI", "Built-in Audio", "Audio Device",
+		"USB Audio", "USB Audio Device", "USB Audio CODEC", "USB PnP Audio Device",
+		"USB PnP Sound Device", "Bluetooth Audio",
+		"Bluetooth Audio Device", "Realtek Audio", "Realtek(R) Audio",
+		"Realtek USB Audio", "Realtek(R) USB Audio", "High Definition Audio",
+		"High Definition Audio Device", "Realtek High Definition Audio",
+		"NVIDIA High Definition Audio", "AMD High Definition Audio Device",
+		"Intel(R) Display Audio", "S/PDIF"
+	};
+	const char *model = name;
+	size_t length = strlen(name);
+	const char *detail = strchr(name, '(');
+
+	if (!length)
+		return false;
+	// Windows often appends the driver or headset model to a generic endpoint name.
+	if (detail && detail > name && detail[-1] == ' ' && name[length - 1] == ')')
+	{
+		size_t prefix_length = detail - name - 1;
+		for (size_t i = 0; i < Q_COUNTOF(generic); i++)
+		{
+			if (strlen(generic[i]) == prefix_length && !q_strncasecmp(name, generic[i], prefix_length))
+			{
+				model = detail + 1;
+				length = &name[length - 1] - model;
+				break;
+			}
+		}
+	}
+
+	// A duplicate Windows endpoint can prefix its device name with "2- ", "3- ", etc.
+	const char *number = model;
+	while ((size_t)(number - model) < length && q_isdigit((unsigned char)*number))
+		number++;
+	if (number != model && length - (size_t)(number - model) >= 2 && number[0] == '-' && number[1] == ' ')
+	{
+		length -= number + 2 - model;
+		model = number + 2;
+	}
+	for (size_t i = 0; i < Q_COUNTOF(generic); i++)
+		if (strlen(generic[i]) == length && !q_strncasecmp(model, generic[i], length))
+			return false;
+	return length > 0;
+}
+
 // woods -- f_ chat replies stay quiet only during a real match. cl.matchinp alone
 // also trips on any running timelimit clock (pubs, normal/dm modes), which
 // silenced f_version and friends everywhere.
@@ -4280,57 +4342,41 @@ if (!strcmp(printtext, "Client ping times:\n") && (cl.expectingpingtimes > realt
 				platform = mac_platform;
 #endif
 
-			const char* sound = SNDDMA_GetDeviceName(); // woods #q_sysinfo (qrack)
+			const char *sound = SNDDMA_GetDeviceName();
+			char cpu[80] = "";
 			const int sdlRam = SDL_GetSystemRAM(); // woods #q_sysinfo (qrack)
 			const int num_cpus = SDL_GetNumLogicalCPUCores(); // woods #q_sysinfo (qrack)
 			const float display_scale = VID_GetCurrentDisplayScale(); // woods #q_sysinfo
 
 #if defined(_WIN32) // use windows registry to get some more detailed info that SDL can't, adapted from ezquake
-			char* SYSINFO_processor_description = NULL;
 			char windows_version[256];
-			int	 SYSINFO_MHz = 0;
-			HKEY hKey;
-
-			// find/set registry location
-			long ret = RegOpenKey(
-				HKEY_LOCAL_MACHINE,
-				"HARDWARE\\DESCRIPTION\\System\\CentralProcessor\\0",
-				&hKey);
-
-			// get processor mhz
-
-			if (ret == ERROR_SUCCESS) {
-				DWORD type;
-				byte  data[1024];
-				DWORD datasize;
-
-				datasize = 1024;
-				ret = RegQueryValueEx(
-					hKey,
-					"~MHz",
-					NULL,
-					&type,
-					data,
-					&datasize);
-
-				if (ret == ERROR_SUCCESS && datasize > 0 && type == REG_DWORD)
-					SYSINFO_MHz = *((DWORD*)data);
-
-				// get processor name and description
-
-				datasize = 1024;
-				ret = RegQueryValueEx(
-					hKey,
-					"ProcessorNameString",
-					NULL,
-					&type,
-					data,
-					&datasize);
-
-				if (ret == ERROR_SUCCESS && datasize > 0 && type == REG_SZ)
-					SYSINFO_processor_description = strdup((char*)data);
-
-				RegCloseKey(hKey);
+			char processor[128];
+			DWORD mhz = 0;
+			const char *cpu_key = "HARDWARE\\DESCRIPTION\\System\\CentralProcessor\\0";
+			DWORD cpu_size = sizeof(processor);
+			DWORD mhz_size = sizeof(mhz);
+			if (RegGetValueA(HKEY_LOCAL_MACHINE, cpu_key, "ProcessorNameString",
+				RRF_RT_REG_SZ, NULL, processor, &cpu_size) == ERROR_SUCCESS)
+			{
+				CL_SysinfoChatName(processor);
+				const char *name = processor;
+				while (*name == ' ')
+					name++;
+				char *suffix = strstr(processor, "-Core Processor");
+				if (suffix && !strcmp(suffix, "-Core Processor"))
+				{
+					char *cores = suffix;
+					while (cores > name && q_isdigit((unsigned char)cores[-1]))
+						cores--;
+					if (cores > name && cores[-1] == ' ')
+						cores[-1] = 0;
+				}
+				RegGetValueA(HKEY_LOCAL_MACHINE, cpu_key, "~MHz",
+					RRF_RT_REG_DWORD, NULL, &mhz, &mhz_size);
+				if (*name && mhz)
+					q_snprintf(cpu, sizeof(cpu), "%.60s @ %.1f GHz", name, mhz / 1000.0);
+				else
+					q_strlcpy(cpu, name, sizeof(cpu));
 			}
 
 			const char *version_key = "SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion";
@@ -4354,8 +4400,6 @@ if (!strcmp(printtext, "Client ping times:\n") && (cl.expectingpingtimes > realt
 				platform = windows_version;
 			}
 	
-			MSG_WriteByte(&cls.message, clc_stringcmd);
-			MSG_WriteString(&cls.message, va("say %1.1fGHz %s", (float)SYSINFO_MHz/1000, SYSINFO_processor_description));
 #endif
 
 #if defined(PLATFORM_OSX) || defined(PLATFORM_MAC) // woods -- use mac terminal to get some more detailed info that SDL can't
@@ -4475,31 +4519,50 @@ if (!strcmp(printtext, "Client ping times:\n") && (cl.expectingpingtimes > realt
 			if (!com_modelname || !*com_modelname)
 				com_modelname = "Cannot Find Mac Model Name";
 
-			MSG_WriteByte(&cls.message, clc_stringcmd);
-			MSG_WriteString(&cls.message, va("say %s", com_modelname));
-			MSG_WriteByte(&cls.message, clc_stringcmd);
-			MSG_WriteString(&cls.message, va("say %s", SYSINFO_processor_description));
+			q_snprintf(cpu, sizeof(cpu), "%.30s, %.45s", com_modelname, SYSINFO_processor_description);
+			CL_SysinfoChatName(cpu);
 #endif
 			MSG_WriteByte(&cls.message, clc_stringcmd);
-			MSG_WriteString(&cls.message, va("say %s, %d l-cores, %dgb ram", platform, num_cpus, sdlRam / 1000));
-			MSG_WriteByte(&cls.message, clc_stringcmd);
-			MSG_WriteString(&cls.message, va("say Video: %s", videoc));
-			MSG_WriteByte(&cls.message, clc_stringcmd);
+			MSG_WriteString(&cls.message, va("say %.64s | %s%s%d threads, %d GB RAM",
+				platform, cpu, cpu[0] ? ", " : "", num_cpus, sdlRam / 1000));
 
-			char resolution_suffix[10] = "";
+			char gpu[80];
+			const char *renderer = VID_GetRendererName();
+			q_strlcpy(gpu, renderer ? renderer : "Unknown GPU", sizeof(gpu));
+			char *driver_suffix = strstr(gpu, "/PCIe/SSE2");
+			if (driver_suffix && !strcmp(driver_suffix, "/PCIe/SSE2"))
+				*driver_suffix = 0;
+			CL_SysinfoChatName(gpu);
+			MSG_WriteByte(&cls.message, clc_stringcmd);
+			MSG_WriteString(&cls.message, va("say %s | %dx%d @ %d Hz, %gx scale", gpu,
+				VID_GetCurrentWidth(), VID_GetCurrentHeight(), VID_GetCurrentRefreshRate(), display_scale));
 
-			// Use vid.width and vid.height which are updated when videosetg is set
-			if ((vid.width == 3840 && vid.height == 2160) || (vid.width == 4096 && vid.height == 2160)) { // Common 4K resolutions
-				strcpy(resolution_suffix, " (4k)");
+			char keyboard[256], mouse[256];
+			char keyboard_chat[49], mouse_chat[49];
+			IN_GetInputDeviceNames(keyboard, sizeof(keyboard), mouse, sizeof(mouse));
+			UTF8_ToQuake(keyboard_chat, sizeof(keyboard_chat), keyboard);
+			UTF8_ToQuake(mouse_chat, sizeof(mouse_chat), mouse);
+			CL_SysinfoChatName(keyboard_chat);
+			CL_SysinfoChatName(mouse_chat);
+			if (keyboard_chat[0] || mouse_chat[0])
+			{
+				MSG_WriteByte(&cls.message, clc_stringcmd);
+				MSG_WriteString(&cls.message, va("say Input: %s%s%s", keyboard_chat,
+					keyboard_chat[0] && mouse_chat[0] ? " + " : "", mouse_chat));
 			}
-			else if (vid.width == 2560 && vid.height == 1440) { // Common 2K resolution (QHD)
-				strcpy(resolution_suffix, " (2k)");
+
+			if (sound && CL_SysinfoSpecificAudio(sound))
+			{
+				char sound_chat[81];
+				UTF8_ToQuake(sound_chat, sizeof(sound_chat), sound);
+				CL_SysinfoChatName(sound_chat);
+				if (sound_chat[0])
+				{
+					MSG_WriteByte(&cls.message, clc_stringcmd);
+					MSG_WriteString(&cls.message, va("say %s", sound_chat));
+				}
 			}
 
-			MSG_WriteString(&cls.message, va("say %s %gx scale%s", videosetg, display_scale, resolution_suffix));
-			MSG_WriteByte(&cls.message, clc_stringcmd);
-			MSG_WriteString(&cls.message, va("say Audio: %s", sound));
-		
 			cl.printqsys = realtime + 20;
 		}
 	}
