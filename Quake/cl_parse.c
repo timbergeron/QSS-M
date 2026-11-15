@@ -4287,7 +4287,7 @@ if (!strcmp(printtext, "Client ping times:\n") && (cl.expectingpingtimes > realt
 
 #if defined(_WIN32) // use windows registry to get some more detailed info that SDL can't, adapted from ezquake
 			char* SYSINFO_processor_description = NULL;
-			char* SYSINFO_windows_version = NULL;
+			char windows_version[256];
 			int	 SYSINFO_MHz = 0;
 			HKEY hKey;
 
@@ -4330,30 +4330,29 @@ if (!strcmp(printtext, "Client ping times:\n") && (cl.expectingpingtimes > realt
 				if (ret == ERROR_SUCCESS && datasize > 0 && type == REG_SZ)
 					SYSINFO_processor_description = strdup((char*)data);
 
-				// find/set registry location
-				long ret = RegOpenKey(
-					HKEY_LOCAL_MACHINE,
-					"SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion",
-					&hKey);
-
-				// get windows version
-
-				datasize = 1024;
-				ret = RegQueryValueEx(
-					hKey,
-					"ProductName",
-					NULL,
-					&type,
-					data,
-					&datasize);
-
-				if (ret == ERROR_SUCCESS && datasize > 0 && type == REG_SZ)
-					SYSINFO_windows_version = strdup((char*)data);
-
 				RegCloseKey(hKey);
 			}
 
-			platform = SYSINFO_windows_version;
+			const char *version_key = "SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion";
+			DWORD version_size = sizeof(windows_version);
+			if (RegGetValueA(HKEY_LOCAL_MACHINE, version_key, "ProductName",
+				RRF_RT_REG_SZ, NULL, windows_version, &version_size) == ERROR_SUCCESS && windows_version[0])
+			{
+				// Windows 11 (build 22000 and later) can still have a Windows 10 product name.
+				const size_t name_length = sizeof("Windows 10") - 1;
+				char build[16];
+				DWORD build_size = sizeof(build);
+				if (!strncmp(windows_version, "Windows 10", name_length) &&
+					(windows_version[name_length] == ' ' || !windows_version[name_length]) &&
+					RegGetValueA(HKEY_LOCAL_MACHINE, version_key, "CurrentBuildNumber",
+						RRF_RT_REG_SZ, NULL, build, &build_size) == ERROR_SUCCESS)
+				{
+					char *end;
+					if (strtol(build, &end, 10) >= 22000 && !*end)
+						memcpy(windows_version, "Windows 11", name_length);
+				}
+				platform = windows_version;
+			}
 	
 			MSG_WriteByte(&cls.message, clc_stringcmd);
 			MSG_WriteString(&cls.message, va("say %1.1fGHz %s", (float)SYSINFO_MHz/1000, SYSINFO_processor_description));
