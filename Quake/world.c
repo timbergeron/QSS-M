@@ -899,8 +899,9 @@ reenter:
 	}
 	else
 	{
-		t1 = DotProduct (plane->normal, ctx->start) - plane->dist;
-		t2 = DotProduct (plane->normal, ctx->end) - plane->dist;
+		// Match the side tests above so an endpoint near the plane stays on the same side.
+		t1 = DoublePrecisionDotProduct (plane->normal, ctx->start) - plane->dist;
+		t2 = DoublePrecisionDotProduct (plane->normal, ctx->end) - plane->dist;
 	}
 
 	side = t1 < 0;

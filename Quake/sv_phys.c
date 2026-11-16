@@ -417,6 +417,19 @@ int SV_FlyMove (edict_t *ent, float time, trace_t *steptrace)
 		if (ent->free)
 			break;		// removed by the impact function
 
+		if (pr_checkextension.value && !trace.fraction && trace.ent == qcvm->edicts)
+		{
+			// Rounding can put the end of a slide back inside the same plane.
+			// Give the next trace clearance before treating it as another constraint.
+			for (i = 0; i < numplanes; i++)
+				if (VectorCompare (trace.plane.normal, planes[i]))
+					break;
+			if (i < numplanes)
+			{
+				VectorMA (ent->v.velocity, STOP_EPSILON, trace.plane.normal, ent->v.velocity);
+				continue;
+			}
+		}
 
 		time_left -= time_left * trace.fraction;
 
