@@ -2788,6 +2788,7 @@ static int CL_GetDemoMessage (void)
 {
 	int	r, i;
 	int	msglen;
+	long	demo_entry_end;
 	float	f;
 
 	if (!cls.demospeed || demo_rewind.backstop) // woods (iw) #democontrols
@@ -2825,6 +2826,20 @@ static int CL_GetDemoMessage (void)
 
 	cls.demo_offset_current = ftell(cls.demofile); // woods #demopercent (Baker Fitzquake Mark V)
 
+	// A demo stored in a pak shares the file with whatever follows it, so a
+	// demo that lacks a trailing svc_disconnect would read straight into the
+	// next entry.  Stop at this demo's own end.  Both the header and the
+	// payload are checked against it below.
+	demo_entry_end = (cls.demo_file_length > 0) ? (long)CL_GetDemoSeekEndOffset() : -1;
+	if (demo_entry_end >= 0 && cls.demo_offset_current >= demo_entry_end)
+	{
+		CL_EndDemoReadFailure("End of demo");
+	}
+	if (demo_entry_end >= 0 && demo_entry_end - cls.demo_offset_current < 16) // 4 length + 12 view angles
+	{
+		CL_EndDemoReadFailure("Demo read failed: truncated message length");
+	}
+
 	// read the length into a local and validate it before it ever reaches
 	// net_message.cursize, so a corrupt demo cannot leave a bogus size on the
 	// global buffer for anything else to act on
@@ -2853,6 +2868,10 @@ static int CL_GetDemoMessage (void)
 	{
 		Con_Printf ("Corrupt demo: message length %i out of range\n", msglen);
 		CL_EndDemoReadFailure("Demo read failed: invalid message length");
+	}
+	if (demo_entry_end >= 0 && msglen > demo_entry_end - ftell(cls.demofile))
+	{
+		CL_EndDemoReadFailure("Demo read failed: message extends past end of demo");
 	}
 	// only publish the size once the payload is actually in the buffer, so a
 	// short read never leaves cursize describing bytes we did not get
