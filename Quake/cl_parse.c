@@ -2111,8 +2111,10 @@ static void CL_ParseClientdata (void)
 		for (i = 0; i < 4; i++)
 			ammovals[i] = MSG_ReadByte ();
 		activeweapon = MSG_ReadByte ();
+		// the weapon's bit number; some old servers sent 32 for none,
+		// which x86 shifted as 0, the same as the 0 we send for none
 		if (!standard_quake)
-			activeweapon = 1u<<activeweapon;
+			activeweapon = 1u<<(activeweapon & 31);
 
 		//johnfitz -- PROTOCOL_FITZQUAKE
 		if (bits & SU_WEAPON2)
