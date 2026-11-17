@@ -1451,9 +1451,10 @@ void SV_BuildEntityState(client_t *client, edict_t *ent, entity_state_t *state)
 	VectorCopy(ent->v.origin, state->origin);
 	VectorCopy(ent->v.angles, state->angles);
 	state->modelindex = ent->v.modelindex;
-	state->frame = ent->v.frame;
+	// through int: a QC frame or skin of -1 is undefined as unsigned
+	state->frame = (int)ent->v.frame;
 	state->colormap = ent->v.colormap;
-	state->skin = ent->v.skin;
+	state->skin = (int)ent->v.skin;
 	if ((val = GetEdictFieldValue(ent, qcvm->extfields.scale)))
 		state->scale = ENTSCALE_ENCODE(val->_float);
 	else
@@ -4491,8 +4492,9 @@ void SV_CreateBaseline (void)
 		svent->baseline = nullentitystate;
 		VectorCopy (svent->v.origin, svent->baseline.origin);
 		VectorCopy (svent->v.angles, svent->baseline.angles);
-		svent->baseline.frame = svent->v.frame;
-		svent->baseline.skin = svent->v.skin;
+		// through int: a QC frame or skin of -1 is undefined as unsigned
+		svent->baseline.frame = (int)svent->v.frame;
+		svent->baseline.skin = (int)svent->v.skin;
 		if (entnum > 0 && entnum <= svs.maxclients)
 		{
 			svent->baseline.colormap = entnum;
