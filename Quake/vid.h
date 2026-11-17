@@ -106,6 +106,7 @@ int VID_GetCurrentHeight (void);
 int VID_GetCurrentRefreshRate (void);
 const char *VID_GetRendererName (void);
 float VID_GetCurrentDisplayScale (void); // content scale of the window's display, for diagnostics
+int VID_GetCurrentDisplayPPI (void); // physical pixels per inch, or zero if unavailable
 void	VID_Lock (void);
 void	VID_SetWindowCaption(const char *newcaption);
 void	VID_SetWindowTitle(const char* title); // github.com/andrei-drexler/ironwail (Show game summary in window title)

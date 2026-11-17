@@ -32,11 +32,13 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 //ericw -- for putting the driver into multithreaded mode
 #ifdef __APPLE__
 #include <CoreGraphics/CoreGraphics.h>
+#include <IOKit/graphics/IOGraphicsTypes.h>
 #include <OpenGL/OpenGL.h>
 #endif
 
 #ifdef _WIN32
 #include <windows.h>
+#include <shellscalingapi.h>
 #endif
 
 #define MAX_MODE_LIST	600 //johnfitz -- was 30
@@ -349,17 +351,12 @@ static void VID_Gamma_f (cvar_t *var)
 static double vid_gamma_burst_deadline;	// monitor rapidly until this time
 static double vid_gamma_burst_next;
 
-#if defined(__APPLE__) && USE_GAMMA_RAMPS
-#define VID_GAMMA_BURST_INTERVAL	0.05
-#define VID_GAMMA_IDLE_INTERVAL		0.25
-
-static CGDirectDisplayID vid_gamma_display = kCGNullDirectDisplay;
-static SDL_DisplayID vid_gamma_display_id = 0;
-static int vid_gamma_mismatch_streak;
-static double vid_gamma_last_mismatch;
+#ifdef __APPLE__
+static CGDirectDisplayID vid_cg_display = kCGNullDirectDisplay;
+static SDL_DisplayID vid_cg_display_id = 0;
 
 /* SDL's Cocoa backend exposes these same CoreGraphics bounds publicly. */
-static qboolean VID_Gamma_DisplayBoundsMatch (CGDirectDisplayID display, const SDL_Rect *bounds)
+static qboolean VID_CocoaDisplayBoundsMatch (CGDirectDisplayID display, const SDL_Rect *bounds)
 {
 	CGRect display_bounds = CGDisplayBounds (display);
 
@@ -371,16 +368,14 @@ static qboolean VID_Gamma_DisplayBoundsMatch (CGDirectDisplayID display, const S
 
 /*
 ================
-VID_Gamma_GetDisplay
+VID_GetCocoaDisplay
 
-Gamma ramps go straight to the CoreGraphics transfer table of the window's
-display, which is also where macOS can replace them behind our back.  Resolve
-SDL's display by its CoreGraphics bounds so
-the lookup does not depend on the ordering or filtering of either display
-list.  The cached ID is revalidated to handle window moves and hot-plugging.
+Resolve SDL's display by its CoreGraphics bounds so the lookup does not
+depend on the ordering or filtering of either display list. Revalidate
+the cached ID to handle window moves and hot-plugging.
 ================
 */
-static qboolean VID_Gamma_GetDisplay (CGDirectDisplayID *display)
+static qboolean VID_GetCocoaDisplay (CGDirectDisplayID *display)
 {
 	CGDirectDisplayID *displays;
 	CGDisplayCount count, i;
@@ -400,17 +395,17 @@ static qboolean VID_Gamma_GetDisplay (CGDirectDisplayID *display)
 	if (!display_id || !SDL_GetDisplayBounds (display_id, &bounds))
 		return false;
 
-	if (display_id == vid_gamma_display_id &&
-		vid_gamma_display != kCGNullDirectDisplay &&
-		CGDisplayIsOnline (vid_gamma_display) &&
-		VID_Gamma_DisplayBoundsMatch (vid_gamma_display, &bounds))
+	if (display_id == vid_cg_display_id &&
+		vid_cg_display != kCGNullDirectDisplay &&
+		CGDisplayIsOnline (vid_cg_display) &&
+		VID_CocoaDisplayBoundsMatch (vid_cg_display, &bounds))
 	{
-		*display = vid_gamma_display;
+		*display = vid_cg_display;
 		return true;
 	}
 
-	vid_gamma_display = kCGNullDirectDisplay;
-	vid_gamma_display_id = 0;
+	vid_cg_display = kCGNullDirectDisplay;
+	vid_cg_display_id = 0;
 
 	error = CGGetOnlineDisplayList (0, NULL, &count);
 	if (error != kCGErrorSuccess || !count)
@@ -428,10 +423,10 @@ static qboolean VID_Gamma_GetDisplay (CGDirectDisplayID *display)
 			// SDL omits the secondary members of a mirrored display set.
 			if (CGDisplayMirrorsDisplay (displays[i]) != kCGNullDirectDisplay)
 				continue;
-			if (VID_Gamma_DisplayBoundsMatch (displays[i], &bounds))
+			if (VID_CocoaDisplayBoundsMatch (displays[i], &bounds))
 			{
-				vid_gamma_display = displays[i];
-				vid_gamma_display_id = display_id;
+				vid_cg_display = displays[i];
+				vid_cg_display_id = display_id;
 				*display = displays[i];
 				break;
 			}
@@ -439,8 +434,17 @@ static qboolean VID_Gamma_GetDisplay (CGDirectDisplayID *display)
 	}
 	SDL_free (displays);
 
-	return vid_gamma_display != kCGNullDirectDisplay;
+	return vid_cg_display != kCGNullDirectDisplay;
 }
+
+#endif
+
+#if defined(__APPLE__) && USE_GAMMA_RAMPS
+#define VID_GAMMA_BURST_INTERVAL	0.05
+#define VID_GAMMA_IDLE_INTERVAL		0.25
+
+static int vid_gamma_mismatch_streak;
+static double vid_gamma_last_mismatch;
 
 static CGGammaValue VID_Gamma_ExpectedSample (const unsigned short *ramp,
 	uint32_t sample, uint32_t sample_count)
@@ -469,7 +473,7 @@ static qboolean VID_Gamma_RampMatches (void)
 	uint32_t count, i;
 	const CGGammaValue tolerance = 1.5f / 65535.0f;
 
-	if (!VID_Gamma_GetDisplay (&display) ||
+	if (!VID_GetCocoaDisplay (&display) ||
 		CGGetDisplayTransferByTable (display, (uint32_t)countof(red),
 		red, green, blue, &count) != kCGErrorSuccess || count < 2)
 		return true; // do not hammer the setter when the state cannot be queried
@@ -541,7 +545,7 @@ static qboolean VID_Gamma_ProbeNative (void)
 {
 	CGDirectDisplayID display;
 
-	return VID_Gamma_GetDisplay (&display) && CGDisplayGammaTableCapacity (display) > 0;
+	return VID_GetCocoaDisplay (&display) && CGDisplayGammaTableCapacity (display) > 0;
 }
 
 static qboolean VID_Gamma_SetNative (void)
@@ -550,7 +554,7 @@ static qboolean VID_Gamma_SetNative (void)
 	CGDirectDisplayID display;
 	int i;
 
-	if (!VID_Gamma_GetDisplay (&display))
+	if (!VID_GetCocoaDisplay (&display))
 	{
 		VID_Gamma_RestoreNative ();
 		return false;
@@ -805,6 +809,75 @@ float VID_GetCurrentDisplayScale (void)
 	float scale = draw_context ? SDL_GetWindowDisplayScale(draw_context) : 0.0f;
 
 	return scale > 0.0f ? scale : 1.0f;
+}
+
+int VID_GetCurrentDisplayPPI (void)
+{
+#ifdef __APPLE__
+	CGDirectDisplayID display;
+	if (!VID_GetCocoaDisplay (&display))
+		return 0;
+
+	CGSize mm = CGDisplayScreenSize (display);
+	if (mm.width <= 0 || mm.height <= 0)
+		return 0;
+
+	// Without physical dimensions, Core Graphics estimates them at 72 DPI.
+	CGSize bounds = CGDisplayBounds (display).size;
+	const double fallback_pixels_per_mm = 2.835;
+	if (fabs (mm.width - bounds.width / fallback_pixels_per_mm) < 1.0 &&
+		fabs (mm.height - bounds.height / fallback_pixels_per_mm) < 1.0)
+		return 0;
+
+	CFArrayRef modes = CGDisplayCopyAllDisplayModes (display, NULL);
+	if (!modes)
+		return 0;
+
+	double native_diagonal = 0.0;
+	const CFIndex count = CFArrayGetCount (modes);
+	for (CFIndex i = 0; i < count; i++)
+	{
+		CGDisplayModeRef mode = (CGDisplayModeRef)CFArrayGetValueAtIndex (modes, i);
+		if (!(CGDisplayModeGetIOFlags (mode) & kDisplayModeNativeFlag))
+			continue;
+		double diagonal = hypot (CGDisplayModeGetPixelWidth (mode), CGDisplayModeGetPixelHeight (mode));
+		if (diagonal > native_diagonal)
+			native_diagonal = diagonal;
+	}
+	CFRelease (modes);
+	return (int)(native_diagonal * 25.4 / hypot (mm.width, mm.height) + 0.5);
+#elif defined(_WIN32)
+	if (!draw_context)
+		return 0;
+
+	HWND window = SDL_GetPointerProperty (SDL_GetWindowProperties (draw_context),
+		SDL_PROP_WINDOW_WIN32_HWND_POINTER, NULL);
+	HMONITOR monitor = window ? MonitorFromWindow (window, MONITOR_DEFAULTTONEAREST) : NULL;
+	if (!monitor)
+		return 0;
+
+	HMODULE shcore = LoadLibraryExW (L"shcore.dll", NULL, LOAD_LIBRARY_SEARCH_SYSTEM32);
+	if (!shcore)
+		return 0;
+
+	typedef HRESULT (WINAPI *GetDpiForMonitorFunc)(HMONITOR, MONITOR_DPI_TYPE, UINT *, UINT *);
+	typedef HRESULT (WINAPI *GetProcessDpiAwarenessFunc)(HANDLE, PROCESS_DPI_AWARENESS *);
+	GetDpiForMonitorFunc get_dpi = (GetDpiForMonitorFunc)GetProcAddress (shcore, "GetDpiForMonitor");
+	GetProcessDpiAwarenessFunc get_awareness = (GetProcessDpiAwarenessFunc)GetProcAddress (shcore, "GetProcessDpiAwareness");
+	PROCESS_DPI_AWARENESS awareness;
+	UINT x = 0, y = 0;
+	// A compatibility override can prevent our process from becoming per-monitor aware.
+	if (get_dpi && get_awareness && SUCCEEDED (get_awareness (NULL, &awareness)) &&
+		awareness == PROCESS_PER_MONITOR_DPI_AWARE)
+	{
+		if (FAILED (get_dpi (monitor, MDT_RAW_DPI, &x, &y)))
+			x = y = 0;
+	}
+	FreeLibrary (shcore);
+	if (x && y)
+		return (int)(((double)x + y) / 2.0 + 0.5);
+#endif
+	return 0;
 }
 
 /*

@@ -4580,9 +4580,15 @@ if (!strcmp(printtext, "Client ping times:\n") && (cl.expectingpingtimes > realt
 			if (driver_suffix && !strcmp(driver_suffix, "/PCIe/SSE2"))
 				*driver_suffix = 0;
 			CL_SysinfoChatName(gpu);
+
+			char monitor_ppi[24] = "";
+			const int ppi = VID_GetCurrentDisplayPPI();
+			if (ppi > 0)
+				q_snprintf(monitor_ppi, sizeof(monitor_ppi), ", %d ppi", ppi);
+
 			MSG_WriteByte(&cls.message, clc_stringcmd);
-			MSG_WriteString(&cls.message, va("say %s | %dx%d @ %d Hz, %gx scale", gpu,
-				VID_GetCurrentWidth(), VID_GetCurrentHeight(), VID_GetCurrentRefreshRate(), display_scale));
+			MSG_WriteString(&cls.message, va("say %s | %dx%d @ %d Hz%s, %gx scale", gpu,
+				VID_GetCurrentWidth(), VID_GetCurrentHeight(), VID_GetCurrentRefreshRate(), monitor_ppi, display_scale));
 
 			cl.sysinfo_reply.audio[0] = 0;
 			if (sound && CL_SysinfoSpecificAudio(sound))
