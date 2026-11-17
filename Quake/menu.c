@@ -45868,7 +45868,10 @@ void M_Demos_Key(int key)
 			}
 			VEC_CLEAR(demosmenu.sorted_indices);
 			demosmenu.bg_parse_map_changed = false;
-			M_Demos_RefilterEx(true);
+			// Start at the first result instead of following the old selection.
+			demosmenu.list.cursor = -1;
+			M_Demos_Refilter();
+			M_Ticker_Init(&demosmenu.ticker);
 			S_LocalSound("misc/menu2.wav");
 			return;
 		}
