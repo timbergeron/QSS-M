@@ -326,6 +326,9 @@ const char *COM_FileGetExtension (const char *in); /* doesn't return NULL */
 void COM_CreatePath (char *path);
 qboolean ZIP_Extract(const char *zipfile, const char *outdir);
 qboolean ZIP_ExtractQuiet(const char *zipfile, const char *outdir);
+typedef qboolean (*zip_cancel_fn_t)(void);
+qboolean ZIP_ExtractQuietCancellable(const char *zipfile, const char *outdir,
+	zip_cancel_fn_t cancel_fn);
 const char *ZIP_ExtractError(void);
 
 char *va (const char *format, ...) FUNC_PRINTF(1,2);

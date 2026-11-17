@@ -7482,6 +7482,7 @@ void SCR_EndLoadingPlaque (void)
 //=============================================================================
 
 const char	*scr_notifystring;
+static scr_modalstyle_t scr_notifystyle = SCR_MODAL_PLAIN;
 qboolean	scr_drawdialog;
 
 static int SCR_NotifyLineVisibleLength(const char *start)
@@ -7550,8 +7551,7 @@ static void SCR_DrawNotifyStringBox(int y)
 
 static qboolean SCR_NotifyStringWantsBox(void)
 {
-	return scr_notifystring &&
-		strstr(scr_notifystring, "Install ^mQSS-M") != NULL;
+	return scr_notifystring && scr_notifystyle == SCR_MODAL_BOXED;
 }
 
 void SCR_DrawNotifyString (void) // woods add ^m/^g support
@@ -7659,6 +7659,12 @@ keypress.
 */
 int SCR_ModalMessage (const char *text, float timeout) //johnfitz -- timeout
 {
+	return SCR_ModalMessageStyled (text, timeout, SCR_MODAL_PLAIN);
+}
+
+int SCR_ModalMessageStyled (const char *text, float timeout,
+	scr_modalstyle_t style)
+{
 	double time1, time2; //johnfitz -- timeout
 	int lastkey, lastchar;
 
@@ -7666,6 +7672,7 @@ int SCR_ModalMessage (const char *text, float timeout) //johnfitz -- timeout
 		return true;
 
 	scr_notifystring = text;
+	scr_notifystyle = style;
 
 // draw a fresh screen
 	scr_drawdialog = true;

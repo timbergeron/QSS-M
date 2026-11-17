@@ -53,7 +53,15 @@ void SCR_AbortLoadingPlaque (void);	// woods -- release without clearing the not
 void SCR_ShowSaving (void);
 void SCR_QuitFade (void);
 
+typedef enum
+{
+	SCR_MODAL_PLAIN = 0,
+	SCR_MODAL_BOXED		// framed dialog, e.g. the update confirmation
+} scr_modalstyle_t;
+
 int SCR_ModalMessage (const char *text, float timeout); //johnfitz -- added timeout
+int SCR_ModalMessageStyled (const char *text, float timeout,
+	scr_modalstyle_t style);
 
 void Pong_Init (void); // woods #pong
 void Pong_Update (void);

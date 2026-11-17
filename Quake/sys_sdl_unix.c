@@ -365,15 +365,28 @@ qboolean Sys_LaunchUpdateHelper(const char *helper_path,
 }
 
 qboolean Sys_LaunchProgram(const char *exe_path, const char *working_dir,
-	char *error, size_t error_size)
+	const char *const *args, int num_args, char *error, size_t error_size)
 {
 	pid_t pid;
 	int status_pipe[2] = {-1, -1};
 	int child_errno = 0;
 	ssize_t nread;
+	const char *argv[32];
+	int argc = 0;
+	int i;
 
 	if (error && error_size)
 		error[0] = '\0';
+
+	if (num_args < 0 || num_args > (int)(sizeof(argv) / sizeof(argv[0])) - 2)
+	{
+		q_strlcpy(error, "too many launch arguments", error_size);
+		return false;
+	}
+	argv[argc++] = exe_path;
+	for (i = 0; i < num_args; i++)
+		argv[argc++] = args[i];
+	argv[argc] = NULL;
 
 	if (pipe(status_pipe) != 0)
 	{
@@ -409,7 +422,7 @@ qboolean Sys_LaunchProgram(const char *exe_path, const char *working_dir,
 			(void)written;
 			_exit(126);
 		}
-		execl(exe_path, exe_path, (char *)NULL);
+		execv(exe_path, (char *const *)argv);
 		child_errno = errno;
 		written = write(status_pipe[1], &child_errno,
 			sizeof(child_errno));

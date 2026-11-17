@@ -297,11 +297,13 @@ static qboolean Sys_AppendQuotedArg(char *cmdline, size_t cmdline_size,
 }
 
 static qboolean Sys_CreateProcessCommand(const char *exe_path,
-	const char *arg, const char *working_dir, char *error, size_t error_size)
+	const char *const *args, int num_args, const char *working_dir,
+	char *error, size_t error_size)
 {
 	STARTUPINFOA si;
 	PROCESS_INFORMATION pi;
-	char cmdline[MAX_OSPATH * 3];
+	char cmdline[8192];
+	int i;
 
 	if (error && error_size)
 		error[0] = '\0';
@@ -311,11 +313,19 @@ static qboolean Sys_CreateProcessCommand(const char *exe_path,
 	si.cb = sizeof(si);
 	cmdline[0] = '\0';
 
-	if (!Sys_AppendQuotedArg(cmdline, sizeof(cmdline), exe_path) ||
-		(arg && *arg && !Sys_AppendQuotedArg(cmdline, sizeof(cmdline), arg)))
+	if (!Sys_AppendQuotedArg(cmdline, sizeof(cmdline), exe_path))
 	{
 		q_strlcpy(error, "command line too long", error_size);
 		return false;
+	}
+	for (i = 0; i < num_args; i++)
+	{
+		if (args[i] && *args[i] &&
+			!Sys_AppendQuotedArg(cmdline, sizeof(cmdline), args[i]))
+		{
+			q_strlcpy(error, "command line too long", error_size);
+			return false;
+		}
 	}
 
 	if (!CreateProcessA(exe_path, cmdline, NULL, NULL, FALSE,
@@ -451,10 +461,10 @@ done:
 }
 
 qboolean Sys_LaunchProgram(const char *exe_path, const char *working_dir,
-	char *error, size_t error_size)
+	const char *const *args, int num_args, char *error, size_t error_size)
 {
-	return Sys_CreateProcessCommand(exe_path, NULL, working_dir, error,
-		error_size);
+	return Sys_CreateProcessCommand(exe_path, args, num_args, working_dir,
+		error, error_size);
 }
 
 qboolean Sys_RunUpdateSelfTest(const char *exe_path, const char *working_dir,

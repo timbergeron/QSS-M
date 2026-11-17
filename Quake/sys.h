@@ -85,7 +85,7 @@ qboolean Sys_LaunchUpdateHelper(const char *helper_path,
 	const char *helper_arg, const char *manifest_path, char *error,
 	size_t error_size);
 qboolean Sys_LaunchProgram(const char *exe_path, const char *working_dir,
-	char *error, size_t error_size);
+	const char *const *args, int num_args, char *error, size_t error_size);
 qboolean Sys_RunUpdateSelfTest(const char *exe_path, const char *working_dir,
 	const char *selftest_arg, unsigned int timeout_ms, char *error,
 	size_t error_size);

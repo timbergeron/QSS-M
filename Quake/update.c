@@ -200,6 +200,7 @@ void M_Update_PruneStagingAtStartup(void) {}
 #if !defined(PLATFORM_HAIKU)
 #include <sys/statvfs.h>
 #endif
+#include <signal.h>
 #include <sys/wait.h>
 #include <unistd.h>
 #endif
@@ -243,6 +244,9 @@ Update Command
 #define UPDATE_RECOVERY_MANIFEST	"recovery-manifest.txt"
 #define UPDATE_APPLY_LOCK			"update.lock"
 #define UPDATE_MAX_APPLY_FILES		32
+#define UPDATE_MAX_RELAUNCH_ARGS	12
+#define UPDATE_RELAUNCH_ARG_MAX		512
+#define UPDATE_FAILED_ARG			"-qssm-update-failed"
 #define UPDATE_STAGE_PRUNE_AGE		(7 * 24 * 60 * 60)
 #define UPDATE_WINDOWS_MIN_MAJOR	6
 #define UPDATE_WINDOWS_MIN_MINOR	1
@@ -309,10 +313,7 @@ typedef struct
 	curl_off_t	max_bytes;
 	curl_off_t	written;
 	qboolean	too_large;
-	qboolean	pump_events;
 	double		last_progress_time;
-	double		last_event_time;
-	double		last_screen_time;
 	char		display_name[64];
 } updatedownload_t;
 
@@ -350,6 +351,10 @@ typedef struct
 	char			recovery_manifest[MAX_OSPATH];
 	char			relaunch_dst[64];
 	updaterelaunchkind_t relaunch_kind;
+	/* Launch context (base/game dirs) to restore on relaunch. Older readers
+	 * ignore the relaunch_arg key, so the manifest stays compatible. */
+	char			relaunch_args[UPDATE_MAX_RELAUNCH_ARGS][UPDATE_RELAUNCH_ARG_MAX];
+	int				num_relaunch_args;
 	qboolean		complete;
 	qboolean		startup_attempted;
 	qboolean		startup_confirmed;
@@ -572,8 +577,97 @@ void M_Update_CurlOptions(void *curl_handle)
 #endif
 }
 
-qboolean M_Version_GitHubHttpGet(const char *url, versionhttpmem_t *mem,
-	char *error, size_t errorsz, size_t max_bytes)
+/*
+ * Foreground UI pump for the update command. Every blocking step between the
+ * release check and handing off to the helper (HTTP, hashing, unpacking) polls
+ * this so the screen keeps drawing and Esc cancels before any live file is
+ * touched. It owns the single key input grab for its scope; outside a scope it
+ * is inert, so worker-thread callers of the shared HTTP helper never pump.
+ */
+typedef struct
+{
+	qboolean	active;
+	qboolean	cancelled;
+	double		last_event_time;
+	double		last_screen_time;
+} updatepump_t;
+
+static updatepump_t update_pump;
+
+static qboolean M_Update_CanPumpScreen(void)
+{
+	return host_initialized && scr_initialized && con_initialized &&
+		cls.state != ca_dedicated;
+}
+
+static void M_Update_PumpBegin(const char *hint)
+{
+	memset(&update_pump, 0, sizeof(update_pump));
+	if (!M_Update_CanPumpScreen())
+		return;
+	if (hint && *hint)
+		Con_Printf("%s\n", hint);
+	update_pump.active = true;
+	Key_BeginInputGrab();
+	SCR_UpdateScreen();
+}
+
+static void M_Update_PumpEnd(void)
+{
+	if (update_pump.active)
+		Key_EndInputGrab();
+	update_pump.active = false;
+}
+
+/* Returns true once the player has asked to cancel. */
+static qboolean M_Update_PumpCancelled(void)
+{
+	double now;
+
+	if (update_pump.cancelled)
+		return true;
+	if (!update_pump.active)
+		return false;
+
+	now = Sys_DoubleTime();
+	if (now - update_pump.last_event_time >= 0.05)
+	{
+		int lastkey = -1;
+		int lastchar = -1;
+
+		update_pump.last_event_time = now;
+		Sys_SendKeyEvents();
+		Key_GetGrabbedInput(&lastkey, &lastchar);
+		if (lastkey == K_ESCAPE || lastkey == K_BBUTTON ||
+			lastkey == K_MOUSE2 || lastkey == K_MOUSE4 ||
+			lastchar == '`')
+		{
+			update_pump.cancelled = true;
+			return true;
+		}
+	}
+	if (now - update_pump.last_screen_time >= 0.10)
+	{
+		update_pump.last_screen_time = now;
+		SCR_UpdateScreen();
+	}
+	return false;
+}
+
+static int M_Update_HttpPumpCallback(void *clientp, curl_off_t dltotal,
+	curl_off_t dlnow, curl_off_t ultotal, curl_off_t ulnow)
+{
+	(void)clientp;
+	(void)dltotal;
+	(void)dlnow;
+	(void)ultotal;
+	(void)ulnow;
+	return M_Update_PumpCancelled() ? 1 : 0;
+}
+
+static qboolean M_Version_GitHubHttpGetInternal(const char *url,
+	versionhttpmem_t *mem, char *error, size_t errorsz, size_t max_bytes,
+	qboolean pump)
 {
 	CURL *curl;
 	CURLcode res;
@@ -609,6 +703,12 @@ qboolean M_Version_GitHubHttpGet(const char *url, versionhttpmem_t *mem,
 	if (max_bytes)
 		curl_easy_setopt(curl, CURLOPT_MAXFILESIZE_LARGE,
 			(curl_off_t)max_bytes);
+	if (pump)
+	{
+		curl_easy_setopt(curl, CURLOPT_NOPROGRESS, 0L);
+		curl_easy_setopt(curl, CURLOPT_XFERINFOFUNCTION,
+			M_Update_HttpPumpCallback);
+	}
 	M_Update_CurlOptions(curl);
 
 	res = NET_CurlEasyPerform(curl);
@@ -620,6 +720,7 @@ qboolean M_Version_GitHubHttpGet(const char *url, versionhttpmem_t *mem,
 	if (res != CURLE_OK)
 	{
 		q_strlcpy(error, mem->too_large ? "response too large" :
+			(pump && update_pump.cancelled) ? "cancelled" :
 			curl_easy_strerror(res), errorsz);
 		free(mem->memory);
 		mem->memory = NULL;
@@ -635,6 +736,21 @@ qboolean M_Version_GitHubHttpGet(const char *url, versionhttpmem_t *mem,
 	}
 
 	return true;
+}
+
+qboolean M_Version_GitHubHttpGet(const char *url, versionhttpmem_t *mem,
+	char *error, size_t errorsz, size_t max_bytes)
+{
+	return M_Version_GitHubHttpGetInternal(url, mem, error, errorsz,
+		max_bytes, false);
+}
+
+/* Foreground update-command fetch: same request, but pumps the UI. */
+static qboolean M_Update_HttpGet(const char *url, versionhttpmem_t *mem,
+	char *error, size_t errorsz, size_t max_bytes)
+{
+	return M_Version_GitHubHttpGetInternal(url, mem, error, errorsz,
+		max_bytes, true);
 }
 
 static qboolean M_Update_SHA256StringOkay(const char *sha)
@@ -3245,6 +3361,11 @@ static qboolean M_Update_WriteApplyManifest(const updateapplymanifest_t *manifes
 	fprintf(f, "relaunch_dst=%s\n", manifest->relaunch_dst);
 	fprintf(f, "relaunch_kind=%s\n",
 		M_Update_RelaunchKindName(manifest->relaunch_kind));
+	for (i = 0; i < manifest->num_relaunch_args; i++)
+	{
+		if (M_Update_ManifestValueOkay(manifest->relaunch_args[i]))
+			fprintf(f, "relaunch_arg=%s\n", manifest->relaunch_args[i]);
+	}
 	fprintf(f, "complete=%d\n", manifest->complete ? 1 : 0);
 	fprintf(f, "startup_attempted=%d\n",
 		manifest->startup_attempted ? 1 : 0);
@@ -3525,6 +3646,15 @@ static qboolean M_Update_ReadApplyManifest(const char *manifest_path,
 			!M_Update_ParseRelaunchKind(value,
 			&manifest->relaunch_kind))
 			goto invalid_value;
+		else if (!strcmp(line, "relaunch_arg"))
+		{
+			/* Optional context; drop anything that doesn't fit rather than
+			 * failing recovery over it. */
+			if (manifest->num_relaunch_args < UPDATE_MAX_RELAUNCH_ARGS &&
+				q_strlcpy(manifest->relaunch_args[manifest->num_relaunch_args],
+				value, UPDATE_RELAUNCH_ARG_MAX) < UPDATE_RELAUNCH_ARG_MAX)
+				manifest->num_relaunch_args++;
+		}
 		else if (!strcmp(line, "complete"))
 		{
 			qboolean bool_value;
@@ -4315,13 +4445,18 @@ static void M_Update_RecordRollbackComplete(qboolean restored,
 }
 
 static qboolean M_Update_HelperApply(updateapplymanifest_t *manifest,
-	FILE *log, char *error, size_t error_size, qboolean *rollback_complete)
+	FILE *log, char *error, size_t error_size, qboolean *rollback_complete,
+	qboolean *live_untouched)
 {
 	int i;
 	char probe_error[256] = "";
 
 	if (rollback_complete)
 		*rollback_complete = false;
+	/* True until the first change to the install directory; preflight
+	 * failures leave the previous build exactly as it was. */
+	if (live_untouched)
+		*live_untouched = true;
 
 	M_Update_HelperLog(log, "apply: live_dir=%s\n", manifest->live_dir);
 	M_Update_HelperLog(log, "apply: extract_dir=%s\n", manifest->extract_dir);
@@ -4340,6 +4475,8 @@ static qboolean M_Update_HelperApply(updateapplymanifest_t *manifest,
 	if (!M_Update_HelperPreflightTargets(manifest, log, error, error_size))
 		return false;
 
+	if (live_untouched)
+		*live_untouched = false;
 	if (!M_Update_CreateDirectoryPath(manifest->backup_dir, error, error_size))
 		return false;
 	manifest->complete = false;
@@ -4897,14 +5034,37 @@ static qboolean M_Update_ManifestRelaunchPath(
 }
 
 static qboolean M_Update_LaunchAppBundle(const char *bundle_path,
-	char *error, size_t error_size)
+	const char *const *args, int num_args, char *error, size_t error_size)
 {
 #if defined(__APPLE__)
+	const char *argv[UPDATE_MAX_RELAUNCH_ARGS + 8];
+	int argc = 0;
+	int i;
 	pid_t pid;
 	int status_pipe[2] = {-1, -1};
 	int child_errno = 0;
 	ssize_t nread;
 	int status = 0;
+
+	if (num_args < 0 || num_args > UPDATE_MAX_RELAUNCH_ARGS + 2)
+	{
+		q_strlcpy(error, "too many relaunch arguments", error_size);
+		return false;
+	}
+	/* -n: the helper is itself a process of this bundle, so without it
+	 * LaunchServices treats the app as running and only activates the
+	 * helper, dropping the relaunch (and its --args). The original game has
+	 * exited by now, so a new instance is the only one. */
+	argv[argc++] = "open";
+	argv[argc++] = "-n";
+	argv[argc++] = bundle_path;
+	if (num_args > 0)
+	{
+		argv[argc++] = "--args";
+		for (i = 0; i < num_args; i++)
+			argv[argc++] = args[i];
+	}
+	argv[argc] = NULL;
 
 	if (pipe(status_pipe) != 0)
 	{
@@ -4932,7 +5092,7 @@ static qboolean M_Update_LaunchAppBundle(const char *bundle_path,
 		ssize_t written;
 
 		close(status_pipe[0]);
-		execl("/usr/bin/open", "open", bundle_path, (char *)NULL);
+		execv("/usr/bin/open", (char *const *)argv);
 		child_errno = errno;
 		written = write(status_pipe[1], &child_errno,
 			sizeof(child_errno));
@@ -4984,24 +5144,46 @@ static qboolean M_Update_LaunchAppBundle(const char *bundle_path,
 	return true;
 #else
 	(void)bundle_path;
+	(void)args;
+	(void)num_args;
 	q_strlcpy(error, "app bundle launch is only supported on macOS",
 		error_size);
 	return false;
 #endif
 }
 
+/*
+ * Relaunch with the saved launch context. When report_failure is set the
+ * previous build was restored, so tell it to explain that on startup and
+ * point at the helper log.
+ */
 static qboolean M_Update_LaunchManifestTarget(
-	const updateapplymanifest_t *manifest, char *error, size_t error_size)
+	const updateapplymanifest_t *manifest, qboolean report_failure,
+	char *error, size_t error_size)
 {
 	char relaunch_path[MAX_OSPATH];
+	const char *args[UPDATE_MAX_RELAUNCH_ARGS + 2];
+	int num_args = 0;
+	int i;
 
 	if (!M_Update_ManifestRelaunchPath(manifest, false, relaunch_path,
 		sizeof(relaunch_path), error, error_size))
 		return false;
+
+	for (i = 0; i < manifest->num_relaunch_args &&
+		i < UPDATE_MAX_RELAUNCH_ARGS; i++)
+		args[num_args++] = manifest->relaunch_args[i];
+	if (report_failure)
+	{
+		args[num_args++] = UPDATE_FAILED_ARG;
+		args[num_args++] = manifest->log_path[0] ? manifest->log_path : "-";
+	}
+
 	if (manifest->relaunch_kind == UPDATE_RELAUNCH_APP_BUNDLE)
-		return M_Update_LaunchAppBundle(relaunch_path, error, error_size);
-	return Sys_LaunchProgram(relaunch_path, manifest->live_dir, error,
-		error_size);
+		return M_Update_LaunchAppBundle(relaunch_path, args, num_args,
+			error, error_size);
+	return Sys_LaunchProgram(relaunch_path, manifest->live_dir, args,
+		num_args, error, error_size);
 }
 
 static qboolean M_Update_LaunchRestoredBuild(
@@ -5013,7 +5195,7 @@ static qboolean M_Update_LaunchRestoredBuild(
 			error_size);
 		return false;
 	}
-	return M_Update_LaunchManifestTarget(manifest, error, error_size);
+	return M_Update_LaunchManifestTarget(manifest, true, error, error_size);
 }
 
 void M_Update_RecoverAtStartup(void)
@@ -5181,6 +5363,26 @@ void M_Update_RecoverAtStartup(void)
 	exit(1);
 }
 
+/* A relaunch from a failed update: say so plainly, once, with the log. */
+static void M_Update_ReportFailedUpdate(void)
+{
+	int arg = COM_CheckParm(UPDATE_FAILED_ARG);
+	const char *log_path;
+
+	if (!arg || isDedicated || !con_initialized)
+		return;
+
+	Con_Printf("\n^mUpdate couldn't finish.^m Your previous version was restored.\n");
+	log_path = (arg < com_argc - 1) ? com_argv[arg + 1] : NULL;
+	if (log_path && *log_path && strcmp(log_path, "-") &&
+		(Sys_FileType(log_path) & FS_ENT_FILE))
+	{
+		Con_Printf("Details: ");
+		Con_LinkPrintf(log_path, "%s", log_path);
+		Con_Printf("\n");
+	}
+}
+
 void M_Update_ConfirmStartup(void)
 {
 	updateapplymanifest_t manifest;
@@ -5190,6 +5392,8 @@ void M_Update_ConfirmStartup(void)
 	char manifest_path[MAX_OSPATH];
 	char error[512] = "";
 	FILE *log = NULL;
+
+	M_Update_ReportFailedUpdate();
 
 	if (!Sys_GetExecutablePath(current_exe, sizeof(current_exe)))
 		return;
@@ -5237,6 +5441,8 @@ void M_Update_ConfirmStartup(void)
 
 	M_Update_HelperLog(log, "startup confirmed updated build\n");
 	Sys_Printf("QSS-M update confirmed; removing recovery backups.\n");
+	if (con_initialized && !isDedicated)
+		Con_Printf("\n^mQSS-M^m updated to ^g%s^g.\n", QSSM_VER_STRING);
 	if (log)
 		fclose(log);
 	M_Update_ReleaseStartupLock();
@@ -5251,6 +5457,78 @@ void M_Update_PruneStagingAtStartup(void)
 #endif
 	if (com_basedir[0])
 		M_Update_PruneStageRoot(NULL);
+}
+
+/* Adds an option (and optional value) only when both fit, so a dropped
+ * value can never leave a dangling "-game" behind. */
+static qboolean M_Update_AddRelaunchArg(updateapplymanifest_t *manifest,
+	const char *opt, const char *value)
+{
+	int needed = value ? 2 : 1;
+
+	if (manifest->num_relaunch_args + needed > UPDATE_MAX_RELAUNCH_ARGS ||
+		strlen(opt) >= UPDATE_RELAUNCH_ARG_MAX ||
+		(value && strlen(value) >= UPDATE_RELAUNCH_ARG_MAX) ||
+		!M_Update_ManifestValueOkay(opt) ||
+		(value && (!*value || !M_Update_ManifestValueOkay(value))))
+		return false;
+
+	q_strlcpy(manifest->relaunch_args[manifest->num_relaunch_args++], opt,
+		UPDATE_RELAUNCH_ARG_MAX);
+	if (value)
+		q_strlcpy(manifest->relaunch_args[manifest->num_relaunch_args++],
+			value, UPDATE_RELAUNCH_ARG_MAX);
+	return true;
+}
+
+static qboolean M_Update_GameNameOkay(const char *name)
+{
+	return name && *name && strcmp(name, ".") && !strstr(name, "..") &&
+		!strchr(name, '/') && !strchr(name, '\\') && !strchr(name, ':');
+}
+
+/*
+ * Rebuild the launch context the player is in now: base directory, base game
+ * and the effective game dirs. Game dirs come from the live search path, not
+ * the original command line: -rogue/-hipnotic/-quoth only add those dirs (the
+ * flags are re-derived from dir names), and the "game" command can switch
+ * them away after launch, so replaying the launch flags could resurrect a
+ * pack the player already left. -basegame is never reset by "game", so the
+ * command line is its current state. One-shot options (+map, +connect,
+ * -condebug, ...) are deliberately not replayed.
+ */
+static void M_Update_BuildRelaunchArgs(updateapplymanifest_t *manifest)
+{
+	char names[1024];
+	char *name, *next;
+	int arg;
+
+	manifest->num_relaunch_args = 0;
+
+	if (COM_CheckParm("-basedir"))
+	{
+		char basedir[MAX_OSPATH];
+
+		if (M_Update_MakeAbsolutePath(com_basedir, basedir, sizeof(basedir)))
+			M_Update_AddRelaunchArg(manifest, "-basedir", basedir);
+	}
+
+	for (arg = COM_CheckParm("-basegame"); arg && arg < com_argc - 1;
+		arg = COM_CheckParmNext(arg, "-basegame"))
+	{
+		if (M_Update_GameNameOkay(com_argv[arg + 1]))
+			M_Update_AddRelaunchArg(manifest, "-basegame", com_argv[arg + 1]);
+	}
+
+	q_strlcpy(names, COM_GetGameNames(false), sizeof(names));
+	for (name = names; name && *name; name = next)
+	{
+		next = strchr(name, ';');
+		if (next)
+			*next++ = '\0';
+		if (q_strcasecmp(name, GAMENAME) && M_Update_GameNameOkay(name))
+			M_Update_AddRelaunchArg(manifest, "-game", name);
+	}
 }
 
 static qboolean M_Update_PrepareApplyHelper(const updatereleaseinfo_t *info,
@@ -5360,6 +5638,7 @@ static qboolean M_Update_PrepareApplyHelper(const updatereleaseinfo_t *info,
 	if (!M_Update_BuildApplyFileList(&manifest, info->platform,
 		live_exe_name, absolute_extract_dir, error, error_size))
 		return false;
+	M_Update_BuildRelaunchArgs(&manifest);
 
 	return M_Update_WriteApplyManifest(&manifest, manifest_path, error,
 		error_size);
@@ -5374,6 +5653,7 @@ int M_UpdateHelperMain(int argc, char **argv)
 	updateapplylock_t apply_lock;
 	qboolean success;
 	qboolean rollback_complete = false;
+	qboolean live_untouched = false;
 
 	if (argc < 3 || strcmp(argv[1], UPDATE_HELPER_ARG))
 		return 2;
@@ -5459,13 +5739,28 @@ int M_UpdateHelperMain(int argc, char **argv)
 	}
 
 	success = M_Update_HelperApply(&manifest, log, error, sizeof(error),
-		&rollback_complete);
+		&rollback_complete, &live_untouched);
 	if (!success)
 	{
 		M_Update_ReleaseApplyLock(&apply_lock);
 		if (rollback_complete && M_Update_ManifestHasTree(&manifest))
 			M_Update_RemoveManifestRecoveryDir(&manifest);
 		M_Update_HelperLog(log, "update failed: %s\n", error);
+		/* The game already closed. If the previous files are known to be in
+		 * place, bring the player back to them with an explanation instead
+		 * of leaving them at the desktop. A failed rollback is left for
+		 * startup recovery to handle. */
+		if ((live_untouched || rollback_complete) && manifest.relaunch_dst[0])
+		{
+			char relaunch_error[512] = "";
+
+			if (M_Update_LaunchManifestTarget(&manifest, true,
+				relaunch_error, sizeof(relaunch_error)))
+				M_Update_HelperLog(log, "relaunched previous build\n");
+			else
+				M_Update_HelperLog(log,
+					"previous build relaunch failed: %s\n", relaunch_error);
+		}
 		if (log)
 			fclose(log);
 		fprintf(stderr, "QSS-M update helper: %s\n", error);
@@ -5520,7 +5815,7 @@ int M_UpdateHelperMain(int argc, char **argv)
 					"self-test rollback restored previous files\n");
 				M_Update_ReleaseApplyLock(&apply_lock);
 				M_Update_RemoveManifestRecoveryDir(&manifest);
-				if (!M_Update_LaunchManifestTarget(&manifest,
+				if (!M_Update_LaunchManifestTarget(&manifest, true,
 					rollback_error, sizeof(rollback_error)))
 				{
 					M_Update_HelperLog(log,
@@ -5548,7 +5843,7 @@ int M_UpdateHelperMain(int argc, char **argv)
 		/* Release before relaunch so startup recovery/confirmation can take
 		 * the same lock in the new process. */
 		M_Update_ReleaseApplyLock(&apply_lock);
-		if (!M_Update_LaunchManifestTarget(&manifest, error,
+		if (!M_Update_LaunchManifestTarget(&manifest, false, error,
 			sizeof(error)))
 			M_Update_HelperLog(log, "relaunch failed: %s\n", error);
 	}
@@ -5623,7 +5918,7 @@ static qboolean M_Update_FetchReleaseAssetMemory(
 		return false;
 	}
 
-	if (!M_Version_GitHubHttpGet(asset->url, mem, error, error_size,
+	if (!M_Update_HttpGet(asset->url, mem, error, error_size,
 		max_bytes))
 		return false;
 
@@ -5929,7 +6224,7 @@ static qboolean M_Update_FetchReleaseInfo(updatereleaseinfo_t *info,
 		sizeof(info->platform));
 	info->comparison = 2;
 
-	if (!M_Version_GitHubHttpGet(UPDATE_RELEASE_URL, &mem, error, error_size,
+	if (!M_Update_HttpGet(UPDATE_RELEASE_URL, &mem, error, error_size,
 		VERSION_GITHUB_MAX_RESPONSE_BYTES))
 		return false;
 
@@ -5987,6 +6282,37 @@ done:
 	if (mem.memory)
 		free(mem.memory);
 	return ok;
+}
+
+/* The release lookup is a blocking HTTPS call (plus signed metadata); keep
+ * the screen live and Esc-cancellable while it runs. */
+static qboolean M_Update_FetchReleaseInfoInteractive(
+	updatereleaseinfo_t *info, char *error, size_t error_size)
+{
+	qboolean ok;
+
+	Con_Printf("Checking for QSS-M updates...\n");
+	M_Update_PumpBegin(NULL);
+	ok = M_Update_FetchReleaseInfo(info, error, error_size);
+	M_Update_PumpEnd();
+	return ok;
+}
+
+static void M_Update_PrintFetchError(const char *what, const char *error)
+{
+	if (update_pump.cancelled)
+	{
+		Con_Printf("Update check cancelled.\n");
+		return;
+	}
+	if (!q_strcasecmp(error, "HTTP 403") || !q_strcasecmp(error, "HTTP 429"))
+		Con_Printf("%s: GitHub's update check limit was reached; try again in an hour.\n",
+			what);
+	else
+		Con_Printf("%s: %s\n", what, error[0] ? error : "unknown error");
+	Con_Printf("Release page: ");
+	Con_LinkPrintf(UPDATE_RELEASE_PAGE, "%s", UPDATE_RELEASE_PAGE);
+	Con_Printf("\n");
 }
 
 static void M_Update_PrintReleaseInfo(const updatereleaseinfo_t *info,
@@ -6125,30 +6451,10 @@ static int M_Update_ProgressCallback(void *clientp, curl_off_t dltotal,
 	if (stop_curl_download)
 		return 1;
 
-	if (download->pump_events)
+	if (M_Update_PumpCancelled())
 	{
-		int lastkey = -1;
-		int lastchar = -1;
-
-		now = Sys_DoubleTime();
-		if (now - download->last_event_time >= 0.05)
-		{
-			download->last_event_time = now;
-			Sys_SendKeyEvents();
-			Key_GetGrabbedInput(&lastkey, &lastchar);
-			if (lastkey == K_ESCAPE || lastkey == K_BBUTTON ||
-				lastkey == K_MOUSE2 || lastkey == K_MOUSE4 ||
-				lastchar == '`')
-			{
-				stop_curl_download = true;
-				return 1;
-			}
-		}
-		if (now - download->last_screen_time >= 0.10)
-		{
-			download->last_screen_time = now;
-			SCR_UpdateScreen();
-		}
+		stop_curl_download = true;
+		return 1;
 	}
 
 	if (download->max_bytes > 0 &&
@@ -6182,7 +6488,7 @@ static int M_Update_ProgressCallback(void *clientp, curl_off_t dltotal,
 		Con_Printf("DL %s %.0f KB\r", download->display_name,
 			(double)dlnow / 1024.0);
 	}
-	if (download->pump_events)
+	if (update_pump.active)
 		SCR_UpdateScreen();
 
 	return 0;
@@ -6201,7 +6507,6 @@ static qboolean M_Update_RunTransfer(const char *url, const char *path,
 	qofs_t local_file_size = 0;
 	qboolean success = false;
 	qboolean write_failed = false;
-	qboolean input_grabbed = false;
 	char flush_error[256] = "";
 
 	if (file_size)
@@ -6232,8 +6537,6 @@ static qboolean M_Update_RunTransfer(const char *url, const char *path,
 	memset(&download, 0, sizeof(download));
 	download.file = fp;
 	download.max_bytes = max_bytes;
-	download.pump_events = host_initialized && scr_initialized &&
-		con_initialized && cls.state != ca_dedicated;
 	q_strlcpy(download.display_name,
 		display_name && *display_name ? display_name : "QSS-M update",
 		sizeof(download.display_name));
@@ -6255,20 +6558,7 @@ static qboolean M_Update_RunTransfer(const char *url, const char *path,
 		curl_easy_setopt(curl, CURLOPT_MAXFILESIZE_LARGE, max_bytes);
 	M_Update_CurlOptions(curl);
 
-	if (download.pump_events)
-	{
-		Con_Printf("Press ^mEsc^m to cancel.\n");
-		Key_BeginInputGrab();
-		input_grabbed = true;
-	}
-
 	result = NET_CurlEasyPerform(curl);
-
-	if (input_grabbed)
-	{
-		Key_EndInputGrab();
-		input_grabbed = false;
-	}
 
 	curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &response_code);
 	write_failed = !M_Update_FlushFileToDisk(fp, flush_error,
@@ -6405,19 +6695,29 @@ static qboolean M_Update_ExtractWithDitto(const char *zip_path,
 		return false;
 	}
 
+	for (;;)
 	{
-		pid_t result;
+		pid_t result = waitpid(pid, &status, WNOHANG);
 
-		do
-		{
-			result = waitpid(pid, &status, 0);
-		} while (result < 0 && errno == EINTR);
-		if (result != pid)
+		if (result == pid)
+			break;
+		if (result < 0 && errno == EINTR)
+			continue;
+		if (result < 0)
 		{
 			q_snprintf(error, error_size, "ditto wait failed: %s",
 				strerror(errno));
 			return false;
 		}
+		if (M_Update_PumpCancelled())
+		{
+			kill(pid, SIGTERM);
+			while (waitpid(pid, NULL, 0) < 0 && errno == EINTR)
+				;
+			q_strlcpy(error, "cancelled", error_size);
+			return false;
+		}
+		Sys_Sleep(10);
 	}
 
 	if (!WIFEXITED(status) || WEXITSTATUS(status) != 0)
@@ -6445,7 +6745,8 @@ static qboolean M_Update_ExtractArchive(const updatereleaseinfo_t *info,
 	if (!strcmp(info->platform, "macos"))
 		return M_Update_ExtractWithDitto(zip_path, extract_dir, error,
 			error_size);
-	if (!ZIP_ExtractQuiet(zip_path, extract_dir))
+	if (!ZIP_ExtractQuietCancellable(zip_path, extract_dir,
+		M_Update_PumpCancelled))
 	{
 		M_Update_CopyExtractError(error, error_size);
 		return false;
@@ -6527,12 +6828,14 @@ static qboolean M_Update_PreflightRelease(const updatereleaseinfo_t *info,
 	return true;
 }
 
-static qboolean M_Update_PrepareRelease(const updatereleaseinfo_t *info,
+static qboolean M_Update_PrepareReleaseSteps(const updatereleaseinfo_t *info,
 	qboolean force, char *stage_dir, size_t stage_dir_size,
 	char *zip_path, size_t zip_path_size, char *extract_dir,
 	size_t extract_dir_size, char *error, size_t error_size)
 {
 	qofs_t file_size = 0;
+	char size[32];
+	char display_name[64];
 
 	if (!M_Update_PreflightRelease(info, force, error, error_size))
 		return false;
@@ -6544,29 +6847,59 @@ static qboolean M_Update_PrepareRelease(const updatereleaseinfo_t *info,
 		info->asset_size, error, error_size))
 		return false;
 
-	Con_Printf("Downloading %s\n", info->asset_url);
-	if (!M_Update_RunTransfer(info->asset_url, zip_path, info->asset_name,
+	M_Update_FormatSize(info->asset_size, size, sizeof(size));
+	Con_Printf("Downloading QSS-M ^g%s^g (%s)...\n", info->tag, size);
+	q_snprintf(display_name, sizeof(display_name), "QSS-M %s", info->tag);
+	if (!M_Update_RunTransfer(info->asset_url, zip_path, display_name,
 		UPDATE_MAX_DOWNLOAD_BYTES, &file_size, error, error_size))
 		return false;
 
-	Con_Printf("Verifying SHA-256...\n");
-	if (!M_VerifySHA256File(zip_path, info->asset_sha256, false, NULL))
+	Con_Printf("Verifying download...\n");
+	if (!M_VerifySHA256File(zip_path, info->asset_sha256, false,
+		M_Update_PumpCancelled))
 	{
 		remove(zip_path);
-		q_strlcpy(error, "SHA-256 verification failed", error_size);
+		q_strlcpy(error, update_pump.cancelled ? "cancelled" :
+			"SHA-256 verification failed", error_size);
 		return false;
 	}
 
-	Con_Printf("Extracting to %s\n", extract_dir);
+	Con_Printf("Unpacking...\n");
 	if (!M_Update_ExtractArchive(info, zip_path, extract_dir, error,
 		error_size))
 		return false;
 
-	Con_Printf("Validating staged package...\n");
 	if (!M_Update_ValidateExtracted(info, extract_dir, error, error_size))
 		return false;
+	if (M_Update_PumpCancelled())
+	{
+		q_strlcpy(error, "cancelled", error_size);
+		return false;
+	}
 
 	return true;
+}
+
+/* Download, verify, unpack and validate with the UI live; Esc cancels any
+ * step. Nothing outside the staging directory is modified here. */
+static qboolean M_Update_PrepareRelease(const updatereleaseinfo_t *info,
+	qboolean force, char *stage_dir, size_t stage_dir_size,
+	char *zip_path, size_t zip_path_size, char *extract_dir,
+	size_t extract_dir_size, char *error, size_t error_size)
+{
+	qboolean ok;
+
+	M_Update_PumpBegin("Press ^mEsc^m to cancel.");
+	ok = M_Update_PrepareReleaseSteps(info, force, stage_dir,
+		stage_dir_size, zip_path, zip_path_size, extract_dir,
+		extract_dir_size, error, error_size);
+	M_Update_PumpEnd();
+	return ok;
+}
+
+static qboolean M_Update_WasCancelled(void)
+{
+	return update_pump.cancelled;
 }
 
 static void M_Update_Prepare_f(qboolean force)
@@ -6583,11 +6916,9 @@ static void M_Update_Prepare_f(qboolean force)
 		return;
 	}
 
-	if (!M_Update_FetchReleaseInfo(&info, error, sizeof(error)))
+	if (!M_Update_FetchReleaseInfoInteractive(&info, error, sizeof(error)))
 	{
-		Con_Printf("update prepare failed: %s\n",
-			error[0] ? error : "unknown error");
-		Con_Printf("Release page: %s\n", UPDATE_RELEASE_PAGE);
+		M_Update_PrintFetchError("update prepare failed", error);
 		return;
 	}
 
@@ -6598,8 +6929,11 @@ static void M_Update_Prepare_f(qboolean force)
 		zip_path, sizeof(zip_path), extract_dir, sizeof(extract_dir),
 		error, sizeof(error)))
 	{
-		Con_Printf("update prepare failed: %s\n",
-			error[0] ? error : "unknown error");
+		if (M_Update_WasCancelled())
+			Con_Printf("Update cancelled.\n");
+		else
+			Con_Printf("update prepare failed: %s\n",
+				error[0] ? error : "unknown error");
 		return;
 	}
 
@@ -6614,11 +6948,11 @@ static void M_Update_Prepare_f(qboolean force)
 	Con_Printf("No live QSS-M files were changed.\n");
 }
 
-static qboolean M_Update_ConfirmInstall(const updatereleaseinfo_t *info,
-	qboolean force)
+static qboolean M_Update_ConfirmInstall(const updatereleaseinfo_t *info)
 {
 	char prompt[1024];
 	char size[32];
+	const char *verb;
 
 	if (isDedicated)
 	{
@@ -6631,23 +6965,32 @@ static qboolean M_Update_ConfirmInstall(const updatereleaseinfo_t *info,
 		return false;
 	}
 
+	/* 2 means "unable to compare": test it before the ordered cases so an
+	 * unknown version is never presented as a downgrade. */
+	if (info->comparison == 2)
+		verb = "Install";
+	else if (info->comparison == 0)
+		verb = "Reinstall";
+	else if (info->comparison > 0)
+		verb = "Downgrade to";
+	else
+		verb = "Update to";
+
 	M_Update_FormatSize(info->asset_size, size, sizeof(size));
 	q_snprintf(prompt, sizeof(prompt),
-		"Install ^mQSS-M^m ^g%s^g%s?\n\n"
-		"Current: ^g%s^g\n"
-		"Asset: %s\n"
-		"Size: %s\n"
-		"%s"
-		"Configs/saves are not touched\n\n"
+		"%s ^mQSS-M^m ^g%s^g%s?\n\n"
+		"You have: ^g%s^g\n"
+		"Download: ^g%s^g\n\n"
+		"QSS-M will restart when done.\n"
+		"Configs, saves, and mods are kept.\n"
+		"%s\n"
 		"Continue? (^my^m/^mn^m)",
-		info->tag, info->prerelease ? " (prerelease)" : "",
-		QSSM_VER_STRING,
-		info->asset_name[0] ? info->asset_name : "(none)", size,
-		force ? "\nForce allows downgrade/reinstall\n" : "");
+		verb, info->tag, info->prerelease ? " (prerelease)" : "",
+		QSSM_VER_STRING, size,
+		(cls.state == ca_connected || sv.active) ?
+			"You will leave the current game.\n" : "");
 
-	Con_Printf("QSS-M will download and verify the release ZIP, close, replace only known engine package files, back up replaced files, and restart.\n");
-	Con_Printf("Configs, saves, demos, mods, and id1 data are not touched.\n");
-	return SCR_ModalMessage(prompt, 0.0f);
+	return SCR_ModalMessageStyled(prompt, 0.0f, SCR_MODAL_BOXED);
 }
 
 static void M_Update_Install_f(qboolean force)
@@ -6669,47 +7012,66 @@ static void M_Update_Install_f(qboolean force)
 		return;
 	}
 
-	if (!M_Update_FetchReleaseInfo(&info, error, sizeof(error)))
+	if (!M_Update_FetchReleaseInfoInteractive(&info, error, sizeof(error)))
 	{
-		Con_Printf("update failed: %s\n",
-			error[0] ? error : "unknown error");
-		Con_Printf("Release page: %s\n", UPDATE_RELEASE_PAGE);
+		M_Update_PrintFetchError("Unable to check for updates", error);
 		return;
 	}
 
-	M_Update_PrintReleaseInfo(&info, force);
-	if (!M_Update_PreflightRelease(&info, force, error, sizeof(error)))
+	/* The common "nothing to do" answers get one plain sentence instead of
+	 * the full diagnostic table (that lives in "update check"). */
+	if (!force && info.comparison == 0)
 	{
-		Con_Printf("update refused: %s\n", error);
+		Con_Printf("QSS-M ^g%s^g is up to date.\n", QSSM_VER_STRING);
+		Con_Printf("Use ^mupdate force^m to reinstall it.\n");
 		return;
 	}
-	if (!M_Update_GetLiveInstallPaths(current_exe, sizeof(current_exe),
+	if (!force && info.comparison == 2)
+	{
+		Con_Printf("Unable to compare this build (^g%s^g) with the latest release (^g%s^g).\n",
+			QSSM_VER_STRING, info.tag);
+		Con_Printf("Use ^mupdate check^m for details or ^mupdate force^m to install it anyway.\n");
+		return;
+	}
+	if (!force && info.comparison > 0)
+	{
+		Con_Printf("This build (^g%s^g) is newer than the latest release (^g%s^g).\n",
+			QSSM_VER_STRING, info.tag);
+		Con_Printf("Use ^mupdate force^m to install ^g%s^g anyway.\n", info.tag);
+		return;
+	}
+
+	if (!M_Update_PreflightRelease(&info, force, error, sizeof(error)) ||
+		!M_Update_GetLiveInstallPaths(current_exe, sizeof(current_exe),
 		live_dir, sizeof(live_dir), live_exe_name, sizeof(live_exe_name),
-		error, sizeof(error)))
-	{
-		Con_Printf("update refused: %s\n", error);
-		return;
-	}
-	if (!M_Update_CheckFreeDiskSpace(live_dir, "install directory",
+		error, sizeof(error)) ||
+		!M_Update_CheckFreeDiskSpace(live_dir, "install directory",
 		info.asset_size, error, sizeof(error)))
 	{
-		Con_Printf("update refused: %s\n", error);
+		Con_Printf("QSS-M ^g%s^g is available, but it can't be installed automatically:\n",
+			info.tag);
+		Con_Printf("  %s\n", error[0] ? error : "unknown error");
+		Con_Printf("Download it from ");
+		Con_LinkPrintf(info.html_url, "%s", info.html_url);
+		Con_Printf("\n");
 		return;
 	}
 
-	if (!M_Update_ConfirmInstall(&info, force))
+	if (!M_Update_ConfirmInstall(&info))
 	{
-		Con_Printf("update cancelled\n");
+		Con_Printf("Update cancelled.\n");
 		return;
 	}
 
-	Con_Printf("Preparing verified update package...\n");
 	if (!M_Update_PrepareRelease(&info, force, stage_dir, sizeof(stage_dir),
 		zip_path, sizeof(zip_path), extract_dir, sizeof(extract_dir),
 		error, sizeof(error)))
 	{
-		Con_Printf("update failed: %s\n",
-			error[0] ? error : "unknown error");
+		if (M_Update_WasCancelled())
+			Con_Printf("Update cancelled.\n");
+		else
+			Con_Printf("update failed: %s\n",
+				error[0] ? error : "unknown error");
 		return;
 	}
 
@@ -6730,7 +7092,14 @@ static void M_Update_Install_f(qboolean force)
 		return;
 	}
 
-	Con_Printf("Update helper launched. QSS-M will close now and restart after files are replaced.\n");
+	Con_Printf("Installing QSS-M ^g%s^g; restarting...\n", info.tag);
+	if (M_Update_CanPumpScreen())
+		SCR_UpdateScreen();
+
+	/* Leave like the quit command does: a clean disconnect tells the server
+	 * (and any listen-server clients) instead of letting them time out. */
+	CL_Disconnect();
+	Host_ShutdownServer(false);
 	Sys_Quit();
 }
 
@@ -6802,15 +7171,15 @@ void M_Update_Completion_f(const char *partial)
 static void M_Update_Usage(void)
 {
 	Con_Printf("\n");
-	Con_Printf("^mupdate^m : confirm, download, verify, stage, and apply the latest portable release\n");
-	Con_Printf("^mupdate^m check : check latest GitHub release and matching asset\n");
-	Con_Printf("^mupdate^m install [force] : same as update; force bypasses downgrade/unknown-version refusal\n");
-	Con_Printf("^mupdate^m prepare [force] : download, SHA-256 verify, extract, and validate the portable ZIP in staging\n");
-	Con_Printf("^mupdate^m page  : open the latest QSS-M release page\n");
+	Con_Printf("^mupdate^m : install the latest QSS-M release (asks first)\n");
+	Con_Printf("^mupdate check^m : show the latest release without installing\n");
+	Con_Printf("^mupdate force^m : reinstall or downgrade to the latest release\n");
+	Con_Printf("^mupdate prepare^m [force] : download and verify into staging only\n");
+	Con_Printf("^mupdate page^m : open the release page in your browser\n");
 	Con_Printf("\n");
-	Con_Printf("The installer only replaces known engine package files and keeps recovery backups until the restarted build confirms startup.\n");
-	Con_Printf("Windows portable updates enforce signed release metadata min_windows_version when present; otherwise Windows 7 or later is required.\n");
-	Con_Printf("GitHub unauthenticated API checks are limited to 60 requests/hour per IP; repeated checks may return HTTP 403.\n");
+	Con_Printf("Only QSS-M's own program files are replaced; configs, saves, demos, and mods are kept. Replaced files are backed up until the new build starts successfully.\n");
+	Con_Printf("Windows updates need Windows 7 or later, or the minimum a signed release names.\n");
+	Con_Printf("GitHub allows 60 update checks per hour; repeated checks may be refused.\n");
 	Con_Printf("\n");
 }
 
@@ -6834,18 +7203,17 @@ void M_Update_f(void)
 	if (!q_strcasecmp(arg, "check"))
 	{
 		updatereleaseinfo_t info;
-		char error[128] = "";
+		char error[256] = "";
 
-		if (!M_Update_FetchReleaseInfo(&info, error, sizeof(error)))
+		if (!M_Update_FetchReleaseInfoInteractive(&info, error, sizeof(error)))
 		{
-			Con_Printf("update check failed: %s\n",
-				error[0] ? error : "unknown error");
-			Con_Printf("Release page: %s\n", UPDATE_RELEASE_PAGE);
+			M_Update_PrintFetchError("update check failed", error);
 			return;
 		}
 
 		M_Update_PrintReleaseInfo(&info, false);
-		Con_Printf("Use ^mupdate^m to confirm, stage, and apply the latest portable release.\n");
+		if (info.comparison < 0)
+			Con_Printf("Type ^mupdate^m to install ^g%s^g.\n", info.tag);
 		return;
 	}
 
@@ -6868,6 +7236,7 @@ void M_Update_f(void)
 		return;
 	}
 
+	Con_Printf("Unknown update option \"%s\"\n", arg);
 	M_Update_Usage();
 }
 

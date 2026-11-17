@@ -6292,8 +6292,10 @@ Extraction Function
 */
 
 static qboolean ZIP_ExtractInternalBody(const char* zipfile, const char* outdir,
-	qboolean quiet)
+	qboolean quiet, zip_cancel_fn_t cancel_fn)
 {
+	qboolean cancelled = false;
+
 	Archive_DPrintf(quiet, "Extracting %s to %s\n", zipfile, outdir);
 	zip_extract_error[0] = 0;
 
@@ -6509,6 +6511,13 @@ static qboolean ZIP_ExtractInternalBody(const char* zipfile, const char* outdir,
 
 	// Process each file in the central directory
 	for (int i = 0; i < total_entries; i++) {
+		if (cancel_fn && cancel_fn()) {
+			ZIP_SetExtractError(quiet, "cancelled");
+			cancelled = true;
+			success = false;
+			break;
+		}
+
 		// Read signature first
 		unsigned int cd_sig;
 		if (fread(&cd_sig, 1, 4, zip) != 4) {
@@ -6663,7 +6672,15 @@ static qboolean ZIP_ExtractInternalBody(const char* zipfile, const char* outdir,
 			size_t remaining = compressed_size;
 			while (remaining > 0 && extract_success) {
 				size_t to_read = q_min(remaining, ZIP_CHUNK);
-				size_t bytes_read = fread(buffer, 1, to_read, zip);
+				size_t bytes_read;
+
+				if (cancel_fn && cancel_fn()) {
+					ZIP_SetExtractError(quiet, "cancelled");
+					cancelled = true;
+					extract_success = false;
+					break;
+				}
+				bytes_read = fread(buffer, 1, to_read, zip);
 				if (bytes_read != to_read || fwrite(buffer, 1, bytes_read, outfile) != bytes_read) {
 					extract_success = false;
 				}
@@ -6682,7 +6699,15 @@ static qboolean ZIP_ExtractInternalBody(const char* zipfile, const char* outdir,
 				qboolean stream_end = false;
 				while (remaining > 0 && extract_success && !stream_end) {
 					size_t to_read = q_min(remaining, ZIP_CHUNK);
-					size_t bytes_read = fread(in, 1, to_read, zip);
+					size_t bytes_read;
+
+					if (cancel_fn && cancel_fn()) {
+						ZIP_SetExtractError(quiet, "cancelled");
+						cancelled = true;
+						extract_success = false;
+						break;
+					}
+					bytes_read = fread(in, 1, to_read, zip);
 
 					if (bytes_read != to_read) {
 						extract_success = false;
@@ -6754,6 +6779,8 @@ static qboolean ZIP_ExtractInternalBody(const char* zipfile, const char* outdir,
 				ZIP_SetExtractError(quiet, "failed to extract %s", filename);
 			Archive_DPrintf(quiet, "ERROR: Failed to extract %s\n", filename);
 			success = false;
+			if (cancelled)
+				break;
 		}
 		else {
 			files_extracted++;
@@ -6794,9 +6821,9 @@ static qboolean ZIP_ExtractInternalBody(const char* zipfile, const char* outdir,
 }
 
 static qboolean ZIP_ExtractInternal(const char* zipfile, const char* outdir,
-	qboolean quiet)
+	qboolean quiet, zip_cancel_fn_t cancel_fn)
 {
-	qboolean ok = ZIP_ExtractInternalBody(zipfile, outdir, quiet);
+	qboolean ok = ZIP_ExtractInternalBody(zipfile, outdir, quiet, cancel_fn);
 
 	/* Guarantee a reason on failure: many early returns only print (suppressed
 	 * in quiet mode) without recording an error, which would leave callers such
@@ -6809,12 +6836,20 @@ static qboolean ZIP_ExtractInternal(const char* zipfile, const char* outdir,
 
 qboolean ZIP_Extract(const char* zipfile, const char* outdir)
 {
-	return ZIP_ExtractInternal(zipfile, outdir, false);
+	return ZIP_ExtractInternal(zipfile, outdir, false, NULL);
 }
 
 qboolean ZIP_ExtractQuiet(const char* zipfile, const char* outdir)
 {
-	return ZIP_ExtractInternal(zipfile, outdir, true);
+	return ZIP_ExtractInternal(zipfile, outdir, true, NULL);
+}
+
+/* Quiet extraction that polls cancel_fn between chunks; a true return stops
+ * it with ZIP_ExtractError() set to "cancelled". */
+qboolean ZIP_ExtractQuietCancellable(const char* zipfile, const char* outdir,
+	zip_cancel_fn_t cancel_fn)
+{
+	return ZIP_ExtractInternal(zipfile, outdir, true, cancel_fn);
 }
 
 /*
