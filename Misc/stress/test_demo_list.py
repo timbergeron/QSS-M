@@ -44,7 +44,6 @@ static struct {
     int minframes_threshold;
 } demosmenu;
 static demoitem_t *demos_sort_base;
-static qboolean M_Demos_CurrentGameIsId1(void) { return false; }
 static qboolean M_Demos_MetadataCache_ApplyToItem(demoitem_t *di) {
     (void)di;
     return false;
@@ -118,8 +117,7 @@ static void check_case(int n, int mode, qboolean duplicates) {
         time_t mtime = i % 17 == 0 ? 0 : (time_t)1700000000 + stamp;
         q_snprintf(name, sizeof(name), "%s%s_%05d.%s", prefix,
                    i % 2 ? "dm2" : "DM2", id, i % 2 ? "dem" : "DEM");
-        M_Demos_AddEx(name, COM_SkipPath(name), i % 2,
-                      mtime, 1000 + i, &sources[i % 3]);
+        M_Demos_AddEx(name, COM_SkipPath(name), mtime, 1000 + i, &sources[i % 3]);
     }
     collect_ms = (now() - start) * 1000;
     assert(demosmenu.democount == n && VEC_SIZE(demosmenu.items) == (size_t)n);
@@ -159,17 +157,17 @@ static void check_case(int n, int mode, qboolean duplicates) {
 
 static void check_case_insensitive_override(void) {
     /* Later sources have newer dates; the first source must still win. */
-    M_Demos_AddEx("demos/Foo.dem", "Foo.dem", false, 1, 100, &sources[0]);
-    M_Demos_AddEx("demos/foo.DEM", "foo.DEM", true, 2, 200, &sources[1]);
-    M_Demos_AddEx("./Foo.dem", "../Foo.dem", false, 0, 300, &sources[2]);
-    M_Demos_AddEx("demos/sub/Foo.dem", "Foo.dem", false, 0, 400, &sources[2]);
+    M_Demos_AddEx("demos/Foo.dem", "Foo.dem", 1, 100, &sources[0]);
+    M_Demos_AddEx("demos/foo.DEM", "foo.DEM", 2, 200, &sources[1]);
+    M_Demos_AddEx("./Foo.dem", "../Foo.dem", 0, 300, &sources[2]);
+    M_Demos_AddEx("demos/sub/Foo.dem", "Foo.dem", 0, 400, &sources[2]);
     M_Demos_SortItems();
     assert(demosmenu.democount == 3);
     assert(!strcmp(demosmenu.items[0].name, "./Foo.dem"));
     assert(!strcmp(demosmenu.items[1].name, "demos/sub/Foo.dem"));
     assert(!strcmp(demosmenu.items[2].name, "demos/Foo.dem"));
     assert(demosmenu.items[2].source_searchpath == &sources[0]);
-    assert(demosmenu.items[2].fsize == 100 && !demosmenu.items[2].from_id1);
+    assert(demosmenu.items[2].fsize == 100);
     Vec_Free((void **)&demosmenu.items);
     demosmenu.democount = 0;
 }

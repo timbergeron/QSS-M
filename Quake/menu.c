@@ -42104,16 +42104,26 @@ Demos Menu
 ==================
 */
 
-#define MAX_VIS_DEMOS	11
+#define MAX_VIS_DEMOS	10
+#define MAX_VIS_DEMO_FOLDERS	11
+#define DEMOS_LIST_X	16
+#define DEMOS_LIST_COLS	36
+#define DEMOS_SORT_HEADER_GAP	16
+#define DEMOS_MAP_REFILTER_INTERVAL	0.25
 #define DEMOS_PATH_ROW_Y	32
 #define DEMOS_PATH_LABEL_X	16
 #define DEMOS_PATH_BOX_X	56
 #define DEMOS_PATH_TEXT_X	64
 #define DEMOS_PATH_BOX_CHARS	30
 #define DEMOS_PATH_MAX_DEPTH	8
-#define DEMOS_ID1_ROW_Y	44
-#define DEMOS_ID1_TEXT_X	(DEMOS_PATH_BOX_X + 8)
-#define DEMOS_ID1_TEXT_SCALE	0.8125f
+
+typedef enum
+{
+	DEMO_SORT_DATE, // the original date order is the zero-initialized default
+	DEMO_SORT_NAME,
+	DEMO_SORT_SIZE,
+	DEMO_SORT_MAP
+} demo_sort_t;
 
 typedef enum
 {
@@ -42125,7 +42135,7 @@ typedef enum
 typedef struct
 {
 	char        name[MAX_QPATH];
-	char        display[MAX_QPATH + 8];
+	char        display[MAX_QPATH];
 	char        date[32];
 	char        map[64];
 	char        players[256];
@@ -42134,7 +42144,7 @@ typedef struct
 	char        filesize[16];
 	qboolean    active;
 	qboolean    parsed;
-	qboolean    from_id1;
+	qboolean    map_parse_failed;
 	time_t      mtime;
 	size_t      fsize;
 	int         scan_order; // preserve search-path precedence and equal-date ordering
@@ -42826,13 +42836,15 @@ static struct
 {
 	menulist_t			list;
 	enum m_state_e		prev;
-	int					x, y, cols;
 	int					democount;
 	int					prev_cursor;
 	menuticker_t		ticker;
 	demoitem_t			*items;
 	qboolean			scrollbar_grab;
 	int*                filtered_indices;
+	int					*sorted_indices;
+	demo_sort_t			sort_mode;
+	qboolean			sort_reverse;
 	menu_textfield_t	path_field;
 	char				path_suffix[MAX_QPATH];
 	char				remembered_path_suffix[MAX_QPATH];
@@ -42841,9 +42853,10 @@ static struct
 	filelist_item_t		*path_folders;
 	qboolean			path_editing;
 	qboolean			path_valid;
-	qboolean			show_id1;
 	int					bg_parse_cursor;       // next index to background-parse for searchable metadata
 	int					bg_parse_refilter_count; // parsed metadata entries since last search refilter
+	qboolean			bg_parse_map_changed;
+	double				bg_parse_map_refilter_time;
 	int					minframes_threshold;
 	int					minframes_check_cursor;
 	int					minframes_hidden_since_refilter;
@@ -42865,9 +42878,9 @@ static qboolean M_Demos_CurrentGameIsId1(void)
 }
 
 /* The attract-mode demos shipped in the official paks: id1 and Rogue both
-   use demo1..demo3 (disambiguated by gamedir / from_id1), Hipnotic uses
+   use demo1..demo3 (disambiguated by gamedir), Hipnotic uses
    hipdemo1..hipdemo4. Returns the caption to show, or NULL. */
-static const char *M_Demos_OriginalIntroDemoLabel(const char *name, qboolean from_id1)
+static const char *M_Demos_OriginalIntroDemoLabel(const char *name)
 {
 	const char *base = COM_SkipPath(name);
 	const char *game = M_Demos_CurrentGameName();
@@ -42875,10 +42888,6 @@ static const char *M_Demos_OriginalIntroDemoLabel(const char *name, qboolean fro
 		!q_strcasecmp(base, "demo1.dem") ||
 		!q_strcasecmp(base, "demo2.dem") ||
 		!q_strcasecmp(base, "demo3.dem");
-
-	/* id1 demos surfaced while playing a mod (the show-id1 toggle) */
-	if (from_id1)
-		return is_demo123 ? "original Quake intro demo" : NULL;
 
 	if (!q_strcasecmp(game, "hipnotic") &&
 		(!q_strcasecmp(base, "hipdemo1.dem") || !q_strcasecmp(base, "hipdemo2.dem") ||
@@ -42956,43 +42965,9 @@ static qboolean M_Demos_SearchPathMatchesGame(searchpath_t *search, const char *
 		 search->purename[len] == '\\');
 }
 
-static qboolean M_Demos_SearchPathAllowed(searchpath_t *search, qboolean *from_id1)
+static qboolean M_Demos_SearchPathAllowed(searchpath_t *search)
 {
-	qboolean is_id1;
-
-	if (from_id1)
-		*from_id1 = false;
-
-	if (M_Demos_SearchPathMatchesGame(search, M_Demos_CurrentGameName()))
-		return true;
-
-	is_id1 = M_Demos_SearchPathMatchesGame(search, GAMENAME);
-	if (!M_Demos_CurrentGameIsId1() && demosmenu.show_id1 && is_id1)
-	{
-		if (from_id1)
-			*from_id1 = true;
-		return true;
-	}
-
-	return false;
-}
-
-static qboolean M_Demos_HasId1SearchPath(void)
-{
-	searchpath_t *search;
-
-	for (search = com_searchpaths; search; search = search->next)
-	{
-		if (M_Demos_SearchPathMatchesGame(search, GAMENAME))
-			return true;
-	}
-
-	return false;
-}
-
-static qboolean M_Demos_ShowId1Toggle(void)
-{
-	return !M_Demos_CurrentGameIsId1() && M_Demos_HasId1SearchPath();
+	return M_Demos_SearchPathMatchesGame(search, M_Demos_CurrentGameName());
 }
 
 static void M_Demos_ClearFileList(filelist_item_t **list)
@@ -43021,30 +42996,24 @@ static void M_Demos_FreeItems(void)
 		Vec_Free((void**)&demosmenu.filtered_indices);
 		demosmenu.filtered_indices = NULL;
 	}
+	VEC_FREE(demosmenu.sorted_indices);
 	demosmenu.democount = 0;
 	demosmenu.bg_parse_cursor = 0;
 	demosmenu.bg_parse_refilter_count = 0;
+	demosmenu.bg_parse_map_changed = false;
 	demosmenu.minframes_check_cursor = 0;
 	demosmenu.minframes_hidden_since_refilter = 0;
 }
 
 static void M_Demos_AddEx(const char* name, const char *display,
-	qboolean from_id1, time_t mtime, size_t fsize, searchpath_t *spath)
+	time_t mtime, size_t fsize, searchpath_t *spath)
 {
     demoitem_t tempDemo;
-	char display_with_source[MAX_QPATH + 8];
 
 	memset(&tempDemo, 0, sizeof(tempDemo));
 
 	q_strlcpy(tempDemo.name, name, sizeof(tempDemo.name));
-	if (from_id1 && !M_Demos_CurrentGameIsId1())
-	{
-		q_snprintf(display_with_source, sizeof(display_with_source), "%s [id1]",
-			display && display[0] ? display : name);
-		q_strlcpy(tempDemo.display, display_with_source, sizeof(tempDemo.display));
-	}
-	else
-		q_strlcpy(tempDemo.display, display && display[0] ? display : name, sizeof(tempDemo.display));
+	q_strlcpy(tempDemo.display, display && display[0] ? display : name, sizeof(tempDemo.display));
 	M_InferDemoMapName(name, tempDemo.map, sizeof(tempDemo.map));
 	tempDemo.players[0] = '\0';
 	tempDemo.stats[0] = '\0';
@@ -43052,7 +43021,6 @@ static void M_Demos_AddEx(const char* name, const char *display,
 	tempDemo.filesize[0] = '\0';
     tempDemo.active = false;
 	tempDemo.parsed = false;
-	tempDemo.from_id1 = from_id1;
 	tempDemo.mtime = mtime;
 	tempDemo.fsize = fsize;
 	tempDemo.scan_order = demosmenu.democount;
@@ -43098,6 +43066,47 @@ static int M_Demos_CompareDates(const void *a, const void *b)
 		order = (da->mtime < db->mtime) - (da->mtime > db->mtime);
 
 	return order ? order : da->scan_order - db->scan_order;
+}
+
+static const char *M_Demos_MapSortKey(const demoitem_t *di)
+{
+	return di->map_parse_failed ? "" : di->map;
+}
+
+// The underlying indices are in the original date order, which also breaks ties.
+static int M_Demos_CompareDisplay(const void *a, const void *b)
+{
+	int ia = *(const int *)a, ib = *(const int *)b;
+	const demoitem_t *da = &demosmenu.items[ia];
+	const demoitem_t *db = &demosmenu.items[ib];
+	int order = 0;
+
+	switch (demosmenu.sort_mode)
+	{
+	case DEMO_SORT_NAME:
+		order = q_strcasecmp(da->display, db->display);
+		break;
+	case DEMO_SORT_DATE:
+		if (!da->mtime || !db->mtime)
+			order = (da->mtime != 0) - (db->mtime != 0);
+		else
+			order = (da->mtime < db->mtime) - (da->mtime > db->mtime);
+		break;
+	case DEMO_SORT_SIZE:
+		order = (da->fsize < db->fsize) - (da->fsize > db->fsize);
+		break;
+	case DEMO_SORT_MAP:
+		{
+			const char *map_a = M_Demos_MapSortKey(da);
+			const char *map_b = M_Demos_MapSortKey(db);
+			if (!*map_a != !*map_b)
+				return *map_a ? -1 : 1;
+			order = q_strcasecmp(map_a, map_b);
+		}
+		break;
+	}
+
+	return order ? (demosmenu.sort_reverse ? -order : order) : ia - ib;
 }
 
 // Rearrange items[] in place so slot i holds the item order[i] points at.
@@ -43232,7 +43241,7 @@ static void M_Demos_ScanPakFolders(void)
 	{
 		if (!search->pack)
 			continue;
-		if (!M_Demos_SearchPathAllowed(search, NULL))
+		if (!M_Demos_SearchPathAllowed(search))
 			continue;
 
 		pak = search->pack;
@@ -43349,7 +43358,7 @@ static void M_Demos_RebuildFolderList(void)
 	{
 		if (search->pack)
 			continue;
-		if (!M_Demos_SearchPathAllowed(search, NULL))
+		if (!M_Demos_SearchPathAllowed(search))
 			continue;
 
 		q_snprintf(demos_path, sizeof(demos_path), "%s/demos", search->filename);
@@ -44264,11 +44273,10 @@ static qboolean M_Demos_AddListedFile(void *ctx, const char *fname, time_t mtime
 	demos_list_ctx_t *list_ctx = (demos_list_ctx_t *)ctx;
 	char logical_name[MAX_QPATH];
 	char display_name[MAX_QPATH];
-	qboolean from_id1;
 	qboolean explicit_root = list_ctx && list_ctx->explicit_root &&
 		!strchr(fname, '/') && !strchr(fname, '\\');
 
-	if (!M_Demos_SearchPathAllowed(spath, &from_id1))
+	if (!M_Demos_SearchPathAllowed(spath))
 		return true;
 
 	if (explicit_root)
@@ -44282,7 +44290,7 @@ static qboolean M_Demos_AddListedFile(void *ctx, const char *fname, time_t mtime
 		q_strlcpy(display_name, COM_SkipPath(fname), sizeof(display_name));
 	}
 
-	M_Demos_AddEx(logical_name, display_name, from_id1, mtime, fsize, spath);
+	M_Demos_AddEx(logical_name, display_name, mtime, fsize, spath);
 	return true;
 }
 
@@ -44431,10 +44439,11 @@ extern filelist_item_t *FindLevelInList(filelist_item_t *list, const char *name)
 
 static void M_Demos_ApplyInfoToItem(demoitem_t *di, const demoinfo_t *info)
 {
+	di->map_parse_failed = false;
 	q_strlcpy(di->map, info->map, sizeof(di->map));
 	q_strlcpy(di->players, info->players, sizeof(di->players));
 	FormatDuration(info->duration, di->duration, sizeof(di->duration));
-	q_snprintf(di->filesize, sizeof(di->filesize), "%.1f mb", info->filesize_mb);
+	q_snprintf(di->filesize, sizeof(di->filesize), "%.1f mb", di->fsize / (1024.0 * 1024.0));
 
 	di->stats[0] = '\0';
 	if (info->singleplayer)
@@ -44465,10 +44474,11 @@ static void M_Demos_ApplyInfoToItem(demoitem_t *di, const demoinfo_t *info)
 
 static void M_Demos_ApplyParseFailureToItem(demoitem_t *di)
 {
+	di->map_parse_failed = true;
 	q_strlcpy(di->map, "unknown", sizeof(di->map));
 	q_strlcpy(di->players, "n/a", sizeof(di->players));
 	q_strlcpy(di->duration, "n/a", sizeof(di->duration));
-	q_strlcpy(di->filesize, "n/a", sizeof(di->filesize));
+	q_snprintf(di->filesize, sizeof(di->filesize), "%.1f mb", di->fsize / (1024.0 * 1024.0));
 	di->stats[0] = '\0';
 }
 
@@ -44521,6 +44531,10 @@ static void M_Demos_ParseItem(demoitem_t *di)
 	demoinfo_t info;
 	qboolean parsed = Parse_DemoInfo(di->name, di->source_searchpath, &info);
 
+	if (demosmenu.sort_mode == DEMO_SORT_MAP &&
+		q_strcasecmp(M_Demos_MapSortKey(di), parsed ? info.map : ""))
+		demosmenu.bg_parse_map_changed = true;
+
 	if (parsed)
 		M_Demos_ApplyInfoToItem(di, &info);
 	else
@@ -44530,9 +44544,6 @@ static void M_Demos_ParseItem(demoitem_t *di)
 	M_Demos_MetadataCacheUpdateParse(di, parsed, parsed ? &info : NULL);
 }
 
-// Parse a small number of demos per frame so typed searches don't block.
-// Returns true if anything was parsed this call (so caller can refresh
-// dependent state like the filtered list).
 typedef enum
 {
 	DEMO_BACKGROUND_PARSE_NONE,
@@ -44637,7 +44648,8 @@ static demo_background_parse_result_t M_Demos_TickSequentialBackgroundParse(void
 	return DEMO_BACKGROUND_PARSE_NONE;
 }
 
-static qboolean M_Demos_TickBackgroundParse(void)
+// Parse a small number of demos per frame so typed searches don't block.
+static void M_Demos_TickBackgroundParse(void)
 {
 	const int BUDGET = 1;  // demos per frame; each Parse_DemoInfo can be I/O heavy
 	int parsed = 0;
@@ -44667,8 +44679,6 @@ static qboolean M_Demos_TickBackgroundParse(void)
 		else
 			M_Demos_MetadataCache_MaybeFlush();
 	}
-
-	return parsed > 0;
 }
 
 #define DEMOS_SEARCH_MAX_TERMS	8
@@ -44777,6 +44787,38 @@ static qboolean M_Demos_ItemMatchesSearch(demoitem_t *di, const demosearchterm_t
 	return true;
 }
 
+static qboolean M_Demos_MapOrderNeedsRefresh(void)
+{
+	return demosmenu.bg_parse_map_changed &&
+		(demosmenu.bg_parse_cursor >= demosmenu.democount ||
+			realtime >= demosmenu.bg_parse_map_refilter_time);
+}
+
+// Cache the file order so searching and minimum-frame checks only filter it.
+static const int *M_Demos_DisplayOrder(void)
+{
+	int i;
+
+	if (demosmenu.sort_mode == DEMO_SORT_DATE && !demosmenu.sort_reverse)
+		return NULL;
+
+	if (VEC_SIZE(demosmenu.sorted_indices) != (size_t)demosmenu.democount ||
+		M_Demos_MapOrderNeedsRefresh())
+	{
+		VEC_CLEAR(demosmenu.sorted_indices);
+		for (i = 0; i < demosmenu.democount; i++)
+			VEC_PUSH(demosmenu.sorted_indices, i);
+		if (demosmenu.democount > 1)
+			qsort(demosmenu.sorted_indices, demosmenu.democount,
+				sizeof(*demosmenu.sorted_indices), M_Demos_CompareDisplay);
+
+		demosmenu.bg_parse_map_changed = false;
+		demosmenu.bg_parse_map_refilter_time = realtime + DEMOS_MAP_REFILTER_INTERVAL;
+	}
+
+	return demosmenu.sorted_indices;
+}
+
 // preserve_view=true: keep the user's scroll position when possible.  Used by
 // the background-parse tick so newly-matched items can stream into the list
 // without scroll-jumping under the user.  Keystroke callers pass false and
@@ -44790,6 +44832,7 @@ static void M_Demos_RefilterEx(qboolean preserve_view)
 		terms, (int)Q_COUNTOF(terms)) : 0;
     int prev_demo_idx = -1;
     int prev_scroll = demosmenu.list.scroll;
+    const int *order = M_Demos_DisplayOrder();
 
     // Remember which demo the cursor was on so we can keep it selected even
     // when the filter set grows or items shift index.
@@ -44801,7 +44844,8 @@ static void M_Demos_RefilterEx(qboolean preserve_view)
 
     for (i = 0; i < demosmenu.democount; i++)
     {
-        demoitem_t *di = &demosmenu.items[i];
+        int demo_idx = order ? order[i] : i;
+        demoitem_t *di = &demosmenu.items[demo_idx];
 
 		if (di->minframes_state == DEMO_MINFRAMES_FAIL)
 			continue;
@@ -44831,7 +44875,7 @@ static void M_Demos_RefilterEx(qboolean preserve_view)
 
         if (term_count <= 0 || M_Demos_ItemMatchesSearch(di, terms, term_count, map_desc))
         {
-            VEC_PUSH(demosmenu.filtered_indices, i);
+            VEC_PUSH(demosmenu.filtered_indices, demo_idx);
         }
     }
 
@@ -44999,18 +45043,6 @@ static void M_Demos_PathChanged(void)
 	M_Demos_RebuildForCurrentPath();
 }
 
-static void M_Demos_ToggleShowId1(void)
-{
-	if (!M_Demos_ShowId1Toggle())
-		return;
-
-	demosmenu.show_id1 = !demosmenu.show_id1;
-	demosmenu.path_tabpartial[0] = '\0';
-	M_Demos_RebuildFolderList();
-	M_Demos_RebuildForCurrentPath();
-	S_LocalSound("misc/menu1.wav");
-}
-
 static void M_Demos_RememberCurrentPath(void)
 {
 	q_strlcpy(demosmenu.remembered_path_suffix, demosmenu.path_suffix,
@@ -45114,28 +45146,61 @@ static qboolean M_Demos_ShowPathOptions(void)
 
 static int M_Demos_ListY(void)
 {
-	return M_Demos_ShowId1Toggle() ? 64 : 56;
+	return demosmenu.path_valid && !M_Demos_ShowPathOptions() ? 64 : 56;
 }
 
-static qboolean M_Demos_MouseInShowId1Toggle(void)
+static const struct
 {
-	return M_Demos_ShowId1Toggle() &&
-		M_TextField_MouseInRow(m_mousey, DEMOS_ID1_ROW_Y) &&
-		m_mousex >= DEMOS_ID1_TEXT_X &&
-		m_mousex < DEMOS_ID1_TEXT_X + (int)(22 * 8 * DEMOS_ID1_TEXT_SCALE);
+	const char *label;
+	demo_sort_t mode;
+} demo_sort_headers[] = {
+	{ "Name", DEMO_SORT_NAME },
+	{ "Date", DEMO_SORT_DATE },
+	{ "Size", DEMO_SORT_SIZE },
+	{ "Map", DEMO_SORT_MAP }
+};
+
+static void M_Demos_DrawSortHeader(int x, int y)
+{
+	int width = DEMOS_LIST_COLS * 8 / Q_COUNTOF(demo_sort_headers);
+	int i;
+
+	for (i = 0; i < (int)Q_COUNTOF(demo_sort_headers); i++)
+	{
+		const char *label = demo_sort_headers[i].label;
+		int label_x = x + i * width;
+		if (demosmenu.sort_mode == demo_sort_headers[i].mode)
+			M_PrintWhite(label_x, y, label);
+		else
+			M_Print(label_x, y, label);
+	}
+}
+
+static int M_Demos_HoveredSortHeader(void)
+{
+	int x = m_mousex - DEMOS_LIST_X;
+	int y = m_mousey - (M_Demos_ListY() - DEMOS_SORT_HEADER_GAP);
+	int width = DEMOS_LIST_COLS * 8;
+
+	if (!demosmenu.path_valid || M_Demos_ShowPathOptions() ||
+		y < 0 || y >= 8 || x < 0 || x >= width)
+		return -1;
+
+	return x / (width / Q_COUNTOF(demo_sort_headers));
 }
 
 static qboolean M_Demos_MouseInPathOptionsArea(void)
 {
-	int width = (demosmenu.cols - 2) * 8;
-	int height = demosmenu.list.viewsize * 8;
-	int left = demosmenu.x - 8;
+	int width = (DEMOS_LIST_COLS - 2) * 8;
+	int height = MAX_VIS_DEMO_FOLDERS * 8;
+	int left = DEMOS_LIST_X - 8;
+	int y = M_Demos_ListY();
 
 	return M_Demos_ShowPathOptions() &&
 		m_mousex >= left &&
-		m_mousex < demosmenu.x + width &&
-		m_mousey >= demosmenu.y &&
-		m_mousey < demosmenu.y + height;
+		m_mousex < DEMOS_LIST_X + width &&
+		m_mousey >= y &&
+		m_mousey < y + height;
 }
 
 static filelist_item_t *M_Demos_GetPathOptionAtRow(int row)
@@ -45146,7 +45211,7 @@ static filelist_item_t *M_Demos_GetPathOptionAtRow(int row)
 	int partial_len = (int)strlen(partial);
 	int shown = 0;
 
-	if (row < 0 || row >= demosmenu.list.viewsize)
+	if (row < 0 || row >= MAX_VIS_DEMO_FOLDERS)
 		return NULL;
 
 	for (folder = demosmenu.path_folders; folder; folder = folder->next)
@@ -45158,8 +45223,6 @@ static filelist_item_t *M_Demos_GetPathOptionAtRow(int row)
 			return folder;
 
 		++shown;
-		if (shown >= demosmenu.list.viewsize)
-			break;
 	}
 
 	return NULL;
@@ -45172,7 +45235,7 @@ static filelist_item_t *M_Demos_GetHoveredPathOption(void)
 	if (!M_Demos_MouseInPathOptionsArea())
 		return NULL;
 
-	row = (m_mousey - demosmenu.y) / 8;
+	row = (m_mousey - M_Demos_ListY()) / 8;
 	return M_Demos_GetPathOptionAtRow(row);
 }
 
@@ -45281,26 +45344,6 @@ static void M_Demos_DrawPathField(void)
 	}
 }
 
-static void M_Demos_DrawShowId1Toggle(void)
-{
-	const int value_x = DEMOS_ID1_TEXT_X + (int)(16 * 8 * DEMOS_ID1_TEXT_SCALE);
-
-	if (!M_Demos_ShowId1Toggle())
-		return;
-
-	glPushMatrix();
-	glTranslatef(DEMOS_ID1_TEXT_X, DEMOS_ID1_ROW_Y + 1, 0);
-	glScalef(DEMOS_ID1_TEXT_SCALE, DEMOS_ID1_TEXT_SCALE, 1.0f);
-	M_Print(0, 0, "show id1 demos:");
-	glPopMatrix();
-
-	glPushMatrix();
-	glTranslatef(value_x, DEMOS_ID1_ROW_Y + 1, 0);
-	glScalef(DEMOS_ID1_TEXT_SCALE, DEMOS_ID1_TEXT_SCALE, 1.0f);
-	M_PrintWhite(0, 0, demosmenu.show_id1 ? "on" : "off");
-	glPopMatrix();
-}
-
 static void M_Demos_DrawPathOptions(int x, int y, int cols)
 {
 	filelist_item_t *folder;
@@ -45320,7 +45363,7 @@ static void M_Demos_DrawPathOptions(int x, int y, int cols)
 			continue;
 
 		++matches;
-		if (shown >= demosmenu.list.viewsize)
+		if (shown >= MAX_VIS_DEMO_FOLDERS)
 			continue;
 
 		q_snprintf(label, sizeof(label), "%s/", folder->name);
@@ -45359,15 +45402,11 @@ void M_Demos_Draw (void)
     int x, y, i, cols;
     int firstvis, numvis;
 
-    x = 16;
+    x = DEMOS_LIST_X;
     y = M_Demos_ListY();
-    cols = 36;
+    cols = DEMOS_LIST_COLS;
 
     char demofilename[MAX_OSPATH];
-
-    demosmenu.x = x;
-    demosmenu.y = y;
-    demosmenu.cols = cols;
 
     if (!keydown[K_MOUSE1]) // woods #mousemenu
         demosmenu.scrollbar_grab = false;
@@ -45397,17 +45436,18 @@ void M_Demos_Draw (void)
 	}
 
     // Background-parse a few demos per frame so metadata fills the cache without
-    // blocking one frame. Search refilters are coalesced because they sweep the
+    // blocking one frame. Refilters are coalesced because they sweep the
     // full visible demo set.
     {
-        qboolean parsed = M_Demos_TickBackgroundParse();
-        if (demosmenu.list.search.len > 0 && parsed)
-        {
-            const int REFILTER_BATCH = 8;
-            qboolean done = (demosmenu.bg_parse_cursor >= demosmenu.democount);
-            if (demosmenu.bg_parse_refilter_count >= REFILTER_BATCH || done)
-                M_Demos_RefilterEx(true);
-        }
+        const int REFILTER_BATCH = 8;
+        qboolean done;
+
+        M_Demos_TickBackgroundParse();
+        done = (demosmenu.bg_parse_cursor >= demosmenu.democount);
+        if (M_Demos_MapOrderNeedsRefresh() ||
+            (demosmenu.list.search.len > 0 && demosmenu.bg_parse_refilter_count > 0 &&
+                (done || demosmenu.bg_parse_refilter_count >= REFILTER_BATCH)))
+            M_Demos_RefilterEx(true);
     }
 
 	M_TextField_CheckMouseRelease();
@@ -45416,7 +45456,6 @@ void M_Demos_Draw (void)
 		demosmenu.democount, "demo", "demos");
     M_DrawQuakeBar(x - 8, 16, cols + 2);
 	M_Demos_DrawPathField();
-	M_Demos_DrawShowId1Toggle();
 
 	if (M_Demos_ShowPathOptions())
 	{
@@ -45430,6 +45469,8 @@ void M_Demos_Draw (void)
 			CL_PLColours_Parse("0xffffff"), 0.5f, true);
 		return;
 	}
+
+	M_Demos_DrawSortHeader(x, y - DEMOS_SORT_HEADER_GAP);
 
     M_List_GetVisibleRange(&demosmenu.list, &firstvis, &numvis);
     for (i = 0; i < numvis; i++)
@@ -45487,7 +45528,7 @@ void M_Demos_Draw (void)
     }
 
 	if (demosmenu.list.numitems == 0)
-		M_PrintRGBA(x, y, "no demos in this path",
+		M_PrintRGBA(x, y, demosmenu.list.search.len > 0 ? "no matching demos" : "no demos in this path",
 			CL_PLColours_Parse("0xffffff"), 0.5f, true);
 
     if (M_List_GetOverflow(&demosmenu.list) > 0)
@@ -45539,7 +45580,7 @@ void M_Demos_Draw (void)
         }
 
         {
-            const char *introlabel = M_Demos_OriginalIntroDemoLabel(di->name, di->from_id1);
+            const char *introlabel = M_Demos_OriginalIntroDemoLabel(di->name);
             if (introlabel)
             {
                 M_Print(x, current_y, introlabel);
@@ -45715,7 +45756,28 @@ static void M_Demos_MouseClickPathField(void)
 
 void M_Demos_Key(int key)
 {
-    int x, y; // woods #mousemenu
+	if (key == K_MOUSE1 && !demosmenu.scrollbar_grab)
+	{
+		int header = M_Demos_HoveredSortHeader();
+		if (header >= 0)
+		{
+			demo_sort_t mode = demo_sort_headers[header].mode;
+			if (demosmenu.path_editing)
+				M_Demos_EndPathEdit();
+			if (mode == demosmenu.sort_mode)
+				demosmenu.sort_reverse = !demosmenu.sort_reverse;
+			else
+			{
+				demosmenu.sort_mode = mode;
+				demosmenu.sort_reverse = false;
+			}
+			VEC_CLEAR(demosmenu.sorted_indices);
+			demosmenu.bg_parse_map_changed = false;
+			M_Demos_RefilterEx(true);
+			S_LocalSound("misc/menu2.wav");
+			return;
+		}
+	}
 
 	if (demosmenu.path_editing)
 	{
@@ -45778,11 +45840,6 @@ void M_Demos_Key(int key)
 					M_Demos_SelectPathOption(folder);
 					S_LocalSound("misc/menu2.wav");
 				}
-				else if (M_Demos_MouseInShowId1Toggle())
-				{
-					M_Demos_EndPathEdit();
-					M_Demos_ToggleShowId1();
-				}
 				else if (M_Demos_MouseInPathField())
 					M_Demos_MouseClickPathField();
 				else
@@ -45807,12 +45864,6 @@ void M_Demos_Key(int key)
 				return;
 			break;
 		}
-	}
-
-	if (key == K_MOUSE1 && M_Demos_MouseInShowId1Toggle())
-	{
-		M_Demos_ToggleShowId1();
-		return;
 	}
 
 	if (key == K_MOUSE1 && M_Demos_MouseInPathField())
@@ -45846,13 +45897,6 @@ void M_Demos_Key(int key)
 			// Copy demo name to local buffer BEFORE freeing memory
 			char demo_name[MAX_QPATH];
 			q_strlcpy(demo_name, demo->name, sizeof(demo_name));
-
-			if (demo->from_id1)
-			{
-				S_LocalSound("misc/menu3.wav");
-				Con_Printf("cannot delete inherited id1 demo ^m%s^m from this menu\n", M_Demos_CommandName(demo_name));
-				return;
-			}
 
 			char demo_path[MAX_OSPATH];
 
@@ -45982,13 +46026,27 @@ void M_Demos_Key(int key)
         break;
 
     case K_MOUSE1: // woods #mousemenu
-        x = m_mousex - demosmenu.x - (demosmenu.cols - 1) * 8;
-        y = m_mousey - demosmenu.y;
-        if (x < -8 || !M_List_UseScrollbar(&demosmenu.list, y))
+        {
+            int x = m_mousex - DEMOS_LIST_X;
+            int y = m_mousey - M_Demos_ListY();
+
+            if (!demosmenu.path_valid || x < -8 || x >= DEMOS_LIST_COLS * 8 ||
+                y < 0 || y >= demosmenu.list.viewsize * 8)
+                return;
+
+            if (x >= (DEMOS_LIST_COLS - 2) * 8 && M_List_UseScrollbar(&demosmenu.list, y))
+            {
+                demosmenu.scrollbar_grab = true;
+                M_Demos_Mousemove(m_mousex, m_mousey);
+                return;
+            }
+
+            if (y / 8 >= demosmenu.list.numitems - demosmenu.list.scroll)
+                return;
+
+            M_List_Mousemove(&demosmenu.list, y);
             goto enter;
-        demosmenu.scrollbar_grab = true;
-        M_Demos_Mousemove(m_mousex, m_mousey);
-        break;
+        }
 
     default:
         break;
@@ -46018,7 +46076,7 @@ void M_Demos_Mousemove(int cx, int cy) // woods #mousemenu
 		return;
 	}
 
-	cy -= demosmenu.y;
+	cy -= M_Demos_ListY();
 
 	if (M_Demos_ShowPathOptions())
 		return;
@@ -48983,7 +49041,7 @@ qboolean M_WantsIBeamCursor(void)
 	if (m_state == m_demos)
 		return M_Demos_TextEntry() &&
 			!M_Demos_MouseInPathOptionsArea() &&
-			!M_Demos_MouseInShowId1Toggle();
+			M_Demos_HoveredSortHeader() < 0;
 
 	if (m_state == m_resetconfig)
 		return M_ResetConfig_MouseInSearchBox();
