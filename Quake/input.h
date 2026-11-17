@@ -31,7 +31,8 @@ void IN_Shutdown (void);
 void IN_Commands (void);
 // oportunity for devices to stick commands on the script buffer
 
-void IN_GetInputDeviceNames (char *keyboard, size_t keyboard_size, char *mouse, size_t mouse_size);
+qboolean IN_StartInputDeviceInfo (char *keyboard, size_t keyboard_size, char *mouse, size_t mouse_size);
+qboolean IN_FinishInputDeviceInfo (char *mouse, size_t mouse_size, int *dpi_x, int *dpi_y);
 
 // joy_device keeps SDL2's index into the connected joystick list
 int IN_GetJoystickCount (void);

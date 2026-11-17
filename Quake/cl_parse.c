@@ -4079,6 +4079,53 @@ static qboolean CL_SuppressFReplies (void)
 	return !q_strcasecmp(Info_GetKey(cl.serverinfo, "playmode", playmode, sizeof(playmode)), "match");
 }
 
+void CL_SysinfoFrame(void)
+{
+	if (!cl.sysinfo_reply.pending)
+		return;
+	if (cls.state != ca_connected || CL_SuppressFReplies() || realtime >= cl.sysinfo_reply.expires)
+	{
+		cl.sysinfo_reply.pending = false;
+		return;
+	}
+
+	char keyboard[49], mouse[49], dpi[24] = "";
+	// Leave room for both chat commands, including their separators and opcodes.
+	const int needed = sizeof("say Input:  + ") + sizeof(keyboard) + sizeof(mouse)
+		+ sizeof(dpi) + sizeof("say ") + sizeof(cl.sysinfo_reply.audio) + 2;
+	if (cls.message.maxsize - cls.message.cursize < needed)
+		return;
+
+	int dpi_x = 0, dpi_y = 0;
+	if (cl.sysinfo_reply.probing && !IN_FinishInputDeviceInfo(cl.sysinfo_reply.mouse,
+		sizeof(cl.sysinfo_reply.mouse), &dpi_x, &dpi_y))
+		return;
+	cl.sysinfo_reply.pending = false;
+
+	UTF8_ToQuake(keyboard, sizeof(keyboard), cl.sysinfo_reply.keyboard);
+	UTF8_ToQuake(mouse, sizeof(mouse), cl.sysinfo_reply.mouse);
+	CL_SysinfoChatName(keyboard);
+	CL_SysinfoChatName(mouse);
+	if (keyboard[0] || mouse[0])
+	{
+		if (mouse[0] && dpi_x)
+		{
+			if (dpi_x == dpi_y)
+				q_snprintf(dpi, sizeof(dpi), " (%d DPI)", dpi_x);
+			else
+				q_snprintf(dpi, sizeof(dpi), " (%dx%d DPI)", dpi_x, dpi_y);
+		}
+		MSG_WriteByte(&cls.message, clc_stringcmd);
+		MSG_WriteString(&cls.message, va("say Input: %s%s%s%s", keyboard,
+			keyboard[0] && mouse[0] ? " + " : "", mouse, dpi));
+	}
+	if (cl.sysinfo_reply.audio[0])
+	{
+		MSG_WriteByte(&cls.message, clc_stringcmd);
+		MSG_WriteString(&cls.message, va("say %s", cl.sysinfo_reply.audio));
+	}
+}
+
 //warning: this text might not even be a complete line.
 //we're screwed if someone names themselves something that triggers this or some such
 //however, that's what has become standard for nq clients
@@ -4329,7 +4376,7 @@ if (!strcmp(printtext, "Client ping times:\n") && (cl.expectingpingtimes > realt
 
 	if (!CL_SuppressFReplies() && *printtext == 1 && e - printtext > 13 && (!strcmp(e - 12, ": q_sysinfo\n") || !strcmp(e - 11, ": f_system\n"))) // woods #q_sysinfo (qrack)
 	{
-		if (realtime > cl.printqsys)
+		if (realtime > cl.printqsys && cls.message.maxsize - cls.message.cursize >= 2 * MAXCMDLINE)
 		{
 #if defined(__linux__) || defined(__linux)
 			const char *linux_platform = CL_LinuxOSDescription();
@@ -4537,31 +4584,17 @@ if (!strcmp(printtext, "Client ping times:\n") && (cl.expectingpingtimes > realt
 			MSG_WriteString(&cls.message, va("say %s | %dx%d @ %d Hz, %gx scale", gpu,
 				VID_GetCurrentWidth(), VID_GetCurrentHeight(), VID_GetCurrentRefreshRate(), display_scale));
 
-			char keyboard[256], mouse[256];
-			char keyboard_chat[49], mouse_chat[49];
-			IN_GetInputDeviceNames(keyboard, sizeof(keyboard), mouse, sizeof(mouse));
-			UTF8_ToQuake(keyboard_chat, sizeof(keyboard_chat), keyboard);
-			UTF8_ToQuake(mouse_chat, sizeof(mouse_chat), mouse);
-			CL_SysinfoChatName(keyboard_chat);
-			CL_SysinfoChatName(mouse_chat);
-			if (keyboard_chat[0] || mouse_chat[0])
-			{
-				MSG_WriteByte(&cls.message, clc_stringcmd);
-				MSG_WriteString(&cls.message, va("say Input: %s%s%s", keyboard_chat,
-					keyboard_chat[0] && mouse_chat[0] ? " + " : "", mouse_chat));
-			}
-
+			cl.sysinfo_reply.audio[0] = 0;
 			if (sound && CL_SysinfoSpecificAudio(sound))
 			{
-				char sound_chat[81];
-				UTF8_ToQuake(sound_chat, sizeof(sound_chat), sound);
-				CL_SysinfoChatName(sound_chat);
-				if (sound_chat[0])
-				{
-					MSG_WriteByte(&cls.message, clc_stringcmd);
-					MSG_WriteString(&cls.message, va("say %s", sound_chat));
-				}
+				UTF8_ToQuake(cl.sysinfo_reply.audio, sizeof(cl.sysinfo_reply.audio), sound);
+				CL_SysinfoChatName(cl.sysinfo_reply.audio);
 			}
+			cl.sysinfo_reply.pending = true;
+			cl.sysinfo_reply.expires = realtime + 2;
+			cl.sysinfo_reply.probing = IN_StartInputDeviceInfo(cl.sysinfo_reply.keyboard,
+				sizeof(cl.sysinfo_reply.keyboard), cl.sysinfo_reply.mouse, sizeof(cl.sysinfo_reply.mouse));
+			CL_SysinfoFrame();
 
 			cl.printqsys = realtime + 20;
 		}

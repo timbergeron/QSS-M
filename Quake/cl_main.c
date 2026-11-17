@@ -791,6 +791,7 @@ static void CL_WriteTransferAnnouncement(const char *host)
 
 static void CL_DisconnectInternal(const char *transferhost)
 {
+	cl.sysinfo_reply.pending = false;
 	CL_Translate_Reset();
 	CL_ConnectTimingCancel();
 	CL_AsyncDownload_Cancel();
@@ -6865,6 +6866,8 @@ int CL_ReadFromServer (void)
 		cl.last_received_message = realtime;
 		CL_ParseServerMessage ();
 	} while (ret && cls.state == ca_connected);
+
+	CL_SysinfoFrame();
 
 	if (cls.download.active && cls.download.chunked)
 		DLC_RequestDownloadChunks();

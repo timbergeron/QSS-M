@@ -22,6 +22,7 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 */
 
 #include "quakedef.h"
+#include "q_ctype.h"
 #include <errno.h>
 #include <string.h>
 #include <SDL3/SDL.h>
@@ -331,6 +332,7 @@ static qboolean	textmode;
 static keydevice_t lastactivetype = KD_NONE;
 static SDL_KeyboardID last_keyboard;
 static SDL_MouseID last_mouse;
+static unsigned int mouse_device_generation;
 
 static const char *IN_FindInputDeviceName(const Uint32 *devices, int count,
 	Uint32 active, const char *other, const char *(*get_name)(Uint32))
@@ -356,7 +358,482 @@ static const char *IN_FindInputDeviceName(const Uint32 *devices, int count,
 	return distinct ? distinct : first;
 }
 
-void IN_GetInputDeviceNames(char *keyboard, size_t keyboard_size, char *mouse, size_t mouse_size)
+typedef struct
+{
+	Uint16 product;
+	byte transaction;
+	int maximum;
+} razer_dpi_device_t;
+
+// Product-specific GET DPI parameters from OpenRazer and OpenMouse's hardware reports.
+static const razer_dpi_device_t *IN_RazerDPIProfile(Uint16 product)
+{
+	static const razer_dpi_device_t devices[] = {
+		{0x004c, 0xff, 16000}, // Diamondback Chroma
+		{0x007a, 0x3f, 20000}, {0x007b, 0x3f, 20000}, // Viper Ultimate
+		{0x0064, 0x3f, 16000}, // Basilisk
+		{0x007c, 0x3f, 20000}, {0x007d, 0x3f, 20000}, // DeathAdder V2 Pro
+		{0x0083, 0xff, 16000}, // Basilisk X HyperSpeed
+		{0x0084, 0x3f, 20000}, // DeathAdder V2
+		{0x0085, 0x1f, 20000}, // Basilisk V2
+		{0x0086, 0x1f, 20000}, {0x0088, 0x1f, 20000}, // Basilisk Ultimate
+		{0x008a, 0xff, 8500}, // Viper Mini
+		{0x0099, 0x1f, 26000}, // Basilisk V3
+		{0x009c, 0x1f, 14000}, // DeathAdder V2 X HyperSpeed
+		{0x00a3, 0x1f, 8500}, // Cobra
+		{0x00a5, 0x1f, 30000}, {0x00a6, 0x1f, 30000}, // Viper V2 Pro
+		{0x00a7, 0x1f, 30000}, {0x00a8, 0x1f, 30000}, // Naga V2 Pro
+		{0x00aa, 0x1f, 30000}, {0x00ab, 0x1f, 30000}, // Basilisk V3 Pro
+		{0x00b6, 0x1f, 30000}, {0x00b7, 0x1f, 30000}, // DeathAdder V3 Pro
+		{0x00b8, 0x1f, 30000}, // Viper V3 HyperSpeed
+		{0x00c0, 0x1f, 35000}, {0x00c1, 0x1f, 35000}, // Viper V3 Pro
+		{0x00cb, 0x1f, 35000}, // Basilisk V3 35K
+		{0x00cc, 0x1f, 35000}, {0x00cd, 0x1f, 35000}, // Basilisk V3 Pro 35K
+		{0x00de, 0x1f, 35000}, {0x00df, 0x1f, 35000}, // Viper V3 Pro SE
+	};
+	for (size_t i = 0; i < Q_COUNTOF(devices); i++)
+		if (devices[i].product == product)
+			return &devices[i];
+	return NULL;
+}
+
+// Report ID 0 precedes the 90-byte Razer packet. The zero selector queries
+// the current sensor setting without reading a stored profile.
+static byte IN_RazerReportChecksum(const byte *report)
+{
+	byte checksum = 0;
+	for (int i = 3; i < 89; i++)
+		checksum ^= report[i];
+	return checksum;
+}
+
+static qboolean IN_ReadRazerDPI(const char *path, const razer_dpi_device_t *profile, int *dpi_x, int *dpi_y)
+{
+	SDL_hid_device *device = SDL_hid_open_path(path);
+	if (!device)
+		return false;
+
+	byte request[91] = {0, 0, profile->transaction, 0, 0, 0, 7, 0x04, 0x85};
+	byte reply[91] = {0};
+	request[89] = IN_RazerReportChecksum(request);
+	int length = -1;
+	if (SDL_hid_send_feature_report(device, request, sizeof(request)) == sizeof(request))
+	{
+		SDL_Delay(10);
+		length = SDL_hid_get_feature_report(device, reply, sizeof(reply));
+	}
+	SDL_hid_close(device);
+
+	if (length != sizeof(reply) || reply[0] != request[0] || reply[1] != 0x02 ||
+		reply[2] != request[2] || reply[6] != request[6] || reply[7] != request[7] ||
+		reply[8] != request[8] || reply[9] != request[9] || reply[89] != IN_RazerReportChecksum(reply))
+		return false;
+
+	int x = (reply[10] << 8) | reply[11];
+	int y = (reply[12] << 8) | reply[13];
+	if (x < 100 || x > profile->maximum || y < 100 || y > profile->maximum)
+		return false;
+
+	*dpi_x = x;
+	*dpi_y = y;
+	return true;
+}
+
+// HID++ 2.0 long report with a software ID to distinguish our reply from notifications.
+static qboolean IN_LogitechGet(SDL_hid_device *device, byte index, byte feature,
+	byte function, byte arg0, byte arg1, byte reply[20], int required_length)
+{
+	const byte request[20] = {0x11, index, feature, function | 0x0e, arg0, arg1};
+	if (SDL_hid_write(device, request, sizeof(request)) != sizeof(request))
+		return false;
+
+	Uint64 deadline = SDL_GetTicks() + 45;
+	for (Uint64 now = SDL_GetTicks(); now < deadline; now = SDL_GetTicks())
+	{
+		int length = SDL_hid_read_timeout(device, reply, 20, (int)(deadline - now));
+		if (length <= 0)
+			return false;
+#ifdef __APPLE__
+		// IOKit may deliver the data without its separate callback report ID.
+		if (length == 6 || length == 19)
+		{
+			memmove(reply + 1, reply, length);
+			reply[0] = length == 6 ? 0x10 : 0x11;
+			length++;
+		}
+#endif
+		if (((length == 7 && reply[0] == 0x10) || (length == 20 && reply[0] == 0x11)) &&
+			reply[1] == index)
+		{
+			if (reply[2] == feature && reply[3] == request[3])
+				return length >= required_length;
+			if (reply[2] == 0xff && reply[3] == feature && reply[4] == request[3])
+				return false;
+		}
+	}
+	return false;
+}
+
+static qboolean IN_ReadLogitechDPI(const char *path, byte index, int *dpi_x, int *dpi_y)
+{
+	SDL_hid_device *device = SDL_hid_open_path(path);
+	if (!device)
+		return false;
+
+	byte reply[20];
+	int x = 0, y = 0;
+	// Root.GetFeature(0x2202), followed by ExtendedAdjustableDPI.GetSensorDPI(0).
+	if (IN_LogitechGet(device, index, 0, 0, 0x22, 0x02, reply, 7) && reply[4])
+	{
+		const byte feature = reply[4];
+		if (IN_LogitechGet(device, index, feature, 0x10, 0, 0, reply, 7))
+		{
+			qboolean separate_axes = (reply[6] & 1) != 0;
+			if (IN_LogitechGet(device, index, feature, 0x50, 0, 0, reply, separate_axes ? 11 : 7) && !reply[4])
+			{
+				x = (reply[5] << 8) | reply[6];
+				y = separate_axes ? (reply[9] << 8) | reply[10] : x;
+			}
+		}
+	}
+	// Older gaming mice expose AdjustableDPI (0x2201) with a single DPI value.
+	else if (IN_LogitechGet(device, index, 0, 0, 0x22, 0x01, reply, 7) && reply[4] &&
+		IN_LogitechGet(device, index, reply[4], 0x20, 0, 0, reply, 7) && !reply[4])
+		x = y = (reply[5] << 8) | reply[6];
+
+	SDL_hid_close(device);
+	if (x < 100 || x > 50000 || y < 100 || y > 50000)
+		return false;
+	*dpi_x = x;
+	*dpi_y = y;
+	return true;
+}
+
+#ifdef _WIN32
+static Uint16 IN_RawMouseProduct(SDL_MouseID mouse, Uint16 vendor, char *path, UINT path_size)
+{
+	char prefix[32];
+	q_snprintf(prefix, sizeof(prefix), "\\\\?\\HID#VID_%04X&PID_", (unsigned)vendor);
+	size_t prefix_length = strlen(prefix);
+	// SDL's Windows Raw Input backend uses the RAWINPUT device handle as the mouse ID.
+	if (GetRawInputDeviceInfoA((HANDLE)(uintptr_t)mouse, RIDI_DEVICENAME, path, &path_size) == (UINT)-1 ||
+		q_strncasecmp(path, prefix, prefix_length))
+		return 0;
+
+	char *end;
+	unsigned long product = strtoul(path + prefix_length, &end, 16);
+	if (end != path + prefix_length + 4 || (*end != '&' && *end != '#'))
+		return 0;
+	return (Uint16)product;
+}
+
+#endif
+
+// Known Logitech mouse IDs, including paired wireless IDs exposed by some
+// backends. A shared receiver ID alone does not identify its paired mouse.
+static const char *IN_LogitechModelName(Uint16 product, byte *index)
+{
+	*index = 1;
+	switch (product)
+	{
+	case 0x4067: return "Logitech G903";
+	case 0x4070: return "Logitech G703";
+	case 0x4074: return "Logitech G305";
+	case 0x4079: return "Logitech G Pro Wireless";
+	case 0x407f: return "Logitech G502 Lightspeed";
+	case 0x4093: return "Logitech G Pro X Superlight";
+	case 0x4099: return "Logitech G502 X Plus";
+	case 0x409f: return "Logitech G502 X Wireless";
+	default: break;
+	}
+	*index = 0xff;
+	switch (product)
+	{
+	case 0xc086: return "Logitech G903";
+	case 0xc087: return "Logitech G703";
+	case 0xc088: return "Logitech G Pro Wireless";
+	case 0xc08b: return "Logitech G502 Hero";
+	case 0xc08d: return "Logitech G502 Lightspeed";
+	case 0xc094: return "Logitech G Pro X Superlight";
+	case 0xc095: return "Logitech G502 X Plus";
+	case 0xc098: return "Logitech G502 X Wireless";
+	case 0xc099: return "Logitech G502 X";
+	case 0xc09a: return "Logitech G Pro 2 Lightspeed";
+	case 0xc09b: return "Logitech G Pro X Superlight 2";
+	default: return NULL;
+	}
+}
+
+static SDL_hid_device_info *IN_EnumerateMouseHID(Uint16 vendor)
+{
+	// SDL defaults HID enumeration to controllers. Expand only this vendor's
+	// enumeration, preserve explicit user settings, and serialize with joystick updates.
+	SDL_LockJoysticks();
+	const char *hint = SDL_GetHint(SDL_HINT_HIDAPI_ENUMERATE_ONLY_CONTROLLERS);
+	qboolean temporary = !hint && SDL_SetHint(SDL_HINT_HIDAPI_ENUMERATE_ONLY_CONTROLLERS, "0");
+	SDL_hid_device_info *devices = SDL_hid_enumerate(vendor, 0);
+	if (temporary)
+		SDL_ResetHint(SDL_HINT_HIDAPI_ENUMERATE_ONLY_CONTROLLERS);
+	SDL_UnlockJoysticks();
+	return devices;
+}
+
+typedef struct
+{
+	char name[256];
+	int x, y;
+} mouse_dpi_result_t;
+
+static qboolean IN_ReadHIDMouseDPI(SDL_hid_device_info *devices, Uint16 vendor, Uint16 selected_product,
+	const char *selected, mouse_dpi_result_t *result)
+{
+	const SDL_hid_device_info *candidate = NULL;
+	const razer_dpi_device_t *razer = NULL;
+	byte index = 0xff;
+	for (const SDL_hid_device_info *item = devices; item; item = item->next)
+	{
+		if (item->vendor_id != vendor || (selected_product && selected_product != item->product_id))
+			continue;
+
+		const razer_dpi_device_t *profile = NULL;
+		byte candidate_index = 0xff;
+		const char *model = NULL;
+		if (vendor == 0x1532)
+		{
+			profile = IN_RazerDPIProfile(item->product_id);
+			if (!profile || item->usage_page != 1 || item->usage != 2)
+				continue;
+		}
+		else
+		{
+			if (item->usage_page != 0xff00 || item->usage != 1)
+				continue;
+			model = IN_LogitechModelName(item->product_id, &candidate_index);
+			if (!model && (!*selected || q_strcasestr(selected, "receiver")))
+				continue;
+		}
+
+		char *product = item->product_string ? SDL_iconv_wchar_utf8(item->product_string) : NULL;
+		const char *name = model ? model : product;
+		const char *selection_name = selected;
+		if (vendor == 0x046d && !q_strncasecmp(selected, "Logitech ", 9))
+			selection_name += 9;
+		qboolean matches = name && *name && (selected_product || !*selected ||
+			!q_strcasecmp(selected, name) ||
+			(product && (!q_strcasecmp(selected, product) || !q_strcasecmp(selection_name, product))));
+		if (matches && candidate && strcmp(candidate->path, item->path))
+		{
+			// Name and product match cannot distinguish two physical devices.
+			SDL_free(product);
+			return false;
+		}
+		if (matches)
+		{
+			candidate = item;
+			razer = profile;
+			index = candidate_index;
+			q_strlcpy(result->name, name, sizeof(result->name));
+		}
+		SDL_free(product);
+	}
+
+	if (candidate)
+	{
+		if (razer)
+			IN_ReadRazerDPI(candidate->path, razer, &result->x, &result->y);
+		else if (!IN_ReadLogitechDPI(candidate->path, index, &result->x, &result->y) && index == 1)
+			IN_ReadLogitechDPI(candidate->path, 0xff, &result->x, &result->y);
+	}
+	return true;
+}
+
+#if defined(__linux__) && !defined(__ANDROID__)
+static qboolean IN_ReadRatbagOutput(const char *const *args, char *output, size_t size)
+{
+	SDL_PropertiesID props = SDL_CreateProperties();
+	if (!props)
+		return false;
+	SDL_SetPointerProperty(props, SDL_PROP_PROCESS_CREATE_ARGS_POINTER, (void *)args);
+	SDL_SetNumberProperty(props, SDL_PROP_PROCESS_CREATE_STDIN_NUMBER, SDL_PROCESS_STDIO_NULL);
+	SDL_SetNumberProperty(props, SDL_PROP_PROCESS_CREATE_STDOUT_NUMBER, SDL_PROCESS_STDIO_APP);
+	SDL_SetNumberProperty(props, SDL_PROP_PROCESS_CREATE_STDERR_NUMBER, SDL_PROCESS_STDIO_NULL);
+	SDL_Process *process = SDL_CreateProcessWithProperties(props);
+	SDL_DestroyProperties(props);
+	if (!process)
+		return false;
+
+	SDL_IOStream *stream = SDL_GetProcessOutput(process);
+	Uint64 deadline = SDL_GetTicks() + 120;
+	size_t used = 0;
+	qboolean complete = false;
+	int status = -1;
+	while (stream && used < size - 1 && SDL_GetTicks() < deadline)
+	{
+		used += SDL_ReadIO(stream, output + used, size - used - 1);
+		SDL_IOStatus io = SDL_GetIOStatus(stream);
+		if (io == SDL_IO_STATUS_EOF && SDL_WaitProcess(process, false, &status))
+		{
+			complete = true;
+			break;
+		}
+		if (io == SDL_IO_STATUS_ERROR)
+			break;
+		SDL_Delay(2);
+	}
+	if (!complete)
+	{
+		SDL_KillProcess(process, true);
+		SDL_WaitProcess(process, true, NULL);
+	}
+	SDL_DestroyProcess(process);
+	output[used] = 0;
+	return complete && status == 0;
+}
+
+static qboolean IN_ParseRatbagDPI(const char *output, int *dpi_x, int *dpi_y)
+{
+	char *end;
+	long x = strtol(output, &end, 10);
+	if (end == output)
+		return false;
+	long y = x;
+	if (*end == 'x')
+	{
+		const char *axis = end + 1;
+		y = strtol(axis, &end, 10);
+		if (end == axis)
+			return false;
+	}
+	if (strncmp(end, "dpi", 3) || x < 100 || x > 100000 || y < 100 || y > 100000)
+		return false;
+	end += 3;
+	while (q_isspace((unsigned char)*end))
+		end++;
+	if (*end)
+		return false;
+	*dpi_x = (int)x;
+	*dpi_y = (int)y;
+	return true;
+}
+
+static void IN_ReadRatbagDPI(const char *selected, char *mouse, size_t mouse_size, int *dpi_x, int *dpi_y)
+{
+	const char *tool = "/usr/bin/ratbagctl";
+	SDL_PathInfo info;
+	if (!SDL_GetPathInfo(tool, &info) || info.type != SDL_PATHTYPE_FILE)
+	{
+		tool = "/usr/local/bin/ratbagctl";
+		if (!SDL_GetPathInfo(tool, &info) || info.type != SDL_PATHTYPE_FILE)
+			return;
+	}
+	const char *list_args[] = {tool, "list", NULL};
+	char list[4096], id[32] = "", name[256] = "";
+	if (!IN_ReadRatbagOutput(list_args, list, sizeof(list)))
+		return;
+
+	char *state;
+	for (char *line = strtok_r(list, "\r\n", &state); line; line = strtok_r(NULL, "\r\n", &state))
+	{
+		char *value = strstr(line, ": ");
+		if (!value || value == line || (size_t)(value - line) >= sizeof(id))
+			continue;
+		*value++ = 0;
+		while (*value == ' ')
+			value++;
+		char *end = value + strlen(value);
+		while (end > value && q_isspace((unsigned char)end[-1]))
+			*--end = 0;
+		// Device IDs have no leading option marker. Pass the ID as an argv value,
+		// and require a unique name match before asking for its active DPI.
+		const char *id_end = line;
+		while (q_isalnum((unsigned char)*id_end) || *id_end == '_' || *id_end == '-')
+			id_end++;
+		if (!q_isalnum((unsigned char)line[0]) || *id_end || !*value || (*selected && q_strcasecmp(selected, value)))
+			continue;
+		if (id[0])
+			return;
+		q_strlcpy(id, line, sizeof(id));
+		q_strlcpy(name, value, sizeof(name));
+	}
+
+	if (id[0])
+	{
+		const char *dpi_args[] = {tool, id, "dpi", "get", NULL};
+		char output[64];
+		if (IN_ReadRatbagOutput(dpi_args, output, sizeof(output)) &&
+			IN_ParseRatbagDPI(output, dpi_x, dpi_y) && !*selected)
+			q_strlcpy(mouse, name, mouse_size);
+	}
+}
+#endif
+
+// All names and Raw Input paths are captured on the SDL event thread. Only
+// the worker touches the probe results until it publishes completion.
+static struct
+{
+	SDL_Thread *thread;
+	SDL_AtomicInt done;
+	Uint64 deadline;
+	Uint64 completed;
+	SDL_MouseID active_mouse;
+	unsigned int generation;
+	char selected[256];
+	char raw_path[512];
+	const razer_dpi_device_t *raw_razer;
+	Uint16 logitech_product;
+	SDL_hid_device_info *razer_devices;
+	SDL_hid_device_info *logitech_devices;
+	mouse_dpi_result_t result;
+	qboolean hid_retained;
+} mouse_dpi_probe;
+
+static void IN_ReapMouseDPIProbe(void)
+{
+	if (mouse_dpi_probe.thread)
+		SDL_WaitThread(mouse_dpi_probe.thread, NULL);
+	mouse_dpi_probe.thread = NULL;
+	SDL_hid_free_enumeration(mouse_dpi_probe.razer_devices);
+	SDL_hid_free_enumeration(mouse_dpi_probe.logitech_devices);
+	mouse_dpi_probe.razer_devices = NULL;
+	mouse_dpi_probe.logitech_devices = NULL;
+	if (mouse_dpi_probe.hid_retained)
+		SDL_hid_exit();
+	mouse_dpi_probe.hid_retained = false;
+}
+
+static int SDLCALL IN_MouseDPIWorker(void *unused)
+{
+	const char *selected = mouse_dpi_probe.selected;
+	mouse_dpi_result_t *result = &mouse_dpi_probe.result;
+	mouse_dpi_result_t logitech = {0};
+
+	if (mouse_dpi_probe.raw_razer)
+		IN_ReadRazerDPI(mouse_dpi_probe.raw_path, mouse_dpi_probe.raw_razer, &result->x, &result->y);
+	qboolean unambiguous = true;
+	if (mouse_dpi_probe.razer_devices)
+		unambiguous = IN_ReadHIDMouseDPI(mouse_dpi_probe.razer_devices, 0x1532, 0, selected, result);
+	if (unambiguous && mouse_dpi_probe.logitech_devices && SDL_GetTicks() < mouse_dpi_probe.deadline)
+	{
+		unambiguous = IN_ReadHIDMouseDPI(mouse_dpi_probe.logitech_devices, 0x046d,
+			mouse_dpi_probe.logitech_product, selected, &logitech);
+		if (result->name[0] && logitech.name[0])
+			unambiguous = false;
+		else if (logitech.x)
+			*result = logitech;
+	}
+	if (!unambiguous)
+		result->x = result->y = 0;
+#if defined(__linux__) && !defined(__ANDROID__)
+	if (unambiguous && !result->x && SDL_GetTicks() < mouse_dpi_probe.deadline)
+		IN_ReadRatbagDPI(selected, result->name, sizeof(result->name), &result->x, &result->y);
+#endif
+
+	mouse_dpi_probe.completed = SDL_GetTicks();
+	SDL_SetAtomicInt(&mouse_dpi_probe.done, 1);
+	return 0;
+}
+
+qboolean IN_StartInputDeviceInfo(char *keyboard, size_t keyboard_size, char *mouse, size_t mouse_size)
 {
 	int mouse_count = 0, keyboard_count = 0;
 	SDL_MouseID *mice = SDL_GetMice(&mouse_count);
@@ -370,7 +847,102 @@ void IN_GetInputDeviceNames(char *keyboard, size_t keyboard_size, char *mouse, s
 	q_strlcpy(keyboard, keyboard_name ? keyboard_name : "", keyboard_size);
 	q_strlcpy(mouse, mouse_name ? mouse_name : "", mouse_size);
 	SDL_free(keyboards);
+
+	// At most one device probe may be outstanding, even if a slow driver
+	// misses the chat reply deadline or the client changes servers.
+	if (mouse_dpi_probe.thread && !SDL_GetAtomicInt(&mouse_dpi_probe.done))
+	{
+		SDL_free(mice);
+		return false;
+	}
+	IN_ReapMouseDPIProbe();
+	memset(&mouse_dpi_probe.result, 0, sizeof(mouse_dpi_probe.result));
+	q_strlcpy(mouse_dpi_probe.selected, mouse, sizeof(mouse_dpi_probe.selected));
+	mouse_dpi_probe.active_mouse = last_mouse;
+	mouse_dpi_probe.generation = mouse_device_generation;
+	mouse_dpi_probe.raw_razer = NULL;
+	mouse_dpi_probe.logitech_product = 0;
+
+#ifdef _WIN32
+	if (mouse_name)
+	{
+		SDL_MouseID selected_id = 0;
+		int matches = 0;
+		for (int i = 0; i < mouse_count; i++)
+		{
+			const char *name = SDL_GetMouseNameForID(mice[i]);
+			if (!name || q_strcasecmp(name, mouse_name))
+				continue;
+			selected_id = mice[i];
+			matches++;
+			if (selected_id == last_mouse)
+				break;
+		}
+		if (selected_id != last_mouse && matches != 1)
+			selected_id = 0;
+
+		if (selected_id)
+		{
+			char *path = mouse_dpi_probe.raw_path;
+			path[0] = 0;
+			Uint16 product = IN_RawMouseProduct(selected_id, 0x1532, path, sizeof(mouse_dpi_probe.raw_path));
+			mouse_dpi_probe.raw_razer = IN_RazerDPIProfile(product);
+			if (!product)
+				mouse_dpi_probe.logitech_product = IN_RawMouseProduct(selected_id, 0x046d,
+					path, sizeof(mouse_dpi_probe.raw_path));
+		}
+	}
+#else
+	if (!mouse_name || !q_strncasecmp(mouse_name, "Razer ", 6))
+		mouse_dpi_probe.razer_devices = IN_EnumerateMouseHID(0x1532);
+#endif
+	if (!mouse_name || !q_strncasecmp(mouse_name, "Logitech ", 9))
+		mouse_dpi_probe.logitech_devices = IN_EnumerateMouseHID(0x046d);
 	SDL_free(mice);
+
+#if !defined(__linux__) || defined(__ANDROID__)
+	if (!mouse_dpi_probe.raw_razer && !mouse_dpi_probe.razer_devices && !mouse_dpi_probe.logitech_devices)
+		return false;
+#endif
+
+	if (mouse_dpi_probe.raw_razer || mouse_dpi_probe.razer_devices || mouse_dpi_probe.logitech_devices)
+	{
+		if (SDL_hid_init() < 0)
+		{
+			IN_ReapMouseDPIProbe();
+			return false;
+		}
+		mouse_dpi_probe.hid_retained = true;
+	}
+
+	mouse_dpi_probe.deadline = SDL_GetTicks() + 500;
+	SDL_SetAtomicInt(&mouse_dpi_probe.done, 0);
+	mouse_dpi_probe.thread = SDL_CreateThread(IN_MouseDPIWorker, "MouseDPI", NULL);
+	if (!mouse_dpi_probe.thread)
+	{
+		IN_ReapMouseDPIProbe();
+		return false;
+	}
+	return true;
+}
+
+qboolean IN_FinishInputDeviceInfo(char *mouse, size_t mouse_size, int *dpi_x, int *dpi_y)
+{
+	*dpi_x = *dpi_y = 0;
+	if (!SDL_GetAtomicInt(&mouse_dpi_probe.done))
+		return SDL_GetTicks() >= mouse_dpi_probe.deadline;
+
+	const mouse_dpi_result_t *result = &mouse_dpi_probe.result;
+	if (result->x && mouse_dpi_probe.completed <= mouse_dpi_probe.deadline &&
+		last_mouse == mouse_dpi_probe.active_mouse && mouse_device_generation == mouse_dpi_probe.generation)
+	{
+		*dpi_x = result->x;
+		*dpi_y = result->y;
+		if (!*mouse || (mouse_dpi_probe.logitech_product && q_strcasestr(mouse, "receiver")))
+			q_strlcpy(mouse, result->name, mouse_size);
+	}
+	IN_ReapMouseDPIProbe();
+	return true;
 }
 
 extern qboolean	bind_grab;	//from the menu code, so that we regrab the mouse in order to pass inputs through
@@ -2098,6 +2670,7 @@ void IN_Init (void)
 void IN_Shutdown (void)
 {
 	Con_DPrintf("IN_Shutdown called\n");
+	IN_ReapMouseDPIProbe();
 	IN_ClearDropBatch();
 #if defined(_WIN32) // woods #disablecaps via ironwail
 	Sys_ActivateKeyFilter(false);
@@ -6386,6 +6959,13 @@ void IN_SendKeyEvents (void)
 				break;
 			}
 			IN_EmitWheelKeySteps(event.wheel.integer_y);
+			break;
+
+		case SDL_EVENT_MOUSE_ADDED:
+		case SDL_EVENT_MOUSE_REMOVED:
+			mouse_device_generation++;
+			if (event.type == SDL_EVENT_MOUSE_REMOVED && last_mouse == event.mdevice.which)
+				last_mouse = 0;
 			break;
 
 		case SDL_EVENT_MOUSE_MOTION:

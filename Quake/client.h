@@ -431,6 +431,12 @@ typedef struct
 	float expectingpltimes;  // woods #scrpl
 	float printversionresponse;
 	float printqsys; // woods #q_sysinfo (qrack)
+	struct
+	{
+		qboolean pending, probing;
+		double expires;
+		char keyboard[256], mouse[256], audio[81];
+	} sysinfo_reply;
 	float printconfig; // woods #f_config
 	float printrandom; // woods #f_random
 	float printmodifiedresponse;
@@ -678,6 +684,7 @@ void CL_SendLagMove (void); // JPG - synthetic lag // woods #pqlag
 void CL_FlushLagMoves (void); // woods #pqlag -- send everything still queued (lag switched off)
 void CL_ResetLagMoves (void); // woods #pqlag -- discard the queue (disconnect)
 int  CL_ReadFromServer (void);
+void CL_SysinfoFrame (void);
 void CL_AdjustAngles (void);
 void CL_BaseMove (usercmd_t *cmd, qboolean isfinal);
 void CL_FinishMove(usercmd_t *cmd, qboolean isfinal);
