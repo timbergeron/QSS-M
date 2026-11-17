@@ -42116,6 +42116,9 @@ Demos Menu
 #define DEMOS_PATH_TEXT_X	64
 #define DEMOS_PATH_BOX_CHARS	30
 #define DEMOS_PATH_MAX_DEPTH	8
+#define DEMOS_ID1_ROW_Y	44
+#define DEMOS_ID1_TEXT_X	(DEMOS_PATH_BOX_X + 8)
+#define DEMOS_ID1_TEXT_SCALE	0.8125f
 
 typedef enum
 {
@@ -42135,7 +42138,7 @@ typedef enum
 typedef struct
 {
 	char        name[MAX_QPATH];
-	char        display[MAX_QPATH];
+	char        display[MAX_QPATH + 8];
 	char        date[32];
 	char        map[64];
 	char        players[256];
@@ -42145,6 +42148,7 @@ typedef struct
 	qboolean    active;
 	qboolean    parsed;
 	qboolean    map_parse_failed;
+	qboolean    from_id1;
 	time_t      mtime;
 	size_t      fsize;
 	int         scan_order; // preserve search-path precedence and equal-date ordering
@@ -42853,6 +42857,7 @@ static struct
 	filelist_item_t		*path_folders;
 	qboolean			path_editing;
 	qboolean			path_valid;
+	qboolean			show_id1;
 	int					bg_parse_cursor;       // next index to background-parse for searchable metadata
 	int					bg_parse_refilter_count; // parsed metadata entries since last search refilter
 	qboolean			bg_parse_map_changed;
@@ -42878,9 +42883,9 @@ static qboolean M_Demos_CurrentGameIsId1(void)
 }
 
 /* The attract-mode demos shipped in the official paks: id1 and Rogue both
-   use demo1..demo3 (disambiguated by gamedir), Hipnotic uses
+   use demo1..demo3 (disambiguated by gamedir / from_id1), Hipnotic uses
    hipdemo1..hipdemo4. Returns the caption to show, or NULL. */
-static const char *M_Demos_OriginalIntroDemoLabel(const char *name)
+static const char *M_Demos_OriginalIntroDemoLabel(const char *name, qboolean from_id1)
 {
 	const char *base = COM_SkipPath(name);
 	const char *game = M_Demos_CurrentGameName();
@@ -42888,6 +42893,10 @@ static const char *M_Demos_OriginalIntroDemoLabel(const char *name)
 		!q_strcasecmp(base, "demo1.dem") ||
 		!q_strcasecmp(base, "demo2.dem") ||
 		!q_strcasecmp(base, "demo3.dem");
+
+	/* id1 demos surfaced while playing a mod (the show-id1 toggle) */
+	if (from_id1)
+		return is_demo123 ? "original Quake intro demo" : NULL;
 
 	if (!q_strcasecmp(game, "hipnotic") &&
 		(!q_strcasecmp(base, "hipdemo1.dem") || !q_strcasecmp(base, "hipdemo2.dem") ||
@@ -42965,9 +42974,43 @@ static qboolean M_Demos_SearchPathMatchesGame(searchpath_t *search, const char *
 		 search->purename[len] == '\\');
 }
 
-static qboolean M_Demos_SearchPathAllowed(searchpath_t *search)
+static qboolean M_Demos_SearchPathAllowed(searchpath_t *search, qboolean *from_id1)
 {
-	return M_Demos_SearchPathMatchesGame(search, M_Demos_CurrentGameName());
+	qboolean is_id1;
+
+	if (from_id1)
+		*from_id1 = false;
+
+	if (M_Demos_SearchPathMatchesGame(search, M_Demos_CurrentGameName()))
+		return true;
+
+	is_id1 = M_Demos_SearchPathMatchesGame(search, GAMENAME);
+	if (!M_Demos_CurrentGameIsId1() && demosmenu.show_id1 && is_id1)
+	{
+		if (from_id1)
+			*from_id1 = true;
+		return true;
+	}
+
+	return false;
+}
+
+static qboolean M_Demos_HasId1SearchPath(void)
+{
+	searchpath_t *search;
+
+	for (search = com_searchpaths; search; search = search->next)
+	{
+		if (M_Demos_SearchPathMatchesGame(search, GAMENAME))
+			return true;
+	}
+
+	return false;
+}
+
+static qboolean M_Demos_ShowId1Toggle(void)
+{
+	return !M_Demos_CurrentGameIsId1() && M_Demos_HasId1SearchPath();
 }
 
 static void M_Demos_ClearFileList(filelist_item_t **list)
@@ -43006,14 +43049,22 @@ static void M_Demos_FreeItems(void)
 }
 
 static void M_Demos_AddEx(const char* name, const char *display,
-	time_t mtime, size_t fsize, searchpath_t *spath)
+	qboolean from_id1, time_t mtime, size_t fsize, searchpath_t *spath)
 {
     demoitem_t tempDemo;
+	char display_with_source[MAX_QPATH + 8];
 
 	memset(&tempDemo, 0, sizeof(tempDemo));
 
 	q_strlcpy(tempDemo.name, name, sizeof(tempDemo.name));
-	q_strlcpy(tempDemo.display, display && display[0] ? display : name, sizeof(tempDemo.display));
+	if (from_id1 && !M_Demos_CurrentGameIsId1())
+	{
+		q_snprintf(display_with_source, sizeof(display_with_source), "%s [id1]",
+			display && display[0] ? display : name);
+		q_strlcpy(tempDemo.display, display_with_source, sizeof(tempDemo.display));
+	}
+	else
+		q_strlcpy(tempDemo.display, display && display[0] ? display : name, sizeof(tempDemo.display));
 	M_InferDemoMapName(name, tempDemo.map, sizeof(tempDemo.map));
 	tempDemo.players[0] = '\0';
 	tempDemo.stats[0] = '\0';
@@ -43021,6 +43072,7 @@ static void M_Demos_AddEx(const char* name, const char *display,
 	tempDemo.filesize[0] = '\0';
     tempDemo.active = false;
 	tempDemo.parsed = false;
+	tempDemo.from_id1 = from_id1;
 	tempDemo.mtime = mtime;
 	tempDemo.fsize = fsize;
 	tempDemo.scan_order = demosmenu.democount;
@@ -43241,7 +43293,7 @@ static void M_Demos_ScanPakFolders(void)
 	{
 		if (!search->pack)
 			continue;
-		if (!M_Demos_SearchPathAllowed(search))
+		if (!M_Demos_SearchPathAllowed(search, NULL))
 			continue;
 
 		pak = search->pack;
@@ -43358,7 +43410,7 @@ static void M_Demos_RebuildFolderList(void)
 	{
 		if (search->pack)
 			continue;
-		if (!M_Demos_SearchPathAllowed(search))
+		if (!M_Demos_SearchPathAllowed(search, NULL))
 			continue;
 
 		q_snprintf(demos_path, sizeof(demos_path), "%s/demos", search->filename);
@@ -44273,10 +44325,11 @@ static qboolean M_Demos_AddListedFile(void *ctx, const char *fname, time_t mtime
 	demos_list_ctx_t *list_ctx = (demos_list_ctx_t *)ctx;
 	char logical_name[MAX_QPATH];
 	char display_name[MAX_QPATH];
+	qboolean from_id1;
 	qboolean explicit_root = list_ctx && list_ctx->explicit_root &&
 		!strchr(fname, '/') && !strchr(fname, '\\');
 
-	if (!M_Demos_SearchPathAllowed(spath))
+	if (!M_Demos_SearchPathAllowed(spath, &from_id1))
 		return true;
 
 	if (explicit_root)
@@ -44290,7 +44343,7 @@ static qboolean M_Demos_AddListedFile(void *ctx, const char *fname, time_t mtime
 		q_strlcpy(display_name, COM_SkipPath(fname), sizeof(display_name));
 	}
 
-	M_Demos_AddEx(logical_name, display_name, mtime, fsize, spath);
+	M_Demos_AddEx(logical_name, display_name, from_id1, mtime, fsize, spath);
 	return true;
 }
 
@@ -45043,6 +45096,18 @@ static void M_Demos_PathChanged(void)
 	M_Demos_RebuildForCurrentPath();
 }
 
+static void M_Demos_ToggleShowId1(void)
+{
+	if (!M_Demos_ShowId1Toggle())
+		return;
+
+	demosmenu.show_id1 = !demosmenu.show_id1;
+	demosmenu.path_tabpartial[0] = '\0';
+	M_Demos_RebuildFolderList();
+	M_Demos_RebuildForCurrentPath();
+	S_LocalSound("misc/menu1.wav");
+}
+
 static void M_Demos_RememberCurrentPath(void)
 {
 	q_strlcpy(demosmenu.remembered_path_suffix, demosmenu.path_suffix,
@@ -45146,7 +45211,8 @@ static qboolean M_Demos_ShowPathOptions(void)
 
 static int M_Demos_ListY(void)
 {
-	return demosmenu.path_valid && !M_Demos_ShowPathOptions() ? 64 : 56;
+	int y = M_Demos_ShowId1Toggle() ? 64 : 56;
+	return demosmenu.path_valid && !M_Demos_ShowPathOptions() ? y + 8 : y;
 }
 
 static const struct
@@ -45187,6 +45253,14 @@ static int M_Demos_HoveredSortHeader(void)
 		return -1;
 
 	return x / (width / Q_COUNTOF(demo_sort_headers));
+}
+
+static qboolean M_Demos_MouseInShowId1Toggle(void)
+{
+	return M_Demos_ShowId1Toggle() &&
+		M_TextField_MouseInRow(m_mousey, DEMOS_ID1_ROW_Y) &&
+		m_mousex >= DEMOS_ID1_TEXT_X &&
+		m_mousex < DEMOS_ID1_TEXT_X + (int)(22 * 8 * DEMOS_ID1_TEXT_SCALE);
 }
 
 static qboolean M_Demos_MouseInPathOptionsArea(void)
@@ -45344,6 +45418,26 @@ static void M_Demos_DrawPathField(void)
 	}
 }
 
+static void M_Demos_DrawShowId1Toggle(void)
+{
+	const int value_x = DEMOS_ID1_TEXT_X + (int)(16 * 8 * DEMOS_ID1_TEXT_SCALE);
+
+	if (!M_Demos_ShowId1Toggle())
+		return;
+
+	glPushMatrix();
+	glTranslatef(DEMOS_ID1_TEXT_X, DEMOS_ID1_ROW_Y + 1, 0);
+	glScalef(DEMOS_ID1_TEXT_SCALE, DEMOS_ID1_TEXT_SCALE, 1.0f);
+	M_Print(0, 0, "show id1 demos:");
+	glPopMatrix();
+
+	glPushMatrix();
+	glTranslatef(value_x, DEMOS_ID1_ROW_Y + 1, 0);
+	glScalef(DEMOS_ID1_TEXT_SCALE, DEMOS_ID1_TEXT_SCALE, 1.0f);
+	M_PrintWhite(0, 0, demosmenu.show_id1 ? "on" : "off");
+	glPopMatrix();
+}
+
 static void M_Demos_DrawPathOptions(int x, int y, int cols)
 {
 	filelist_item_t *folder;
@@ -45456,6 +45550,7 @@ void M_Demos_Draw (void)
 		demosmenu.democount, "demo", "demos");
     M_DrawQuakeBar(x - 8, 16, cols + 2);
 	M_Demos_DrawPathField();
+	M_Demos_DrawShowId1Toggle();
 
 	if (M_Demos_ShowPathOptions())
 	{
@@ -45580,7 +45675,7 @@ void M_Demos_Draw (void)
         }
 
         {
-            const char *introlabel = M_Demos_OriginalIntroDemoLabel(di->name);
+            const char *introlabel = M_Demos_OriginalIntroDemoLabel(di->name, di->from_id1);
             if (introlabel)
             {
                 M_Print(x, current_y, introlabel);
@@ -45840,6 +45935,11 @@ void M_Demos_Key(int key)
 					M_Demos_SelectPathOption(folder);
 					S_LocalSound("misc/menu2.wav");
 				}
+				else if (M_Demos_MouseInShowId1Toggle())
+				{
+					M_Demos_EndPathEdit();
+					M_Demos_ToggleShowId1();
+				}
 				else if (M_Demos_MouseInPathField())
 					M_Demos_MouseClickPathField();
 				else
@@ -45864,6 +45964,12 @@ void M_Demos_Key(int key)
 				return;
 			break;
 		}
+	}
+
+	if (key == K_MOUSE1 && M_Demos_MouseInShowId1Toggle())
+	{
+		M_Demos_ToggleShowId1();
+		return;
 	}
 
 	if (key == K_MOUSE1 && M_Demos_MouseInPathField())
@@ -45897,6 +46003,13 @@ void M_Demos_Key(int key)
 			// Copy demo name to local buffer BEFORE freeing memory
 			char demo_name[MAX_QPATH];
 			q_strlcpy(demo_name, demo->name, sizeof(demo_name));
+
+			if (demo->from_id1)
+			{
+				S_LocalSound("misc/menu3.wav");
+				Con_Printf("cannot delete inherited id1 demo ^m%s^m from this menu\n", M_Demos_CommandName(demo_name));
+				return;
+			}
 
 			char demo_path[MAX_OSPATH];
 
@@ -49041,7 +49154,8 @@ qboolean M_WantsIBeamCursor(void)
 	if (m_state == m_demos)
 		return M_Demos_TextEntry() &&
 			!M_Demos_MouseInPathOptionsArea() &&
-			M_Demos_HoveredSortHeader() < 0;
+			M_Demos_HoveredSortHeader() < 0 &&
+			!M_Demos_MouseInShowId1Toggle();
 
 	if (m_state == m_resetconfig)
 		return M_ResetConfig_MouseInSearchBox();
