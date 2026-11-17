@@ -41,6 +41,10 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 #include <shellscalingapi.h>
 #endif
 
+#if defined(__linux__) && !defined(__ANDROID__)
+#include "sysinfo_linux.h"
+#endif
+
 #define MAX_MODE_LIST	600 //johnfitz -- was 30
 #define MAX_BPPS_LIST	5
 #define MAX_RATES_LIST	MAX_MODE_LIST // retain every refresh rate in modelist
@@ -876,6 +880,31 @@ int VID_GetCurrentDisplayPPI (void)
 	FreeLibrary (shcore);
 	if (x && y)
 		return (int)(((double)x + y) / 2.0 + 0.5);
+#elif defined(__linux__) && !defined(__ANDROID__)
+	// X11 and Wayland do not expose physical sizes through SDL; read the
+	// monitor's EDID from DRM sysfs and match it by native resolution.
+	const SDL_DisplayID display = VID_GetDisplay ();
+	const SDL_DisplayMode *desktop = SDL_GetDesktopDisplayMode (display);
+	if (!desktop)
+		return 0;
+	const float density = desktop->pixel_density > 0.0f ? desktop->pixel_density : 1.0f;
+	const int width = (int)(desktop->w * density + 0.5f);
+	const int height = (int)(desktop->h * density + 0.5f);
+
+	// A scaled desktop can run below native; the largest mode is the panel's own.
+	int native_width = 0, native_height = 0, mode_count = 0, display_count = 0;
+	SDL_DisplayMode **modes = SDL_GetFullscreenDisplayModes (display, &mode_count);
+	if (modes && mode_count > 0)
+	{
+		const float mode_density = modes[0]->pixel_density > 0.0f ? modes[0]->pixel_density : 1.0f;
+		native_width = (int)(modes[0]->w * mode_density + 0.5f);
+		native_height = (int)(modes[0]->h * mode_density + 0.5f);
+	}
+	SDL_free (modes);
+	SDL_free (SDL_GetDisplays (&display_count));
+
+	return SysInfoLinux_DisplayPPI (width, height, native_width, native_height,
+		SDL_GetDisplayName (display), display_count);
 #endif
 	return 0;
 }

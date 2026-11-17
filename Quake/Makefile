@@ -257,7 +257,7 @@ SYSOBJ_CDA := cd_null.o
 SYSOBJ_INPUT := in_sdl.o
 SYSOBJ_GL_VID:= gl_vidsdl.o
 SYSOBJ_NET := net_bsd.o net_udp.o
-SYSOBJ_SYS := pl_linux.o sys_sdl_unix.o
+SYSOBJ_SYS := pl_linux.o sys_sdl_unix.o sysinfo_linux.o
 SYSOBJ_MAIN:= main_sdl.o
 
 GLOBJS = \

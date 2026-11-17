@@ -29,6 +29,9 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 #ifdef _WIN32
 #include <windows.h>
 #endif
+#if defined(__linux__) && !defined(__ANDROID__)
+#include "sysinfo_linux.h"
+#endif
 
 static void IN_ClearDropBatch(void);
 
@@ -334,6 +337,25 @@ static SDL_KeyboardID last_keyboard;
 static SDL_MouseID last_mouse;
 static unsigned int mouse_device_generation;
 
+// Names that identify no physical product: generic HID endpoints, and on
+// Linux the X server's virtual devices, ACPI buttons and laptop internals.
+static qboolean IN_GenericInputDeviceName(const char *name)
+{
+	static const char *parts[] = {
+		" (0x", "dongle", "Virtual core", "XTEST", "Consumer Control", "System Control",
+		"Wireless Radio Control", "Power Button", "Sleep Button", "Video Bus", "Lid Switch",
+		"PC Speaker", "AT Translated Set", "ydotool", "uinput", "xwayland", "WMI hotkeys",
+		"Intel HID events", "wl_pointer", "wl_keyboard",
+	};
+	if (!name || !*name || !q_strcasecmp(name, "Keyboard") || !q_strcasecmp(name, "Mouse") ||
+		!q_strncasecmp(name, "HID", 3) || !q_strncasecmp(name, "USB Input Device", 16))
+		return true;
+	for (size_t i = 0; i < Q_COUNTOF(parts); i++)
+		if (q_strcasestr(name, parts[i]))
+			return true;
+	return false;
+}
+
 static const char *IN_FindInputDeviceName(const Uint32 *devices, int count,
 	Uint32 active, const char *other, const char *(*get_name)(Uint32))
 {
@@ -343,9 +365,7 @@ static const char *IN_FindInputDeviceName(const Uint32 *devices, int count,
 	for (int i = 0; i < count; i++)
 	{
 		const char *name = get_name(devices[i]);
-		if (!name || !*name || !q_strcasecmp(name, "Keyboard") || !q_strcasecmp(name, "Mouse") ||
-			!q_strncasecmp(name, "HID", 3) || !q_strncasecmp(name, "USB Input Device", 16) ||
-			q_strcasestr(name, " (0x") || q_strcasestr(name, "dongle"))
+		if (IN_GenericInputDeviceName(name))
 			continue;
 		if (devices[i] == active)
 			return name;
@@ -584,6 +604,17 @@ typedef struct
 	int x, y;
 } mouse_dpi_result_t;
 
+// Linux input names repeat the vendor ("Razer Razer Viper") and can carry
+// an interface suffix that product strings and driver names lack.
+static qboolean IN_SameMouseName(const char *a, const char *b)
+{
+#if defined(__linux__) && !defined(__ANDROID__)
+	return SysInfoLinux_SameDeviceName(a, b);
+#else
+	return !q_strcasecmp(a, b);
+#endif
+}
+
 static qboolean IN_ReadHIDMouseDPI(SDL_hid_device_info *devices, Uint16 vendor, Uint16 selected_product,
 	const char *selected, mouse_dpi_result_t *result)
 {
@@ -619,8 +650,8 @@ static qboolean IN_ReadHIDMouseDPI(SDL_hid_device_info *devices, Uint16 vendor, 
 		if (vendor == 0x046d && !q_strncasecmp(selected, "Logitech ", 9))
 			selection_name += 9;
 		qboolean matches = name && *name && (selected_product || !*selected ||
-			!q_strcasecmp(selected, name) ||
-			(product && (!q_strcasecmp(selected, product) || !q_strcasecmp(selection_name, product))));
+			IN_SameMouseName(selected, name) ||
+			(product && (IN_SameMouseName(selected, product) || IN_SameMouseName(selection_name, product))));
 		if (matches && candidate && strcmp(candidate->path, item->path))
 		{
 			// Name and product match cannot distinguish two physical devices.
@@ -748,7 +779,7 @@ static void IN_ReadRatbagDPI(const char *selected, char *mouse, size_t mouse_siz
 		const char *id_end = line;
 		while (q_isalnum((unsigned char)*id_end) || *id_end == '_' || *id_end == '-')
 			id_end++;
-		if (!q_isalnum((unsigned char)line[0]) || *id_end || !*value || (*selected && q_strcasecmp(selected, value)))
+		if (!q_isalnum((unsigned char)line[0]) || *id_end || !*value || (*selected && !IN_SameMouseName(selected, value)))
 			continue;
 		if (id[0])
 			return;
@@ -809,8 +840,13 @@ static int SDLCALL IN_MouseDPIWorker(void *unused)
 
 	if (mouse_dpi_probe.raw_razer)
 		IN_ReadRazerDPI(mouse_dpi_probe.raw_path, mouse_dpi_probe.raw_razer, &result->x, &result->y);
+#if defined(__linux__) && !defined(__ANDROID__)
+	// OpenRazer's kernel driver answers without hidraw access, which
+	// distributions normally reserve for root.
+	SysInfoLinux_OpenRazerDPI(selected, result->name, sizeof(result->name), &result->x, &result->y);
+#endif
 	qboolean unambiguous = true;
-	if (mouse_dpi_probe.razer_devices)
+	if (mouse_dpi_probe.razer_devices && !result->x)
 		unambiguous = IN_ReadHIDMouseDPI(mouse_dpi_probe.razer_devices, 0x1532, 0, selected, result);
 	if (unambiguous && mouse_dpi_probe.logitech_devices && SDL_GetTicks() < mouse_dpi_probe.deadline)
 	{
@@ -847,6 +883,20 @@ qboolean IN_StartInputDeviceInfo(char *keyboard, size_t keyboard_size, char *mou
 	q_strlcpy(keyboard, keyboard_name ? keyboard_name : "", keyboard_size);
 	q_strlcpy(mouse, mouse_name ? mouse_name : "", mouse_size);
 	SDL_free(keyboards);
+#if defined(__linux__) && !defined(__ANDROID__)
+	// Wayland names no devices, but the kernel's input list does.
+	if (!keyboard[0] || !mouse[0])
+	{
+		char kernel_keyboard[128], kernel_mouse[128];
+		SysInfoLinux_InputDevices(kernel_keyboard, sizeof(kernel_keyboard), kernel_mouse, sizeof(kernel_mouse));
+		if (!keyboard[0])
+			q_strlcpy(keyboard, kernel_keyboard, keyboard_size);
+		if (!mouse[0])
+			q_strlcpy(mouse, kernel_mouse, mouse_size);
+	}
+	SysInfoLinux_CollapseVendor(keyboard);
+	SysInfoLinux_CollapseVendor(mouse);
+#endif
 
 	// At most one device probe may be outstanding, even if a slow driver
 	// misses the chat reply deadline or the client changes servers.
@@ -893,10 +943,10 @@ qboolean IN_StartInputDeviceInfo(char *keyboard, size_t keyboard_size, char *mou
 		}
 	}
 #else
-	if (!mouse_name || !q_strncasecmp(mouse_name, "Razer ", 6))
+	if (!*mouse || !q_strncasecmp(mouse, "Razer ", 6))
 		mouse_dpi_probe.razer_devices = IN_EnumerateMouseHID(0x1532);
 #endif
-	if (!mouse_name || !q_strncasecmp(mouse_name, "Logitech ", 9))
+	if (!*mouse || !q_strncasecmp(mouse, "Logitech ", 9))
 		mouse_dpi_probe.logitech_devices = IN_EnumerateMouseHID(0x046d);
 	SDL_free(mice);
 

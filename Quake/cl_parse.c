@@ -31,6 +31,11 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 #if defined(PLATFORM_OSX) || defined(PLATFORM_MAC) // woods for f_system
 #include <sys/sysctl.h>
 #include <stdio.h>
+#include <IOKit/IOKitLib.h>
+#include <CoreFoundation/CoreFoundation.h>
+#endif
+#if defined(__linux__) && !defined(__ANDROID__)
+#include "sysinfo_linux.h"
 #endif
 
 extern cvar_t scr_fov; // woods #f_config
@@ -4027,13 +4032,28 @@ static qboolean CL_SysinfoSpecificAudio(const char *name)
 		"Realtek USB Audio", "Realtek(R) USB Audio", "High Definition Audio",
 		"High Definition Audio Device", "Realtek High Definition Audio",
 		"NVIDIA High Definition Audio", "AMD High Definition Audio Device",
-		"Intel(R) Display Audio", "S/PDIF"
+		"Intel(R) Display Audio", "S/PDIF",
+		// macOS, PipeWire and PulseAudio endpoint names
+		"External Headphones", "Built-in Output", "Speaker", "Speaker + Headphones",
+		"Headphones + Speaker", "HD-Audio Generic", "Dummy Output", "Analog Output",
+		"Digital Output", "Built-in Audio Analog Stereo"
+	};
+	// Sound card chipsets say nothing about the speakers or headset.
+	static const char *generic_parts[] = {
+		"Audio Controller", "HDA Intel", "HDA NVidia", "HDA ATI", "HDMI/DP Audio",
 	};
 	const char *model = name;
 	size_t length = strlen(name);
 	const char *detail = strchr(name, '(');
 
 	if (!length)
+		return false;
+	for (size_t i = 0; i < Q_COUNTOF(generic_parts); i++)
+		if (q_strcasestr(name, generic_parts[i]))
+			return false;
+	// The built-in speakers of a Mac add nothing to the model already reported.
+	if ((!q_strncasecmp(name, "MacBook", 7) || !q_strncasecmp(name, "iMac", 4) ||
+		!q_strncasecmp(name, "Mac ", 4)) && length > 9 && !q_strcasecmp(name + length - 9, " Speakers"))
 		return false;
 	// Windows often appends the driver or headset model to a generic endpoint name.
 	if (detail && detail > name && detail[-1] == ' ' && name[length - 1] == ')')
@@ -4064,6 +4084,249 @@ static qboolean CL_SysinfoSpecificAudio(const char *name)
 			return false;
 	return length > 0;
 }
+
+// Collapse runs of spaces and drop trailing ones.
+static void CL_SysinfoCollapseSpaces(char *name)
+{
+	char *out = name;
+	for (const char *p = name; *p; p++)
+		if (*p != ' ' || (out > name && out[-1] != ' '))
+			*out++ = *p;
+	while (out > name && out[-1] == ' ')
+		out--;
+	*out = 0;
+}
+
+// Remove a whole-word token, e.g. "CPU" from "Intel Xeon CPU E5-2680".
+static void CL_SysinfoRemoveWord(char *name, const char *word)
+{
+	const size_t length = strlen(word);
+	for (char *p = name; (p = strstr(p, word)) != NULL; )
+	{
+		if ((p == name || p[-1] == ' ') && (p[length] == ' ' || !p[length]))
+			memmove(p, p + length, strlen(p + length) + 1);
+		else
+			p += length;
+	}
+}
+
+// Trademark marks and padding only lengthen the chat line.
+static void CL_SysinfoCompactName(char *name)
+{
+	static const char *marks[] = {"(R)", "(r)", "(TM)", "(tm)"};
+	CL_SysinfoChatName(name);
+	for (size_t i = 0; i < Q_COUNTOF(marks); i++)
+	{
+		const size_t length = strlen(marks[i]);
+		for (char *p; (p = strstr(name, marks[i])) != NULL; )
+			memmove(p, p + length, strlen(p + length) + 1);
+	}
+	CL_SysinfoCollapseSpaces(name);
+}
+
+/*
+Normalize a processor name to "<model> @ <clock> GHz" on every platform:
+  "Intel(R) Core(TM) i7-8700K CPU @ 3.70GHz" -> "Intel Core i7-8700K @ 3.7 GHz"
+  "AMD Ryzen 7 5800X 8-Core Processor", 3800 -> "AMD Ryzen 7 5800X @ 3.8 GHz"
+*/
+static void CL_SysinfoCPUName(char *out, size_t size, const char *raw, int mhz)
+{
+	char name[160];
+	q_strlcpy(name, raw, sizeof(name));
+	CL_SysinfoCompactName(name);
+
+	// A clock in the brand string is the base clock; prefer it.
+	char *at = strstr(name, " @ ");
+	if (at)
+	{
+		char *end;
+		const double ghz = strtod(at + 3, &end);
+		if (ghz > 0.1 && ghz < 20.0 && !q_strncasecmp(end, "GHz", 3))
+			mhz = (int)(ghz * 1000.0 + 0.5);
+		*at = 0;
+	}
+	CL_SysinfoRemoveWord(name, "CPU");
+	// AMD integrated graphics and core counts: "... 8-Core Processor", "... w/ Radeon 780M Graphics"
+	char *tail;
+	if ((tail = strstr(name, " w/ ")) != NULL || (tail = q_strcasestr(name, " with Radeon")) != NULL)
+		*tail = 0;
+	CL_SysinfoCollapseSpaces(name);
+	tail = strstr(name, "-Core Processor");
+	if (tail && !strcmp(tail, "-Core Processor"))
+	{
+		char *cores = tail;
+		while (cores > name && q_isdigit((unsigned char)cores[-1]))
+			cores--;
+		if (cores > name && cores[-1] == ' ')
+			cores[-1] = 0;
+	}
+	else if ((tail = strstr(name, " Processor")) != NULL && !strcmp(tail, " Processor"))
+		*tail = 0;
+
+	if (name[0] && mhz > 0)
+		q_snprintf(out, size, "%.60s @ %.1f GHz", name, mhz / 1000.0);
+	else
+		q_strlcpy(out, name, size);
+}
+
+/*
+Shorten driver detail in GL renderer strings:
+  "NVIDIA GeForce RTX 3080/PCIe/SSE2" -> "NVIDIA GeForce RTX 3080"
+  "AMD Radeon RX 6800 XT (radeonsi, navi21, LLVM 15.0.7, DRM 3.49, 6.2.0)" -> "AMD Radeon RX 6800 XT"
+  "Mesa Intel(R) UHD Graphics 620 (KBL GT2)" -> "Intel UHD Graphics 620 (KBL GT2)"
+*/
+static void CL_SysinfoGPUName(char *out, size_t size, const char *renderer)
+{
+	static const char *bus_suffixes[] = {"/PCIe/SSE2", "/PCI/SSE2", "/SSE2"};
+	char gpu[256];
+	q_strlcpy(gpu, renderer && *renderer ? renderer : "Unknown GPU", sizeof(gpu));
+	CL_SysinfoChatName(gpu);
+
+	size_t length = strlen(gpu);
+	for (size_t i = 0; i < Q_COUNTOF(bus_suffixes); i++)
+	{
+		const size_t suffix = strlen(bus_suffixes[i]);
+		if (length > suffix && !strcmp(gpu + length - suffix, bus_suffixes[i]))
+		{
+			gpu[length -= suffix] = 0;
+			break;
+		}
+	}
+	char *detail = strrchr(gpu, '(');
+	if (detail && detail > gpu && detail[-1] == ' ' && length && gpu[length - 1] == ')' &&
+		(strstr(detail, "LLVM") || strstr(detail, "DRM ") || strstr(detail, "ACO")))
+		detail[-1] = 0;
+	if (!q_strncasecmp(gpu, "Mesa ", 5) && gpu[5])
+		memmove(gpu, gpu + 5, strlen(gpu + 5) + 1);
+	CL_SysinfoCompactName(gpu);
+	q_strlcpy(out, gpu, size);
+}
+
+/*
+Convert an audio endpoint to a chat name, dropping PipeWire and PulseAudio
+profile suffixes ("Arctis Nova 7 Analog Stereo" -> "Arctis Nova 7").
+Returns false when the remaining name is generic.
+*/
+static qboolean CL_SysinfoAudioName(const char *device, char *out, size_t size)
+{
+	static const char *profiles[] = {" Analog Stereo", " Analog Surround", " Analog Mono",
+		" Digital Stereo", " Digital Surround", " Multichannel"};
+	out[0] = 0;
+	if (!device || !*device)
+		return false;
+	UTF8_ToQuake(out, size, device);
+	CL_SysinfoChatName(out);
+	for (size_t i = 0; i < Q_COUNTOF(profiles); i++)
+	{
+		char *profile = strstr(out, profiles[i]);
+		const size_t length = strlen(profiles[i]);
+		// Accept the profile at the end or before its "(HDMI)", "5.1" etc. detail.
+		if (profile && profile > out && (!profile[length] || profile[length] == ' '))
+		{
+			*profile = 0;
+			break;
+		}
+	}
+	CL_SysinfoCollapseSpaces(out);
+	if (!CL_SysinfoSpecificAudio(out))
+	{
+		out[0] = 0;
+		return false;
+	}
+	return true;
+}
+
+#if defined(__linux__) && !defined(__ANDROID__)
+static const char *CL_LinuxDisplayServer(void)
+{
+	const char *driver = SDL_GetCurrentVideoDriver();
+	if (!driver)
+		return NULL;
+	if (!strcmp(driver, "wayland"))
+		return "Wayland";
+	if (!strcmp(driver, "x11"))
+	{
+		const char *wayland = getenv("WAYLAND_DISPLAY");
+		return wayland && *wayland ? "XWayland" : "X11";
+	}
+	if (!strcmp(driver, "kmsdrm"))
+		return "KMSDRM";
+	return NULL;
+}
+#endif
+
+#if defined(PLATFORM_OSX) || defined(PLATFORM_MAC)
+/*
+Mac marketing name without spawning helpers or touching other apps.
+Apple silicon publishes it as product-name. Intel Macs only have it in the
+System Information cache, keyed by the serial number's model suffix.
+*/
+static void CL_MacModelName(char *out, size_t size)
+{
+	out[0] = 0;
+	io_registry_entry_t product_entry = IORegistryEntryFromPath(MACH_PORT_NULL, "IODeviceTree:/product");
+	if (product_entry)
+	{
+		CFTypeRef product = IORegistryEntryCreateCFProperty(product_entry, CFSTR("product-name"), kCFAllocatorDefault, 0);
+		if (product)
+		{
+			if (CFGetTypeID(product) == CFDataGetTypeID())
+			{
+				CFIndex length = CFDataGetLength((CFDataRef)product);
+				if (length > (CFIndex)size - 1)
+					length = (CFIndex)size - 1;
+				memcpy(out, CFDataGetBytePtr((CFDataRef)product), length);
+				out[length] = 0;
+			}
+			CFRelease(product);
+		}
+		IOObjectRelease(product_entry);
+	}
+
+	io_service_t expert = out[0] ? IO_OBJECT_NULL :
+		IOServiceGetMatchingService(MACH_PORT_NULL, IOServiceMatching("IOPlatformExpertDevice"));
+	if (expert)
+	{
+		CFTypeRef serial = IORegistryEntryCreateCFProperty(expert, CFSTR(kIOPlatformSerialNumberKey), kCFAllocatorDefault, 0);
+		char serial_text[32];
+		if (serial && CFGetTypeID(serial) == CFStringGetTypeID() &&
+			CFStringGetCString((CFStringRef)serial, serial_text, sizeof(serial_text), kCFStringEncodingUTF8) &&
+			strlen(serial_text) > 8)
+		{
+			CFPropertyListRef names = CFPreferencesCopyAppValue(CFSTR("CPU Names"), CFSTR("com.apple.SystemProfiler"));
+			if (names && CFGetTypeID(names) == CFDictionaryGetTypeID())
+			{
+				// Keys look like "<suffix>-en-US_US"; any cached language will do.
+				char prefix[40];
+				q_snprintf(prefix, sizeof(prefix), "%s-", serial_text + 8);
+				const CFIndex count = CFDictionaryGetCount((CFDictionaryRef)names);
+				const void **keys = (const void **)malloc(sizeof(void *) * 2 * (count ? count : 1));
+				const void **values = keys + (count ? count : 1);
+				CFDictionaryGetKeysAndValues((CFDictionaryRef)names, keys, values);
+				for (CFIndex i = 0; i < count && !out[0]; i++)
+				{
+					char key[64];
+					if (CFGetTypeID(keys[i]) == CFStringGetTypeID() && CFGetTypeID(values[i]) == CFStringGetTypeID() &&
+						CFStringGetCString((CFStringRef)keys[i], key, sizeof(key), kCFStringEncodingUTF8) &&
+						!strncmp(key, prefix, strlen(prefix)))
+						CFStringGetCString((CFStringRef)values[i], out, size, kCFStringEncodingUTF8);
+				}
+				free(keys);
+			}
+			if (names)
+				CFRelease(names);
+		}
+		if (serial)
+			CFRelease(serial);
+		IOObjectRelease(expert);
+	}
+
+	size_t length = size;
+	if (!out[0] && sysctlbyname("hw.model", out, &length, NULL, 0) == -1)
+		out[0] = 0;
+	out[size - 1] = 0;
+}
+#endif
 
 // woods -- f_ chat replies stay quiet only during a real match. cl.matchinp alone
 // also trips on any running timelimit clock (pubs, normal/dm modes), which
@@ -4390,7 +4653,7 @@ if (!strcmp(printtext, "Client ping times:\n") && (cl.expectingpingtimes > realt
 #endif
 
 			const char *sound = SNDDMA_GetDeviceName();
-			char cpu[80] = "";
+			char cpu[96] = "";
 			const int sdlRam = SDL_GetSystemRAM(); // woods #q_sysinfo (qrack)
 			const int num_cpus = SDL_GetNumLogicalCPUCores(); // woods #q_sysinfo (qrack)
 			const float display_scale = VID_GetCurrentDisplayScale(); // woods #q_sysinfo
@@ -4405,25 +4668,10 @@ if (!strcmp(printtext, "Client ping times:\n") && (cl.expectingpingtimes > realt
 			if (RegGetValueA(HKEY_LOCAL_MACHINE, cpu_key, "ProcessorNameString",
 				RRF_RT_REG_SZ, NULL, processor, &cpu_size) == ERROR_SUCCESS)
 			{
-				CL_SysinfoChatName(processor);
-				const char *name = processor;
-				while (*name == ' ')
-					name++;
-				char *suffix = strstr(processor, "-Core Processor");
-				if (suffix && !strcmp(suffix, "-Core Processor"))
-				{
-					char *cores = suffix;
-					while (cores > name && q_isdigit((unsigned char)cores[-1]))
-						cores--;
-					if (cores > name && cores[-1] == ' ')
-						cores[-1] = 0;
-				}
-				RegGetValueA(HKEY_LOCAL_MACHINE, cpu_key, "~MHz",
-					RRF_RT_REG_DWORD, NULL, &mhz, &mhz_size);
-				if (*name && mhz)
-					q_snprintf(cpu, sizeof(cpu), "%.60s @ %.1f GHz", name, mhz / 1000.0);
-				else
-					q_strlcpy(cpu, name, sizeof(cpu));
+				if (RegGetValueA(HKEY_LOCAL_MACHINE, cpu_key, "~MHz",
+					RRF_RT_REG_DWORD, NULL, &mhz, &mhz_size) != ERROR_SUCCESS)
+					mhz = 0;
+				CL_SysinfoCPUName(cpu, sizeof(cpu), processor, (int)mhz);
 			}
 
 			const char *version_key = "SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion";
@@ -4446,140 +4694,46 @@ if (!strcmp(printtext, "Client ping times:\n") && (cl.expectingpingtimes > realt
 				}
 				platform = windows_version;
 			}
-	
 #endif
 
-#if defined(PLATFORM_OSX) || defined(PLATFORM_MAC) // woods -- use mac terminal to get some more detailed info that SDL can't
-
-			char* SYSINFO_processor_description = NULL;
-			char* com_modelname = NULL;
-			char modelbuf[75] = "";
-
-			char buf[75];
-			char buf2a[75];
-			size_t buflen = 75;
-			size_t buflen2a = 75;
-
-			// get prcoessor info: brand, name, ghz
-
-			if (sysctlbyname("machdep.cpu.brand_string", &buf, &buflen, NULL, 0) == -1)
-				SYSINFO_processor_description = "Could Not Find Processor Info";
-			else
-				SYSINFO_processor_description = buf;
-
-			// get the specific model name and release year
-
-			if (sysctlbyname("hw.optional.arm64", &buf2a, &buflen2a, NULL, 0) == 0) // m1 mac, simplest case
-
+			// The machine model leads where one is known, as in "MacBook Pro (14-inch, 2023), Apple M3 Pro".
+			char machine[128] = "", processor_name[96] = "";
+#if defined(PLATFORM_OSX) || defined(PLATFORM_MAC)
+			char brand[128];
+			size_t brand_length = sizeof(brand);
+			if (sysctlbyname("machdep.cpu.brand_string", brand, &brand_length, NULL, 0) == 0)
 			{
-				FILE* fmodelname = popen("/usr/libexec/PlistBuddy -c 'print 0:product-name' /dev/stdin <<< \"$(/usr/sbin/ioreg -ar -d1 -k product-name)\"", "r");
-
-				if (fmodelname)
-				{
-					if (!fgets(modelbuf, sizeof(modelbuf), fmodelname))
-						modelbuf[0] = '\0';
-					pclose(fmodelname);
-				}
-
-				if (strstr(modelbuf, "Mac")) // did it find a clean mac name, if so set var
-					com_modelname = modelbuf;
+				brand[brand_length < sizeof(brand) ? brand_length : sizeof(brand) - 1] = 0;
+				CL_SysinfoCPUName(processor_name, sizeof(processor_name), brand, 0);
 			}
+			CL_MacModelName(machine, sizeof(machine));
+#elif defined(__linux__) && !defined(__ANDROID__)
+			char linux_cpu[160];
+			int linux_mhz;
+			if (SysInfoLinux_CPU(linux_cpu, sizeof(linux_cpu), &linux_mhz))
+				CL_SysinfoCPUName(processor_name, sizeof(processor_name), linux_cpu, linux_mhz);
+			SysInfoLinux_MachineModel(machine, sizeof(machine));
 
-			else // if not a m1 mac, (About My Mac needs to have run ONCE by user to fill plist, or run it)
-
+			static char linux_session[96];
+			const char *display_server = CL_LinuxDisplayServer();
+			if (display_server)
 			{
-
-				FILE* fmodelname = popen("/usr/libexec/PlistBuddy -c \"print :'CPU Names':$(system_profiler SPHardwareDataType | awk '/Serial/ {print $4}' | cut -c 9-)-en-US_US\" ~/Library/Preferences/com.apple.SystemProfiler.plist", "r");
-
-				if (fmodelname)
-				{
-					if (!fgets(modelbuf, sizeof(modelbuf), fmodelname))
-						modelbuf[0] = '\0';
-					pclose(fmodelname);
-				}
-
-				if (strstr(modelbuf, "Mac"))
-
-					com_modelname = modelbuf;
-
-				else // did it find a clean mac name, if so set var, else run About My Mac
-
-				{
-					FILE* fmodelname1 = popen("/usr/bin/open '/System/Library/CoreServices/Applications/About This Mac.app'; /bin/sleep 2", "r");
-
-					if (fmodelname1)
-					{
-						char buf4[75];
-						while (fgets(buf4, sizeof(buf4), fmodelname1) != 0)
-							;
-						pclose(fmodelname1);
-					}
-
-					FILE* fmodelname2 = popen("/usr/bin/pkill -ail 'System Information'; /bin/sleep 2", "r");
-
-					if (fmodelname2)
-					{
-						char buf5[75];
-						while (fgets(buf5, sizeof(buf5), fmodelname2) != 0)
-							;
-						pclose(fmodelname2);
-					}
-
-					FILE* fmodelname3 = popen("/usr/bin/killall cfprefsd; /bin/sleep 2", "r");
-
-					if (fmodelname3)
-					{
-						char buf6[75];
-						while (fgets(buf6, sizeof(buf6), fmodelname3) != 0)
-							;
-						pclose(fmodelname3);
-					}
-
-					FILE* fmodelname = popen("/usr/libexec/PlistBuddy -c \"print :'CPU Names':$(system_profiler SPHardwareDataType | awk '/Serial/ {print $4}' | cut -c 9-)-en-US_US\" ~/Library/Preferences/com.apple.SystemProfiler.plist", "r");
-
-					if (fmodelname)
-					{
-						if (!fgets(modelbuf, sizeof(modelbuf), fmodelname))
-							modelbuf[0] = '\0';
-						pclose(fmodelname);
-					}
-					else
-						modelbuf[0] = '\0';
-
-					if (strstr(modelbuf, "Mac"))
-						com_modelname = modelbuf;
-
-					else // did it find a clean mac name, if so set var, else give generic simple name
-					{
-						size_t modellen = sizeof(modelbuf);
-
-						if (sysctlbyname("hw.model", modelbuf, &modellen, NULL, 0) == -1)
-							com_modelname = "Cannot Find Mac Model Name"; // final fall back
-						else
-							com_modelname = modelbuf; // second to last fall back
-					}
-				}
+				q_snprintf(linux_session, sizeof(linux_session), "%.56s, %s", platform, display_server);
+				platform = linux_session;
 			}
-
-			if (com_modelname == modelbuf)	//only strip newlines from the mutable buffer, never a string literal
-				com_modelname = strtok(modelbuf, "\n");
-			if (!com_modelname || !*com_modelname)
-				com_modelname = "Cannot Find Mac Model Name";
-
-			q_snprintf(cpu, sizeof(cpu), "%.30s, %.45s", com_modelname, SYSINFO_processor_description);
-			CL_SysinfoChatName(cpu);
 #endif
+			CL_SysinfoCompactName(machine);
+			if (machine[0] && processor_name[0])
+				q_snprintf(cpu, sizeof(cpu), "%.36s, %.56s", machine, processor_name);
+			else if (machine[0] || processor_name[0])
+				q_strlcpy(cpu, machine[0] ? machine : processor_name, sizeof(cpu));
+
 			MSG_WriteByte(&cls.message, clc_stringcmd);
 			MSG_WriteString(&cls.message, va("say %.64s | %s%s%d threads, %d GB RAM",
 				platform, cpu, cpu[0] ? ", " : "", num_cpus, sdlRam / 1000));
 
 			char gpu[80];
-			const char *renderer = VID_GetRendererName();
-			q_strlcpy(gpu, renderer ? renderer : "Unknown GPU", sizeof(gpu));
-			char *driver_suffix = strstr(gpu, "/PCIe/SSE2");
-			if (driver_suffix && !strcmp(driver_suffix, "/PCIe/SSE2"))
-				*driver_suffix = 0;
-			CL_SysinfoChatName(gpu);
+			CL_SysinfoGPUName(gpu, sizeof(gpu), VID_GetRendererName());
 
 			char monitor_ppi[24] = "";
 			const int ppi = VID_GetCurrentDisplayPPI();
@@ -4590,12 +4744,7 @@ if (!strcmp(printtext, "Client ping times:\n") && (cl.expectingpingtimes > realt
 			MSG_WriteString(&cls.message, va("say %s | %dx%d @ %d Hz%s, %gx scale", gpu,
 				VID_GetCurrentWidth(), VID_GetCurrentHeight(), VID_GetCurrentRefreshRate(), monitor_ppi, display_scale));
 
-			cl.sysinfo_reply.audio[0] = 0;
-			if (sound && CL_SysinfoSpecificAudio(sound))
-			{
-				UTF8_ToQuake(cl.sysinfo_reply.audio, sizeof(cl.sysinfo_reply.audio), sound);
-				CL_SysinfoChatName(cl.sysinfo_reply.audio);
-			}
+			CL_SysinfoAudioName(sound, cl.sysinfo_reply.audio, sizeof(cl.sysinfo_reply.audio));
 			cl.sysinfo_reply.pending = true;
 			cl.sysinfo_reply.expires = realtime + 2;
 			cl.sysinfo_reply.probing = IN_StartInputDeviceInfo(cl.sysinfo_reply.keyboard,
