@@ -740,6 +740,13 @@ const char *CL_GetSafeRealViewEntityUserinfo(void);
 qboolean CL_ScoreboardNameHasReadyStatus(const char *name);
 qboolean CL_LocalPlayerHasReadyStatus(void);
 struct qmodel_s *CL_CTFPugTranslateModel(struct qmodel_s *model);
+//like fteqw, treat an out-of-range weapon model index from the server as no view model,
+//rather than indexing past the end (or before the start) of cl.model_precache.
+static inline struct qmodel_s *CL_ViewWeaponModel (void)
+{
+	int i = cl.stats[STAT_WEAPON];
+	return (i > 0 && i < MAX_MODELS) ? cl.model_precache[i] : NULL;
+}
 qboolean CL_CTFPugSwapEntityModel(entity_t *ent);
 
 //

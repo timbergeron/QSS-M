@@ -1578,7 +1578,7 @@ void V_CalcRefdef (void)
 
 	V_CalcGunDrift (view->origin, view->angles); // woods #gdrift
 
-	view->model = CL_CTFPugTranslateModel (cl.model_precache[cl.stats[STAT_WEAPON]]);
+	view->model = CL_CTFPugTranslateModel (CL_ViewWeaponModel ());
 	view->frame = cl.stats[STAT_WEAPONFRAME];
 	view->netstate = nullentitystate;
 

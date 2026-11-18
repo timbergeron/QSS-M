@@ -632,7 +632,7 @@ static void CL_EntitiesDeltaed(void)
 
 			ent->msgtime = cl.mtime[0];
 
-			if (cl.viewent.model != CL_CTFPugTranslateModel (cl.model_precache[cl.stats[STAT_WEAPON]])) // woods
+			if (cl.viewent.model != CL_CTFPugTranslateModel (CL_ViewWeaponModel ())) // woods
 			{
 				cl.viewent.lerpflags |= LERP_WRESET; // woods #wplerp don't lerp animation across model changes
 			}
@@ -2165,7 +2165,7 @@ static void CL_ParseClientdata (void)
 
 	//johnfitz -- lerping
 	//ericw -- this was done before the upper 8 bits of cl.stats[STAT_WEAPON] were filled in, breaking on large maps like zendar.bsp
-	if (cl.viewent.model != CL_CTFPugTranslateModel (cl.model_precache[cl.stats[STAT_WEAPON]]))
+	if (cl.viewent.model != CL_CTFPugTranslateModel (CL_ViewWeaponModel ()))
 	{
 		cl.viewent.lerpflags |= LERP_RESETANIM; //don't lerp animation across model changes
 	}
