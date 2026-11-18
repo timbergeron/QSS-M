@@ -1579,7 +1579,7 @@ static void PF_tokenizebyseparator(void)
 	int seps = 0, s;
 	const char *start = str;
 	int tlen;
-	qboolean found = true;
+	int found;	//0 = not a separator, 1 = separator, -1 = end of string
 
 	while (seps < qcvm->argc - 1 && seps < 7)
 	{
@@ -1594,22 +1594,22 @@ static void PF_tokenizebyseparator(void)
 	if (*str)
 	for(;;)
 	{
-		found = false;
+		found = 0;
 		/*see if its a separator*/
 		if (!*str)
 		{
 			qctoken[qctoken_count].end = str - start;
-			found = true;
+			found = -1;
 		}
 		else
 		{
 			for (s = 0; s < seps; s++)
 			{
-				if (!strncmp(str, sep[s], seplen[s]))
+				if (seplen[s] && !strncmp(str, sep[s], seplen[s]))
 				{
 					qctoken[qctoken_count].end = str - start;
 					str += seplen[s];
-					found = true;
+					found = 1;
 					break;
 				}
 			}
@@ -1624,12 +1624,14 @@ static void PF_tokenizebyseparator(void)
 
 			qctoken_count++;
 
-			if (*str && qctoken_count < MAXQCTOKENS)
-				qctoken[qctoken_count].start = str - start;
-			else
+			//fte fix: don't skip the char after a separator, so ",," yields an empty token
+			//between them and a trailing separator yields a trailing empty token.
+			if (found == -1 || qctoken_count >= MAXQCTOKENS)
 				break;
+			qctoken[qctoken_count].start = str - start;
 		}
-		str++;
+		else
+			str++;
 	}
 	G_FLOAT(OFS_RETURN) = qctoken_count;
 }
