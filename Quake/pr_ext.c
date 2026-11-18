@@ -959,7 +959,7 @@ static void PF_strncmp(void)
 			aofs = strlen(a);
 		if (bofs < 0 || (bofs && bofs > (int)strlen(b)))
 			bofs = strlen(b);
-		G_FLOAT(OFS_RETURN) = Q_strncmp(a + aofs, b, len);
+		G_FLOAT(OFS_RETURN) = Q_strncmp(a + aofs, b + bofs, len);
 	}
 	else
 		G_FLOAT(OFS_RETURN) = Q_strcmp(a, b);
