@@ -2899,7 +2899,8 @@ static void PF_sv_te_blooddp(void)
 	float *dir = G_VECTOR(OFS_PARM1);
 	float color = 73;
 	float count = G_FLOAT(OFS_PARM2);
-	SV_StartParticle (org, dir, color, count);
+	//255 is the explosion marker, so stay below it.
+	SV_StartParticle (org, dir, color, CLAMP(0.f, count, 254.f));
 }
 static void PF_sv_te_bloodqw(void)
 {	//qw tried to strip a lot.
@@ -2907,7 +2908,8 @@ static void PF_sv_te_bloodqw(void)
 	float *dir = vec3_origin;
 	float color = 73;
 	float count = G_FLOAT(OFS_PARM1)*20;
-	SV_StartParticle (org, dir, color, count);
+	//255 is the explosion marker, so stay below it.
+	SV_StartParticle (org, dir, color, CLAMP(0.f, count, 254.f));
 }
 static void PF_sv_te_lightningblood(void)
 {	//a qw builtin, to replace particle.
