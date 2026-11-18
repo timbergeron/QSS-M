@@ -1734,14 +1734,26 @@ static void PF_stof(void)
 	G_FLOAT(OFS_RETURN) = atof(G_STRING(OFS_PARM0));
 }
 static void PF_stov(void)
-{
+{	//fte's parser: skip vtos's quotes, which COM_Parse would return as a token of their own
 	const char *s = G_STRING(OFS_PARM0);
-	s = COM_Parse(s);
-	G_VECTOR(OFS_RETURN)[0] = atof(com_token);
-	s = COM_Parse(s);
-	G_VECTOR(OFS_RETURN)[1] = atof(com_token);
-	s = COM_Parse(s);
-	G_VECTOR(OFS_RETURN)[2] = atof(com_token);
+	float *out = G_VECTOR(OFS_RETURN);
+	int i;
+
+	out[0] = out[1] = out[2] = 0;
+	if (*s == '\'')
+		s++;
+	for (i = 0; i < 3; i++)
+	{
+		while (*s && (unsigned char)*s <= ' ')	//any whitespace, as COM_Parse allowed
+			s++;
+		out[i] = atof(s);
+		if (!out[i] && *s != '-' && *s != '+' && *s != '.' && (*s < '0' || *s > '9'))
+			break;	//not a number
+		while ((unsigned char)*s > ' ' && *s != '\'')
+			s++;
+		if (*s == '\'')
+			break;
+	}
 }
 static void PF_stoi(void)
 {
