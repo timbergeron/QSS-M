@@ -1936,7 +1936,7 @@ static float S_Voip_Preprocess(short *start, unsigned int samples, float micamp)
 		for (i = 0; i < framesize; i++)
 		{
 			f = start[i] * micamp;
-			start[i] = f;
+			start[i] = CLAMP(-32768.f, f, 32767.f);	//clamp it carefully, so it doesn't go to crap when given far too high a mic amp
 			f = abs(start[i]); // woods
 			level += f*f;
 		}
