@@ -411,6 +411,11 @@ void R_ParticleExplosion2 (vec3_t org, int colorStart, int colorLength)
 	particle_t	*p;
 	int			colorMod = 0;
 
+	//the length comes off the network (te_explosion2); 0 would be a divide by zero.
+	//fteqw never reaches this with a network length, it falls back to the normal explosion.
+	if (colorLength < 1)
+		colorLength = 1;
+
 	for (i=0; i<512; i++)
 	{
 		if (!(p = R_AllocParticle())) // woods (iw) #allocpart
