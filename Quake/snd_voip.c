@@ -2550,10 +2550,10 @@ void S_Voip_MapChange(void)
 }
 int S_Voip_Loudness(qboolean ignorevad)
 {
-	if (s_voip.voiplevel > 100)
-		return 100;
 	if (!s_voip.cdriverctx || (!ignorevad && s_voip.dumps))
 		return -1;
+	if (s_voip.voiplevel > 100)
+		return 100;
 	return s_voip.voiplevel;
 }
 qboolean S_Voip_Speaking(unsigned int plno)
