@@ -2868,7 +2868,7 @@ static void CL_ParseParticles(int type)
 	{	//trail
 		entity_t *ent;
 		int entity = MSG_ReadShort();
-		int efnum = MSG_ReadShort();
+		int efnum = (unsigned short)MSG_ReadShort();	//like fteqw: 16-bit unsigned, so never a negative index
 		org[0] = MSG_ReadCoord(cl.protocolflags);
 		org[1] = MSG_ReadCoord(cl.protocolflags);
 		org[2] = MSG_ReadCoord(cl.protocolflags);
@@ -2883,7 +2883,7 @@ static void CL_ParseParticles(int type)
 	}
 	else
 	{	//point
-		int efnum = MSG_ReadShort();
+		int efnum = (unsigned short)MSG_ReadShort();	//like fteqw: 16-bit unsigned, so never a negative index
 		int count;
 		org[0] = MSG_ReadCoord(cl.protocolflags);
 		org[1] = MSG_ReadCoord(cl.protocolflags);
@@ -2898,7 +2898,7 @@ static void CL_ParseParticles(int type)
 			vel[0] = MSG_ReadCoord(cl.protocolflags);
 			vel[1] = MSG_ReadCoord(cl.protocolflags);
 			vel[2] = MSG_ReadCoord(cl.protocolflags);
-			count = MSG_ReadShort();
+			count = (unsigned short)MSG_ReadShort();	//the server clamps to 0..65535, so read it back unsigned
 		}
 		if (efnum < MAX_PARTICLETYPES && cl.particle_precache[efnum].name)
 		{
