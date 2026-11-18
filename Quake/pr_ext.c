@@ -4051,11 +4051,11 @@ static void PF_buf_copy(void)
 		strbuflist[bufto].strings[i] = strbuflist[buffrom].strings[i]?Z_StrDup(strbuflist[buffrom].strings[i]):NULL;
 }
 static int PF_buf_sort_sortprefixlen;
-static int PF_buf_sort_ascending(const void *a, const void *b)
+static int PF_buf_sort_ascending_prefix(const void *a, const void *b)
 {
 	return strncmp(*(char*const*)a, *(char*const*)b, PF_buf_sort_sortprefixlen);
 }
-static int PF_buf_sort_descending(const void *b, const void *a)
+static int PF_buf_sort_descending_prefix(const void *b, const void *a)
 {
 	return strncmp(*(char*const*)a, *(char*const*)b, PF_buf_sort_sortprefixlen);
 }
@@ -4091,9 +4091,9 @@ static void PF_buf_sort(void)
 	//no nulls now, sort it.
 	PF_buf_sort_sortprefixlen = sortprefixlen;	//eww, a global. burn in hell.
 	if (backwards)	//z first
-		qsort(strings, strbuflist[bufno].used, sizeof(char*), PF_buf_sort_descending);
+		qsort(strings, strbuflist[bufno].used, sizeof(char*), PF_buf_sort_descending_prefix);
 	else	//a first
-		qsort(strings, strbuflist[bufno].used, sizeof(char*), PF_buf_sort_ascending);
+		qsort(strings, strbuflist[bufno].used, sizeof(char*), PF_buf_sort_ascending_prefix);
 }
 // #445 string(float bufhandle, string glue) buf_implode (DP_QC_STRINGBUFFERS)
 static void PF_buf_implode(void)
@@ -4346,6 +4346,10 @@ static void PF_bufstr_find(void)
 	}
 }
 
+static int PF_buf_sort_ascending(const void *a, const void *b)
+{
+	return strcmp(*(char*const*)a, *(char*const*)b);
+}
 static void PF_buf_cvarlist(void)
 {
 	size_t bufno = G_FLOAT(OFS_PARM0)-BUFSTRBASE;
