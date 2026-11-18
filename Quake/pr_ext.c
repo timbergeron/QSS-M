@@ -5571,7 +5571,7 @@ static void PF_cl_trailparticles(void)
 		ent = G_EDICT(OFS_PARM1);
 	}
 
-	if (efnum <= 0)
+	if (!efnum)	//negative numbers are csqc-precached effects, so only 0 means none
 		return;
 	efnum = PF_CL_GetParticle(efnum);
 	PScript_ParticleTrail(start, end, efnum, host_frametime, -NUM_FOR_EDICT(ent), NULL, NULL/*&ent->trailstate*/);
@@ -5581,7 +5581,7 @@ static void PF_cl_pointparticles(void)
 	int efnum = G_FLOAT(OFS_PARM0);
 	float *org = G_VECTOR(OFS_PARM1);
 	float *vel = (qcvm->argc < 3)?vec3_origin:G_VECTOR(OFS_PARM2);
-	int count = (qcvm->argc < 4)?1:G_FLOAT(OFS_PARM3);
+	float count = (qcvm->argc < 4)?1:G_FLOAT(OFS_PARM3);	//like fteqw, keep fractional counts (0.5 is half the effect, not none)
 
 	efnum = PF_CL_GetParticle(efnum);
 	if (count <= 0)
