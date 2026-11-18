@@ -3332,8 +3332,13 @@ static void PF_sv_pointsound(void)
 {
 	float *origin = G_VECTOR(OFS_PARM0);
 	const char *sample = G_STRING(OFS_PARM1);
-	float volume = G_FLOAT(OFS_PARM2);
+	float volume = G_FLOAT(OFS_PARM2)*255;
 	float attenuation = G_FLOAT(OFS_PARM3);
+
+	if (volume > 255)
+		volume = 255;
+	else if (volume < 0)
+		volume = 0;	//SV_StartSound treats negative volumes as a fatal error
 	SV_StartSound (qcvm->edicts, origin, 0, sample, volume, attenuation);
 }
 static void PF_cl_pointsound(void)
