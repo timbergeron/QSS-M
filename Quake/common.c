@@ -3795,6 +3795,7 @@ static pack_t *COM_LoadPackFile (const char *packfile)
 	pack_t		*pack;
 	int		packhandle;
 	dpackfile_t	info[MAX_FILES_IN_PACK];
+	int		dirbytes;
 	unsigned short	crc;
 
 	if (Sys_FileOpenRead (packfile, &packhandle) == -1)
@@ -3825,8 +3826,11 @@ static pack_t *COM_LoadPackFile (const char *packfile)
 
 	newfiles = (packfile_t *) Z_Malloc(numpackfiles * sizeof(packfile_t));
 
+	// read whole entries only, like fteqw: a dirlen that isn't a multiple of the entry size
+	// would otherwise write its leftover bytes past the end of info[].
+	dirbytes = numpackfiles * sizeof(dpackfile_t);
 	Sys_FileSeek (packhandle, header.dirofs);
-	if (Sys_FileRead(packhandle, info, header.dirlen) != header.dirlen)
+	if (Sys_FileRead(packhandle, info, dirbytes) != dirbytes)
 		Sys_Error ("Error reading %s", packfile);
 
 	if (numpackfiles != PAK0_COUNT)
@@ -3835,7 +3839,7 @@ static pack_t *COM_LoadPackFile (const char *packfile)
 	{
 		// crc the directory to check for modifications
 		CRC_Init (&crc);
-		for (i = 0; i < header.dirlen; i++)
+		for (i = 0; i < (unsigned int)dirbytes; i++)
 			CRC_ProcessByte (&crc, ((byte *)info)[i]);
 		if (crc != PAK0_CRC_V106 && crc != PAK0_CRC_V101 && crc != PAK0_CRC_V100)
 			com_modified = true;
