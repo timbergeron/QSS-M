@@ -5518,7 +5518,11 @@ void CL_ParseServerMessage (void)
 			break;
 
 		case svc_setview:
-			cl.viewentity = MSG_ReadShort ();
+			i = MSG_ReadShort ();
+			// like fteqw, don't trust this: cl.entities[cl.viewentity] is indexed unchecked all over the client
+			if (i < 0 || i >= cl.max_edicts)
+				Host_Error ("svc_setview: %i is an invalid entity number", i);
+			cl.viewentity = i;
 			break;
 
 		case svc_lightstyle:
