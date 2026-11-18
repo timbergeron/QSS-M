@@ -978,7 +978,7 @@ static void PF_strncasecmp(void)
 			aofs = strlen(a);
 		if (bofs < 0 || (bofs && bofs > (int)strlen(b)))
 			bofs = strlen(b);
-		G_FLOAT(OFS_RETURN) = q_strncasecmp(a + aofs, b, len);
+		G_FLOAT(OFS_RETURN) = q_strncasecmp(a + aofs, b + bofs, len);
 	}
 	else
 		G_FLOAT(OFS_RETURN) = q_strcasecmp(a, b);
