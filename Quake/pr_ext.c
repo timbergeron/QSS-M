@@ -2412,7 +2412,7 @@ static void PF_getsurfacepoint(void)
 	unsigned int point		= G_FLOAT(OFS_PARM2);
 	qmodel_t *mod = PR_GetVMModel(ed->v.modelindex);
 
-	if (mod && mod->type == mod_brush && !mod->needload && surfidx < (unsigned int)mod->nummodelsurfaces && point < (unsigned int)mod->surfaces[surfidx].numedges)
+	if (mod && mod->type == mod_brush && !mod->needload && surfidx < (unsigned int)mod->nummodelsurfaces && point < (unsigned int)mod->surfaces[surfidx+mod->firstmodelsurface].numedges)
 	{
 		mvertex_t *v = PF_getsurfacevertex(mod, &mod->surfaces[surfidx+mod->firstmodelsurface], point);
 		VectorCopy(v->position, G_VECTOR(OFS_RETURN));
@@ -2442,7 +2442,7 @@ static void PF_getsurfacetriangle(void)
 	unsigned int triangleidx= G_FLOAT(OFS_PARM2);
 	qmodel_t *mod = PR_GetVMModel(ed->v.modelindex);
 
-	if (mod && mod->type == mod_brush && !mod->needload && surfidx < (unsigned int)mod->nummodelsurfaces && triangleidx < (unsigned int)mod->surfaces[surfidx].numedges-2)
+	if (mod && mod->type == mod_brush && !mod->needload && surfidx < (unsigned int)mod->nummodelsurfaces && triangleidx < (unsigned int)mod->surfaces[surfidx+mod->firstmodelsurface].numedges-2)
 	{
 		G_FLOAT(OFS_RETURN+0) = 0;
 		G_FLOAT(OFS_RETURN+1) = triangleidx+1;
@@ -2587,7 +2587,6 @@ static void PF_getsurfaceclippedpoint(void)
 	float *result = G_VECTOR(OFS_RETURN);
 
 	ent = G_EDICT(OFS_PARM0);
-	surfnum = G_FLOAT(OFS_PARM1);
 	point = G_VECTOR(OFS_PARM2);
 
 	VectorCopy(point, result);
@@ -2596,7 +2595,7 @@ static void PF_getsurfaceclippedpoint(void)
 
 	if (!model || model->type != mod_brush || model->needload)
 		return;
-	if (surfnum >= model->nummodelsurfaces)
+	if (!PR_IndexFromFloat(G_FLOAT(OFS_PARM1), model->nummodelsurfaces, &surfnum))	//like fteqw, reject negative surface numbers too
 		return;
 
 	//all polies, we can skip parts. special case.
