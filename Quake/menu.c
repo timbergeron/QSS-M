@@ -14740,6 +14740,41 @@ static struct
 	} search;
 } graphicsmenu;
 
+/*
+Water caustics slider: the left half covers 0-1, where the fine-tuning
+happens, and the right half covers 1-10. The cvar keeps its 0-10 range so
+saved configs read the same. -- woods #caustics
+*/
+static float M_CausticsToSlider (float v)
+{
+	v = CLAMP(0.0f, v, 10.0f);
+	return (v <= 1.0f) ? v * 0.5f : 0.5f + (v - 1.0f) / 18.0f;
+}
+
+static float M_SliderToCaustics (float f)
+{
+	float v;
+
+	f = CLAMP(0.0f, f, 1.0f);
+	v = (f <= 0.5f) ? f * 2.0f : 1.0f + (f - 0.5f) * 18.0f;
+	if (v < 1.0f)
+		v = Q_rint(v * 20.0f) / 20.0f;	// 0.05 steps
+	else
+		v = Q_rint(v * 10.0f) / 10.0f;	// 0.1 steps
+	return CLAMP(0.0f, v, 10.0f);
+}
+
+static float M_StepCaustics (float v, int dir)
+{
+	// 0.05 below 1, 0.5 above; stepping down from exactly 1 uses the fine step
+	float step = (v < 1.0f || (v == 1.0f && dir < 0)) ? 0.05f : 0.5f;
+	float next = Q_rint((v + dir * step) / step) * step;
+
+	if ((v < 1.0f && next > 1.0f) || (v > 1.0f && next < 1.0f))
+		next = 1.0f;	// land on 1 when crossing between fine and coarse steps
+	return CLAMP(0.0f, next, 10.0f);
+}
+
 static int M_Graphics_FirstY(void)
 {
 	int y = GRAPHICS_BOTTOM_Y - (GRAPHICS_ITEMS - 1) * GRAPHICS_ROW_HEIGHT;
@@ -15191,9 +15226,7 @@ static void M_Graphics_AdjustSliders(int dir)
 
 	case GRAPHICS_WATERCAUSTICS:
 	{
-		float f_wc = gl_caustics.value + dir * 0.1f; // Slider 0-100% maps to value 0-10
-		f_wc = CLAMP(0, f_wc, 10);
-		Cvar_SetValue("gl_caustics", f_wc);
+		Cvar_SetValue("gl_caustics", M_StepCaustics(gl_caustics.value, dir)); // woods #caustics
 		break;
 	}
 	break;
@@ -15402,9 +15435,9 @@ void M_Graphics_Draw(void)
 
 		case GRAPHICS_WATERCAUSTICS:
 			text = "    Water Caustics"; // Adjust spacing as needed
-			r = gl_caustics.value / 10.0f; // Normalize 0-10 value to 0-1 for slider
+			r = M_CausticsToSlider(gl_caustics.value); // woods #caustics
 			if (!show_hint)
-				M_DrawSlider(GRAPHICS_SLIDER_X, y, r, gl_caustics.value * 10.0f, "%.0f%%"); // Display as 0-100%
+				M_DrawSlider(GRAPHICS_SLIDER_X, y, r, gl_caustics.value, gl_caustics.value < 1.0f ? "%.2f" : "%.1f");
 			break;
 
 		case GRAPHICS_WATERWARP:
@@ -15704,8 +15737,7 @@ void M_Graphics_Mousemove(int cx, int cy)
 			break;
 
 		case GRAPHICS_WATERCAUSTICS: // Added
-			f = M_MouseToSliderFraction(cx - 187) * 10.0f; // Convert slider fraction (0-1) to value (0-10)
-			Cvar_SetValue("gl_caustics", CLAMP(0, f, 10));
+			Cvar_SetValue("gl_caustics", M_SliderToCaustics(M_MouseToSliderFraction(cx - 187))); // woods #caustics
 			break;
 
 		case GRAPHICS_WATERALPHA:
