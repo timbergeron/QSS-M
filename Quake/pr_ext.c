@@ -4368,6 +4368,7 @@ static void PF_buf_cvarlist(void)
 			Z_Free(strbuflist[bufno].strings[i]);
 	if (strbuflist[bufno].strings)
 		Z_Free(strbuflist[bufno].strings);
+	strbuflist[bufno].strings = NULL;
 	strbuflist[bufno].used = strbuflist[bufno].allocated = 0;
 
 	for (var=Cvar_FindVarAfter ("", CVAR_NONE) ; var ; var=var->next)
