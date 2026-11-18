@@ -80,3 +80,32 @@ mingw32 and mingw64 repository indexes downloaded on November 5, 2026:
 
 Native Windows gameplay/VoIP testing and an Xcode/macOS runtime test require
 those operating systems; the Linux refresh host cannot perform them.
+
+## November 18 follow-up
+
+This follow-up addresses dependency notifications [#96](https://github.com/timbergeron/QSS-M/issues/96)
+through [#99](https://github.com/timbergeron/QSS-M/issues/99). Every notice was
+an MSYS2 package rebuild with an unchanged upstream version.
+
+| Dependency | Baseline | Action |
+| --- | --- | --- |
+| libFLAC | 1.5.0-3 | x64 legacy DLL refreshed; the recipe change only patches the CMake config module. MSYS2 no longer publishes mingw32 FLAC, so the x86 DLL stays at 1.5.0-2 |
+| libopusfile | 0.12-5 | x64 legacy DLL refreshed; the rebuild was for OpenSSL 4, which only affects the unvendored `libopusurl-0.dll`. The x86 DLL is unchanged |
+| libgcc | 16.2.0-7 | x86 legacy runtime DLL refreshed; the recipe change only removes unused configs |
+| curl | 8.23.0-3 | Baseline only; MSYS2 changed packaging and rebuilt for OpenSSL 4. QSS-M builds curl itself with Schannel from the unchanged 8.23.0 source |
+| libtasn1 | 4.21.0-2 | Baseline only; the recipe change only affects documentation and build dependencies. The static source is unchanged |
+
+The runtime archives were verified against the SHA-256 fields in the MSYS2
+repository indexes downloaded on November 18, 2026:
+
+| Package | SHA-256 |
+| --- | --- |
+| `mingw-w64-i686-libgcc-16.2.0-7-any.pkg.tar.zst` | `a6681c159f7cf4224b582a70f2816e05af2c89dfb9d407b26b817672cc95c943` |
+| `mingw-w64-x86_64-flac-1.5.0-3-any.pkg.tar.zst` | `5da0db245b8e8c20899a74f72dfaa0229c682f372255d61299dd6bdf72239e75` |
+| `mingw-w64-x86_64-opusfile-0.12-5-any.pkg.tar.zst` | `f9c5451d7d3d3e66a5efc14dc3bfa7f224cff691909ea666552520850696ced6` |
+
+The refreshed DLLs keep the same PE architecture, the same imports and the
+same exported names. Every symbol they import from sibling DLLs resolves against
+the bundled `libogg-0.dll`, `libopus-0.dll` and `libwinpthread-1.dll`. No UCRT
+dependency is introduced, so the existing import libraries are retained. The
+license terms are unchanged.

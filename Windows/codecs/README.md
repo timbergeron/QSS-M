@@ -51,16 +51,16 @@ i686-w64-mingw32-objdump   -p x86/libFLAC.dll | grep 'DLL Name'
 
 | Library            | Version        | Source (MSYS2 package)                     |
 |--------------------|----------------|--------------------------------------------|
-| libFLAC            | 1.5.0-2        | `mingw-w64-{x86_64,i686}-flac`             |
+| libFLAC            | 1.5.0-3 (x64), 1.5.0-2 (x86) | `mingw-w64-{x86_64,i686}-flac` |
 | libopus            | 1.6.1-2        | `mingw-w64-{x86_64,i686}-opus-1.6.1-2`       |
-| libopusfile        | 0.12           | `mingw-w64-{x86_64,i686}-opusfile-0.12`    |
+| libopusfile        | 0.12-5 (x64), 0.12 (x86) | `mingw-w64-{x86_64,i686}-opusfile` |
 | libvorbis          | 1.3.7-3        | `mingw-w64-{x86_64,i686}-libvorbis`        |
 | libxmp             | 4.7.4-1        | `mingw-w64-{x86_64,i686}-libxmp`           |
 | libmikmod          | 3.3.16         | MSYS2 x64 `3.3.16-1`; upstream source for x86 |
 | libmpg123          | 1.33.7-1       | `mingw-w64-{x86_64,i686}-mpg123`           |
 | libogg             | 1.3.6          | `mingw-w64-{x86_64,i686}-libogg-1.3.6`     |
 | libwinpthread      | 14.0.0.r598.ge3d18511f-1 | `mingw-w64-{x86_64,i686}-libwinpthread` |
-| libgcc (x86 only)  | gcc 16.2.0-6   | `mingw-w64-i686-libgcc` (monitored as `gcc-libs`) |
+| libgcc (x86 only)  | gcc 16.2.0-7   | `mingw-w64-i686-libgcc` (monitored as `gcc-libs`) |
 
 Package revisions are included above for the September through November 2026
 refreshes. Downloads were verified against the SHA-256 hashes in the MSYS2

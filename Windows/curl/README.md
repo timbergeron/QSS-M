@@ -9,7 +9,7 @@ Both architectures use curl 8.23.0, built from the unmodified upstream release:
 - Source: https://curl.se/download/curl-8.23.0.tar.xz
 - SHA-256: `8dadd7d2536a314f982ad05a651b713f426bf7d02cc2c76cffb9796f2218e6c5`
 
-The source hash was checked against MSYS2's curl 8.23.0-1 recipe. The dependency
+The source hash was checked against MSYS2's curl 8.23.0-3 recipe. The dependency
 watch uses that package's version as the upstream notification baseline; these
 DLLs are built locally rather than copied from the MSYS2 curl package.
 

@@ -14,8 +14,8 @@
     "vendored": "8.23.0",
     "dlls": ["Windows/curl/lib/x86/libcurl.dll", "Windows/curl/lib/x64/libcurl.dll"],
     "packages": [
-      { "repository": "mingw32", "name": "mingw-w64-i686-curl", "baseline": "8.23.0-1" },
-      { "repository": "mingw64", "name": "mingw-w64-x86_64-curl", "baseline": "8.23.0-1" }
+      { "repository": "mingw32", "name": "mingw-w64-i686-curl", "baseline": "8.23.0-3" },
+      { "repository": "mingw64", "name": "mingw-w64-x86_64-curl", "baseline": "8.23.0-3" }
     ]
   },
   {
@@ -34,7 +34,7 @@
     "vendored": "1.5.0",
     "dlls": ["Windows/codecs/x86/libFLAC.dll", "Windows/codecs/x64/libFLAC.dll"],
     "packages": [
-      { "repository": "mingw64", "name": "mingw-w64-x86_64-flac", "baseline": "1.5.0-2" }
+      { "repository": "mingw64", "name": "mingw-w64-x86_64-flac", "baseline": "1.5.0-3" }
     ]
   },
   {
@@ -88,7 +88,7 @@
     "vendored": "0.12",
     "dlls": ["Windows/codecs/x86/libopusfile-0.dll", "Windows/codecs/x64/libopusfile-0.dll"],
     "packages": [
-      { "repository": "mingw64", "name": "mingw-w64-x86_64-opusfile", "baseline": "0.12-4" }
+      { "repository": "mingw64", "name": "mingw-w64-x86_64-opusfile", "baseline": "0.12-5" }
     ]
   },
   {
@@ -129,7 +129,7 @@
     "vendored": "16.2.0",
     "dlls": ["Windows/codecs/x86/libgcc_s_dw2-1.dll"],
     "packages": [
-      { "repository": "mingw32", "name": "mingw-w64-i686-gcc-libs", "baseline": "16.2.0-6" }
+      { "repository": "mingw32", "name": "mingw-w64-i686-gcc-libs", "baseline": "16.2.0-7" }
     ]
   },
   {
@@ -156,7 +156,7 @@
     "vendored": "4.21.0",
     "dlls": [],
     "packages": [
-      {"repository": "mingw64", "name": "mingw-w64-x86_64-libtasn1", "baseline": "4.21.0-1"}
+      {"repository": "mingw64", "name": "mingw-w64-x86_64-libtasn1", "baseline": "4.21.0-2"}
     ]
   },
   {
