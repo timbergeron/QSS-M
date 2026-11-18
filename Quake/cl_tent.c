@@ -718,6 +718,8 @@ void CL_ParseEffect (qboolean big)
 	framecount = MSG_ReadByte();
 	framerate = MSG_ReadByte();
 
+	if (modelindex < 0 || modelindex >= MAX_MODELS)
+		return;	//the index comes straight off the network
 	mod = cl.model_precache[modelindex];
 	if (mod)
 		CL_SpawnSpriteEffect(org, NULL, NULL, mod, startframe, framecount, framerate, mod->type==mod_sprite ? -1 : 1, 1, 0, 0, P_INVALID, 0, 0, 1.0f, 1.0f, 1.0f);
