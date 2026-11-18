@@ -4504,8 +4504,13 @@ static void PF_copyentity(void)
 	G_INT(OFS_RETURN) = EDICT_TO_PROG(dst);
 }
 static void PF_edict_for_num(void)
-{
-	G_INT(OFS_RETURN) = EDICT_TO_PROG(EDICT_NUM(G_FLOAT(OFS_PARM0)));
+{	//like fteqw: numbers outside the spawned entities return world. a never-spawned slot
+	//reads as not-free yet fails NUM_FOR_EDICT, and a negative number was a Host_Error.
+	int num;
+	if (PR_IndexFromFloat(G_FLOAT(OFS_PARM0), qcvm->num_edicts, &num))
+		G_INT(OFS_RETURN) = EDICT_TO_PROG(EDICT_NUM(num));
+	else
+		G_INT(OFS_RETURN) = EDICT_TO_PROG(qcvm->edicts);
 }
 static void PF_num_for_edict(void)
 {
