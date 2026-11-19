@@ -228,6 +228,8 @@ extern	cvar_t	r_dynamic;
 extern	cvar_t	r_novis;
 extern	cvar_t	r_scale;
 extern	cvar_t	r_softemu;
+extern	cvar_t	r_softemu_lightmap_banding;
+qboolean R_LightmapBandingActive (void);
 extern	cvar_t	r_ambient; // woods #rambient
 
 extern	cvar_t	gl_clear;

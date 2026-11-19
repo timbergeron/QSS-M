@@ -458,8 +458,13 @@ static int glmode_idx = 5; /* trilinear */
 
 static qboolean TexMgr_UsesSoftEmuFilterOverride (void)
 {
+	if (glmode_idx == 0)
+		return false;
+	// ironwail: forced lightmap banding also gets the software-style filtering
+	if (r_softemu_lightmap_banding.value > 0.0f)
+		return true;
 	return gl_glsl_gamma_able && gl_mtexable && gl_max_texture_image_units >= 3 &&
-		(int)r_softemu.value >= 2 && glmode_idx != 0;
+		(int)r_softemu.value >= 2;
 }
 
 static int TexMgr_EffectiveTextureMode (void)
@@ -661,6 +666,17 @@ void TexMgr_SoftEmu_f (cvar_t *var)
 	old_filter_override = filter_override;
 	if (mode > 0)
 		GLSLGamma_SoftEmuPrecache ();
+}
+
+/*
+===============
+TexMgr_SoftEmuBanding_f -- called when r_softemu_lightmap_banding changes
+===============
+*/
+void TexMgr_SoftEmuBanding_f (cvar_t *var)
+{
+	(void)var;
+	TexMgr_SoftEmu_f (&r_softemu);
 }
 
 static const char *const texmgr_imagedump_formats[] = { "jpg", "lmp", "png", "tga" };

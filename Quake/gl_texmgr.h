@@ -137,6 +137,7 @@ void TexMgr_Init (void);
 void TexMgr_Shutdown (void);
 int TexMgr_GetTextureMode(void);	//for menu use.
 void TexMgr_SoftEmu_f (cvar_t *var);
+void TexMgr_SoftEmuBanding_f (cvar_t *var);
 void TexMgr_DeleteTextureObjects (void);
 void TexMgr_ReloadTextureSettings (void);
 enum srcformat TexMgr_FormatForCode (const char *code);	//returns SRC_EXTERNAL when not known.

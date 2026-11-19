@@ -725,6 +725,8 @@ void R_Init (void)
 	Cvar_SetCallback (&r_softemu, TexMgr_SoftEmu_f);
 	Cvar_SetCompletion (&r_softemu, R_SoftEmu_Completion_f); // woods #iwtabcomplete
 	TexMgr_SoftEmu_f (&r_softemu);
+	Cvar_RegisterVariable (&r_softemu_lightmap_banding);
+	Cvar_SetCallback (&r_softemu_lightmap_banding, TexMgr_SoftEmuBanding_f);
 	Cvar_SetCallback (&r_lavaalpha, R_SetLavaalpha_f);
 	Cvar_SetCallback (&r_telealpha, R_SetTelealpha_f);
 	Cvar_SetCallback (&r_slimealpha, R_SetSlimealpha_f);

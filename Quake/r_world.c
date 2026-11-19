@@ -32,6 +32,8 @@ extern cvar_t r_drawcandle;
 extern cvar_t gl_max_size;
 extern cvar_t r_lightmap_extra4;
 extern cvar_t r_textureless_dither;
+extern cvar_t r_softemu;
+extern cvar_t r_softemu_lightmap_banding;
 cvar_t r_scenecache = {"r_scenecache",""};	//spike, an attempt to cope with abusive maps a bit better.
 
 //tb -- scene cache statistics, see glquake.h. Diagnostic only, and absent
@@ -785,6 +787,7 @@ static GLuint useLightmapOnlyLoc;
 static GLuint useLightmapExtra4Loc;
 static GLuint lightmapTexelSizeLoc;
 static GLuint useTexturelessDitherLoc;
+static GLint useLightmapBandingLoc = -1;
 static GLuint alphaLoc;
 GLuint clTimeLoc; // woods #caustics
 static GLuint causticsOpacityLoc; // woods #caustics
@@ -814,6 +817,7 @@ static GLint instUseLightmapOnlyLoc;
 static GLint instUseLightmapExtra4Loc;
 static GLint instLightmapTexelSizeLoc;
 static GLint instUseTexturelessDitherLoc;
+static GLint instUseLightmapBandingLoc = -1;
 static GLint instAlphaLoc;
 static GLint instClTimeLoc;
 static GLint instCausticsOpacityLoc;
@@ -863,6 +867,7 @@ static struct
 	GLint skyfogcolor;
 	GLint use_extra4;
 	GLint texel_size;
+	GLint use_banding;
 } r_water[4];	//
 
 static void R_SetLightmapExtra4Uniforms (GLint use_loc, GLint texel_size_loc)
@@ -879,6 +884,28 @@ static void R_SetTexturelessDitherUniform (GLint loc)
 {
 	if (loc >= 0)
 		GL_Uniform1iFunc (loc, gl_max_size.value == 1.0f && r_textureless_dither.value != 0.0f);
+}
+
+/*
+=============
+R_LightmapBandingActive -- ironwail r_softemu_lightmap_banding
+
+-1 = auto (only with the undithered r_softemu 3), 0 = off, 1 = always.
+Snaps lighting to texel centres and quantizes it to the 64 colormap
+levels the software renderer used.
+=============
+*/
+qboolean R_LightmapBandingActive (void)
+{
+	if (r_softemu_lightmap_banding.value > 0.0f)
+		return true;
+	return (int)r_softemu.value == 3 && r_softemu_lightmap_banding.value != 0.0f;
+}
+
+static void R_SetLightmapBandingUniform (GLint loc)
+{
+	if (loc >= 0)
+		GL_Uniform1iFunc (loc, R_LightmapBandingActive ());
 }
 
 #ifndef vertAttrIndex
@@ -1389,6 +1416,7 @@ qboolean R_DrawBModelDrawCache (qmodel_t *model, entity_t *ent)
 	GL_Uniform1iFunc (useLightmapOnlyLoc, 0);
 	R_SetLightmapExtra4Uniforms (useLightmapExtra4Loc, lightmapTexelSizeLoc);
 	R_SetTexturelessDitherUniform (useTexturelessDitherLoc);
+	R_SetLightmapBandingUniform (useLightmapBandingLoc);
 	GL_Uniform1fFunc (alphaLoc, 1.0f);
 	GL_Uniform1fFunc (clTimeLoc, cl.time);
 	R_SetCausticsProjection (causticsPlaneSLoc, causticsPlaneTLoc, causticsWorldUpLoc); // woods #caustics
@@ -1772,6 +1800,7 @@ static void R_DrawBrushModelInstancedGroup (entity_t **ents, int count)
 	GL_Uniform1iFunc(instUseLightmapOnlyLoc, 0);
 	R_SetLightmapExtra4Uniforms (instUseLightmapExtra4Loc, instLightmapTexelSizeLoc);
 	R_SetTexturelessDitherUniform (instUseTexturelessDitherLoc);
+	R_SetLightmapBandingUniform (instUseLightmapBandingLoc);
 	GL_Uniform1fFunc(instAlphaLoc, 1.0f);
 	GL_Uniform1fFunc(instClTimeLoc, cl.time);
 	R_SetCausticsProjection (instCausticsPlaneSLoc, instCausticsPlaneTLoc, instCausticsWorldUpLoc); // woods #caustics
@@ -1934,6 +1963,7 @@ static void GLWorld_DeleteShaderPrograms (void)
 	useLightmapExtra4Loc = 0;
 	lightmapTexelSizeLoc = 0;
 	useTexturelessDitherLoc = 0;
+	useLightmapBandingLoc = -1;
 	alphaLoc = 0;
 	clTimeLoc = 0;
 	causticsOpacityLoc = 0;
@@ -1963,6 +1993,7 @@ static void GLWorld_DeleteShaderPrograms (void)
 	instUseLightmapExtra4Loc = -1;
 	instLightmapTexelSizeLoc = -1;
 	instUseTexturelessDitherLoc = -1;
+	instUseLightmapBandingLoc = -1;
 	instAlphaLoc = -1;
 	instClTimeLoc = -1;
 	instCausticsOpacityLoc = -1;
@@ -2009,6 +2040,7 @@ static void GLWorld_DeleteShaderPrograms (void)
 		r_water[i].skyfogcolor = -1;
 		r_water[i].use_extra4 = -1;
 		r_water[i].texel_size = -1;
+		r_water[i].use_banding = -1;
 	}
 }
 
@@ -5216,6 +5248,7 @@ static void GLWater_CreateShaders (void)
 		"uniform sampler2D LMTex;\n"
 		"uniform float LightScale;\n"
 		"uniform bool UseLightmapExtra4;\n"
+		"uniform bool UseLightmapBanding;\n"
 		"uniform vec2 LightmapTexelSize;\n"
 		"varying vec2 tc_lm;\n"
 		"varying vec4 tc_lmbounds;\n"
@@ -5279,11 +5312,23 @@ static void GLWater_CreateShaders (void)
         "#define M_PI 3.14159\n"
 		"#define TIMEBIAS (((WarpTime*20.0)*M_PI*2.0)/128.0)\n"
 		"	ntc += 0.125 + sin(tc_tex.ts*M_PI + TIMEBIAS)*0.125;\n"
-		"	vec4 result = texture2D(Tex, ntc.st);\n"
 "#ifdef LIT\n"
-		"	vec4 lightmapBase = texture2D(LMTex, tc_lm.xy);\n"
+		"	vec4 result;\n"
+		"	vec4 lightmapBase;\n"
+		"	if (UseLightmapBanding)\n"
+		"	{\n"
+		"		// software surface cache: one light value per texture texel (16 per luxel)\n"
+		"		vec2 lmsize = 16.0 / LightmapTexelSize;\n"
+		"		result = texture2D(Tex, ntc.st, -1.0);\n"
+		"		lightmapBase = texture2D(LMTex, (floor(tc_lm.xy * lmsize) + 0.5) / lmsize);\n"
+		"	}\n"
+		"	else\n"
+		"	{\n"
+		"		result = texture2D(Tex, ntc.st);\n"
+		"		lightmapBase = texture2D(LMTex, tc_lm.xy);\n"
+		"	}\n"
 		"	vec4 lightmapColor;\n"
-		"	if (UseLightmapExtra4)\n"
+		"	if (UseLightmapExtra4 && !UseLightmapBanding)\n"
 		"	{\n"
 		"		vec4 bounds = LightmapBoundsUV();\n"
 		"		vec2 s = LightmapTexelSize * 0.28;\n"
@@ -5297,14 +5342,23 @@ static void GLWater_CreateShaders (void)
 		"	}\n"
 		"	else\n"
 		"		lightmapColor = lightmapBase;\n"
+		"	if (UseLightmapBanding)\n"
+		"		// 64 colormap levels spanning 0..2x (overbright) light\n"
+		"		lightmapColor.rgb = floor(lightmapColor.rgb * (LightScale * 31.5) + 0.5) / 31.5;\n"
+		"	else\n"
+		"		lightmapColor.rgb *= LightScale;\n"
 		"	result *= lightmapColor;\n"
-		"	result.rgb *= LightScale;\n"
+"#else\n"
+		"	vec4 result = texture2D(Tex, ntc.st);\n"
 "#endif\n"
 		"	result.a *= Alpha;\n"
 		"	result = clamp(result, 0.0, 1.0);\n"
 		"	float fog = FogFactor(FogFragCoord);\n"
 		"	fog = clamp(fog, 0.0, 1.0);\n"
 		"	result.rgb = mix(gl_Fog.color.rgb, result.rgb, fog);\n"
+"#ifdef LIT\n"
+		"	if (!UseLightmapBanding)\n"
+"#endif\n"
 		"	result.rgb = clamp(result.rgb + vec3(FogDither()), 0.0, 1.0);\n"
 		"	gl_FragColor = result;\n"
 		"}\n";
@@ -5422,6 +5476,7 @@ static void GLWater_CreateShaders (void)
 			r_water[i].light_scale		= ((i==1)?GL_GetUniformLocation (&r_water[i].program, "LightScale"):-1);
 			r_water[i].use_extra4		= ((i==1)?GL_GetUniformLocation (&r_water[i].program, "UseLightmapExtra4"):-1);
 			r_water[i].texel_size		= ((i==1)?GL_GetUniformLocation (&r_water[i].program, "LightmapTexelSize"):-1);
+			r_water[i].use_banding		= ((i==1)?GL_GetUniformLocation (&r_water[i].program, "UseLightmapBanding"):-1);
 			r_water[i].alpha_scale		= ((i!=3)?GL_GetUniformLocation (&r_water[i].program, "Alpha"):-1);
 			r_water[i].time				= ((i!=3)?GL_GetUniformLocation (&r_water[i].program, "WarpTime"):-1);
 			r_water[i].eyepos			= ((i==2)?GL_GetUniformLocation (&r_water[i].program, "EyePos"):-1);
@@ -5529,6 +5584,7 @@ void R_DrawTextureChains_Water (qmodel_t *model, entity_t *ent, texchain_t chain
 					if (r_water[mode].light_scale != -1)
 						GL_Uniform1fFunc (r_water[mode].light_scale, lightmapscale);
 					R_SetLightmapExtra4Uniforms (r_water[mode].use_extra4, r_water[mode].texel_size);
+					R_SetLightmapBandingUniform (r_water[mode].use_banding);
 					GL_Uniform1fFunc (r_water[mode].alpha_scale, entalpha);
 					lastlightmap = s->lightmaptexturenum;
 				}
@@ -5707,6 +5763,7 @@ void R_LiquidRunDrawModel (qmodel_t *model, entity_t *ent, texchain_t chain, con
 					if (r_water[mode].light_scale != -1)
 						GL_Uniform1fFunc (r_water[mode].light_scale, lightmapscale);
 					R_SetLightmapExtra4Uniforms (r_water[mode].use_extra4, r_water[mode].texel_size);
+					R_SetLightmapBandingUniform (r_water[mode].use_banding);
 					r_liquidrun.constants[mode] = true;
 				}
 				if (r_liquidrun.alpha[mode] != entalpha)
@@ -5829,6 +5886,7 @@ void R_SolidRunBegin (float entalpha)
 	GL_Uniform1iFunc (useLightmapOnlyLoc, 0);
 	R_SetLightmapExtra4Uniforms (useLightmapExtra4Loc, lightmapTexelSizeLoc);
 	R_SetTexturelessDitherUniform (useTexturelessDitherLoc);
+	R_SetLightmapBandingUniform (useLightmapBandingLoc);
 	GL_Uniform1fFunc (clTimeLoc, cl.time);
 	R_SetCausticsProjection (causticsPlaneSLoc, causticsPlaneTLoc, causticsWorldUpLoc); // woods #caustics
 	GL_Uniform1fFunc (causticsOpacityLoc, gl_caustics.value);
@@ -6140,6 +6198,7 @@ void GLWorld_CreateShaders (void)
 		"uniform bool UseLightmapExtra4;\n"
 		"uniform vec2 LightmapTexelSize;\n"
 		"uniform bool UseTexturelessDither;\n"
+		"uniform bool UseLightmapBanding;\n"
 		"uniform float Alpha;\n"
 		"uniform float ClTime;\n"
 		"uniform float CausticsOpacity;\n"
@@ -6269,10 +6328,22 @@ void GLWorld_CreateShaders (void)
 		"\n"
 		"void main()\n"
 		"{\n"
-		"	vec4 result = texture2D(Tex, tc_tex.xy);\n"
-		"	vec4 lightmapBase = texture2D(LMTex, tc_lm.xy);\n"
+		"	vec4 result;\n"
+		"	vec4 lightmapBase;\n"
+		"	if (UseLightmapBanding)\n"
+		"	{\n"
+		"		// software surface cache: one light value per texture texel (16 per luxel)\n"
+		"		vec2 lmsize = 16.0 / LightmapTexelSize;\n"
+		"		result = texture2D(Tex, tc_tex.xy, -1.0);\n"
+		"		lightmapBase = texture2D(LMTex, (floor(tc_lm.xy * lmsize) + 0.5) / lmsize);\n"
+		"	}\n"
+		"	else\n"
+		"	{\n"
+		"		result = texture2D(Tex, tc_tex.xy);\n"
+		"		lightmapBase = texture2D(LMTex, tc_lm.xy);\n"
+		"	}\n"
 		"	vec4 lightmapColor;\n"
-		"	if (UseLightmapExtra4)\n"
+		"	if (UseLightmapExtra4 && !UseLightmapBanding)\n"
 		"	{\n"
 		"		// Approximate light -extra4 with four variance-matched sub-texel samples.\n"
 		"		// The original compiler's sub-samples are not recoverable clientside,\n"
@@ -6291,6 +6362,12 @@ void GLWorld_CreateShaders (void)
 		"		lightmapColor = lightmapBase; // Sample lightmap early\n"
 		"	if (UseLightmapWide)\n"
 		"	    lightmapColor.rgb *= 4.0;\n"
+		"	if (UseLightmapBanding)\n"
+		"	{\n"
+		"		// 64 colormap levels spanning 0..2x (overbright) light\n"
+		"		float lmscale = UseOverbright ? 2.0 : 1.0;\n"
+		"		lightmapColor.rgb = floor(lightmapColor.rgb * (lmscale * 31.5) + 0.5) / (lmscale * 31.5);\n"
+		"	}\n"
 		"	float lightBrightness = (lightmapColor.r + lightmapColor.g + lightmapColor.b) / 3.0;\n"
 		"	// caustics need some light, but the result is already lightmap-scaled, so gate gently\n"
 		"	float surfaceLightFactor = smoothstep(0.0, 0.35, lightBrightness);\n"
@@ -6376,10 +6453,13 @@ void GLWorld_CreateShaders (void)
 		"	float fog = FogFactor(FogFragCoord);\n"
 		"	fog = clamp(fog, 0.0, 1.0);\n"
 		"	result = mix(gl_Fog.color, result, fog);\n"
-		"	vec3 dither = vec3(FogDither());\n"
-		"	if (UseTexturelessDither)\n"
-		"		dither += vec3(TexturelessDither() * (0.35 / 255.0));\n"
-		"	result.rgb = clamp(result.rgb + dither, 0.0, 1.0);\n"
+		"	if (!UseLightmapBanding)\n"
+		"	{\n"
+		"		vec3 dither = vec3(FogDither());\n"
+		"		if (UseTexturelessDither)\n"
+		"			dither += vec3(TexturelessDither() * (0.35 / 255.0));\n"
+		"		result.rgb = clamp(result.rgb + dither, 0.0, 1.0);\n"
+		"	}\n"
 		"	result.a = Alpha;\n" // FIXME: This will make almost transparent things cut holes though heavy fog
 		"	gl_FragColor = result;\n"
 		"}\n";
@@ -6408,6 +6488,7 @@ void GLWorld_CreateShaders (void)
 		useLightmapExtra4Loc = GL_GetUniformLocation (&r_world_program, "UseLightmapExtra4");
 		lightmapTexelSizeLoc = GL_GetUniformLocation (&r_world_program, "LightmapTexelSize");
 		useTexturelessDitherLoc = GL_GetUniformLocation (&r_world_program, "UseTexturelessDither");
+		useLightmapBandingLoc = GL_GetUniformLocation (&r_world_program, "UseLightmapBanding");
 		alphaLoc = GL_GetUniformLocation (&r_world_program, "Alpha");
 		clTimeLoc = GL_GetUniformLocation(&r_world_program, "ClTime"); // woods #caustics
 		causticsOpacityLoc = GL_GetUniformLocation(&r_world_program, "CausticsOpacity"); // woods #caustics
@@ -6451,6 +6532,7 @@ void GLWorld_CreateShaders (void)
 			instUseLightmapExtra4Loc = GL_GetUniformLocation (&r_world_instanced_program, "UseLightmapExtra4");
 			instLightmapTexelSizeLoc = GL_GetUniformLocation (&r_world_instanced_program, "LightmapTexelSize");
 			instUseTexturelessDitherLoc = GL_GetUniformLocation (&r_world_instanced_program, "UseTexturelessDither");
+			instUseLightmapBandingLoc = GL_GetUniformLocation (&r_world_instanced_program, "UseLightmapBanding");
 			instAlphaLoc = GL_GetUniformLocation (&r_world_instanced_program, "Alpha");
 			instClTimeLoc = GL_GetUniformLocation(&r_world_instanced_program, "ClTime"); // woods #caustics
 			instCausticsOpacityLoc = GL_GetUniformLocation(&r_world_instanced_program, "CausticsOpacity"); // woods #caustics
@@ -6548,6 +6630,7 @@ void R_DrawTextureChains_GLSL (qmodel_t *model, entity_t *ent, texchain_t chain)
 	GL_Uniform1iFunc (useLightmapOnlyLoc, 0);
 	R_SetLightmapExtra4Uniforms (useLightmapExtra4Loc, lightmapTexelSizeLoc);
 	R_SetTexturelessDitherUniform (useTexturelessDitherLoc);
+	R_SetLightmapBandingUniform (useLightmapBandingLoc);
 	GL_Uniform1fFunc (alphaLoc, entalpha);
 	GL_Uniform1fFunc(clTimeLoc, cl.time); // woods #caustics
 	R_SetCausticsProjection (causticsPlaneSLoc, causticsPlaneTLoc, causticsWorldUpLoc); // woods #caustics
@@ -6691,6 +6774,7 @@ void R_DrawLightmapChains_GLSL(qmodel_t* model, entity_t* ent, texchain_t chain)
 	GL_Uniform1iFunc(useLightmapOnlyLoc, 1);
 	R_SetLightmapExtra4Uniforms (useLightmapExtra4Loc, lightmapTexelSizeLoc);
 	R_SetTexturelessDitherUniform (useTexturelessDitherLoc);
+	R_SetLightmapBandingUniform (useLightmapBandingLoc);
 	GL_Uniform1iFunc(fogModeLoc, Fog_GetMode());
 
 	R_ClearBatch();
@@ -8811,6 +8895,7 @@ static void RSceneCache_Draw(qboolean water)
 							GL_Uniform1fFunc (r_water[mode].light_scale, lightmapscale);
 					}
 					R_SetLightmapExtra4Uniforms (r_water[mode].use_extra4, r_water[mode].texel_size);
+					R_SetLightmapBandingUniform (r_water[mode].use_banding);
 					GL_Uniform1fFunc (r_water[mode].alpha_scale, alpha);
 				}
 				else if (tex->name[0]=='s'&&tex->name[1]=='k'&&tex->name[2]=='y')
@@ -8866,6 +8951,7 @@ static void RSceneCache_Draw(qboolean water)
 						GL_Uniform1iFunc (useLightmapOnlyLoc, 0);
 						R_SetLightmapExtra4Uniforms (useLightmapExtra4Loc, lightmapTexelSizeLoc);
 						R_SetTexturelessDitherUniform (useTexturelessDitherLoc);
+						R_SetLightmapBandingUniform (useLightmapBandingLoc);
 						GL_Uniform1fFunc (alphaLoc, 1);			//worldmodel is never translucent.
 						GL_Uniform1fFunc (grassAmountLoc, R_GrassAmount()); // woods #grass
 						GL_Uniform1fFunc (grassTimeLoc, R_GrassAnimTime()); // woods #grass
