@@ -1400,8 +1400,19 @@ static void PF_sv_lightstyle (void)
 		return;
 	}
 
-// change the string in sv
-	sv.lightstyles[style] = val;
+// change the string in sv, keeping a copy because QC can pass a temp
+// or zoned string that is reused or freed before new clients get it
+	if (!sv.lightstylecopies[style] || strcmp (sv.lightstylecopies[style], val))
+	{
+		size_t len = strlen (val) + 1;
+		char *copy = (char *) malloc (len);
+		if (!copy)
+			Sys_Error ("PF_lightstyle: out of memory");
+		memcpy (copy, val, len);
+		free (sv.lightstylecopies[style]);
+		sv.lightstylecopies[style] = copy;
+	}
+	sv.lightstyles[style] = val = sv.lightstylecopies[style];
 
 // send message to all clients on this server
 	if (sv.state != ss_active)

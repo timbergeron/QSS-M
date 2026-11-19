@@ -65,6 +65,7 @@ typedef struct
 	struct qmodel_s	*models[MAX_MODELS];
 	const char	*sound_precache[MAX_SOUNDS];	// may be full; bound scans by MAX_SOUNDS
 	const char	*lightstyles[MAX_LIGHTSTYLES];
+	char		*lightstylecopies[MAX_LIGHTSTYLES];	// malloced copies of the strings QC set, freed by Host_ClearMemory
 	server_state_t	state;			// some actions are only valid during load
 
 	sizebuf_t	datagram;

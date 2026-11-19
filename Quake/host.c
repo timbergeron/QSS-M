@@ -1522,6 +1522,7 @@ void Host_ClearMemory (void)
 {
 	extern edict_t *bbox_focus;
 	extern void SCR_ClearShowFieldsTracks(void);
+	int i;
 
 	CL_AsyncDownload_Cancel();
 	Host_WaitForSaveThread();
@@ -1548,6 +1549,8 @@ void Host_ClearMemory (void)
 	PR_ClearProgs(&sv.qcvm);
 	free(sv.static_entities);	//spike -- this is dynamic too, now
 	free(sv.ambientsounds);
+	for (i = 0; i < MAX_LIGHTSTYLES; i++)
+		free (sv.lightstylecopies[i]);
 	memset (&sv, 0, sizeof(sv));
 
 	CL_FreeState();
