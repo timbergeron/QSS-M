@@ -141,13 +141,14 @@ qboolean SV_movestep (edict_t *ent, vec3_t move, qboolean relink)
 
 			if (trace.fraction == 1)
 			{
-				if ( ((int)ent->v.flags & FL_SWIM) && SV_PointContents(trace.endpos) == CONTENTS_EMPTY )
-					return false;	// swim monster left water
-
-				VectorCopy (trace.endpos, ent->v.origin);
-				if (relink)
-					SV_LinkEdict (ent, true);
-				return true;
+				// a swim monster that would leave the water tries the level move next
+				if ( !((int)ent->v.flags & FL_SWIM) || SV_PointContents(trace.endpos) != CONTENTS_EMPTY )
+				{
+					VectorCopy (trace.endpos, ent->v.origin);
+					if (relink)
+						SV_LinkEdict (ent, true);
+					return true;
+				}
 			}
 
 			if (enemy == qcvm->edicts)
