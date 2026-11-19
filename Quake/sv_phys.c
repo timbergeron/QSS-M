@@ -1768,8 +1768,9 @@ void SV_Physics_Toss (edict_t *ent)
 
 // add gravity
 	movetype = ent->v.movetype; if (movetype == MOVETYPE_EXT_BOUNCEMISSILE && qcvm->brokenbouncemissile) movetype = MOVETYPE_BOUNCE;
-	if (ent->v.movetype != MOVETYPE_FLY
-	&& ent->v.movetype != MOVETYPE_FLYMISSILE)
+	if (movetype != MOVETYPE_FLY
+	&& movetype != MOVETYPE_FLYMISSILE
+	&& movetype != MOVETYPE_EXT_BOUNCEMISSILE)
 		SV_AddGravity (ent);
 
 // move angles
@@ -1794,9 +1795,9 @@ void SV_Physics_Toss (edict_t *ent)
 	ClipVelocity (ent->v.velocity, trace.plane.normal, ent->v.velocity, backoff);
 
 // stop if on ground
-	if (trace.plane.normal[2] > 0.7)
+	if (trace.plane.normal[2] > 0.7 && movetype != MOVETYPE_EXT_BOUNCEMISSILE)
 	{
-		if (ent->v.movetype != MOVETYPE_BOUNCE || (sv_gameplayfix_bouncedownslopes.value?DotProduct(trace.plane.normal, ent->v.velocity):ent->v.velocity[2]) < 60)
+		if (movetype != MOVETYPE_BOUNCE || (sv_gameplayfix_bouncedownslopes.value?DotProduct(trace.plane.normal, ent->v.velocity):ent->v.velocity[2]) < 60)
 		{
 			ent->v.flags = (int)ent->v.flags | FL_ONGROUND;
 			ent->v.groundentity = EDICT_TO_PROG(trace.ent);
