@@ -1619,7 +1619,7 @@ void SV_Physics_Client (edict_t	*ent, int num)
 		if (!SV_RunThink (ent))
 			return;
 		if (!SV_CheckWater (ent) && ! ((int)ent->v.flags & FL_WATERJUMP) )
-			if (!sv_player->onladder)
+			if (!ent->onladder)
 				SV_AddGravity (ent);
 		SV_CheckStuck (ent);
 		SV_WalkMove (ent);
