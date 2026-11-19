@@ -1317,6 +1317,12 @@ void SV_CheckStuck (edict_t *ent)
 SV_CheckWater
 =============
 */
+// water, slime, lava and sky, but not ladders or other contents a submodel's skin can give
+static qboolean SV_ContentsIsFluid (int cont)
+{
+	return cont <= CONTENTS_WATER && cont >= CONTENTS_SKY;
+}
+
 qboolean SV_CheckWater (edict_t *ent)
 {
 	vec3_t	point;
@@ -1350,18 +1356,18 @@ qboolean SV_CheckWater (edict_t *ent)
 	ent->v.watertype = CONTENTS_EMPTY;
 	//Spike -- FTE_ENT_SKIN_CONTENTS -- check submodels too, because we can.
 	cont = SV_PointContentsAllBsps (point, ent);
-	if (cont <= CONTENTS_WATER)
+	if (SV_ContentsIsFluid (cont))
 	{
 		ent->v.watertype = cont;
 		ent->v.waterlevel = 1;
 		point[2] = ent->v.origin[2] + (ent->v.mins[2] + ent->v.maxs[2])*0.5;
 		cont = SV_PointContentsAllBsps (point, ent);
-		if (cont <= CONTENTS_WATER)
+		if (SV_ContentsIsFluid (cont))
 		{
 			ent->v.waterlevel = 2;
 			point[2] = ent->v.origin[2] + ent->v.view_ofs[2];
 			cont = SV_PointContentsAllBsps (point, ent);
-			if (cont <= CONTENTS_WATER)
+			if (SV_ContentsIsFluid (cont))
 				ent->v.waterlevel = 3;
 		}
 	}
