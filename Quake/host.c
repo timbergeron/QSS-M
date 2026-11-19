@@ -1551,6 +1551,10 @@ void Host_ClearMemory (void)
 	free(sv.ambientsounds);
 	for (i = 0; i < MAX_LIGHTSTYLES; i++)
 		free (sv.lightstylecopies[i]);
+	for (i = 0; i < MAX_MODELS; i++)
+		free (sv.modelprecachecopies[i]);
+	for (i = 0; i < MAX_SOUNDS; i++)
+		free (sv.soundprecachecopies[i]);
 	memset (&sv, 0, sizeof(sv));
 
 	CL_FreeState();

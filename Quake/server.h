@@ -66,6 +66,8 @@ typedef struct
 	const char	*sound_precache[MAX_SOUNDS];	// may be full; bound scans by MAX_SOUNDS
 	const char	*lightstyles[MAX_LIGHTSTYLES];
 	char		*lightstylecopies[MAX_LIGHTSTYLES];	// malloced copies of the strings QC set, freed by Host_ClearMemory
+	char		*modelprecachecopies[MAX_MODELS];	// malloced copies of precached names, freed by Host_ClearMemory
+	char		*soundprecachecopies[MAX_SOUNDS];
 	server_state_t	state;			// some actions are only valid during load
 
 	sizebuf_t	datagram;

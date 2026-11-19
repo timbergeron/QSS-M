@@ -1192,8 +1192,20 @@ static void PF_precache_file (void)
 	G_INT(OFS_RETURN) = G_INT(OFS_PARM0);
 }
 
+// precache names are copied because QC can pass a temp or zoned string that
+// is reused or freed while the name is still compared and sent to clients
+static char *SV_CopyPrecacheName (char **copy, const char *s)
+{
+	size_t len = strlen (s) + 1;
+	*copy = (char *) malloc (len);
+	if (!*copy)
+		Sys_Error ("SV_CopyPrecacheName: out of memory");
+	memcpy (*copy, s, len);
+	return *copy;
+}
+
 int SV_Precache_Sound(const char *s)
-{	//must be a persistent string.
+{
 	int		i;
 
 	if (sv.state != ss_loading && !qcvm->precacheanytime)
@@ -1214,7 +1226,7 @@ int SV_Precache_Sound(const char *s)
 				MSG_WriteShort(&sv.reliable_datagram, i|0x8000);
 				MSG_WriteString(&sv.reliable_datagram, s);
 			}
-			sv.sound_precache[i] = s;
+			sv.sound_precache[i] = SV_CopyPrecacheName (&sv.soundprecachecopies[i], s);
 			return i;
 		}
 		if (!strcmp(sv.sound_precache[i], s))
@@ -1258,8 +1270,8 @@ int SV_Precache_Model(const char *s)
 				MSG_WriteString(&sv.reliable_datagram, s);
 			}
 
-			sv.model_precache[i] = s;
-			sv.models[i] = Mod_ForName (s, i==1);
+			sv.model_precache[i] = SV_CopyPrecacheName (&sv.modelprecachecopies[i], s);
+			sv.models[i] = Mod_ForName (sv.model_precache[i], i==1);
 			return i;
 		}
 		if (!strcmp(sv.model_precache[i], s))
