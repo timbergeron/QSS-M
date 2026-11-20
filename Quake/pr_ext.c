@@ -959,10 +959,7 @@ static void PF_strncmp(void)
 			aofs = strlen(a);
 		if (bofs < 0 || (bofs && bofs > (int)strlen(b)))
 			bofs = strlen(b);
-		if (len < 0)	//negative counts never ran out in Q_strncmp (nor in strncmp's size_t), so compare it all
-			G_FLOAT(OFS_RETURN) = strcmp(a + aofs, b + bofs);
-		else
-			G_FLOAT(OFS_RETURN) = strncmp(a + aofs, b + bofs, len);
+		G_FLOAT(OFS_RETURN) = strncmp(a + aofs, b + bofs, (size_t)len);	//negative = huge, as libc callers get
 	}
 	else
 		G_FLOAT(OFS_RETURN) = strcmp(a, b);
@@ -2586,7 +2583,10 @@ static void PF_getsurfacenearpoint(void)
 	if (!model || model->type != mod_brush || model->needload)
 		return;
 
-	bestdist = 1e30f;	//squared distance; no search radius, as DP_QC_GETSURFACE's nearest-surface semantics expect
+	//squared distance. the 16-unit cutoff lets the cheap plane-distance test skip the
+	//edge work on most faces of huge maps (eg ad_tears); faces with none strictly
+	//closer return -1. an unrestricted query would want a bsp node walk instead.
+	bestdist = 16.f * 16.f;
 
 	//all polies, we can skip parts. special case.
 	surf = model->surfaces + model->firstmodelsurface;
@@ -4124,8 +4124,6 @@ static void PF_buf_sort(void)
 		}
 		strings[d++] = strings[s++];
 	}
-	for (s = d; s < strbuflist[bufno].used; s++)
-		strings[s] = NULL;	//vacated slots would otherwise alias strings now held earlier
 	strbuflist[bufno].used = d;
 
 	//no nulls now, sort it.
@@ -4250,13 +4248,21 @@ static void PF_bufstr_set(void)
 		strbuflist[bufno].strings = Z_Realloc(strbuflist[bufno].strings, strbuflist[bufno].allocated*sizeof(char*));
 		memset(strbuflist[bufno].strings+oldcount, 0, (strbuflist[bufno].allocated - oldcount) * sizeof(char*));
 	}
-	if (strbuflist[bufno].strings[index])
-		Z_Free(strbuflist[bufno].strings[index]);
+	//slots at or past used are not owned (buf_sort leaves stale pointers there),
+	//so only replace a live entry, and clear any slots this write makes visible
+	if (index < strbuflist[bufno].used)
+	{
+		if (strbuflist[bufno].strings[index])
+			Z_Free(strbuflist[bufno].strings[index]);
+	}
+	else
+	{
+		for (oldcount = strbuflist[bufno].used; oldcount < index; oldcount++)
+			strbuflist[bufno].strings[oldcount] = NULL;
+		strbuflist[bufno].used = index+1;
+	}
 	strbuflist[bufno].strings[index] = Z_Malloc(strlen(string)+1);
 	strcpy(strbuflist[bufno].strings[index], string);
-
-	if (index >= strbuflist[bufno].used)
-		strbuflist[bufno].used = index+1;
 }
 
 static int PF_bufstr_add_internal(unsigned int bufno, const char *string, int appendonend)
@@ -4285,9 +4291,7 @@ static int PF_bufstr_add_internal(unsigned int bufno, const char *string, int ap
 		memset(strbuflist[bufno].strings+oldcount, 0, (strbuflist[bufno].allocated - oldcount) * sizeof(char*));
 	}
 
-	//add in the new string.
-	if (strbuflist[bufno].strings[index])
-		Z_Free(strbuflist[bufno].strings[index]);
+	//add in the new string. index is a NULL hole or the end (not owned), so nothing to free
 	strbuflist[bufno].strings[index] = Z_Malloc(strlen(string)+1);
 	strcpy(strbuflist[bufno].strings[index], string);
 
