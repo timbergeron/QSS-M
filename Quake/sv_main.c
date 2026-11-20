@@ -2176,7 +2176,7 @@ void SV_StartSound2 (edict_t *entity, float *origin, int channel, const char *sa
 		if (client_mask & SND_VOLUME)
 			MSG_WriteByte (msg, volume);
 		if (client_mask & SND_ATTENUATION)
-			MSG_WriteByte (msg, attenuation*64);
+			MSG_WriteByte (msg, (int)CLAMP (0.f, attenuation * 64.f, 255.f));
 
 		//spike -- stuff
 		if (client_mask & SND_FTE_PITCHADJ)
