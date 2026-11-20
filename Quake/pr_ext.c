@@ -959,10 +959,13 @@ static void PF_strncmp(void)
 			aofs = strlen(a);
 		if (bofs < 0 || (bofs && bofs > (int)strlen(b)))
 			bofs = strlen(b);
-		G_FLOAT(OFS_RETURN) = Q_strncmp(a + aofs, b + bofs, len);
+		if (len < 0)	//negative counts never ran out in Q_strncmp (nor in strncmp's size_t), so compare it all
+			G_FLOAT(OFS_RETURN) = strcmp(a + aofs, b + bofs);
+		else
+			G_FLOAT(OFS_RETURN) = strncmp(a + aofs, b + bofs, len);
 	}
 	else
-		G_FLOAT(OFS_RETURN) = Q_strcmp(a, b);
+		G_FLOAT(OFS_RETURN) = strcmp(a, b);
 }
 static void PF_strncasecmp(void)
 {
@@ -1740,6 +1743,8 @@ static void PF_stov(void)
 	int i;
 
 	out[0] = out[1] = out[2] = 0;
+	while (*s && (unsigned char)*s <= ' ')
+		s++;
 	if (*s == '\'')
 		s++;
 	for (i = 0; i < 3; i++)
@@ -1995,7 +2000,7 @@ static void PF_both_pmove(edict_t *e)
 
 	pmove.waterjumptime = (e->v.teleport_time>qcvm->time)?e->v.teleport_time - qcvm->time:0;
 	pmove.jump_held = !!(fl&PMF_JUMP_HELD);
-	pmove.onladder = !!(fl&PMF_LADDER);
+	pmove.onladder = false;	//PM_CategorizePosition only sets it; carrying PMF_LADDER in kept it stuck after leaving
 	pmove.jump_secs = 0;	//has been 0 since Z_EXT_PM_TYPE instead of imposing a delay on rejumps.
 	pmove.onground = !!((int)e->v.flags & FL_ONGROUND); //in case we're using pm_pground
 	switch((int)e->v.movetype)
@@ -2489,41 +2494,63 @@ static void PF_getsurfacetexture(void)
 static float getsurface_clippointpoly(qmodel_t *model, msurface_t *surf, vec3_t point, vec3_t bestcpoint, float bestdist)
 {
 	int e, edge;
-	vec3_t edgedir, edgenormal, cpoint, temp;
+	vec3_t edgedir, rel, cross, cpoint, onplane, edgepoint, temp;
 	mvertex_t *v1, *v2;
 	float dist = DotProduct(point, surf->plane->normal) - surf->plane->dist;
-	//don't care about SURF_PLANEBACK, the maths works out the same.
+	float side, t, len2, edist, bestedge;
+	qboolean pos = false, neg = false;
 
+	//the plane distance never exceeds the face distance, so this rejects safely
 	if (dist*dist < bestdist)
-	{	//within a specific range
-		//make sure it's within the poly
-		VectorMA(point, dist, surf->plane->normal, cpoint);
-		for (e = surf->firstedge+surf->numedges; e > surf->firstedge; edge++)
+	{
+		//closest point on the finite face: the plane projection when it lies
+		//inside the polygon, otherwise the closest point on its boundary.
+		//(clamping against each edge line in turn is not exact near corners.)
+		VectorMA(point, -dist, surf->plane->normal, onplane);
+		VectorCopy(onplane, edgepoint);
+		bestedge = -1;
+		for (e = surf->firstedge; e < surf->firstedge+surf->numedges; e++)
 		{
-			edge = model->surfedges[--e];
+			edge = model->surfedges[e];
 			if (edge < 0)
 			{
-				v1 = &model->vertexes[model->edges[-edge].v[0]];
-				v2 = &model->vertexes[model->edges[-edge].v[1]];
+				v1 = &model->vertexes[model->edges[-edge].v[1]];
+				v2 = &model->vertexes[model->edges[-edge].v[0]];
 			}
 			else
 			{
-				v2 = &model->vertexes[model->edges[edge].v[0]];
-				v1 = &model->vertexes[model->edges[edge].v[1]];
+				v1 = &model->vertexes[model->edges[edge].v[0]];
+				v2 = &model->vertexes[model->edges[edge].v[1]];
 			}
-			
-			VectorSubtract(v1->position, v2->position, edgedir);
-			CrossProduct(edgedir, surf->plane->normal, edgenormal);
-			if (!(surf->flags & SURF_PLANEBACK))
-			{
-				VectorSubtract(vec3_origin, edgenormal, edgenormal);
-			}
-			VectorNormalize(edgenormal);
 
-			dist = DotProduct(v1->position, edgenormal) - DotProduct(cpoint, edgenormal);
-			if (dist < 0)
-				VectorMA(cpoint, dist, edgenormal, cpoint);
+			//which side of this edge? winding-independent: only consistency matters
+			VectorSubtract(v2->position, v1->position, edgedir);
+			VectorSubtract(onplane, v1->position, rel);
+			CrossProduct(edgedir, rel, cross);
+			side = DotProduct(cross, surf->plane->normal);
+			if (side > 0)
+				pos = true;
+			else if (side < 0)
+				neg = true;
+
+			//closest point on this edge segment
+			len2 = DotProduct(edgedir, edgedir);
+			t = len2 > 0 ? DotProduct(rel, edgedir) / len2 : 0;
+			t = CLAMP(0.f, t, 1.f);
+			VectorMA(v1->position, t, edgedir, temp);
+			VectorSubtract(temp, onplane, rel);
+			edist = DotProduct(rel, rel);
+			if (bestedge < 0 || edist < bestedge)
+			{
+				bestedge = edist;
+				VectorCopy(temp, edgepoint);
+			}
 		}
+		//on both sides of some edges = outside the (convex) face
+		if (pos && neg)
+			VectorCopy(edgepoint, cpoint);
+		else
+			VectorCopy(onplane, cpoint);
 
 		VectorSubtract(cpoint, point, temp);
 		dist = DotProduct(temp, temp);
@@ -2559,7 +2586,7 @@ static void PF_getsurfacenearpoint(void)
 	if (!model || model->type != mod_brush || model->needload)
 		return;
 
-	bestdist = 256;
+	bestdist = 1e30f;	//squared distance; no search radius, as DP_QC_GETSURFACE's nearest-surface semantics expect
 
 	//all polies, we can skip parts. special case.
 	surf = model->surfaces + model->firstmodelsurface;
@@ -4097,6 +4124,8 @@ static void PF_buf_sort(void)
 		}
 		strings[d++] = strings[s++];
 	}
+	for (s = d; s < strbuflist[bufno].used; s++)
+		strings[s] = NULL;	//vacated slots would otherwise alias strings now held earlier
 	strbuflist[bufno].used = d;
 
 	//no nulls now, sort it.
