@@ -800,6 +800,58 @@ static FUNC_ALWAYSINLINE edict_t *SV_PushIter_Next (pushiter_t *it, int *out_e)
 SV_PushMove
 ============
 */
+/*
+pusher rollback scratch: SV_PushMove and SV_PushMoveAngles call the blocked QC
+function while their rollback records are live. that QC may precache or load
+models (Hunk_Alloc), so the records must not sit on the hunk, or freeing them
+back to a low mark would also discard the new map-lifetime data.
+*/
+static byte		*sv_pushscratch;
+static size_t	sv_pushscratch_size;
+static qboolean	sv_pushscratch_busy;
+
+static void *SV_PushScratch_Acquire (size_t size)
+{
+	void *p;
+
+	if (sv_pushscratch_busy)
+	{	//nested push from QC: give it its own block
+		p = malloc (size ? size : 1);
+		if (!p)
+			Sys_Error ("SV_PushScratch_Acquire: failed on %u bytes", (unsigned)size);
+		return p;
+	}
+	if (size > sv_pushscratch_size)
+	{
+		p = realloc (sv_pushscratch, size);
+		if (!p)
+			Sys_Error ("SV_PushScratch_Acquire: failed on %u bytes", (unsigned)size);
+		sv_pushscratch = (byte *) p;
+		sv_pushscratch_size = size;
+	}
+	sv_pushscratch_busy = true;
+	return sv_pushscratch;
+}
+
+/*
+a Host_Error inside a blocked callback longjmps past the Release, leaving the
+shared block marked busy (every later push would fall back to malloc). no push
+is ever in progress when a top-level SV_Physics starts, for the server or the
+client VM (QC cannot call SV_Physics), so it clears the flag there.
+*/
+static void SV_PushScratch_Reset (void)
+{
+	sv_pushscratch_busy = false;
+}
+
+static void SV_PushScratch_Release (void *p)
+{
+	if (p && p == (void *) sv_pushscratch)
+		sv_pushscratch_busy = false;
+	else
+		free (p);
+}
+
 static qboolean SV_PushMoveAngles (edict_t *pusher, float movetime, const vec3_t amove)
 {
 	int			i, e;
@@ -823,7 +875,9 @@ static qboolean SV_PushMoveAngles (edict_t *pusher, float movetime, const vec3_t
 	}
 
 	//using johnfitz's dynamic alloc strategy, consistent with SV_PushMove
-	pushed_p = pushed = Hunk_AllocNoFill (qcvm->num_edicts*sizeof(*pushed));
+	//sized for max_edicts: touch callbacks during the scan can spawn edicts, and the
+	//iterator follows num_edicts as it grows, so the starting count is not a bound
+	pushed_p = pushed = SV_PushScratch_Acquire (qcvm->max_edicts*sizeof(*pushed));
 
 	// find the bounding box
 	for (i=0 ; i<3 ; i++)
@@ -992,6 +1046,7 @@ static qboolean SV_PushMoveAngles (edict_t *pusher, float movetime, const vec3_t
 			VectorCopy (p->angles, p->ent->v.angles);
 			SV_LinkEdict (p->ent, false);
 		}
+		SV_PushScratch_Release (pushed);
 		return false;
 	}
 
@@ -1000,6 +1055,7 @@ static qboolean SV_PushMoveAngles (edict_t *pusher, float movetime, const vec3_t
 	for (p=pushed_p-1 ; p>=pushed ; p--)
 		SV_LinkEdict (p->ent, true);
 
+	SV_PushScratch_Release (pushed);
 	return true;
 }
 
@@ -1013,7 +1069,6 @@ void SV_PushMove (edict_t *pusher, float movetime)
 	int			num_moved;
 	edict_t		**moved_edict; //johnfitz -- dynamically allocate
 	vec3_t		*moved_from; //johnfitz -- dynamically allocate
-	int			mark; //johnfitz
 	float	solid_backup;
 
 	if ((pusher->v.avelocity[0] || pusher->v.avelocity[1] || pusher->v.avelocity[2]))
@@ -1024,11 +1079,9 @@ void SV_PushMove (edict_t *pusher, float movetime)
 			{	//spike -- added this block for proper rotations
 				vec3_t amove;
 
-				mark = Hunk_LowMark ();
 				VectorScale (pusher->v.avelocity, movetime, amove);
 				if (SV_PushMoveAngles (pusher, movetime, amove))
 					pusher->v.ltime += movetime;
-				Hunk_FreeToLowMark (mark);
 				return;
 			}
 
@@ -1074,10 +1127,10 @@ void SV_PushMove (edict_t *pusher, float movetime)
 	pusher->v.ltime += movetime;
 	SV_LinkEdict (pusher, false);
 
-	//johnfitz -- dynamically allocate
-	mark = Hunk_LowMark ();
-	moved_edict = (edict_t **) Hunk_AllocNoFill (qcvm->num_edicts*sizeof(edict_t *));
-	moved_from = (vec3_t *) Hunk_AllocNoFill (qcvm->num_edicts*sizeof(vec3_t));
+	//johnfitz -- dynamically allocate (off the hunk, see SV_PushScratch_Acquire)
+	//max_edicts, not num_edicts: see SV_PushMoveAngles
+	moved_edict = (edict_t **) SV_PushScratch_Acquire (qcvm->max_edicts*(sizeof(edict_t *) + sizeof(vec3_t)));
+	moved_from = (vec3_t *) (moved_edict + qcvm->max_edicts);
 	//johnfitz
 
 // see if any solid entities are inside the final position
@@ -1203,12 +1256,12 @@ void SV_PushMove (edict_t *pusher, float movetime)
 				VectorCopy (moved_from[i], moved_edict[i]->v.origin);
 				SV_LinkEdict (moved_edict[i], false);
 			}
-			Hunk_FreeToLowMark (mark); //johnfitz
+			SV_PushScratch_Release (moved_edict); //johnfitz
 			return;
 		}
 	}
 
-	Hunk_FreeToLowMark (mark); //johnfitz
+	SV_PushScratch_Release (moved_edict); //johnfitz
 
 }
 
@@ -1931,6 +1984,8 @@ void SV_Physics (double frametime)
 	eval_t *val;
 
 	int physics_mode;
+
+	SV_PushScratch_Reset ();
 	if (qcvm->extglobals.physics_mode)
 		physics_mode = *qcvm->extglobals.physics_mode;
 	else
