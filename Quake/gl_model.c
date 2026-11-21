@@ -39,6 +39,10 @@ void Mod_LoadMD5MeshModel (qmodel_t *mod, void *buffer);
 void Mod_LoadIQMModel (qmodel_t *mod, const void *buffer);
 static qmodel_t *Mod_LoadModel (qmodel_t *mod, qboolean crash);
 static void Q1BSPX_Reset (void);
+// woods #bsprealign -- a 4-byte-aligned copy of the bsp being loaded (freed after the load), and how far
+// the texture lump moved, so embedded texture source offsets still point into the file on disk
+static byte	*mod_bsp_realigned;
+static ptrdiff_t mod_texturelump_shift;
 
 static void Mod_Print (void);
 static int Mod_RetainSignature (void);
@@ -830,6 +834,9 @@ static qmodel_t *Mod_LoadModel (qmodel_t *mod, qboolean crash)
 	mod->retain_signature = Mod_RetainSignature ();
 	free (buf);
 	Q1BSPX_Reset ();
+	free (mod_bsp_realigned); // woods #bsprealign
+	mod_bsp_realigned = NULL;
+	mod_texturelump_shift = 0;
 
 	if (crash && mod->type == mod_ext_invalid)
 	{	//any of those formats for a world map will be screwed up.
@@ -970,6 +977,13 @@ typedef struct {
 } bspx_header_t;
 static char *bspxbase;
 static bspx_header_t *bspxheader;
+// woods #bsprealign -- aligned copies of misaligned bspx payloads, freed by Q1BSPX_Reset
+typedef struct bspx_alignedcopy_s {
+	struct bspx_alignedcopy_s *next;
+	int index;
+	void *data;
+} bspx_alignedcopy_t;
+static bspx_alignedcopy_t *bspxcopies;
 //supported lumps:
 //RGBLIGHTING (.lit)
 //LMSHIFT (.lit2)
@@ -992,8 +1006,34 @@ static void *Q1BSPX_FindLump(char *lumpname, int *lumpsize)
 	{
 		if (!strncmp(bspxheader->lumps[i].lumpname, lumpname, 24))
 		{
+			char *data = bspxbase + bspxheader->lumps[i].fileofs;
+			bspx_alignedcopy_t *copy;
 			*lumpsize = bspxheader->lumps[i].filelen;
-			return bspxbase + bspxheader->lumps[i].fileofs;
+			// woods #bsprealign -- callers read payloads like LMOFFSET/LMSTYLE16 through typed pointers,
+			// so hand back a 4-byte-aligned copy when the lump itself sits at a misaligned offset
+			if (!((uintptr_t)data & 3) || *lumpsize <= 0)
+				return data;
+			for (copy = bspxcopies; copy; copy = copy->next)
+				if (copy->index == i)
+					return copy->data;
+			copy = (bspx_alignedcopy_t *) malloc (sizeof(*copy));
+			if (!copy)
+			{
+				*lumpsize = 0;
+				return NULL;
+			}
+			copy->data = malloc ((size_t)*lumpsize);
+			if (!copy->data)
+			{
+				free (copy);
+				*lumpsize = 0;
+				return NULL;
+			}
+			memcpy (copy->data, data, (size_t)*lumpsize);
+			copy->index = i;
+			copy->next = bspxcopies;
+			bspxcopies = copy;
+			return copy->data;
 		}
 	}
 	return NULL;
@@ -1010,7 +1050,6 @@ static void Q1BSPX_Setup(qmodel_t *mod, char *filebase, size_t filelen, lump_t *
 	int i;
 	size_t offs = 0, headersize;
 	bspx_header_t *h;
-	qboolean misaligned = false;
 
 	bspxbase = filebase;
 	bspxheader = NULL;
@@ -1019,14 +1058,10 @@ static void Q1BSPX_Setup(qmodel_t *mod, char *filebase, size_t filelen, lump_t *
 	{
 		if (!lumps->filelen)
 			continue;
-		if ((lumps->fileofs & 3) && i != LUMP_ENTITIES)
-			misaligned = true;
 		/* The ordinary BSP lumps are validated before this function is called. */
 		if (offs < (size_t)lumps->fileofs + (size_t)lumps->filelen)
 			offs = (size_t)lumps->fileofs + (size_t)lumps->filelen;
 	}
-	if (misaligned)
-		Con_DWarning("%s contains misaligned lumps\n", mod->name);
 	if (offs > SIZE_MAX - 3)
 		return;
 	offs = (offs + 3) & ~(size_t)3;
@@ -1060,6 +1095,13 @@ static void Q1BSPX_Setup(qmodel_t *mod, char *filebase, size_t filelen, lump_t *
 
 static void Q1BSPX_Reset (void)
 {
+	while (bspxcopies) // woods #bsprealign
+	{
+		bspx_alignedcopy_t *next = bspxcopies->next;
+		free (bspxcopies->data);
+		free (bspxcopies);
+		bspxcopies = next;
+	}
 	bspxbase = NULL;
 	bspxheader = NULL;
 }
@@ -2402,7 +2444,7 @@ static void Mod_LoadTextures (lump_t *l)
 			continue;
 		loadmodel->textures[i] = tx;
 		if (tx->source_offset)
-			tx->source_offset += (uintptr_t)((byte *)mt - mod_base);
+			tx->source_offset += (uintptr_t)((byte *)mt - mod_base) + mod_texturelump_shift; // woods #bsprealign
 
 		if (!tx->name[0]) // woods (aerowalk.bsp)
 		{
@@ -4354,6 +4396,84 @@ static qboolean Mod_BSPLumpValid (size_t filesize, const lump_t *lump, size_t it
 	return true;
 }
 
+/*
+=================
+Mod_RealignBSPLumps -- woods #bsprealign (fteqw concept)
+
+Pre-phong tyrutils (and some other compilers) wrote lumps at offsets that are not a
+multiple of 4. The loaders read lumps through typed pointers, which is undefined
+behaviour on a misaligned address, so copy every lump of an already byte-swapped
+header into a fresh malloc'd buffer at 4-byte-aligned offsets and rewrite fileofs.
+
+Unlike fte this never packs in place: overlapping source lumps are copied out
+separately, so the size is computed from the padded lengths rather than the file size.
+
+Returns NULL with *failed false when nothing is misaligned, NULL with *failed true
+when a lump is out of range or the realigned layout would overflow, and otherwise a
+new buffer (caller frees) that starts with a copy of the header holding the new
+offsets. The input buffer is not modified.
+=================
+*/
+static byte *Mod_RealignBSPLumps (const byte *buffer, size_t filesize, const dheader_t *header, qboolean *failed)
+{
+	size_t	size, ofs;
+	byte	*out;
+	dheader_t *outheader;
+	int		i;
+	qboolean misaligned = false;
+
+	*failed = false;
+	for (i = 0; i < HEADER_LUMPS; i++)
+	{
+		// byte-only lumps are safe anywhere; only lumps read as shorts/ints/floats force a copy
+		if (i == LUMP_ENTITIES || i == LUMP_LIGHTING || i == LUMP_VISIBILITY)
+			continue;
+		if (header->lumps[i].filelen && (header->lumps[i].fileofs & 3))
+			misaligned = true;
+	}
+	if (!misaligned)
+		return NULL;
+
+	size = sizeof(dheader_t);
+	for (i = 0; i < HEADER_LUMPS; i++)
+	{
+		size_t len;
+		if (!Mod_BSPLumpValid (filesize, &header->lumps[i], 0, NULL))
+		{
+			*failed = true;
+			return NULL;
+		}
+		len = ((size_t)header->lumps[i].filelen + 3) & ~(size_t)3;
+		if (len > (size_t)INT_MAX - size)
+		{
+			*failed = true;
+			return NULL;
+		}
+		size += len;
+	}
+
+	out = (byte *) malloc (size);
+	if (!out)
+	{
+		*failed = true;
+		return NULL;
+	}
+
+	outheader = (dheader_t *)out;
+	memcpy (outheader, header, sizeof(dheader_t));
+	ofs = sizeof(dheader_t);
+	for (i = 0; i < HEADER_LUMPS; i++)
+	{
+		size_t len = (size_t)header->lumps[i].filelen;
+		memcpy (out + ofs, buffer + header->lumps[i].fileofs, len);
+		memset (out + ofs + len, 0, ((len + 3) & ~(size_t)3) - len);
+		outheader->lumps[i].fileofs = (int)ofs;
+		ofs += (len + 3) & ~(size_t)3;
+	}
+
+	return out;
+}
+
 static qboolean Mod_BSPTextureName (const byte *modbase, const lump_t *textures_lump, const texinfo_t *info, char name[17])
 {
 	const dmiptexlump_t *miptex_lump;
@@ -4553,6 +4673,20 @@ qboolean Mod_CalcBSPFileSurfaceAreas (const char *path, map_surface_areas_t *are
 		goto done;
 	if (header.lumps[LUMP_TEXTURES].filelen && !Mod_BSPLumpValid(filesize, &header.lumps[LUMP_TEXTURES], 0, NULL))
 		goto done;
+
+	// woods #bsprealign -- same aligned copy as Mod_LoadBrushModel, for the typed reads below
+	{
+		qboolean failed;
+		byte *realigned = Mod_RealignBSPLumps(buffer, filesize, &header, &failed);
+		if (failed)
+			goto done;
+		if (realigned)
+		{
+			free(buffer);
+			buffer = realigned;
+			memcpy(&header, buffer, sizeof(header));
+		}
+	}
 
 	models = (const dmodelq1_t *)(buffer + header.lumps[LUMP_MODELS].fileofs);
 	planes = (const dplane_t *)(buffer + header.lumps[LUMP_PLANES].fileofs);
@@ -5467,6 +5601,31 @@ static void Mod_LoadBrushModel (qmodel_t *mod, void *buffer)
 		}
 	}
 
+	// woods #bsprealign -- move misaligned lumps to aligned offsets before the preflight or any
+	// loader reads them through typed pointers. bspx is still located against the original
+	// layout, since its header sits after the last original lump.
+	mod_texturelump_shift = 0;
+	{
+		qboolean failed;
+		byte *realigned = Mod_RealignBSPLumps ((const byte *)buffer, filesize, header, &failed);
+		if (failed)
+		{
+			loadmodel->type = mod_ext_invalid;
+			Con_Warning ("Mod_LoadBrushModel: %s has misaligned lumps that could not be realigned\n", mod->name);
+			return;
+		}
+		if (realigned)
+		{
+			Con_DWarning ("%s contains misaligned lumps, realigned\n", mod->name);
+			free (mod_bsp_realigned);
+			mod_bsp_realigned = realigned;
+			header = (dheader_t *)realigned;
+			mod_base = realigned;
+			mod_texturelump_shift = (ptrdiff_t)((dheader_t *)buffer)->lumps[LUMP_TEXTURES].fileofs -
+				(ptrdiff_t)header->lumps[LUMP_TEXTURES].fileofs;
+		}
+	}
+
 	// woods #bsppreflight -- these are present in every real bsp, and a zero-length one leaves the
 	// hull/bounds setup at the end of this function with nothing to fill it in
 	{
@@ -5494,7 +5653,7 @@ static void Mod_LoadBrushModel (qmodel_t *mod, void *buffer)
 		}
 	}
 
-	Q1BSPX_Setup(mod, buffer, filesize, header->lumps, HEADER_LUMPS);
+	Q1BSPX_Setup(mod, buffer, filesize, ((dheader_t *)buffer)->lumps, HEADER_LUMPS); // woods #bsprealign -- original buffer + layout
 
 // load into heap
 
