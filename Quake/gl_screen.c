@@ -5156,128 +5156,20 @@ void SCR_DrawCrosshair (void)
 
 /*
 ================
-Auto-ID BSP submodel blocker cache
+SCR_AutoIDBModelCanBlock -- sight test for name, timer and x-ray overlays
+
+Any drawn inline brush blocks the view unless it is currently translucent,
+so names read through glass while opaque doors, walls and lifts hide them.
+Unset alpha decodes to 1, so ordinary brushes stay opaque. Impact traces
+(particles, decals, laser sight) do not use this and keep glass solid.
 ================
 */
-static qmodel_t *scr_autoid_bmodel_worldmodel;
-static byte *scr_autoid_bmodel_blockers;
-static int scr_autoid_bmodel_blocker_count;
-
-static void SCR_ClearAutoIDBModelBlockers (void)
-{
-	free (scr_autoid_bmodel_blockers);
-	scr_autoid_bmodel_blockers = NULL;
-	scr_autoid_bmodel_blocker_count = 0;
-	scr_autoid_bmodel_worldmodel = NULL;
-}
-
-static qboolean SCR_AutoIDBModelClassBlocks (const char *classname)
-{
-	if (!classname || !classname[0])
-		return false;
-
-	return q_strcasestr(classname, "door") != NULL;
-}
-
-static void SCR_MarkAutoIDBModelBlocker (const char *modelname)
-{
-	int submodel;
-
-	if (!modelname || modelname[0] != '*' || !scr_autoid_bmodel_blockers)
-		return;
-
-	submodel = Q_atoi(modelname + 1);
-	if (submodel <= 0 || submodel >= scr_autoid_bmodel_blocker_count)
-		return;
-
-	scr_autoid_bmodel_blockers[submodel >> 3] |= (byte)(1u << (submodel & 7));
-}
-
-static void SCR_BuildAutoIDBModelBlockers (void)
-{
-	const char *data;
-	int bytes;
-	qboolean parse_failed;
-
-	if (scr_autoid_bmodel_worldmodel == cl.worldmodel)
-		return;
-
-	SCR_ClearAutoIDBModelBlockers();
-	scr_autoid_bmodel_worldmodel = cl.worldmodel;
-
-	if (!cl.worldmodel || cl.worldmodel->numsubmodels <= 1 || !cl.worldmodel->entities)
-		return;
-
-	scr_autoid_bmodel_blocker_count = cl.worldmodel->numsubmodels;
-	bytes = (scr_autoid_bmodel_blocker_count + 7) >> 3;
-	scr_autoid_bmodel_blockers = (byte *)calloc(1, (size_t)bytes);
-	if (!scr_autoid_bmodel_blockers)
-		return;
-
-	data = cl.worldmodel->entities;
-	parse_failed = false;
-	while ((data = COM_Parse(data)) != NULL)
-	{
-		char classname[128], modelname[64];
-
-		if (com_token[0] != '{')
-			break;
-
-		classname[0] = 0;
-		modelname[0] = 0;
-		while (1)
-		{
-			char key[128];
-
-			data = COM_Parse(data);
-			if (!data)
-			{
-				parse_failed = true;
-				break;
-			}
-			if (com_token[0] == '}')
-				break;
-
-			q_strlcpy(key, com_token, sizeof(key));
-			data = COM_ParseEx(data, CPE_ALLOWTRUNC);
-			if (!data)
-			{
-				parse_failed = true;
-				break;
-			}
-
-			if (!q_strcasecmp(key, "classname"))
-				q_strlcpy(classname, com_token, sizeof(classname));
-			else if (!q_strcasecmp(key, "model"))
-				q_strlcpy(modelname, com_token, sizeof(modelname));
-		}
-
-		if (parse_failed)
-			break;
-		if (SCR_AutoIDBModelClassBlocks(classname))
-			SCR_MarkAutoIDBModelBlocker(modelname);
-	}
-}
-
-static qboolean SCR_AutoIDBModelMarked (const qmodel_t *model)
-{
-	unsigned int submodel;
-
-	SCR_BuildAutoIDBModelBlockers();
-
-	if (!model || model->submodelof != cl.worldmodel || !scr_autoid_bmodel_blockers)
-		return false;
-
-	submodel = model->submodelidx;
-	if (submodel >= (unsigned int)scr_autoid_bmodel_blocker_count)
-		return false;
-
-	return (scr_autoid_bmodel_blockers[submodel >> 3] & (1u << (submodel & 7))) != 0;
-}
-
 static qboolean SCR_AutoIDBModelCanBlock (const entity_t *ent)
 {
-	return SCR_AutoIDBModelMarked(ent->model);
+	if (!ent->model || ent->model->submodelof != cl.worldmodel || ent->model->nummodelsurfaces <= 0)
+		return false;
+
+	return ENTALPHA_DECODE(ent->alpha) >= 1.0f;
 }
 
 /*
