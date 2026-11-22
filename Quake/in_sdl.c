@@ -6662,6 +6662,28 @@ static qboolean IN_FinishDropBatch(void)
 	return handled;
 }
 
+/* #idledisconnect: events that mean a person is at the keyboard. Gamepad
+ * axes need real deflection so stick drift does not keep a player "active". */
+static qboolean IN_IsUserInputEvent (const SDL_Event *event)
+{
+	switch (event->type)
+	{
+	case SDL_EVENT_KEY_DOWN:
+	case SDL_EVENT_TEXT_INPUT:
+	case SDL_EVENT_MOUSE_BUTTON_DOWN:
+	case SDL_EVENT_MOUSE_WHEEL:
+	case SDL_EVENT_MOUSE_MOTION:
+	case SDL_EVENT_GAMEPAD_BUTTON_DOWN:
+	case SDL_EVENT_JOYSTICK_BUTTON_DOWN:
+	case SDL_EVENT_GAMEPAD_TOUCHPAD_DOWN:
+		return true;
+	case SDL_EVENT_GAMEPAD_AXIS_MOTION:
+		return event->gaxis.value > 16000 || event->gaxis.value < -16000;
+	default:
+		return false;
+	}
+}
+
 void IN_SendKeyEvents (void)
 {
 	SDL_Event event;
@@ -6711,6 +6733,9 @@ void IN_SendKeyEvents (void)
 
 	while (SDL_PollEvent(&event))
 	{
+		if (IN_IsUserInputEvent(&event)) // #idledisconnect
+			CL_NoteUserInput ();
+
 		switch (event.type)
 		{
 		case SDL_EVENT_DISPLAY_ADDED:

@@ -90,6 +90,94 @@ cvar_t	cl_chatmode = {"cl_chatmode","0", CVAR_ARCHIVE}; // woods #ezsay
 cvar_t	cl_announce_transfer = {"cl_announce_transfer", "0", CVAR_ARCHIVE};
 cvar_t  cl_afk = {"cl_afk", "0", CVAR_ARCHIVE }; // woods #smartafk
 cvar_t  cl_idle = {"cl_idle", "0", CVAR_NONE }; // woods #smartafk
+cvar_t  cl_idledisconnect = {"cl_idledisconnect", "0", CVAR_ARCHIVE }; // #idledisconnect minutes without input before disconnecting, 0 = off
+
+/*
+=====================
+#idledisconnect
+
+Leaves a remote server after cl_idledisconnect minutes with no keyboard, mouse
+or gamepad input. The timer only runs while fully signed on as a player on a
+server we are not hosting: demos, observers and listen/local games never count,
+and becoming ineligible restarts the countdown.
+=====================
+*/
+#define CL_IDLEDISCONNECT_WARN	30.0	// seconds of warning before the disconnect
+
+static double	cl_idle_lastinput;	// realtime of the most recent user input
+static double	cl_idle_since;		// start of the current eligible idle stretch
+static qboolean	cl_idle_warned;
+static qboolean	cl_idle_disconnected;	// left because of idling; holds off cl_idle until input returns
+
+void CL_NoteUserInput (void)
+{
+	cl_idle_lastinput = realtime;
+	cl_idle_disconnected = false;
+}
+
+qboolean CL_IdleDisconnectPending (void)
+{
+	return cl_idle_disconnected;
+}
+
+static qboolean CL_IdleDisconnectEligible (void)
+{
+	int slot;
+
+	if (cl_idledisconnect.value <= 0)
+		return false;
+	if (cls.state != ca_connected || cls.signon != SIGNONS)
+		return false;
+	if (cls.demoplayback || cls.timedemo || sv.active)
+		return false;
+	if (cl.eyecam || cl.observer[0] == 'y')
+		return false;
+
+	slot = (cl.realviewentity ? cl.realviewentity : cl.viewentity) - 1;
+	if (slot >= 0 && slot < cl.maxclients && cl.scores && cl.scores[slot].spectator)
+		return false;
+
+	return true;
+}
+
+void CL_IdleDisconnect_Frame (void)
+{
+	double timeout, idle, warnlead;
+
+	if (!CL_IdleDisconnectEligible ())
+	{
+		cl_idle_since = realtime;
+		cl_idle_warned = false;
+		return;
+	}
+
+	if (cl_idle_lastinput > cl_idle_since)
+	{
+		cl_idle_since = cl_idle_lastinput;
+		cl_idle_warned = false;
+	}
+
+	timeout = cl_idledisconnect.value * 60.0;
+	idle = realtime - cl_idle_since;
+	warnlead = q_min (CL_IDLEDISCONNECT_WARN, timeout * 0.5);
+
+	if (!cl_idle_warned && idle >= timeout - warnlead)
+	{
+		cl_idle_warned = true;
+		SCR_CenterPrint (va ("idle: disconnecting in %d seconds\nmove or press a key to stay", (int)ceil (timeout - idle)));
+		Con_Printf ("idle: disconnecting in %d seconds unless there is input (cl_idledisconnect)\n", (int)ceil (timeout - idle));
+	}
+
+	if (idle >= timeout)
+	{
+		Con_Printf ("\nidle for %s: disconnecting (cl_idledisconnect)\n\n",
+			va ("%g %s", cl_idledisconnect.value, cl_idledisconnect.value == 1 ? "minute" : "minutes"));
+		cl_idle_disconnected = true;
+		cl_idle_since = realtime;
+		cl_idle_warned = false;
+		Cbuf_AddText ("disconnect\n");
+	}
+}
 cvar_t  r_rocketlight = {"r_rocketlight", "0", CVAR_ARCHIVE }; // woods #rocketlight
 cvar_t  r_explosionlight = {"r_explosionlight", "0", CVAR_ARCHIVE}; // woods #explosionlight
 cvar_t  cl_muzzleflash = {"cl_muzzleflash", "0", CVAR_ARCHIVE}; // woods #muzzleflash
@@ -8190,6 +8278,7 @@ void CL_Init (void)
 	Cvar_SetCompletion (&cl_chatmode, &CL_ChatMode_Completion_f);
 	Cvar_RegisterVariable (&cl_afk); // woods #smartafk
 	Cvar_RegisterVariable (&cl_idle); // woods #smartafk
+	Cvar_RegisterVariable (&cl_idledisconnect); // #idledisconnect
 	Cvar_RegisterVariable (&r_rocketlight); // woods #rocketlight
 	Cvar_RegisterVariable (&r_explosionlight); // woods #explosionlight
 	Cvar_RegisterVariable (&cl_muzzleflash); // woods #muzzleflash

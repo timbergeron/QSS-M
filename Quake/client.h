@@ -584,6 +584,10 @@ extern	cvar_t	gl_lightning_alpha; // woods transparent lightning #lightalpha
 extern	cvar_t	cl_chatmode; // woods #ezsay
 extern	cvar_t	cl_afk; // woods #smartafk
 extern  cvar_t	cl_idle;  // woods #damage
+extern  cvar_t	cl_idledisconnect; // #idledisconnect
+void CL_NoteUserInput (void);
+qboolean CL_IdleDisconnectPending (void);
+void CL_IdleDisconnect_Frame (void);
 extern  cvar_t	cl_smartspawn; // woods #spawntrainer
 extern  cvar_t	r_explosionlight; // woods #explosionlight
 extern  cvar_t	cl_autovote; // woods #autovote

@@ -188,7 +188,9 @@ int QSSM_Main(int argc, char *argv[])
 			scr_skipupdate = 0;
 		}
 
-		if (cl_idle.value > 0 && cls.state == ca_disconnected) // woods #idle
+		CL_IdleDisconnect_Frame (); // #idledisconnect
+
+		if (cl_idle.value > 0 && cls.state == ca_disconnected && !CL_IdleDisconnectPending ()) // woods #idle #idledisconnect
 		{
 			Uint64 currentTime = SDL_GetTicks();
 			int clampedValue = CLAMP(1, cl_idle.value, 60); // don't spam servers
