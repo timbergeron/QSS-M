@@ -58,6 +58,7 @@ static float R_GrassMovement (void);
 static float R_GrassGustScale (void);
 static qboolean R_TextureUsesSurfaceGrass (const texture_t *t);
 static void R_SetGrassColorUniforms (const texture_t *t);
+static float R_GrassWeatherNoise (float x, float y, unsigned int salt);
 static qboolean R_GrassEntityAllowsGrass (const entity_t *ent);
 static void R_DrawGrassBlades (qmodel_t *model, entity_t *ent, texchain_t chain);
 static qboolean R_GrassSurfaceCanHaveBlades (const msurface_t *s);
@@ -2549,21 +2550,60 @@ static float R_GrassBitsToFloat (unsigned int x)
 	return (x & 0x00ffffffU) * (1.0f / 16777215.0f);
 }
 
-static void R_GrassApplyBladeColorVariation (unsigned int colorbits, const vec3_t basein, const vec3_t tipin, vec3_t baseout, vec3_t tipout)
+// woods #grass -- per-blade colour: fine per-blade jitter, a slow world-space patch
+// tint so the field clumps into lusher and yellower areas, and a sprinkle of dry
+// straw blades (more of them in the yellow patches). Colours stay relative to the
+// texture's grass colour so tinted grass textures keep their hue.
+static void R_GrassApplyBladeColorVariation (unsigned int colorbits, const vec3_t pos, const vec3_t basein, const vec3_t tipin, vec3_t baseout, vec3_t tipout)
 {
-	float warm, dry, bright, tipboost;
+	float warm, dry, bright, tipboost, patch, drychance, dryamount, lum;
+	unsigned int drybits;
+	int i;
 
 	warm = (float)(colorbits & 0xffU) * (1.0f / 255.0f) - 0.5f;
 	dry = (float)((colorbits >> 8) & 0xffU) * (1.0f / 255.0f) - 0.5f;
 	bright = 0.88f + (float)((colorbits >> 16) & 0xffU) * (0.24f / 255.0f);
 	tipboost = 0.92f + (float)((colorbits >> 24) & 0xffU) * (0.16f / 255.0f);
 
-	baseout[0] = basein[0] * CLAMP(0.78f, bright * (1.0f + warm * 0.10f + dry * 0.06f), 1.22f);
-	baseout[1] = basein[1] * CLAMP(0.78f, bright * (1.0f - dry * 0.05f), 1.22f);
-	baseout[2] = basein[2] * CLAMP(0.78f, bright * (1.0f - warm * 0.08f - dry * 0.06f), 1.22f);
-	tipout[0] = tipin[0] * CLAMP(0.80f, bright * tipboost * (1.0f + warm * 0.12f + dry * 0.08f), 1.25f);
-	tipout[1] = tipin[1] * CLAMP(0.80f, bright * tipboost * (1.0f - dry * 0.04f), 1.25f);
-	tipout[2] = tipin[2] * CLAMP(0.80f, bright * tipboost * (1.0f - warm * 0.10f - dry * 0.08f), 1.25f);
+	// -1 = lush, +1 = sun-dried; two octaves so patch edges aren't blobby
+	patch = 0.7f * R_GrassWeatherNoise(pos[0] * (1.0f / 160.0f), pos[1] * (1.0f / 160.0f), 211U);
+	patch += 0.3f * R_GrassWeatherNoise(pos[0] * (1.0f / 48.0f), pos[1] * (1.0f / 48.0f), 223U);
+	patch = CLAMP(-1.0f, (patch - 0.5f) * 2.6f, 1.0f);
+	warm += patch * 0.45f;
+	dry += patch * 0.35f;
+	bright *= 1.0f - patch * 0.05f;
+
+	baseout[0] = basein[0] * CLAMP(0.70f, bright * (1.0f + warm * 0.22f + dry * 0.14f), 1.35f);
+	baseout[1] = basein[1] * CLAMP(0.78f, bright * (1.0f - dry * 0.06f), 1.22f);
+	baseout[2] = basein[2] * CLAMP(0.65f, bright * (1.0f - warm * 0.18f - dry * 0.12f), 1.30f);
+	tipout[0] = tipin[0] * CLAMP(0.70f, bright * tipboost * (1.0f + warm * 0.30f + dry * 0.20f), 1.45f);
+	tipout[1] = tipin[1] * CLAMP(0.80f, bright * tipboost * (1.0f - dry * 0.05f), 1.25f);
+	tipout[2] = tipin[2] * CLAMP(0.65f, bright * tipboost * (1.0f - warm * 0.22f - dry * 0.16f), 1.35f);
+
+	// dead/dry blades: blend toward luminance-matched straw, mostly at the tip
+	drybits = R_GrassHashUInt(colorbits ^ 0x9e3779b9U);
+	drychance = 0.04f + 0.08f * q_max(patch, 0.0f);
+	if (R_GrassBitsToFloat(drybits) < drychance)
+	{
+		dryamount = 0.45f + (float)(drybits >> 24) * (0.45f / 255.0f);
+
+		lum = tipout[0] * 0.30f + tipout[1] * 0.59f + tipout[2] * 0.11f;
+		tipout[0] += (lum * 1.50f - tipout[0]) * dryamount;
+		tipout[1] += (lum * 1.22f - tipout[1]) * dryamount;
+		tipout[2] += (lum * 0.48f - tipout[2]) * dryamount;
+
+		lum = baseout[0] * 0.30f + baseout[1] * 0.59f + baseout[2] * 0.11f;
+		dryamount *= 0.55f;
+		baseout[0] += (lum * 1.35f - baseout[0]) * dryamount;
+		baseout[1] += (lum * 1.12f - baseout[1]) * dryamount;
+		baseout[2] += (lum * 0.55f - baseout[2]) * dryamount;
+	}
+
+	for (i = 0; i < 3; i++)
+	{
+		baseout[i] = q_max(baseout[i], 0.0f);
+		tipout[i] = q_max(tipout[i], 0.0f);
+	}
 }
 
 static void R_TextureGrassBladeColors (const texture_t *t, vec3_t base, vec3_t tip)
@@ -4461,7 +4501,7 @@ static qboolean R_GrassEnsureSurfaceShaderVBO (qmodel_t *model, const msurface_t
 		curl = curlrand > 0.90f ? 0.45f + (curlrand - 0.90f) * (0.55f / 0.10f) : 0.0f;
 
 		R_GrassLightForPointCached(model, s, &nodlights, blade->pos, false, lightcacheptr, light);
-		R_GrassApplyBladeColorVariation(blade->colorbits, basecolor, tipcolor, variedbasecolor, variedtipcolor);
+		R_GrassApplyBladeColorVariation(blade->colorbits, blade->pos, basecolor, tipcolor, variedbasecolor, variedtipcolor);
 		for (colorindex = 0; colorindex < 3; colorindex++)
 		{
 			litbasecolor[colorindex] = variedbasecolor[colorindex] * light[colorindex] * shade;
@@ -4675,7 +4715,7 @@ static void R_DrawGrassSurfaceBlades (qmodel_t *model, const entity_t *ent, cons
 		curl = curlrand > 0.90f ? 0.45f + (curlrand - 0.90f) * (0.55f / 0.10f) : 0.0f;
 
 		R_GrassLightForPointCached(model, s, &dlights, blade->pos, cheaplight, lightcacheptr, light);
-		R_GrassApplyBladeColorVariation(blade->colorbits, basecolor, tipcolor, variedbasecolor, variedtipcolor);
+		R_GrassApplyBladeColorVariation(blade->colorbits, blade->pos, basecolor, tipcolor, variedbasecolor, variedtipcolor);
 		for (colorindex = 0; colorindex < 3; colorindex++)
 		{
 			litbasecolor[colorindex] = variedbasecolor[colorindex] * light[colorindex];
