@@ -1005,6 +1005,19 @@ qboolean VID_IsMinimized (void)
 }
 
 /*
+====================
+VID_IsOccluded -- #idlefps
+
+True when the window is fully covered by other windows or sits on another
+Space, so nothing drawn would be seen.
+====================
+*/
+qboolean VID_IsOccluded (void)
+{
+	return (SDL_GetWindowFlags(draw_context) & SDL_WINDOW_OCCLUDED) != 0;
+}
+
+/*
 ================
 VID_GetDisplayModeForDisplay
 

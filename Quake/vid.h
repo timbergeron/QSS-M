@@ -101,6 +101,7 @@ void *VID_GetWindow (void);
 qboolean VID_HasMouseOrInputFocus (void);
 qboolean VID_HasInputFocus (void);
 qboolean VID_IsMinimized (void);
+qboolean VID_IsOccluded (void); // #idlefps
 int VID_GetCurrentWidth (void);
 int VID_GetCurrentHeight (void);
 int VID_GetCurrentRefreshRate (void);

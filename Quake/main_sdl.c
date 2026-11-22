@@ -171,9 +171,10 @@ int QSSM_Main(int argc, char *argv[])
 	else
 	while (1)
 	{
-		/* Unfocused, minimised, paused and idle frames are capped by cl_idlefps
-		   inside Host_FrameInterval (#idlefps); minimised windows also skip drawing. */
-		scr_skipupdate = (!listening && VID_IsMinimized()) ? 1 : 0; // woods #listens
+		/* Unfocused, minimised, covered, paused and idle frames are capped by
+		   cl_idlefps inside Host_FrameInterval (#idlefps); minimised or fully
+		   covered windows also skip drawing, since nothing would be seen. */
+		scr_skipupdate = (!listening && (VID_IsMinimized() || VID_IsOccluded())) ? 1 : 0; // woods #listens #idlefps
 
 		CL_IdleDisconnect_Frame (); // #idledisconnect
 

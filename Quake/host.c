@@ -1615,15 +1615,16 @@ qboolean Host_LocalSignon (void)
 Host_IdleFrameInterval -- #idlefps
 
 Minimum frame interval while nobody is playing: the window has no keyboard
-focus or is minimized, the game is paused, or the player has left a focused
-window untouched for a while outside of a live game. Returns 0 when the cap
+focus, is minimized or fully covered, the game is paused, or a focused window
+has been left untouched for a while while disconnected, paused or in a menu
+(including a menu over a live game). Returns 0 when the cap
 does not apply. Hosting a multiplayer game, signing on (which carries content
 downloads) and timedemos always run at full rate, since slowing the loop there
 slows the server tick or the download for everyone involved.
 ===================
 */
 #define HOST_IDLE_INPUT_TIMEOUT	10.0	// seconds without input before a focused window counts as idle
-#define HOST_IDLE_MINIMIZED_FPS	20.f	// nothing is drawn while minimized, so go lower still
+#define HOST_IDLE_MINIMIZED_FPS	20.f	// nothing is drawn while minimized or covered, so go lower still
 
 extern qboolean listening; // woods #listens
 
@@ -1641,9 +1642,9 @@ double Host_IdleFrameInterval (void)
 	if (CL_DemoSeekActive ())
 		return 0;
 
-	minimized = VID_IsMinimized ();
+	minimized = VID_IsMinimized () || VID_IsOccluded ();
 	idle = minimized || !VID_HasInputFocus () || (cl.paused && !Pong_Enabled ());
-	if (!idle && (cls.state == ca_disconnected || cl.paused) && !cls.demoplayback)
+	if (!idle && (cls.state == ca_disconnected || cl.paused || key_dest == key_menu) && !cls.demoplayback)
 		idle = realtime - CL_LastUserInputTime () >= HOST_IDLE_INPUT_TIMEOUT;
 	if (!idle)
 		return 0;
