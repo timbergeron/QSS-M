@@ -35,7 +35,6 @@ extern cvar_t r_nooutline_list; // woods #routline
 extern cvar_t r_player_xray; // woods #routline
 
 extern qboolean nameInList(const char* list, const char* name); // woods #desat #routline
-extern qboolean TP_IsPlayerVisible(vec3_t origin); // woods #routline
 extern qboolean IsOneVsOneMatch(void); // woods #routline
 extern void R_GetEntityBounds(const entity_t *e, vec3_t mins, vec3_t maxs); // woods #routline
 void Matrix3x4_RM_Transform4(const float* matrix, const float* vector, float* product); // woods #routline
@@ -174,6 +173,7 @@ typedef struct
 	GLint colorTintLoc;
 	GLint outlineWidthLoc; // woods #routline
 	GLint isOutlinePassLoc; // woods #routline
+	GLint xrayPullLoc; // woods #routline -- non-instanced programs only
 	GLint outlineColorLoc; // woods #routline
 	GLint shellTexLoc; // woods #powershell
 	GLint useShellTexLoc; // woods #powershell
@@ -342,6 +342,9 @@ void GLAlias_CreateShaders (void)
 		"#endif\n"
 		"uniform float outlineWidth; // Amount to expand vertices\n" // woods #routline
 		"uniform int isOutlinePass; // Indicates if this is the outline pass\n" // woods #routline
+		"#ifndef INSTANCED\n"
+		"uniform float xrayPull; // world units to slide each vertex toward the eye\n" // woods #routline
+		"#endif\n"
 		"attribute vec4 TexCoords; // only xy are used \n"
 		"attribute vec4 Pose1Vert;\n"
 		"attribute vec3 Pose1Normal;\n"
@@ -459,7 +462,23 @@ void GLAlias_CreateShaders (void)
 		"	mat4 InstanceMatrix = mat4(InstMat0, InstMat1, InstMat2, InstMat3);\n"
 		"	gl_Position = gl_ModelViewProjectionMatrix * InstanceMatrix * lerpedVert;\n"
 		"#else\n"
-		"	gl_Position = gl_ModelViewProjectionMatrix * lerpedVert;\n"
+		"	if (xrayPull > 0.0)\n" // woods #routline
+		"	{\n"
+		"		// Slide along the view ray: same screen position, nearer depth, so\n"
+		"		// a pixel only counts as hidden behind clearly nearer geometry.\n"
+		"		// The outline extrusion is in mesh units; measure it in eye space\n"
+		"		// so the margin always covers it, whatever the model's scale.\n"
+		"		vec4 eyePos = gl_ModelViewMatrix * lerpedVert;\n"
+		"		float pull = xrayPull;\n"
+		"		if (isOutlinePass == 1 && outlineWidth > 0.0)\n"
+		"			pull += length((gl_ModelViewMatrix * vec4(lerpedNormal * outlineWidth, 0.0)).xyz);\n"
+		"		float eyeDist = length(eyePos.xyz);\n"
+		"		if (eyeDist > 0.0)\n"
+		"			eyePos.xyz -= eyePos.xyz * (min(pull, 0.5 * eyeDist) / eyeDist);\n"
+		"		gl_Position = gl_ProjectionMatrix * eyePos;\n"
+		"	}\n"
+		"	else\n"
+		"		gl_Position = gl_ModelViewProjectionMatrix * lerpedVert;\n"
 		"#endif\n"
 		"	FogFragCoord = gl_Position.w;\n"
 		"	gl_FrontColor = AliasLightColor * vec4(vec3(dot1), 1.0);\n"
@@ -636,6 +655,7 @@ void GLAlias_CreateShaders (void)
 
 			glsl->outlineWidthLoc = GL_GetUniformLocation (&glsl->program, "outlineWidth"); // woods #routline
 			glsl->isOutlinePassLoc = GL_GetUniformLocation (&glsl->program, "isOutlinePass"); // woods #routline
+			glsl->xrayPullLoc = GL_GetUniformLocation (&glsl->program, "xrayPull"); // woods #routline
 			glsl->outlineColorLoc = GL_GetUniformLocation (&glsl->program, "outlineColor"); // woods #routline
 
 			// woods #powershell
@@ -658,6 +678,7 @@ void GLAlias_CreateShaders (void)
 			GL_Uniform1iFunc (glsl->upperTexLoc, ALIAS_UPPER_TEXTURE_UNIT_INDEX);
 			GL_Uniform1fFunc (glsl->outlineWidthLoc, 0.0f); // woods #routline
 			GL_Uniform1iFunc (glsl->isOutlinePassLoc, 0); // woods #routline
+			GL_Uniform1fFunc (glsl->xrayPullLoc, 0.0f); // woods #routline
 			GL_Uniform1iFunc (glsl->shellTexLoc, ALIAS_UPPER_TEXTURE_UNIT_INDEX);  // woods #powershell
 			GL_Uniform1iFunc(glsl->shellModeLoc, 0);  // woods #powershell
 			GL_Uniform1fFunc(glsl->shellTimeLoc, 0.0f);  // woods #powershell
@@ -690,6 +711,7 @@ void GLAlias_CreateShaders (void)
 			glsl->colorTintLoc = GL_GetUniformLocation (&glsl->program, "ColourTint");
 			glsl->outlineWidthLoc = GL_GetUniformLocation (&glsl->program, "outlineWidth");
 			glsl->isOutlinePassLoc = GL_GetUniformLocation (&glsl->program, "isOutlinePass");
+			glsl->xrayPullLoc = -1;
 			glsl->outlineColorLoc = GL_GetUniformLocation (&glsl->program, "outlineColor");
 			glsl->clTimeLoc = GL_GetUniformLocation (&glsl->program, "ClTime");
 			glsl->shellTexLoc = GL_GetUniformLocation (&glsl->program, "ShellTex");
@@ -1135,7 +1157,61 @@ static void R_ParseOutlineXrayParams(vec3_t color, vec3_t enemy_color, vec3_t te
 
 /*
 =============
+R_XrayTemporalFade -- woods #routline
+
+Ease a player's xray in when it first becomes eligible: after the player was
+absent from xray for a moment (left the PVS, stepped out of range, map
+change) or after a teleport/respawn jump. Advanced once per rendered frame.
+=============
+*/
+#define XRAY_FADE_IN_TIME	0.15	/* seconds from 0 to full alpha */
+#define XRAY_FADE_GAP		0.25	/* absence that restarts the fade */
+#define XRAY_FADE_JUMP		192.0f	/* per-frame move treated as a teleport */
+#define XRAY_DEPTH_PULL		8.0f	/* occluder must be this much nearer (world units) */
+
+typedef struct
+{
+	double	lastseen;
+	int		framecount;
+	float	fade;
+	vec3_t	origin;
+} xray_fade_t;
+
+static xray_fade_t r_xray_fade[MAX_SCOREBOARD];
+
+static float R_XrayTemporalFade(int playernum, const vec3_t origin)
+{
+	xray_fade_t *st;
+	double dt;
+
+	if (playernum < 0 || playernum >= MAX_SCOREBOARD)
+		return 1.0f;
+	st = &r_xray_fade[playernum];
+	if (st->framecount == r_framecount)
+		return st->fade;
+
+	dt = realtime - st->lastseen;
+	if (st->lastseen <= 0.0 || dt < 0.0 || dt > XRAY_FADE_GAP ||
+		VecLength2((float *)origin, st->origin) > XRAY_FADE_JUMP)
+	{
+		st->fade = 0.0f;
+		dt = 0.0;
+	}
+	st->fade = q_min(1.0f, st->fade + (float)(dt / XRAY_FADE_IN_TIME));
+	st->lastseen = realtime;
+	st->framecount = r_framecount;
+	VectorCopy(origin, st->origin);
+	return st->fade;
+}
+
+/*
+=============
 R_IsAliasOutlineXray -- woods #routline
+
+Decides whether a player gets the xray silhouette at all. Which pixels are
+hidden is left to the depth test: the xray prepass runs before the player's
+own fill, so GL_GREATER only selects fragments behind the world and other
+already-drawn entities. A partly visible player shows the hidden part only.
 =============
 */
 static qboolean R_IsAliasOutlineXray(entity_t *e, vec3_t color, float *alpha, float *alpha_fade, int *render_mode)
@@ -1233,9 +1309,6 @@ static qboolean R_IsAliasOutlineXray(entity_t *e, vec3_t color, float *alpha, fl
 	if (distance_to_view > dist)
 		return false;
 
-	if (TP_IsPlayerVisible(e->origin))
-		return false;
-
 	if (color)
 	{
 		if (color_mode == XRAY_COLOR_MATCH)
@@ -1261,6 +1334,7 @@ static qboolean R_IsAliasOutlineXray(entity_t *e, vec3_t color, float *alpha, fl
 		float t = CLAMP(0.0f, distance_to_view / dist, 1.0f);
 		/* Smoothstep falloff: near=1.0, max range=0.0 */
 		*alpha_fade = 1.0f - (t * t * (3.0f - 2.0f * t));
+		*alpha_fade *= R_XrayTemporalFade(playernum, e->origin);
 	}
 
 	return true;
@@ -1432,8 +1506,9 @@ float R_CalculateAliasModelOutlineWidth(aliashdr_t* paliashdr, entity_t* e, lerp
 	if (is_xray && modelScale < 1.0f && (!is_xray_outline || isMD5Model))
 		return 1.0f;
 
+	// Xray has its own fixed width: r_outline only sizes the ordinary outline.
 	float cvarValue;
-	if (is_xray && r_outline.value <= 0.0f)
+	if (is_xray)
 		cvarValue = 1.0f;
 	else
 		cvarValue = CLAMP(1.0f, r_outline.value, 5.0f);
@@ -1441,10 +1516,9 @@ float R_CalculateAliasModelOutlineWidth(aliashdr_t* paliashdr, entity_t* e, lerp
 	outlineWidth = cvarValue * finalScale;
 
 	// Filled xray and MD5 outline keep the old fixed minimum above. Classic
-	// outline-only xray should look more like the normal r_outline shell; when
-	// r_outline is off, scale from the MD5 fallback using the same proportion
-	// as the normal outline path.
-	if (is_xray_outline && r_outline.value <= 0.0f && !isMD5Model)
+	// outline-only xray scales from the MD5 fallback using the same proportion
+	// as the normal outline path, so its ring stays visible at range.
+	if (is_xray_outline && !isMD5Model)
 		outlineWidth = q_max(outlineWidth, 1.0f / md5OutlineScale);
 
 	// The width above is in MDL mesh units (about extent/255 world units each), but
@@ -1602,12 +1676,7 @@ R_DrawAliasModelOutline -- woods #routline
 */
 void R_DrawAliasModelOutline(aliasglsl_t* glsl, aliashdr_t* paliashdr, lerpdata_t* lerpdata, entity_t* e)
 {
-	vec3_t xrayColor = { 1.0f, 0.0f, 0.0f };
-	float xrayAlpha = 1.0f;
-	float xrayAlphaFade = 1.0f;
 	float distanceFade = 1.0f;
-	int xrayRenderMode = XRAY_RENDER_FILL;
-	qboolean is_xray = R_IsAliasOutlineXray(e, xrayColor, &xrayAlpha, &xrayAlphaFade, &xrayRenderMode);
 	GLuint outline_stencil_mask = r_alias_outline_phase == ALIAS_OUTLINE_PHASE_RING
 		? r_alias_outline_refmask
 		: ((gl_laserpoint.value && GL_VIEWMODEL_STENCIL_BIT()) ? 0x01u : 0xFFu);
@@ -1616,7 +1685,9 @@ void R_DrawAliasModelOutline(aliasglsl_t* glsl, aliashdr_t* paliashdr, lerpdata_
 
 	if (r_teleport_view && r_telestyle_detail.value < 2)
 		return; /* r_telestyle_detail: no outlines in teleporter views */
-	if (!is_xray && !(r_outline.value > 0 &&
+	// Xray is drawn separately (R_DrawAliasXray); this is only the ordinary
+	// outline around the visible body.
+	if (!(r_outline.value > 0 &&
 		!(cl.viewent.model == e->model) &&
 		!(e->model->flags & MOD_NOOUTLINE)))
 		return;
@@ -1654,8 +1725,7 @@ void R_DrawAliasModelOutline(aliasglsl_t* glsl, aliashdr_t* paliashdr, lerpdata_
 			return;
 	}
 
-	float outlineWidth = R_CalculateAliasModelOutlineWidth(paliashdr, e, lerpdata, is_xray,
-		is_xray && xrayRenderMode == XRAY_RENDER_OUTLINE);
+	float outlineWidth = R_CalculateAliasModelOutlineWidth(paliashdr, e, lerpdata, false, false);
 
 	if (outlineWidth <= 0.0f)
 		return;
@@ -1668,8 +1738,7 @@ void R_DrawAliasModelOutline(aliasglsl_t* glsl, aliashdr_t* paliashdr, lerpdata_
 	// still cost a full second pass per entity -- a big deal in detail-dense maps
 	// at open vistas. Use the lerped render origin and the forward-axis depth (vpn)
 	// rather than Euclidean distance so peripheral entities aren't over-culled.
-	// Never culls xray (a see-through-walls highlight that must show at any size).
-	if (!is_xray && r_outline_minpixels.value > 0.0f)
+	if (r_outline_minpixels.value > 0.0f)
 	{
 		vec3_t delta;
 		float depth, tanHalfFov;
@@ -1702,10 +1771,10 @@ void R_DrawAliasModelOutline(aliasglsl_t* glsl, aliashdr_t* paliashdr, lerpdata_
 
 	// Opaque normal outlines are replayed after every opaque entity fill. Queue
 	// once per entity here, after all the ordinary outline eligibility checks,
-	// while leaving xray and translucent outlines in their original draw order.
+	// while leaving translucent outlines in their original draw order.
 	// CSQC viewmodels stay inline: the replay has no view-relative transform
 	// or viewmodel depth range, so it would cull or misplace them.
-	if (!is_xray && r_alias_outline_collecting && entalpha >= 1.0f &&
+	if (r_alias_outline_collecting && entalpha >= 1.0f &&
 		!(e->eflags & EFLAGS_VIEWMODEL) &&
 		r_alias_outline_phase == ALIAS_OUTLINE_PHASE_NORMAL && gl_stencilbits &&
 		R_QueueDeferredAliasOutline(e))
@@ -1713,55 +1782,14 @@ void R_DrawAliasModelOutline(aliasglsl_t* glsl, aliashdr_t* paliashdr, lerpdata_
 		return;
 	}
 
-	// Pick a dedicated xray stencil bit that is neither the alias mask bit
-	// (0x01) nor the viewmodel/laser bit. We use it as a coverage mask so the
-	// xray silhouette blends one flat translucent color per pixel instead of
-	// accumulating (darkening) where model geometry overlaps along the view ray.
-	// If no such bit is free, fall back to the legacy single-pass blend.
-	GLuint xray_bit = 0;
-	if (is_xray && gl_stencilbits)
-	{
-		GLuint vm_bit = GL_VIEWMODEL_STENCIL_BIT();
-		int bitnum;
-		for (bitnum = 1; bitnum < gl_stencilbits && bitnum < 32; ++bitnum)
-		{
-			GLuint b = 1u << bitnum;
-			if (b != vm_bit) // b is never 0x01: loop starts at 0x02
-			{
-				xray_bit = b;
-				break;
-			}
-		}
-	}
-
-	if (is_xray)
-	{
-		// Xray draws the part of the model behind world geometry; GL_GREATER
-		// (below) selects those occluded fragments. With a dedicated bit we use
-		// the stencil as a coverage mask; otherwise skip the stencil test so
-		// stale values from earlier entities can't block the silhouette.
-		if (xray_bit)
-		{
-			glEnable(GL_STENCIL_TEST);
-			glStencilMask(xray_bit);
-		}
-		else
-			glDisable(GL_STENCIL_TEST);
-	}
-	else
-	{
-		// Configure stencil to only draw where stencil is not set by the model
-		glStencilFunc(GL_NOTEQUAL, outline_stencil_ref, (GLint)outline_stencil_mask); // Pass test where stencil is not set by the model
-		glStencilOp(GL_KEEP, GL_KEEP, GL_KEEP); // Keep the stencil buffer unchanged
-		glStencilMask(0x00); // Disable writing to the stencil buffer
-	}
+	// Configure stencil to only draw where stencil is not set by the model
+	glStencilFunc(GL_NOTEQUAL, outline_stencil_ref, (GLint)outline_stencil_mask); // Pass test where stencil is not set by the model
+	glStencilOp(GL_KEEP, GL_KEEP, GL_KEEP); // Keep the stencil buffer unchanged
+	glStencilMask(0x00); // Disable writing to the stencil buffer
 
 	// Disable depth writing to prevent depth buffer modifications
 	glDepthMask(GL_FALSE);
-	if (is_xray)
-		glDepthFunc(GL_GREATER);
-	else
-		glDepthFunc(GL_LEQUAL);
+	glDepthFunc(GL_LEQUAL);
 
 	glEnable(GL_BLEND);
 	glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
@@ -1771,14 +1799,7 @@ void R_DrawAliasModelOutline(aliasglsl_t* glsl, aliashdr_t* paliashdr, lerpdata_
 	GL_Uniform1fFunc(glsl->outlineWidthLoc, outlineWidth);
 	float outlineColor[4] = { 0.0f, 0.0f, 0.0f, entalpha }; // Outline color
 
-	if (is_xray)
-	{
-		outlineColor[0] = xrayColor[0];
-		outlineColor[1] = xrayColor[1];
-		outlineColor[2] = xrayColor[2];
-		outlineColor[3] = xrayAlpha * xrayAlphaFade;
-	}
-	else if (!strcmp(e->model->name, "progs/flag.mdl") && e->skinnum == 0)
+	if (!strcmp(e->model->name, "progs/flag.mdl") && e->skinnum == 0)
 	{
 		outlineColor[0] = 1.0f; // Change red component
 		outlineColor[3] = 0.2f; // Change alpha component
@@ -1811,74 +1832,11 @@ void R_DrawAliasModelOutline(aliasglsl_t* glsl, aliashdr_t* paliashdr, lerpdata_
 
 	GL_Uniform4fvFunc(glsl->outlineColorLoc, 1, outlineColor);
 
-	if (is_xray && xray_bit && xrayRenderMode == XRAY_RENDER_OUTLINE)
-	{
-		// Xray-outline mode mirrors normal r_outline behavior: mark the
-		// expanded hidden shell, subtract the hidden body, then fill the
-		// remaining ring once per pixel.
-		glColorMask(GL_FALSE, GL_FALSE, GL_FALSE, GL_FALSE);
-
-		GL_Uniform1fFunc(glsl->outlineWidthLoc, outlineWidth);
-		glEnable(GL_CULL_FACE);
-		glCullFace(GL_FRONT);
-		glStencilFunc(GL_ALWAYS, (GLint)xray_bit, (GLint)xray_bit);
-		glStencilOp(GL_KEEP, GL_KEEP, GL_REPLACE);
-		glDrawElements(GL_TRIANGLES, paliashdr->numindexes, GL_UNSIGNED_SHORT,
-			e->model->meshindexesvboptr + paliashdr->eboofs);
-
-		// Clear the original body out of the shell mask. The fill pass below
-		// redraws the same expanded shell and consumes the remaining mask.
-		GL_Uniform1fFunc(glsl->outlineWidthLoc, 0.0f);
-		glDisable(GL_CULL_FACE);
-		glStencilFunc(GL_EQUAL, (GLint)xray_bit, (GLint)xray_bit);
-		glStencilOp(GL_KEEP, GL_KEEP, GL_ZERO);
-		glDrawElements(GL_TRIANGLES, paliashdr->numindexes, GL_UNSIGNED_SHORT,
-			e->model->meshindexesvboptr + paliashdr->eboofs);
-
-		GL_Uniform1fFunc(glsl->outlineWidthLoc, outlineWidth);
-		glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
-		glEnable(GL_CULL_FACE);
-		glCullFace(GL_FRONT);
-		glStencilFunc(GL_EQUAL, (GLint)xray_bit, (GLint)xray_bit);
-		glStencilOp(GL_KEEP, GL_KEEP, GL_ZERO);
-		glDrawElements(GL_TRIANGLES, paliashdr->numindexes, GL_UNSIGNED_SHORT,
-			e->model->meshindexesvboptr + paliashdr->eboofs);
-	}
-	else
-	{
-		// Cull front faces to render back-facing triangles
-		glEnable(GL_CULL_FACE);
-		glCullFace(GL_FRONT);
-
-		if (is_xray && xray_bit)
-		{
-			// Coverage-mask fill (two passes, identical geometry/depth state so the
-			// same fragments rasterize in both). Pass 1: mark every occluded pixel
-			// in the xray bit with color writes disabled.
-			glColorMask(GL_FALSE, GL_FALSE, GL_FALSE, GL_FALSE);
-			glStencilFunc(GL_ALWAYS, (GLint)xray_bit, (GLint)xray_bit);
-			glStencilOp(GL_KEEP, GL_KEEP, GL_REPLACE);
-			glDrawElements(GL_TRIANGLES, paliashdr->numindexes, GL_UNSIGNED_SHORT,
-				e->model->meshindexesvboptr + paliashdr->eboofs);
-
-			// Pass 2: blend the color exactly once per marked pixel. The first
-			// depth-passing fragment clears the xray bit (GL_ZERO), so any later
-			// overlapping fragment for that pixel fails the stencil test and does
-			// not darken it again. Every marked pixel had a passing fragment in
-			// pass 1, so the identical pass 2 clears the bit; no residue.
-			glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
-			glStencilFunc(GL_EQUAL, (GLint)xray_bit, (GLint)xray_bit);
-			glStencilOp(GL_KEEP, GL_KEEP, GL_ZERO);
-			glDrawElements(GL_TRIANGLES, paliashdr->numindexes, GL_UNSIGNED_SHORT,
-				e->model->meshindexesvboptr + paliashdr->eboofs);
-		}
-		else
-		{
-			// Legacy single-pass outline / xray fallback.
-			glDrawElements(GL_TRIANGLES, paliashdr->numindexes, GL_UNSIGNED_SHORT,
-				e->model->meshindexesvboptr + paliashdr->eboofs);
-		}
-	}
+	// Cull front faces to render back-facing triangles
+	glEnable(GL_CULL_FACE);
+	glCullFace(GL_FRONT);
+	glDrawElements(GL_TRIANGLES, paliashdr->numindexes, GL_UNSIGNED_SHORT,
+		e->model->meshindexesvboptr + paliashdr->eboofs);
 
 	// Reset face culling
 	glCullFace(GL_BACK);
@@ -2666,6 +2624,7 @@ static void GL_DrawAliasFrame_GLSL (aliasglsl_t *glsl, aliashdr_t *paliashdr, le
 		if (grenade_glow.halo[3] > 0.0f)
 			R_DrawGrenadeGlow(glsl, paliashdr, e, &grenade_glow);
 	}
+
 	else if (r_alias_outline_phase == ALIAS_OUTLINE_PHASE_NORMAL)
 	{
 		R_BeginAliasOutlineRendering(glsl); // woods #routline
@@ -3668,6 +3627,10 @@ static alias_inst_run_t r_alias_inst_runs[MAX_ALIAS_INSTANCES];
 static GLuint r_alias_inst_vbos[3];
 static unsigned int r_alias_inst_ring;
 static void R_DrawAliasModelPrepared (entity_t *e, const lerpdata_t *prepared, qboolean depthonly);
+static void R_DrawAliasXray (entity_t *e, qboolean clear_bit);
+static GLuint R_AliasXrayStencilBit (void);
+static entity_t *r_deferred_xrays[MAX_SCOREBOARD];
+static int r_num_deferred_xrays;
 
 static qboolean R_AliasInst_SpecialModel (const char *name)
 {
@@ -4197,6 +4160,26 @@ static void R_DrawAliasModelPrepared (entity_t *e, const lerpdata_t *prepared, q
 
 	glsl = &r_alias_glsl[(paliashdr->poseverttype==PV_IQM&&lerpdata.bonestate)?ALIAS_GLSL_SKELETAL:ALIAS_GLSL_BASIC];
 
+	// woods #routline -- xray. During the opaque pass, wait until every
+	// opaque occluder is in the depth buffer (brush entities such as doors are
+	// batched after alias models). Outside it (translucent players), or with
+	// no stencil bit for the coverage mask, draw now, before this model's own
+	// fill. A fully transparent player is hidden on purpose: no xray either.
+	if (!depthonly && r_alias_outline_phase == ALIAS_OUTLINE_PHASE_NORMAL &&
+		!(e->eflags & EFLAGS_VIEWMODEL) && !r_drawflat_cheatsafe &&
+		!r_lightmap_cheatsafe && !r_fullbright_cheatsafe &&
+		ENTALPHA_DECODE(e->alpha) > 0 &&
+		R_IsAliasOutlineXray(e, NULL, NULL, NULL, NULL))
+	{
+		if (r_alias_outline_collecting && R_AliasXrayStencilBit())
+		{
+			if (r_num_deferred_xrays < countof(r_deferred_xrays))
+				r_deferred_xrays[r_num_deferred_xrays++] = e;
+		}
+		else
+			R_DrawAliasXray(e, true);
+	}
+
 	// Fade the visible model surface as a whole. Without this prepass, hidden
 	// triangles blend through it. Finish every mesh before any color is drawn,
 	// so separate MD3/MD5 surfaces occlude one another too. Reuse the prepared
@@ -4680,6 +4663,7 @@ void R_BeginDeferredAliasOutlines(void)
 
 	r_alias_outline_phase = ALIAS_OUTLINE_PHASE_NORMAL;
 	r_num_deferred_alias_outlines = 0;
+	r_num_deferred_xrays = 0;
 	r_num_grenade_glows = 0;
 	r_alias_outline_holey = false;
 	r_alias_outline_collecting = true;
@@ -4705,6 +4689,206 @@ static void R_ClearAliasOutlineStencil(GLuint mask)
 	glStencilMask(mask);
 	glClear(GL_STENCIL_BUFFER_BIT);
 	glPopAttrib();
+}
+
+/*
+=============
+R_DrawAliasXray -- woods #routline
+
+Tint the parts of a player hidden behind anything already drawn, once per
+pixel, using one dedicated stencil bit as a coverage mask:
+
+  MARK    back faces of the (expanded) model that lie behind the depth buffer,
+          pulled toward the eye so feet sunk into the floor don't count
+  VISIBLE clear pixels where the model's own surface is the nearest one, so
+          its own back faces behind its front never count as hidden
+  BODY    outline mode only: clear the hidden body, leaving the ring
+  FILL    blend the colour where the bit survived, clearing it as it goes
+
+Every step runs over all surfaces before the next, so separate MD3/MD5
+surfaces can't mark each other. FILL repeats MARK's geometry and depth state,
+so it clears every bit MARK set. Draws the same way whether the model's own
+depth is already in the buffer (deferred) or not (inline, before its fill).
+=============
+*/
+enum
+{
+	XRAY_STEP_MARK,
+	XRAY_STEP_VISIBLE,
+	XRAY_STEP_BODY,
+	XRAY_STEP_FILL
+};
+
+static GLuint R_AliasXrayStencilBit (void)
+{
+	GLuint vm_bit = GL_VIEWMODEL_STENCIL_BIT();
+	int bitnum;
+
+	// Neither the shared alias mask bit (0x01) nor the viewmodel/laser bit.
+	for (bitnum = 1; bitnum < gl_stencilbits && bitnum < 8; ++bitnum)
+	{
+		GLuint b = 1u << bitnum;
+		if (b != vm_bit)
+			return b;
+	}
+	return 0;
+}
+
+static void R_DrawAliasXray (entity_t *e, qboolean clear_bit)
+{
+	aliashdr_t *first, *paliashdr;
+	aliasglsl_t *glsl;
+	lerpdata_t lerpdata;
+	vec3_t xray_color;
+	float xray_alpha, xray_fade, blend;
+	float color[4];
+	int render_mode, step;
+	GLuint bit;
+	GLboolean colormask[4];
+
+	if (r_teleport_view && r_telestyle_detail.value < 2)
+		return; /* r_telestyle_detail: no outlines in teleporter views */
+	if (ENTALPHA_DECODE(e->alpha) <= 0)
+		return;
+	if (!R_IsAliasOutlineXray(e, xray_color, &xray_alpha, &xray_fade, &render_mode))
+		return;
+	// Without a free bit there is no coverage mask: fall back to one unmasked
+	// FILL pass. The caller then draws before the model's own fill, so its own
+	// back faces can't count as hidden; overlaps darken, and occluders drawn
+	// later (brush entities) don't hide it.
+	bit = R_AliasXrayStencilBit();
+	color[0] = xray_color[0];
+	color[1] = xray_color[1];
+	color[2] = xray_color[2];
+	color[3] = xray_alpha * xray_fade;
+	if (color[3] <= 0.0f)
+		return;
+
+	currententity = e;
+	first = (aliashdr_t *)Mod_Extradata (e->model);
+	R_SetupAliasFrame (first, e, &lerpdata);
+	R_SetupEntityTransform (e, &lerpdata);
+	if (R_CullModelForEntityTransform (e, lerpdata.origin, lerpdata.angles))
+		return;
+	glsl = &r_alias_glsl[(first->poseverttype == PV_IQM && lerpdata.bonestate) ? ALIAS_GLSL_SKELETAL : ALIAS_GLSL_BASIC];
+	if (!glsl->program)
+		return;
+	blend = (lerpdata.pose1 != lerpdata.pose2) ? lerpdata.blend : 0;
+
+	// The caller's mask, so a stereo eye keeps only its own channels.
+	glGetBooleanv (GL_COLOR_WRITEMASK, colormask);
+	glPushAttrib (GL_ENABLE_BIT | GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT |
+		GL_STENCIL_BUFFER_BIT | GL_POLYGON_BIT);
+	if (clear_bit && bit)
+		R_ClearAliasOutlineStencil (bit);
+
+	GL_UseProgramFunc (glsl->program);
+	GL_EnableVertexAttribArrayFunc (texCoordsAttrIndex);
+	GL_EnableVertexAttribArrayFunc (pose1VertexAttrIndex);
+	GL_EnableVertexAttribArrayFunc (pose2VertexAttrIndex);
+	GL_EnableVertexAttribArrayFunc (pose1NormalAttrIndex);
+	GL_EnableVertexAttribArrayFunc (pose2NormalAttrIndex);
+	GL_Uniform1iFunc (glsl->shellModeLoc, 0);
+	GL_Uniform1iFunc (glsl->useShellTexLoc, 0);
+	GL_Uniform1iFunc (glsl->useAlphaTestLoc, 0);
+	GL_Uniform1iFunc (glsl->isOutlinePassLoc, 1);
+	GL_Uniform4fvFunc (glsl->outlineColorLoc, 1, color);
+
+	glPushMatrix ();
+	R_RotateForEntity (lerpdata.origin, lerpdata.angles, e);
+	R_ApplyAliasModelScale (e->model, first, 1.0f);
+
+	glEnable (GL_DEPTH_TEST);
+	glDepthMask (GL_FALSE);
+	if (bit)
+	{
+		glEnable (GL_STENCIL_TEST);
+		glStencilMask (bit);
+	}
+	else
+		glDisable (GL_STENCIL_TEST);
+	glEnable (GL_BLEND);
+	glBlendFunc (GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+
+	for (step = XRAY_STEP_MARK; step <= XRAY_STEP_FILL; ++step)
+	{
+		qboolean shell = (step == XRAY_STEP_MARK || step == XRAY_STEP_FILL);
+
+		if (step == XRAY_STEP_BODY && render_mode != XRAY_RENDER_OUTLINE)
+			continue;
+		if (!bit && step != XRAY_STEP_FILL)
+			continue;
+
+		if (step == XRAY_STEP_FILL)
+			glColorMask (colormask[0], colormask[1], colormask[2], colormask[3]);
+		else
+			glColorMask (GL_FALSE, GL_FALSE, GL_FALSE, GL_FALSE);
+
+		if (shell)
+		{
+			glEnable (GL_CULL_FACE);
+			glCullFace (GL_FRONT);
+		}
+		else
+			glDisable (GL_CULL_FACE);
+
+		// Only the visible-pixel step compares the model's true depth.
+		glDepthFunc (step == XRAY_STEP_VISIBLE ? GL_LEQUAL : GL_GREATER);
+		GL_Uniform1fFunc (glsl->xrayPullLoc, step == XRAY_STEP_VISIBLE ? 0.0f : XRAY_DEPTH_PULL);
+
+		if (bit && step == XRAY_STEP_MARK)
+		{
+			glStencilFunc (GL_ALWAYS, (GLint)bit, (GLint)bit);
+			glStencilOp (GL_KEEP, GL_KEEP, GL_REPLACE);
+		}
+		else if (bit)
+		{
+			glStencilFunc (GL_EQUAL, (GLint)bit, (GLint)bit);
+			glStencilOp (GL_KEEP, GL_KEEP, GL_ZERO);
+		}
+
+		for (paliashdr = first;;)
+		{
+			intptr_t ns;
+
+			if (paliashdr->numbones <= glsl->maxbones || !lerpdata.bonestate)
+			{
+				float width = shell ? R_CalculateAliasModelOutlineWidth (paliashdr, e, &lerpdata,
+					true, render_mode == XRAY_RENDER_OUTLINE) : 0.0f;
+
+				GL_BindAliasPose (paliashdr, &lerpdata);
+				if (glsl->blendLoc != -1)
+					GL_Uniform1fFunc (glsl->blendLoc, blend);
+				if (glsl->bonesLoc != -1)
+					GL_Uniform4fvFunc (glsl->bonesLoc, paliashdr->numbones*3, lerpdata.bonestate->mat);
+				if (glsl->md5NormalsLoc != -1)
+					GL_Uniform1iFunc (glsl->md5NormalsLoc, paliashdr->md5);
+				GL_Uniform1fFunc (glsl->outlineWidthLoc, width);
+				glDrawElements (GL_TRIANGLES, paliashdr->numindexes, GL_UNSIGNED_SHORT,
+					e->model->meshindexesvboptr + paliashdr->eboofs);
+				rs_aliaspolys += paliashdr->numtris;
+				rs_aliaspasses += paliashdr->numtris;
+			}
+
+			ns = paliashdr->nextsurface;
+			if (ns < 256 || ns > 64*1024*1024)	// last surface, or R_DrawAliasModel's corrupt-chain guard
+				break;
+			paliashdr = (aliashdr_t *)((byte *)paliashdr + ns);
+		}
+	}
+
+	glPopMatrix ();
+	GL_Uniform1fFunc (glsl->xrayPullLoc, 0.0f);
+	GL_Uniform1fFunc (glsl->outlineWidthLoc, 0.0f);
+	GL_Uniform1iFunc (glsl->isOutlinePassLoc, 0);
+	GL_DisableVertexAttribArrayFunc (texCoordsAttrIndex);
+	GL_DisableVertexAttribArrayFunc (pose1VertexAttrIndex);
+	GL_DisableVertexAttribArrayFunc (pose2VertexAttrIndex);
+	GL_DisableVertexAttribArrayFunc (pose1NormalAttrIndex);
+	GL_DisableVertexAttribArrayFunc (pose2NormalAttrIndex);
+	GL_DisableVertexAttribArrayFunc (vertColoursAttrIndex);
+	GL_UseProgramFunc (0);
+	glPopAttrib ();
 }
 
 /*
@@ -4818,6 +5002,12 @@ void R_DrawDeferredAliasOutlines(void)
 	GLboolean colormask[4] = {GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE};
 
 	r_alias_outline_collecting = false;
+
+	// Every opaque occluder is in place now, and the xray bit is still clean:
+	// the outline replay below may leave per-model values in it.
+	for (i = 0; i < r_num_deferred_xrays; ++i)
+		R_DrawAliasXray(r_deferred_xrays[i], false);
+	r_num_deferred_xrays = 0;
 
 	// Every stencil bit below the viewmodel/laser bit can hold a per-model value.
 	// Nothing else is live in them here: shadows and normal alias fills only
