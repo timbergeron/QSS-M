@@ -115,6 +115,11 @@ void CL_NoteUserInput (void)
 	cl_idle_disconnected = false;
 }
 
+double CL_LastUserInputTime (void)
+{
+	return cl_idle_lastinput;
+}
+
 qboolean CL_IdleDisconnectPending (void)
 {
 	return cl_idle_disconnected;

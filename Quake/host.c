@@ -78,6 +78,7 @@ float	host_netinterval = 1.0/72;
 cvar_t	host_framerate = {"host_framerate","0",CVAR_NONE};	// set for slow motion
 cvar_t	host_speeds = {"host_speeds","0",CVAR_NONE};			// set for running times
 cvar_t	host_maxfps = {"host_maxfps", "250", CVAR_ARCHIVE}; //johnfitz
+cvar_t	cl_idlefps = {"cl_idlefps", "60", CVAR_ARCHIVE}; // #idlefps frame cap while unfocused/minimized/paused/idle, 0 = off
 cvar_t	host_timescale = {"host_timescale", "0", CVAR_NONE}; //johnfitz
 cvar_t	max_edicts = {"max_edicts", "15000", CVAR_NONE}; //johnfitz //ericw -- changed from 2048 to 8192, removed CVAR_ARCHIVE
 cvar_t	cl_nocsqc = {"cl_nocsqc", "0", CVAR_NONE};	//spike -- blocks the loading of any csqc modules
@@ -1006,6 +1007,7 @@ void Host_InitLocal (void)
 	Cvar_RegisterVariable (&host_framerate);
 	Cvar_RegisterVariable (&host_speeds);
 	Cvar_RegisterVariable (&host_maxfps); //johnfitz
+	Cvar_RegisterVariable (&cl_idlefps); // #idlefps
 	Cvar_SetCallback (&host_maxfps, Max_Fps_f);
 	Cvar_RegisterVariable (&host_timescale); //johnfitz
 
@@ -1608,10 +1610,57 @@ qboolean Host_LocalSignon (void)
 	return realtime - host_local_signon_start < HOST_LOCAL_SIGNON_WINDOW;
 }
 
+/*
+===================
+Host_IdleFrameInterval -- #idlefps
+
+Minimum frame interval while nobody is playing: the window has no keyboard
+focus or is minimized, the game is paused, or the player has left a focused
+window untouched for a while outside of a live game. Returns 0 when the cap
+does not apply. Hosting a multiplayer game, signing on (which carries content
+downloads) and timedemos always run at full rate, since slowing the loop there
+slows the server tick or the download for everyone involved.
+===================
+*/
+#define HOST_IDLE_INPUT_TIMEOUT	10.0	// seconds without input before a focused window counts as idle
+#define HOST_IDLE_MINIMIZED_FPS	20.f	// nothing is drawn while minimized, so go lower still
+
+extern qboolean listening; // woods #listens
+
+double Host_IdleFrameInterval (void)
+{
+	float fps;
+	qboolean minimized, idle;
+
+	if (cl_idlefps.value <= 0 || isDedicated || cls.timedemo)
+		return 0;
+	if (listening || (sv.active && svs.maxclients > 1))
+		return 0;
+	if (cls.state == ca_connected && cls.signon < SIGNONS)
+		return 0;
+	if (CL_DemoSeekActive ())
+		return 0;
+
+	minimized = VID_IsMinimized ();
+	idle = minimized || !VID_HasInputFocus () || (cl.paused && !Pong_Enabled ());
+	if (!idle && (cls.state == ca_disconnected || cl.paused) && !cls.demoplayback)
+		idle = realtime - CL_LastUserInputTime () >= HOST_IDLE_INPUT_TIMEOUT;
+	if (!idle)
+		return 0;
+
+	fps = CLAMP (10.f, cl_idlefps.value, 1000.f);
+	if (minimized)
+		fps = q_min (fps, HOST_IDLE_MINIMIZED_FPS);
+	return 1.0 / fps;
+}
+
 static double Host_FrameInterval (void)
 {
+	double interval = 0, idle;
+
 	if (Host_LocalSignon ())
 		return 0;
+	idle = Host_IdleFrameInterval ();
 	if ((host_maxfps.value>0 || cls.state == ca_disconnected) && !cls.timedemo)
 	{
 		float maxfps;
@@ -1627,9 +1676,9 @@ static double Host_FrameInterval (void)
 			maxfps = CLAMP (10.f, host_maxfps.value, 5000.0); // woods higher max
 		}
 
-		return 1.0 / maxfps;
+		interval = 1.0 / maxfps;
 	}
-	return 0;
+	return q_max (interval, idle);
 }
 
 /* elapsed is wall time since the main loop sampled the current realtime.

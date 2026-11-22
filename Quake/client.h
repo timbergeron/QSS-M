@@ -586,6 +586,7 @@ extern	cvar_t	cl_afk; // woods #smartafk
 extern  cvar_t	cl_idle;  // woods #damage
 extern  cvar_t	cl_idledisconnect; // #idledisconnect
 void CL_NoteUserInput (void);
+double CL_LastUserInputTime (void);
 qboolean CL_IdleDisconnectPending (void);
 void CL_IdleDisconnect_Frame (void);
 extern  cvar_t	cl_smartspawn; // woods #spawntrainer

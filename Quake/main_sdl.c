@@ -171,22 +171,9 @@ int QSSM_Main(int argc, char *argv[])
 	else
 	while (1)
 	{
-		/* If we have no input focus at all, sleep a bit */
-		if ((!listening && !VID_HasMouseOrInputFocus()) || (cl.paused && !Pong_Enabled())) // woods #listens #pong
-		{
-			if (sys_throttle.value >= 0)
-				SDL_Delay(16);
-		}
-		/* If we're minimised, sleep a bit more */
-		if (!listening && VID_IsMinimized()) // woods #listens
-		{
-			scr_skipupdate = 1;
-			SDL_Delay(32);
-		}
-		else
-		{
-			scr_skipupdate = 0;
-		}
+		/* Unfocused, minimised, paused and idle frames are capped by cl_idlefps
+		   inside Host_FrameInterval (#idlefps); minimised windows also skip drawing. */
+		scr_skipupdate = (!listening && VID_IsMinimized()) ? 1 : 0; // woods #listens
 
 		CL_IdleDisconnect_Frame (); // #idledisconnect
 
@@ -221,7 +208,8 @@ int QSSM_Main(int argc, char *argv[])
 
 		Host_Frame (time);
 
-		if (time < sys_throttle.value && !cls.timedemo)
+		// The idle cap sleeps even with sys_throttle < 0, or it would only spin. #idlefps
+		if ((time < sys_throttle.value || Host_IdleFrameInterval () > 0) && !cls.timedemo)
 			Host_Throttle (Sys_DoubleTime () - newtime);
 
 		oldtime = newtime;
