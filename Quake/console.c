@@ -2066,7 +2066,7 @@ static void Con_Print (const char *txt)
 	if (strstr(txt, "server does not have file locs/") || strstr(txt, "Download locs/")) // woods #locdownloads try to download; don't spam console its missing (kilomile)
 		return;
 
-	if (!VID_HasMouseOrInputFocus() && !cls.demoplayback) // woods flash if my name is mentioned #flash
+	if (!VID_HasInputFocus() && !cls.demoplayback) // woods flash if my name is mentioned #flash (input focus: hovering a background window keeps mouse focus)
 	{
 		if ((cl.gametype == GAME_DEATHMATCH) && (cls.state == ca_connected))
 		{ 
@@ -2123,7 +2123,7 @@ static void Con_Print (const char *txt)
 	if (Con_IsDirectMessage(txt)) // woods #tell+
 	{
 		S_LocalSound("misc/talk.wav");
-		if (!VID_HasMouseOrInputFocus())
+		if (!VID_HasInputFocus()) // input focus: hovering a background window keeps mouse focus
 		{
 			SDL_FlashWindow((SDL_Window*)VID_GetWindow(), SDL_FLASH_BRIEFLY);
 			Discord_NotifyDirectMessage(txt); // woods #discord

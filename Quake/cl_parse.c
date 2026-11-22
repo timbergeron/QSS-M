@@ -3361,7 +3361,7 @@ qboolean CL_ParseProQuakeString(const char* string) // #pqteam
 	{
 		if (cl.notobserver) // am I on a team?
 		{
-			if (!VID_HasMouseOrInputFocus())
+			if (!VID_HasInputFocus()) // input focus: a background window under the cursor still has mouse focus
 				SDL_FlashWindow((SDL_Window*)VID_GetWindow(), SDL_FLASH_BRIEFLY);
 		}
 	}

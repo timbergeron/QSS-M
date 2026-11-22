@@ -2176,7 +2176,7 @@ static int NetDiag_Cond (void)
 		cond |= ND_COND_LOADING;
 	if (cl.paused || cl.match_pause_time)
 		cond |= ND_COND_PAUSED;
-	if (!nd_ignorefocus && (!VID_HasInputFocus () || VID_IsMinimized ()))
+	if (!nd_ignorefocus && (!VID_HasInputFocus () || VID_IsMinimized () || VID_IsOccluded ())) // covered windows run capped by cl_idlefps
 		cond |= ND_COND_UNFOCUSED;
 	return cond;
 }
