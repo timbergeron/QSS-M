@@ -891,6 +891,7 @@ void CL_UpdateTEnts (void)
 	entity_t	*ent;
 	float		yaw, pitch;
 	float		forward;
+	float		beam_frametime = cl.paused ? 0.0f : (float)CLAMP (0.0, cl.time - cl.oldtime, 0.1);
 
 	num_temp_entities = 0;
 
@@ -964,21 +965,15 @@ void CL_UpdateTEnts (void)
 			// end woods for truelightning
 		}
 
-		if (b->lightning) // woods #beamspoly
-		{
-			if (cl_beams_polygons.value > 0)
-			{
-				PScript_DelinkTrailstate(&b->trailstate);
-			}
-			else
-			{
-				if (!PScript_ParticleTrail(b->start, b->end, PScript_FindParticleType(b->trailname), host_frametime, b->entity, NULL, &b->trailstate))
-					continue;
-			}
-		}
+		if (b->lightning && cl_beams_polygons.value > 0) // woods #beamspoly
+			PScript_DelinkTrailstate(&b->trailstate);
 		else
 		{
-			if (!PScript_ParticleTrail(b->start, b->end, PScript_FindParticleType(b->trailname), host_frametime, b->entity, NULL, &b->trailstate))
+			int trailtype = PScript_FindParticleType(b->trailname);
+
+			// A scripted trail still replaces the model on a frozen frame.
+			if (trailtype != P_INVALID && (beam_frametime == 0 ||
+				!PScript_ParticleTrail(b->start, b->end, trailtype, beam_frametime, b->entity, NULL, &b->trailstate)))
 				continue;
 		}
 
