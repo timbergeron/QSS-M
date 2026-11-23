@@ -300,7 +300,7 @@ void R_RenderDlights (void)
 	int		i;
 	dlight_t	*l;
 
-	if (!gl_flashblend.value)
+	if (!gl_flashblend.value || !r_dynamic.value)
 		return;
 
 	glDepthMask (0);
