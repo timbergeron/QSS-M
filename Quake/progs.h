@@ -424,6 +424,7 @@ struct qcvm_s
 	dstatement_t	*statements;
 	float		*globals;	/* same as pr_global_struct */
 	ddef_t		*fielddefs;	//yay reflection.
+	byte		*savefield_words;	/* number of words per saved field, or zero to skip */
 
 	int			edict_size;	/* in bytes */
 

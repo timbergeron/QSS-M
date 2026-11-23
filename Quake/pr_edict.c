@@ -588,6 +588,20 @@ const char *PR_GlobalStringNoContents (int ofs)
 	return line;
 }
 
+// Zero means the field is skipped. Otherwise return its size in QuakeC words.
+static byte ED_RelevantFieldWords (const ddef_t *d)
+{
+	const char *name = PR_GetString(d->s_name);
+	size_t len = strlen(name);
+	int type = d->type & ~DEF_SAVEGLOBAL;
+
+	if (len > 1 && name[len - 2] == '_')
+		return 0;
+	if (type < 0 || type >= (int)countof(type_size))
+		return 0;
+	return (byte)type_size[type];
+}
+
 /*
 =============
 ED_IsRelevantField
@@ -599,23 +613,15 @@ Returns true if the field should be printed by the edict command:
 */
 qboolean ED_IsRelevantField (edict_t *ed, ddef_t *d)
 {
-	const char	*name;
-	size_t		l;
+	int			words = ED_RelevantFieldWords(d);
 	int			*v;
-	int			type;
 	int			i;
 
-	name = PR_GetString(d->s_name);
-	l = strlen(name);
-	if (l > 1 && name[l - 2] == '_')
-		return false;
-
-	type = d->type & ~DEF_SAVEGLOBAL;
-	if (type < 0 || type >= (int)countof(type_size))
+	if (!words)
 		return false;
 
 	v = (int *)((char *)&ed->v + d->ofs * 4);
-	for (i = 0; i < type_size[type]; i++)
+	for (i = 0; i < words; i++)
 	{
 		if (v[i])
 			return true;
@@ -877,7 +883,7 @@ void ED_WriteSave (savedata_t *save, edict_t *ed)
 {
 	ddef_t	*d;
 	int		*v;
-	int		i;
+	int		i, j, words;
 
 	fprintf (save->file, "{ // #%d\n", SAVE_NUM_FOR_EDICT (save, ed));
 
@@ -889,13 +895,19 @@ void ED_WriteSave (savedata_t *save, edict_t *ed)
 
 	for (i = 1; i < qcvm->progs->numfielddefs; i++)
 	{
-		d = &qcvm->fielddefs[i];
-		if (!ED_IsRelevantField(ed, d))
+		words = qcvm->savefield_words[i];
+		if (!words)
 			continue;
 
-		v = (int *)((char *)&ed->v + d->ofs*4);
-		fprintf (save->file, "\"%s\" ", PR_GetSaveString(save, d->s_name));
-		fprintf (save->file, "\"%s\"\n", PR_UglySaveValueString(save, d->type, (eval_t *)v));
+		d = &qcvm->fielddefs[i];
+		v = (int *)((char *)&ed->v + d->ofs * 4);
+		for (j = 0; j < words && !v[j]; j++)
+			;
+		if (j == words)
+			continue;
+
+		fprintf (save->file, "\"%s\" \"%s\"\n", PR_GetSaveString(save, d->s_name),
+			PR_UglySaveValueString(save, d->type, (eval_t *)v));
 	}
 
 	//johnfitz -- save entity alpha manually when progs.dat doesn't know about alpha
@@ -1746,6 +1758,7 @@ void PR_ClearProgs(qcvm_t *vm)
 		Z_Free ((void *)qcvm->knownstrings);
 	free(qcvm->pushcache);
 	free(qcvm->edicts); // ericw -- sv.edicts switched to use malloc()
+	free(qcvm->savefield_words);
 	if (qcvm->fielddefs != (ddef_t *)((byte *)qcvm->progs + qcvm->progs->ofs_fielddefs))
 		free(qcvm->fielddefs);
 	free(qcvm->progs);	// spike -- pr_progs switched to use malloc (so menuqc doesn't end up stuck on the early hunk nor wiped on every map change)
@@ -2129,6 +2142,15 @@ qboolean PR_LoadProgs (const char *filename, qboolean fatal, unsigned int needcr
 	PR_SetEngineString("");
 	PR_EnableExtensions(qcvm->globaldefs);
 	PR_PatchOgreSmashState();
+
+	if (qcvm == &sv.qcvm && qcvm->progs->numfielddefs > 0)
+	{
+		qcvm->savefield_words = calloc(qcvm->progs->numfielddefs, sizeof(*qcvm->savefield_words));
+		if (!qcvm->savefield_words)
+			Sys_Error ("PR_LoadProgs: out of memory for save field sizes");
+		for (i = 1; i < qcvm->progs->numfielddefs; i++)
+			qcvm->savefield_words[i] = ED_RelevantFieldWords(&qcvm->fielddefs[i]);
+	}
 
 	return true;
 }
