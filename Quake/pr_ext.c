@@ -2848,7 +2848,7 @@ static void PF_cvar_defstring(void)
 	const char *name = G_STRING(OFS_PARM0);
 	cvar_t *var = Cvar_FindVarForGamecode(name);	// woods #remotecmd
 	if (var && var->default_string)
-		G_INT(OFS_RETURN) = PR_SetEngineString(var->default_string);
+		G_INT(OFS_RETURN) = PR_MakeTempString(var->default_string);
 	else
 		G_INT(OFS_RETURN) = 0;
 }
