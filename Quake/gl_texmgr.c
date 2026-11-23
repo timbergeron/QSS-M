@@ -3990,6 +3990,11 @@ static GLuint	currenttexture[8] = {GL_UNUSED_TEXTURE, GL_UNUSED_TEXTURE, GL_UNUS
 static GLenum	currenttarget = GL_TEXTURE0_ARB;
 qboolean	mtexenabled = false;
 
+GLenum GL_GetActiveTextureUnit (void)
+{
+	return currenttarget;
+}
+
 /*
 ================
 GL_SelectTexture -- johnfitz -- rewritten

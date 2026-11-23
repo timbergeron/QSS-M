@@ -9500,32 +9500,18 @@ FXAA_EndFrame
 */
 void FXAA_EndFrame(void)
 {
+    GLenum activeTexture;
+
     if (!fxaa_frame_active)
         return;
     fxaa_frame_active = false;
-        
-    // Save current state
-    GLboolean wasBlend = glIsEnabled(GL_BLEND);
-    GLboolean wasAlphaTest = glIsEnabled(GL_ALPHA_TEST);
-    GLboolean wasDepthTest = glIsEnabled(GL_DEPTH_TEST);
-    GLboolean wasCullFace = glIsEnabled(GL_CULL_FACE);
-    GLboolean wasScissorTest = glIsEnabled(GL_SCISSOR_TEST);
-    GLboolean wasTexture2D = glIsEnabled(GL_TEXTURE_2D);
-    GLint polygonMode[2];
-    glGetIntegerv(GL_POLYGON_MODE, polygonMode);
-    GLint activeTexture = GL_TEXTURE0;
-    GLint activeTextureBinding = 0;
-    GLint texture0Binding = 0;
+
+    // Save the pass state without waiting for the driver to answer queries.
+    activeTexture = GL_GetActiveTextureUnit();
+    glPushAttrib(GL_ENABLE_BIT | GL_POLYGON_BIT | GL_TEXTURE_BIT);
     if (GL_SelectTextureFunc)
-    {
-        glGetIntegerv(GL_ACTIVE_TEXTURE, &activeTexture);
-        glGetIntegerv(GL_TEXTURE_BINDING_2D, &activeTextureBinding);
         GL_SelectTexture(GL_TEXTURE0);
-        glGetIntegerv(GL_TEXTURE_BINDING_2D, &texture0Binding);
-    }
-    else
-        glGetIntegerv(GL_TEXTURE_BINDING_2D, &texture0Binding);
-        
+
     // Bind the frame's output target (gamma scene FBO when active, else back buffer)
     GL_BindFramebufferFunc(GL_FRAMEBUFFER, GLSLGamma_SceneFBO());
     glViewport(0, 0, glwidth, glheight);
@@ -9536,8 +9522,7 @@ void FXAA_EndFrame(void)
     glDisable(GL_CULL_FACE);
     glDisable(GL_BLEND);
     glDisable(GL_ALPHA_TEST);
-    if (!wasTexture2D)
-        glEnable(GL_TEXTURE_2D);
+    glEnable(GL_TEXTURE_2D);
     glDisable(GL_SCISSOR_TEST);
     glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
     
@@ -9546,10 +9531,7 @@ void FXAA_EndFrame(void)
     GL_UseProgramFunc(prog);
     
     // Bind texture and set uniforms
-    if (GL_SelectTextureFunc)
-        GL_SelectTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_2D, fxaa.color_texture);
-    GL_ClearBindings();
     
     if (prog == fxaa.program_fte) {
         GL_Uniform1iFunc(fxaa.u_tex_fte, 0);
@@ -9569,35 +9551,10 @@ void FXAA_EndFrame(void)
     glTexCoord2f(0.0f, 1.0f); glVertex2f(-1.0f, 1.0f);
     glEnd();
     
-    // Cleanup
     GL_UseProgramFunc(0);
+    glPopAttrib();
+    // PopAttrib restores GL state but does not update the texture manager.
     if (GL_SelectTextureFunc)
-    {
-        GL_SelectTexture(GL_TEXTURE0);
-        glBindTexture(GL_TEXTURE_2D, (GLuint)texture0Binding);
-        if (activeTexture != GL_TEXTURE0)
-        {
-            GL_SelectTexture((GLenum)activeTexture);
-            glBindTexture(GL_TEXTURE_2D, (GLuint)activeTextureBinding);
-        }
-        GL_ClearBindings();
-    }
-    else
-    {
-        glBindTexture(GL_TEXTURE_2D, (GLuint)texture0Binding);
-        GL_ClearBindings();
-    }
-    
-    // Restore state
-    if (wasDepthTest) glEnable(GL_DEPTH_TEST);
-    if (wasCullFace) glEnable(GL_CULL_FACE);
-    if (wasBlend) glEnable(GL_BLEND);
-    if (wasAlphaTest) glEnable(GL_ALPHA_TEST);
-    if (wasScissorTest) glEnable(GL_SCISSOR_TEST);
-    if (!wasTexture2D)
-        glDisable(GL_TEXTURE_2D);
-    if (GL_SelectTextureFunc)
-        GL_SelectTexture((GLenum)activeTexture);
-    glPolygonMode(GL_FRONT, polygonMode[0]);
-    glPolygonMode(GL_BACK, polygonMode[1]);
+        GL_SelectTexture(activeTexture);
+    GL_ClearBindings();
 }

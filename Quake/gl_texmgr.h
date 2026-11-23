@@ -173,6 +173,7 @@ int TexMgr_PadConditional (int s);
 
 // TEXTURE BINDING & TEXTURE UNIT SWITCHING
 
+GLenum GL_GetActiveTextureUnit (void);
 void GL_SelectTexture (GLenum target);
 void GL_DisableMultitexture (void); //selects texture unit 0
 void GL_EnableMultitexture (void); //selects texture unit 1
