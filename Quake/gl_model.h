@@ -259,6 +259,7 @@ typedef struct mspriteframe_s
 	float				smax, tmax; //johnfitz -- image might be padded
 	uintptr_t			source_offset;
 	int				source_format, source_framenum;
+	int				source_subframe, source_legacy_framenum;
 	struct gltexture_s	*gltexture;
 } mspriteframe_t;
 

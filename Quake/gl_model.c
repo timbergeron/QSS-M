@@ -6887,12 +6887,13 @@ static void Mod_LoadAliasModel (qmodel_t *mod, void *buffer, int pvtype)
 //=============================================================================
 
 //sanity caps on the file-supplied header values. these keep every later
-//computation (pixel run sizes, origin arithmetic, allocation sizes, the external
-//texture name's framenum*100+i) inside an int by construction rather than by
+//computation (pixel run sizes, origin arithmetic, allocation sizes, legacy
+//texture indices) inside an int by construction rather than by
 //argument, and reject the wild values a corrupt/hostile header can hand us.
 #define SPRITE_MAX_DIM		16384
 #define SPRITE_MAX_ORIGIN	(1<<20)
 #define SPRITE_MAX_FRAMES	8192
+#define SPRITE_LEGACY_GROUP_STRIDE	100
 
 /*
 =================
@@ -7036,11 +7037,12 @@ static const byte *Mod_ValidateSpriteGroup (const byte *pos, const byte *end, si
 =================
 Mod_ValidateSpriteModel -- woods #spriteharden
 
-Full structural pass over the frame list. Runs before anything is allocated or
-uploaded, so a rejected sprite costs us nothing but the warning.
+Full structural pass over the frame list before allocating or uploading the
+model. Also counts the frames claiming each legacy replacement filename.
 =================
 */
-static qboolean Mod_ValidateSpriteModel (const byte *buffer, size_t filesize, size_t pixelbytes, int numframes, const char *name)
+static qboolean Mod_ValidateSpriteModel (const byte *buffer, size_t filesize, size_t pixelbytes,
+	int numframes, const char *name, byte *legacy_uses)
 {
 	const byte	*pos = buffer + sizeof(dsprite_t);
 	const byte	*end = buffer + filesize;
@@ -7048,7 +7050,7 @@ static qboolean Mod_ValidateSpriteModel (const byte *buffer, size_t filesize, si
 
 	for (i = 0 ; i < numframes ; i++)
 	{
-		int frametype;
+		int frametype, firstframe = totalframes;
 
 		if ((size_t)(end - pos) < sizeof(dspriteframetype_t))
 		{
@@ -7068,10 +7070,19 @@ static qboolean Mod_ValidateSpriteModel (const byte *buffer, size_t filesize, si
 			}
 			totalframes++;
 			pos = Mod_ValidateSpriteFrame (pos, end, pixelbytes, name);
+			legacy_uses[i]++;
 			break;
 		case SPR_GROUP:
 		case SPR_ANGLED:
 			pos = Mod_ValidateSpriteGroup (pos, end, pixelbytes, name, &totalframes);
+			if (pos)
+			{
+				int j;
+				// Group starts are 100 apart, so even at the frame cap a
+				// legacy index can be claimed by fewer than 256 frames.
+				for (j = 0; j < totalframes - firstframe; j++)
+					legacy_uses[i * SPRITE_LEGACY_GROUP_STRIDE + j]++;
+			}
 			break;
 		default:
 			Con_Warning ("%s: unknown sprite frame type %d\n", name, frametype);
@@ -7098,8 +7109,10 @@ static void Mod_UploadSpriteFrame (mspriteframe_t *pspriteframe, byte *pixels)
 {
 	int width = pspriteframe->width, height = pspriteframe->height;
 	int framenum = pspriteframe->source_framenum;
+	int subframe = pspriteframe->source_subframe;
+	int legacy_framenum = pspriteframe->source_legacy_framenum;
 	enum srcformat fmt = pspriteframe->source_format, rfmt = SRC_RGBA;
-	char name[64];
+	char name[MAX_QPATH];
 	src_offset_t offset;
 	byte *data = NULL;
 	qboolean malloced = false;
@@ -7112,8 +7125,15 @@ static void Mod_UploadSpriteFrame (mspriteframe_t *pspriteframe, byte *pixels)
 	if (gl_load24bit.value) // woods #extsprites
 	{
 		hunkmark = Hunk_LowMark();
-		q_snprintf(name, sizeof(name), "%s_%i", loadmodel->name, framenum);
-		data = Image_LoadImage(name, &fwidth, &fheight, &rfmt, &malloced);
+
+		// FTE names grouped and angled frames by both indices. Keep
+		// the old flattened name when only one frame can claim it.
+		if (subframe >= 0 &&
+			(size_t)q_snprintf (name, sizeof(name), "%s_%i_%i", loadmodel->name, framenum, subframe) < sizeof(name))
+			data = Image_LoadImage (name, &fwidth, &fheight, &rfmt, &malloced);
+		if (!data && legacy_framenum >= 0 &&
+			(size_t)q_snprintf (name, sizeof(name), "%s_%i", loadmodel->name, legacy_framenum) < sizeof(name))
+			data = Image_LoadImage (name, &fwidth, &fheight, &rfmt, &malloced);
 
 		if (data)
 		{
@@ -7133,9 +7153,13 @@ static void Mod_UploadSpriteFrame (mspriteframe_t *pspriteframe, byte *pixels)
 
 			return;
 		}
+		Hunk_FreeToLowMark(hunkmark);
 	}
 
-	q_snprintf (name, sizeof(name), "%s:frame%i", loadmodel->name, framenum);
+	if (subframe >= 0)
+		q_snprintf (name, sizeof(name), "%s:frame%i_%i", loadmodel->name, framenum, subframe);
+	else
+		q_snprintf (name, sizeof(name), "%s:frame%i", loadmodel->name, framenum);
 	offset = pspriteframe->source_offset;
 	pspriteframe->gltexture =
 		TexMgr_LoadImage (loadmodel, name, width, height, fmt,
@@ -7144,7 +7168,8 @@ static void Mod_UploadSpriteFrame (mspriteframe_t *pspriteframe, byte *pixels)
 
 }
 
-static void *Mod_LoadSpriteFrame (void * pin, mspriteframe_t **ppframe, int framenum, enum srcformat fmt, float *maxradius)
+static void *Mod_LoadSpriteFrame (void *pin, mspriteframe_t **ppframe, int framenum, int subframe,
+	int legacy_framenum, enum srcformat fmt, float *maxradius)
 {
 	dspriteframe_t		*pinframe;
 	mspriteframe_t		*pspriteframe;
@@ -7188,6 +7213,8 @@ static void *Mod_LoadSpriteFrame (void * pin, mspriteframe_t **ppframe, int fram
 	pspriteframe->source_offset = (uintptr_t)(pinframe+1) - (uintptr_t)mod_base;
 	pspriteframe->source_format = fmt;
 	pspriteframe->source_framenum = framenum;
+	pspriteframe->source_subframe = subframe;
+	pspriteframe->source_legacy_framenum = legacy_framenum;
 	Mod_UploadSpriteFrame (pspriteframe, (byte *)(pinframe + 1));
 	return (void *)((byte *)pinframe + sizeof(dspriteframe_t) + size);
 }
@@ -7198,7 +7225,8 @@ static void *Mod_LoadSpriteFrame (void * pin, mspriteframe_t **ppframe, int fram
 Mod_LoadSpriteGroup
 =================
 */
-static void *Mod_LoadSpriteGroup (void * pin, mspriteframe_t **ppframe, int framenum, enum srcformat fmt, float *maxradius)
+static void *Mod_LoadSpriteGroup (void *pin, mspriteframe_t **ppframe, int framenum,
+	const byte *legacy_uses, enum srcformat fmt, float *maxradius)
 {
 	dspritegroup_t		*pingroup;
 	mspritegroup_t		*pspritegroup;
@@ -7242,7 +7270,9 @@ static void *Mod_LoadSpriteGroup (void * pin, mspriteframe_t **ppframe, int fram
 
 	for (i=0 ; i<numframes ; i++)
 	{
-		ptemp = Mod_LoadSpriteFrame (ptemp, &pspritegroup->frames[i], framenum * 100 + i, fmt, maxradius);
+		int legacy_framenum = framenum * SPRITE_LEGACY_GROUP_STRIDE + i;
+		ptemp = Mod_LoadSpriteFrame (ptemp, &pspritegroup->frames[i], framenum, i,
+			legacy_uses[legacy_framenum] == 1 ? legacy_framenum : -1, fmt, maxradius);
 	}
 
 	return ptemp;
@@ -7263,6 +7293,7 @@ static void Mod_LoadSpriteModel (qmodel_t *mod, void *buffer)
 	int					numframes;
 	int					size;
 	dspriteframetype_t	*pframetype;
+	byte				*legacy_uses;
 	enum srcformat fmt = SRC_INDEXED;
 	//grab the length now: loading replacement images below reuses com_filesize // woods #spriteharden
 	size_t				filesize = (size_t)com_filesize;
@@ -7306,10 +7337,21 @@ static void Mod_LoadSpriteModel (qmodel_t *mod, void *buffer)
 		return;
 	}
 
-	//walk the whole file before we allocate or upload anything. after this every
-	//frame, group, interval and pixel run is known to be in bounds // woods #spriteharden
-	if (!Mod_ValidateSpriteModel ((const byte *)buffer, filesize, (fmt == SRC_RGBA) ? 4 : 1, numframes, mod->name))
+	// Only the last group can start at the highest legacy index.
+	legacy_uses = (byte *) calloc ((numframes - 1) * SPRITE_LEGACY_GROUP_STRIDE + SPRITE_MAX_FRAMES, sizeof(*legacy_uses));
+	if (!legacy_uses)
 	{
+		Con_Warning ("%s: could not allocate sprite legacy frame counts\n", mod->name);
+		mod->type = mod_ext_invalid;
+		return;
+	}
+
+	//walk the whole file before we allocate or upload the model. after this every
+	//frame, group, interval and pixel run is known to be in bounds // woods #spriteharden
+	if (!Mod_ValidateSpriteModel ((const byte *)buffer, filesize, (fmt == SRC_RGBA) ? 4 : 1,
+		numframes, mod->name, legacy_uses))
+	{
+		free (legacy_uses);
 		mod->type = mod_ext_invalid;
 		return;
 	}
@@ -7361,14 +7403,15 @@ static void Mod_LoadSpriteModel (qmodel_t *mod, void *buffer)
 		if (frametype == SPR_SINGLE)
 		{
 			pframetype = (dspriteframetype_t *)
-					Mod_LoadSpriteFrame (pframetype + 1, &psprite->frames[i].frameptr, i, fmt, &radius);
+					Mod_LoadSpriteFrame (pframetype + 1, &psprite->frames[i].frameptr, i, -1, i, fmt, &radius);
 		}
 		else
 		{
 			pframetype = (dspriteframetype_t *)
-					Mod_LoadSpriteGroup (pframetype + 1, &psprite->frames[i].frameptr, i, fmt, &radius);
+					Mod_LoadSpriteGroup (pframetype + 1, &psprite->frames[i].frameptr, i, legacy_uses, fmt, &radius);
 		}
 	}
+	free (legacy_uses);
 
 	//woods -- bounds are a sphere of the worst-case corner distance over every
 	//frame. billboards rotate to face the view and frame origins are asymmetric,
