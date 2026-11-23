@@ -200,11 +200,6 @@ void DrawGLTriangleFan (glpoly_t *p)
 =============================================================
 */
 
-static qboolean R_IsStaticEntity (const entity_t *e)
-{
-	return e->is_static;
-}
-
 /*
 =================
 R_DrawBrushModel
@@ -272,9 +267,11 @@ static qboolean R_SetupBrushModel (entity_t *e)
 	return true;
 }
 
-static qboolean R_BrushModelZFix (entity_t *e)
+qboolean R_BrushModelZFix (const entity_t *e)
 {
-	return gl_zfix.value && !R_IsStaticEntity (e);
+	// Alpha-tested static decals sit close to the world. Keep their original
+	// placement, including in mixed-material models that share one transform.
+	return gl_zfix.value && (!e->is_static || !e->model->hasfencesurfaces);
 }
 
 static void R_PushBrushModelMatrix (entity_t *e)

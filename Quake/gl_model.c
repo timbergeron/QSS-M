@@ -5794,9 +5794,8 @@ visdone:
 		mod->submodelof = loadmodel->submodelof;
 		mod->submodelidx = i;
 
-		//note whether this submodel has any sky at all, so Sky_ProcessEntities can
-		//skip it outright instead of walking its faces every frame.  the flags were
-		//assigned in Mod_LoadFaces, which has already run.
+		// Cache the surface types used by the renderer so it doesn't have to scan
+		// the submodel each frame. Mod_LoadFaces has already set the flags.
 		//Mod_LoadSubmodels takes firstface/numfaces straight from the lump without
 		//validating them, so check the range before forming a pointer from it.  the
 		//render paths that walk it are equally unguarded, but this is the first thing
@@ -5807,6 +5806,7 @@ visdone:
 		//non-negative so it cannot overflow.
 		mod->hasskysurfaces = false;
 		mod->hastelesurfaces = false;
+		mod->hasfencesurfaces = false;
 		if (mod->firstmodelsurface >= 0 && mod->nummodelsurfaces >= 0 &&
 			mod->firstmodelsurface <= mod->numsurfaces &&
 			mod->nummodelsurfaces <= mod->numsurfaces - mod->firstmodelsurface)
@@ -5818,7 +5818,9 @@ visdone:
 					mod->hasskysurfaces = true;
 				if (surf->flags & SURF_DRAWTELE)
 					mod->hastelesurfaces = true;
-				if (mod->hasskysurfaces && mod->hastelesurfaces)
+				if (surf->flags & SURF_DRAWFENCE)
+					mod->hasfencesurfaces = true;
+				if (mod->hasskysurfaces && mod->hastelesurfaces && mod->hasfencesurfaces)
 					break;
 			}
 		}

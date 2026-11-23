@@ -592,6 +592,7 @@ void R_BeginDeferredAliasOutlines (void);
 void R_DrawDeferredAliasOutlines (void);
 void R_DrawDeferredGrenadeGlows (void);
 void R_DrawBrushModel (entity_t *e);
+qboolean R_BrushModelZFix (const entity_t *e);
 void R_DrawBrushModelsInstanced (entity_t **ents, int count);
 void R_DeleteBrushModelInstancingBuffers (void);
 void R_DrawSpriteModel (entity_t *e);

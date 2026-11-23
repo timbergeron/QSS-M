@@ -1639,7 +1639,7 @@ static void R_BuildBrushModelMatrix (const entity_t *ent, float *matrix)
 	float zofs;
 
 	VectorCopy(ent->origin, origin);
-	if (gl_zfix.value && !ent->is_static)
+	if (R_BrushModelZFix (ent))
 	{
 		origin[0] -= DIST_EPSILON;
 		origin[1] -= DIST_EPSILON;
@@ -7199,6 +7199,7 @@ static struct
 
 		byte *cachedsubmodels;	//one bit for each.
 		unsigned int numcachedsubmodels;
+		qboolean zfix;		// affects which static submodels can be baked
 		byte *visitedsurfs;	//worker-private surface visitation bitmap
 
 		unsigned int brushpolys;
@@ -8270,6 +8271,8 @@ static qboolean RSceneCache_Queue(byte *vis)
 			ent->alpha!=0 ||	//transparent stuff would need extra batches, which gets awkward and misordered.
 			ent->effects)	//weird stuff like EF_ADDITIVE/EF_FULLBRIGHT. probably not used on submodels anyway.
 			continue;	//nope, can't bake it.
+		if (ent->is_static && R_BrushModelZFix (ent))
+			continue;	// the cache can only draw submodels at their original position
 		if (grass_blades_active && R_GrassEntityAllowsGrass(ent) &&
 			R_GrassPresenceCacheHasBladeSurfaces(R_GrassGetPresenceCache(ent->model, true)))
 			continue;	//keep grass-bearing bmodels in the normal entity path.
@@ -8280,7 +8283,7 @@ static qboolean RSceneCache_Queue(byte *vis)
 
 	for (building = NULL, cache = rscenecache.cache; cache; cache = cache->next)
 	{
-		if (cache->worldmodel != cl.worldmodel)
+		if (cache->worldmodel != cl.worldmodel || cache->zfix != !!gl_zfix.value)
 		{	//this cache is completely unsuitable.
 			if (SDL_GetAtomicInt(&cache->status) == SCS_BUILDING)
 				building = cache;
@@ -8480,6 +8483,7 @@ static qboolean RSceneCache_Queue(byte *vis)
 		SDL_SetAtomicInt(&cache->status, SCS_BUILDING);
 		VectorCopy(r_origin, cache->pos);	//might as well overwrite its origin
 		cache->hostframe = host_framecount;
+		cache->zfix = !!gl_zfix.value;
 		memcpy(cache->pvs, vis, rowbytes);
 		memcpy(cache->cachedsubmodels, bakesubmodels, submodelbytes);
 		memset(cache->visitedsurfs, 0, surfacebytes);

@@ -530,6 +530,7 @@ typedef struct qmodel_s
 								//is fixed once the model is loaded. see Sky_ProcessEntities.
 	qboolean	hastelesurfaces;		// any SURF_DRAWTELE in this submodel's surface range
 	qboolean	hasteletextures;		// shared texture set has a usable teleporter normal map
+	qboolean	hasfencesurfaces;	// any alpha-tested surface in this submodel
 
 	int			numsubmodels;
 	mmodel_t	*submodels;
