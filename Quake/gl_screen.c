@@ -5095,8 +5095,6 @@ void SCR_DrawCrosshair (void)
 	glEnable(GL_BLEND);
 	glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
 	glDisable(GL_ALPHA_TEST);
-	GLboolean was_multisample = glIsEnabled(GL_MULTISAMPLE);
-	glEnable(GL_MULTISAMPLE);
 	glEnable(GL_LINE_SMOOTH);
 	glHint(GL_LINE_SMOOTH_HINT, GL_NICEST);
 	glHint(GL_POLYGON_SMOOTH_HINT, GL_NICEST);
@@ -5143,8 +5141,6 @@ void SCR_DrawCrosshair (void)
 	}
 
 	glColor4f(1, 1, 1, 1);
-	if (!was_multisample)
-		glDisable(GL_MULTISAMPLE);
 	glDisable(GL_LINE_SMOOTH);
 	glDisable(GL_POLYGON_SMOOTH);
 	glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
