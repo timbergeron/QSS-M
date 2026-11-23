@@ -228,7 +228,6 @@ static int hudtype;
 void Sbar_MiniDeathmatchOverlay (void);
 void Sbar_DeathmatchOverlay (void);
 void M_DrawPic (int x, int y, qpic_t *pic);
-void Draw_SubPic_QW (int x, int y, qpic_t* pic, int ofsx, int ofsy, int w, int h); // woods #sbarstyles for qw hud
 extern cvar_t scr_showspeed; // woods
 extern cvar_t scr_sbarfacecolor; // #teamface
 
@@ -841,20 +840,27 @@ void Sbar_DrawPic (int x, int y, qpic_t *pic)
 
 /*
 =============
-Sbar_DrawSubPicAlpha -- // woods #sbarstyles
+Sbar_DrawSubPicsAlpha -- // woods #sbarstyles
 =============
 */
-void Sbar_DrawSubPicAlpha(int x, int y, qpic_t* pic, int ofsx, int ofsy, int w, int h, float alpha)
+static void Sbar_DrawSubPicsAlpha (qpic_t *pic, const drawsubpic_t *rects, int count, float alpha)
 {
 	glDisable(GL_ALPHA_TEST);
 	glEnable(GL_BLEND);
 	glTexEnvf(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_MODULATE); // woods -- modulate so vertex alpha is honored (other 2D draws leave env on GL_REPLACE)
 	glColor4f(1, 1, 1, alpha);
-	Draw_SubPic_QW(x, y + 24, pic, ofsx, ofsy, w, h);
+	Draw_SubPics_QW (pic, rects, count);
 	glColor4f(1, 1, 1, 1); // ericw -- changed from glColor3f to work around intel 855 bug with "r_oldwater 0" and "scr_sbaralpha 0"
 	glTexEnvf(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_REPLACE);
 	glDisable(GL_BLEND);
 	glEnable(GL_ALPHA_TEST);
+}
+
+void Sbar_DrawSubPicAlpha (int x, int y, qpic_t *pic, int ofsx, int ofsy, int w, int h, float alpha)
+{
+	const drawsubpic_t rect = {x, y + 24, ofsx, ofsy, w, h};
+
+	Sbar_DrawSubPicsAlpha (pic, &rect, 1, alpha);
 }
 
 /*
@@ -1536,6 +1542,16 @@ void Sbar_DrawScoreboard (void)
 
 //=============================================================================
 
+static void Sbar_BatchAmmoCount (drawcharbatch_t *batch, int x, int y, int count)
+{
+	count = CLAMP (0, count, 999);
+	if (count >= 100)
+		Draw_BatchCharacter (batch, x, y, 18 + count / 100);
+	if (count >= 10)
+		Draw_BatchCharacter (batch, x + 8, y, 18 + count / 10 % 10);
+	Draw_BatchCharacter (batch, x + 16, y, 18 + count % 10);
+}
+
 /*
 ===============
 Sbar_DrawInventory
@@ -1543,8 +1559,8 @@ Sbar_DrawInventory
 */
 void Sbar_DrawInventory (void)
 {
-	int	i, val;
-	char	num[6];
+	int	i;
+	drawcharbatch_t ammo;
 	float	time;
 	int	flashon;
 
@@ -1663,18 +1679,10 @@ void Sbar_DrawInventory (void)
 	}
 
 // ammo counts
+	Draw_BeginCharacterBatch (&ammo);
 	for (i = 0; i < 4; i++)
-	{
-		val = cl.stats[STAT_SHELLS+i];
-		val = (val < 0)? 0 : q_min(999,val);//johnfitz -- cap displayed value to 999
-		sprintf (num, "%3i", val);
-		if (num[0] != ' ')
-			Sbar_DrawCharacter ( (6*i+1)*8 + 2, -24, 18 + num[0] - '0');
-		if (num[1] != ' ')
-			Sbar_DrawCharacter ( (6*i+2)*8 + 2, -24, 18 + num[1] - '0');
-		if (num[2] != ' ')
-			Sbar_DrawCharacter ( (6*i+3)*8 + 2, -24, 18 + num[2] - '0');
-	}
+		Sbar_BatchAmmoCount (&ammo, 10 + 48 * i, 0, cl.stats[STAT_SHELLS + i]);
+	Draw_EndCharacterBatch (&ammo);
 
 	flashon = 0;
 	// items
@@ -1772,43 +1780,45 @@ Sbar_DrawInventory_QW -- github.com/bangstk/Quakespasm // woods #sbarstyles
 */
 void Sbar_DrawInventory_QW (void)
 {
-	int	i, val;
-	char	num[6];
+	int	i, ammo_x;
+	drawcharbatch_t ammo;
+	drawsubpic_t backgrounds[4];
 	float	time;
 	int	flashon;
 	int extraguns = 2 * hipnotic;
 	int clampedSbar = CLAMP(1, (int)scr_sbar.value, 3);
-	qpic_t* pic = NULL;
+	qpic_t *pic, *background;
+	qboolean has_ibar2;
+	float background_alpha;
 
 	if (clampedSbar == 3)
 		GL_SetCanvas(CANVAS_IBAR_QWQE);
 	else
 		GL_SetCanvas(CANVAS_IBAR_QW);
 
-	if (COM_FileExists("gfx/ibar2.lmp", NULL))
-		pic = Draw_CachePic("gfx/ibar2.lmp");
+	has_ibar2 = COM_FileExists ("gfx/ibar2.lmp", NULL);
+	pic = has_ibar2 ? Draw_CachePic ("gfx/ibar2.lmp") : NULL;
+	ammo_x = !scr_sbaralphaqwammo.value && !has_ibar2 ? 17 : 9;
 
 	//for qw hud, ammo backgrounds
+	if (rogue)
+	{
+		background = rsb_invbar[cl.stats[STAT_ACTIVEWEAPON] < RIT_LAVA_NAILGUN];
+		background_alpha = scr_sbaralpha.value;
+	}
+	else
+	{
+		background = !scr_sbaralphaqwammo.value && pic ? pic : sb_ibar;
+		background_alpha = scr_sbaralphaqwammo.value || pic ? 1.0f : 0.0f;
+	}
 	for (i = 0; i < 4; i++)
 	{
-		if (rogue)
-		{
-			if (cl.stats[STAT_ACTIVEWEAPON] >= RIT_LAVA_NAILGUN)
-				Sbar_DrawSubPicAlpha(0, 188 - 11 * (4 - i) - 24, rsb_invbar[0], 1 + (i * 48), 0, 44, 11, scr_sbaralpha.value); //johnfitz -- scr_sbaralpha
-			else
-				Sbar_DrawSubPicAlpha(0, 188 - 11 * (4 - i) - 24, rsb_invbar[1], 1 + (i * 48), 0, 44, 11, scr_sbaralpha.value); //johnfitz -- scr_sbaralpha
-		}
-		else
-			if (!scr_sbaralphaqwammo.value) // woods #sbarstyles
-			{
-				if (pic != NULL)
-					Sbar_DrawSubPicAlpha(2, 188 - 11 * (4 - i) - 24, pic, 3 + (i * 48), 0, 42, 11, 1);
-				else
-					Sbar_DrawSubPicAlpha(2, 188 - 11 * (4 - i) - 24, sb_ibar, 3 + (i * 48), 0, 42, 11, 0);
-			}
-			else
-				Sbar_DrawSubPicAlpha(2, 188 - 11 * (4 - i) - 24, sb_ibar, 3 + (i * 48), 0, 42, 11, 1);
+		backgrounds[i] = (drawsubpic_t) {
+			rogue ? 0 : 2, 144 + 11 * i, (rogue ? 1 : 3) + 48 * i,
+			0, rogue ? 44 : 42, 11
+		};
 	}
+	Sbar_DrawSubPicsAlpha (background, backgrounds, countof(backgrounds), background_alpha);
 
 	// weapons
 	for (i = 0; i < 7; i++)
@@ -1908,22 +1918,10 @@ void Sbar_DrawInventory_QW (void)
 	}
 	
 	// ammo counts
+	Draw_BeginCharacterBatch (&ammo);
 	for (i = 0; i < 4; i++)
-	{
-		int x;
-		x = 0;
-		if (!scr_sbaralphaqwammo.value && !COM_FileExists("gfx/ibar2.lmp", NULL)) // woods #sbarstyles
-			x = 8;
-		val = cl.stats[STAT_SHELLS + i];
-		val = (val < 0) ? 0 : q_min(999, val);//johnfitz -- cap displayed value to 999
-		sprintf(num, "%3i", val);
-		if (num[0] != ' ')
-			Sbar_DrawCharacter(9 + x, 188 - 11 * (4 - i) - 24, 18 + num[0] - '0');
-		if (num[1] != ' ')
-			Sbar_DrawCharacter(17 + x, 188 - 11 * (4 - i) - 24, 18 + num[1] - '0');
-		if (num[2] != ' ')
-			Sbar_DrawCharacter(25 + x, 188 - 11 * (4 - i) - 24, 18 + num[2] - '0');
-	}
+		Sbar_BatchAmmoCount (&ammo, ammo_x, 144 + 11 * i, cl.stats[STAT_SHELLS + i]);
+	Draw_EndCharacterBatch (&ammo);
 
 	GL_SetCanvas(CANVAS_SBAR);
 

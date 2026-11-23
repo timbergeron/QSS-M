@@ -69,6 +69,11 @@ void Draw_Pic (int x, int y, qpic_t *pic);
 void Draw_ScaledPic (int x, int y, qpic_t *pic, float scale); // woods #shownet
 void Draw_Pic_RGBA_Outline (int x, int y, qpic_t* pic, plcolour_t c, float alpha, float outlineThickness); // woods #varmatchclock
 void Draw_SubPic (float x, float y, float w, float h, qpic_t *pic, float s1, float t1, float s2, float t2);
+typedef struct
+{
+	int x, y, ofsx, ofsy, w, h;
+} drawsubpic_t;
+void Draw_SubPics_QW (qpic_t *pic, const drawsubpic_t *rects, int count);
 void Draw_ConsoleBackground (void); //johnfitz -- removed parameter int lines
 void Draw_TileClear (int x, int y, int w, int h);
 void Draw_Fill (int x, int y, int w, int h, int c, float alpha); //johnfitz -- added alpha

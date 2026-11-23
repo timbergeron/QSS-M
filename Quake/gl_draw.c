@@ -2523,42 +2523,42 @@ void Draw_Pic_RGBA_Outline (int x, int y, qpic_t* pic, plcolour_t c, float alpha
 
 // woods #sbarstyles for qw hud
 
-void Draw_SubPic_QW (int x, int y, qpic_t *pic, int ofsx, int ofsy, int w, int h)
+void Draw_SubPics_QW (qpic_t *pic, const drawsubpic_t *rects, int count)
 {
-	glpic_t storage, *gl = &storage;
-	float nsl, ntl, nsh, nth;
+	glpic_t gl;
 	float oldw, oldh;
+	int i;
 
-	if (!pic)
+	if (!pic || count <= 0)
 		return;
 	if (scrap_dirty)
 		Scrap_Upload ();
 	if ((uintptr_t)pic->data < 0x1000)
 		return;
-	memcpy (gl, pic->data, sizeof(*gl));
-	GL_Bind (gl->gltexture);
+	memcpy (&gl, pic->data, sizeof(gl));
+	GL_Bind (gl.gltexture);
+	oldw = gl.sh - gl.sl;
+	oldh = gl.th - gl.tl;
 
-    oldw = gl->sh - gl->sl;
-    oldh = gl->th - gl->tl;
+	glBegin (GL_QUADS);
+	for (i = 0; i < count; ++i)
+	{
+		const drawsubpic_t *rect = &rects[i];
+		float sl = gl.sl + (rect->ofsx * oldw) / pic->width;
+		float sh = sl + (rect->w * oldw) / pic->width;
+		float tl = gl.tl + (rect->ofsy * oldh) / pic->height;
+		float th = tl + (rect->h * oldh) / pic->height;
 
-    nsl = gl->sl + (ofsx * oldw) / pic->width;
-    nsh = nsl + (w * oldw) / pic->width;
-
-    ntl = gl->tl + (ofsy * oldh) / pic->height;
-    nth = ntl + (h * oldh) / pic->height;
-
-    glBegin (GL_QUADS);
-
-    glTexCoord2f (nsl, ntl);
-    glVertex2f (x, y);
-    glTexCoord2f (nsh, ntl);
-    glVertex2f (x+w, y);
-    glTexCoord2f (nsh, nth);
-    glVertex2f (x+w, y+h);
-    glTexCoord2f (nsl, nth);
-    glVertex2f (x, y+h);
-
-    glEnd ();
+		glTexCoord2f (sl, tl);
+		glVertex2f (rect->x, rect->y);
+		glTexCoord2f (sh, tl);
+		glVertex2f (rect->x + rect->w, rect->y);
+		glTexCoord2f (sh, th);
+		glVertex2f (rect->x + rect->w, rect->y + rect->h);
+		glTexCoord2f (sl, th);
+		glVertex2f (rect->x, rect->y + rect->h);
+	}
+	glEnd ();
 }
 
 void Draw_SubPic (float x, float y, float w, float h, qpic_t *pic, float s1, float t1, float s2, float t2)
