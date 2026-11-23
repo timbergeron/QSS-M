@@ -753,6 +753,7 @@ void GL_ResetBufferNames (void);
 
 void GLSLGamma_DeleteTexture (void);
 void GLSLGamma_BeginFrame (void);
+void R_SetSceneFBOCleared (qboolean cleared);
 GLuint GLSLGamma_SceneFBO (void);
 void GLSLGamma_MSAAChanged (void);
 int GLSLGamma_MSAASamples (void);

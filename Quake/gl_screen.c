@@ -8787,6 +8787,7 @@ void SCR_UpdateScreen (void)
 
 		if (FXAA_Enabled ()) // woods #fxaa
 			FXAA_BeginFrame();
+		R_SetSceneFBOCleared (false); // CSQC may draw 2D before calling renderscene
 
 		if (cls.signon == SIGNONS||!cl.qcvm.extfuncs.CSQC_UpdateViewLoading)
 			PR_ExecuteProgram(cl.qcvm.extfuncs.CSQC_UpdateView);
@@ -9490,7 +9491,12 @@ void FXAA_BeginFrame(void)
         rgb = (byte *)(d_8to24table + s);
         glClearColor(rgb[0]/255.0f, rgb[1]/255.0f, rgb[2]/255.0f, 0.0f);
     }
+    glDisable(GL_SCISSOR_TEST);
+    glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+    glDepthMask(GL_TRUE);
+    glStencilMask(~0u);
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT);
+    R_SetSceneFBOCleared(true);
 }
 
 /*
@@ -9506,9 +9512,7 @@ void FXAA_EndFrame(void)
         return;
     fxaa_frame_active = false;
 
-    // Save the pass state without waiting for the driver to answer queries.
     activeTexture = GL_GetActiveTextureUnit();
-    glPushAttrib(GL_ENABLE_BIT | GL_POLYGON_BIT | GL_TEXTURE_BIT);
     if (GL_SelectTextureFunc)
         GL_SelectTexture(GL_TEXTURE0);
 
@@ -9516,8 +9520,7 @@ void FXAA_EndFrame(void)
     GL_BindFramebufferFunc(GL_FRAMEBUFFER, GLSLGamma_SceneFBO());
     glViewport(0, 0, glwidth, glheight);
     
-    // Clear and set up for fullscreen quad
-    glClear(GL_COLOR_BUFFER_BIT);
+    // Opaque fullscreen quad overwrites every pixel; no color clear needed
     glDisable(GL_DEPTH_TEST);
     glDisable(GL_CULL_FACE);
     glDisable(GL_BLEND);
@@ -9552,8 +9555,8 @@ void FXAA_EndFrame(void)
     glEnd();
     
     GL_UseProgramFunc(0);
-    glPopAttrib();
-    // PopAttrib restores GL state but does not update the texture manager.
+    glEnable(GL_DEPTH_TEST);
+    glEnable(GL_ALPHA_TEST);
     if (GL_SelectTextureFunc)
         GL_SelectTexture(activeTexture);
     GL_ClearBindings();

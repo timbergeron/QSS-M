@@ -193,6 +193,7 @@ static int r_gamma_texture_width, r_gamma_texture_height;
 static GLuint r_gamma_fbo;
 static GLuint r_gamma_depth_renderbuffer;
 static qboolean r_gamma_fbo_active;	// scene FBO bound for the current frame
+static qboolean r_scene_fbo_cleared;	// active scene FBO was already cleared for the first 3D pass
 static qboolean r_gamma_fbo_failed; // retry after resize, AA change, or video restart
 static qboolean r_gamma_texture_failed;
 static qboolean r_gamma_texture_warned, r_gamma_fbo_warned;
@@ -1079,6 +1080,7 @@ void GLSLGamma_BeginFrame (void)
 	glStencilMask (~0u);
 	glClear (GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT);
 	r_gamma_fbo_active = true;
+	r_scene_fbo_cleared = true;
 }
 
 /*
@@ -1092,6 +1094,11 @@ such as FXAA and menu previews must restore.
 GLuint GLSLGamma_SceneFBO (void)
 {
 	return r_gamma_fbo_active ? (r_scene_msaa.fbo ? r_scene_msaa.fbo : r_gamma_fbo) : 0;
+}
+
+void R_SetSceneFBOCleared (qboolean cleared)
+{
+	r_scene_fbo_cleared = cleared;
 }
 
 /*
@@ -1110,10 +1117,7 @@ void GLSLGamma_GammaCorrect (void)
 	qboolean fbo_active = r_gamma_fbo_active;
 	qboolean shader;
 
-	GLSLGamma_ResolveMSAA (true);
-	r_gamma_fbo_active = false;
-	if (fbo_active)
-		gl_stencilbits = r_scene_window_stencilbits;
+	r_scene_fbo_cleared = false;
 
 	softemu_mode = GLSLGamma_SoftEmuMode();
 	if (!gl_glsl_gamma_able)
@@ -1136,9 +1140,31 @@ void GLSLGamma_GammaCorrect (void)
 		softemu_mode = 0;
 	}
 
-	// when the scene FBO is active the frame lives in r_gamma_texture and
-	// must be drawn to the default framebuffer regardless of the settings
+	// when the scene FBO is active the frame lives in r_gamma_texture (or r_scene_msaa)
+	// and must be presented to the default framebuffer regardless of the settings
 	shader = gl_glsl_gamma_able && (softemu_mode || vid_gamma.value != 1 || vid_contrast.value != 1);
+
+	// Direct MSAA resolve straight to the default framebuffer when no gamma/contrast/softemu shader is needed.
+	if (fbo_active && !shader && r_scene_msaa.fbo &&
+		r_scene_width == glwidth && r_scene_height == glheight)
+	{
+		glDisable (GL_SCISSOR_TEST);
+		glColorMask (GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+		GL_BindFramebufferFunc (GL_READ_FRAMEBUFFER, r_scene_msaa.fbo);
+		GL_BindFramebufferFunc (GL_DRAW_FRAMEBUFFER, 0);
+		GL_BlitFramebufferFunc (0, 0, glwidth, glheight, glx, gly, glx + glwidth, gly + glheight,
+			GL_COLOR_BUFFER_BIT, GL_NEAREST);
+		GL_BindFramebufferFunc (GL_FRAMEBUFFER, 0);
+		r_gamma_fbo_active = false;
+		gl_stencilbits = r_scene_window_stencilbits;
+		return;
+	}
+
+	GLSLGamma_ResolveMSAA (true);
+	r_gamma_fbo_active = false;
+	if (fbo_active)
+		gl_stencilbits = r_scene_window_stencilbits;
+
 	if (!fbo_active && !shader)
 		return;
 
@@ -1690,6 +1716,12 @@ R_Clear -- johnfitz -- rewritten and gutted
 void R_Clear (void)
 {
 	unsigned int clearbits;
+
+	if (r_scene_fbo_cleared && !r_teleport_view && !skyroom_drawn)
+	{
+		r_scene_fbo_cleared = false;
+		return;
+	}
 
 	clearbits = GL_DEPTH_BUFFER_BIT;
 	// from mh -- if we get a stencil buffer, we should clear it, even though we don't use it
