@@ -352,6 +352,14 @@ start:
 	if (node->contents < 0)
 		return;
 
+	{
+		float r = light->radius;
+		if (lightorg[0] + r < node->minmaxs[0] || lightorg[0] - r > node->minmaxs[3] ||
+			lightorg[1] + r < node->minmaxs[1] || lightorg[1] - r > node->minmaxs[4] ||
+			lightorg[2] + r < node->minmaxs[2] || lightorg[2] - r > node->minmaxs[5])
+			return;
+	}
+
 	splitplane = node->plane;
 	if (splitplane->type < 3)
 		dist = lightorg[splitplane->type] - splitplane->dist;
@@ -385,6 +393,9 @@ start:
 		surf = cl.worldmodel->surfaces + node->firstsurface;
 		for (i=0 ; i<node->numsurfaces ; i++, surf++)
 		{
+			if (surf->flags & SURF_DRAWTILED)
+				continue;
+
 			if (!surf->plane
 				|| surf->plane < cl.worldmodel->planes
 				|| surf->plane >= cl.worldmodel->planes + cl.worldmodel->numplanes)
@@ -396,6 +407,8 @@ start:
 			
 			facedist = DotProduct(lightorg, surf->plane->normal)
 				- surf->plane->dist;
+			if (facedist * facedist >= maxdist)
+				continue;
 			
 			for (j=0 ; j<3 ; j++)
 				impact[j] = lightorg[j] - surf->plane->normal[j]*facedist;

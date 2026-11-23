@@ -233,11 +233,14 @@ static qboolean R_SetupBrushModel (entity_t *e)
 	currententity = e;
 	clmodel = e->model;
 
+	vec3_t		forward, right, up;
+	qboolean	rotated;
+
 	VectorSubtract (r_refdef.vieworg, e->origin, modelorg);
-	if (e->angles[0] || e->angles[1] || e->angles[2])
+	rotated = (e->angles[0] || e->angles[1] || e->angles[2]);
+	if (rotated)
 	{
 		vec3_t	temp;
-		vec3_t	forward, right, up;
 
 		VectorCopy (modelorg, temp);
 		AngleVectors (e->angles, forward, right, up);
@@ -248,17 +251,49 @@ static qboolean R_SetupBrushModel (entity_t *e)
 
 // calculate dynamic lighting for bmodel if it's not an
 // instanced model
-	if (clmodel->firstmodelsurface != 0 && !gl_flashblend.value)
+	if (clmodel->firstmodelsurface != 0 && !gl_flashblend.value && r_dynamic.value)
 	if (e->model->submodelof == cl.worldmodel)	//R_MarkLights has a hacky assumption about cl.worldmodel that could crash if we imported some other model.
 	{
+		vec3_t mins, maxs;
+		qboolean have_bounds = false;
+
 		for (k=0 ; k<MAX_DLIGHTS ; k++)
 		{
+			float radius, dist2 = 0.0f;
+			int axis;
+
 			if ((cl_dlights[k].die < cl.time) ||
 				(!cl_dlights[k].radius) ||
 				(R_DlightStyleScale(&cl_dlights[k]) <= 0.0f))
 				continue;
 
+			if (!have_bounds)
+			{
+				R_GetEntityBounds (e, mins, maxs);
+				have_bounds = true;
+			}
+			radius = cl_dlights[k].radius;
+			for (axis = 0; axis < 3; axis++)
+			{
+				float delta = 0.0f;
+				if (cl_dlights[k].origin[axis] < mins[axis])
+					delta = mins[axis] - cl_dlights[k].origin[axis];
+				else if (cl_dlights[k].origin[axis] > maxs[axis])
+					delta = cl_dlights[k].origin[axis] - maxs[axis];
+				dist2 += delta * delta;
+			}
+			if (dist2 > radius * radius)
+				continue;
+
 			VectorSubtract(cl_dlights[k].origin, e->origin, lightorg);
+			if (rotated)
+			{
+				vec3_t temp;
+				VectorCopy (lightorg, temp);
+				lightorg[0] = DotProduct (temp, forward);
+				lightorg[1] = -DotProduct (temp, right);
+				lightorg[2] = DotProduct (temp, up);
+			}
 			R_MarkLights (&cl_dlights[k], lightorg, r_framecount, k,
 				clmodel->nodes + clmodel->hulls[0].firstclipnode);
 		}
@@ -1845,11 +1880,11 @@ R_AddDynamicLights
 */
 static void R_AddDynamicLights (msurface_t *surf, unsigned *blocklights, entity_t *currentent, dlight_t *lights, const int *lightstyles)
 {
-	int			lnum;
+	int			lnum, word;
 	int			sd, td;
 	float		dist, rad, minlight;
 	vec3_t		impact, local;
-	int			s, t;
+	int			s, t, s0, s1, t0, t1;
 	int			i;
 	int			smax, tmax;
 	//johnfitz -- lit support via lordhavoc
@@ -1861,75 +1896,119 @@ static void R_AddDynamicLights (msurface_t *surf, unsigned *blocklights, entity_
 	smax = surf->extents[0]+1;
 	tmax = surf->extents[1]+1;
 
-	for (lnum=0 ; lnum<MAX_DLIGHTS ; lnum++)
+	for (word = 0; word < (int)countof(surf->dlightbits); word++)
 	{
-		if (! (surf->dlightbits[lnum >> 5] & (1U << (lnum & 31))))
-			continue;		// not lit by this light
-
-		rad = lights[lnum].radius;
-		if (lights[lnum].style < 0 || lights[lnum].style >= MAX_LIGHTSTYLES)
-			stylescale = 1.0f;
-		else
-			stylescale = lightstyles[lights[lnum].style] * (1.0f / 256.0f);
-		if (stylescale <= 0.0f)
-			continue;
-		if (currentent->currentangles[0] || currentent->currentangles[1] || currentent->currentangles[2])
+		unsigned int bits = surf->dlightbits[word];
+		while (bits)
 		{
-			vec3_t temp, axis[3];
-			VectorSubtract(lights[lnum].origin, currentent->origin, temp);
-			AngleVectors(currentent->currentangles, axis[0], axis[1], axis[2]);
-			lightofs[0] = +DotProduct(temp, axis[0]);
-			lightofs[1] = -DotProduct(temp, axis[1]);
-			lightofs[2] = +DotProduct(temp, axis[2]);
-		}
-		else
-			VectorSubtract(lights[lnum].origin, currentent->origin, lightofs);
-		dist = DotProduct (lightofs, surf->plane->normal) - surf->plane->dist;
-		rad -= fabs(dist);
-		minlight = lights[lnum].minlight;
-		if (rad < minlight)
-			continue;
-		minlight = rad - minlight;
+			unsigned int lsb = bits & (0u - bits);
+			int bit = 0;
+			unsigned int tmp = lsb;
+			while (tmp > 1u) { tmp >>= 1; bit++; }
+			bits ^= lsb;
+			lnum = (word << 5) + bit;
+			if (lnum >= MAX_DLIGHTS)
+				break;
 
-		for (i=0 ; i<3 ; i++)
-		{
-			impact[i] = lightofs[i] -
-					surf->plane->normal[i]*dist;
-		}
-
-		local[0] = DotProduct (impact, surf->lmvecs[0]) + surf->lmvecs[0][3];
-		local[1] = DotProduct (impact, surf->lmvecs[1]) + surf->lmvecs[1][3];
-
-		//johnfitz -- lit support via lordhavoc
-		bl = blocklights;
-		cred = lights[lnum].color[0] * 256.0f * stylescale;
-		cgreen = lights[lnum].color[1] * 256.0f * stylescale;
-		cblue = lights[lnum].color[2] * 256.0f * stylescale;
-		//johnfitz
-		for (t = 0 ; t<tmax ; t++)
-		{
-			td = (local[1] - t)*surf->lmvecscale[1];
-			if (td < 0)
-				td = -td;
-			for (s=0 ; s<smax ; s++)
+			rad = lights[lnum].radius;
+			if (lights[lnum].style < 0 || lights[lnum].style >= MAX_LIGHTSTYLES)
+				stylescale = 1.0f;
+			else
+				stylescale = lightstyles[lights[lnum].style] * (1.0f / 256.0f);
+			if (stylescale <= 0.0f)
+				continue;
+			if (currentent->currentangles[0] || currentent->currentangles[1] || currentent->currentangles[2])
 			{
-				sd = (local[0] - s)*surf->lmvecscale[0];
-				if (sd < 0)
-					sd = -sd;
-				if (sd > td)
-					dist = sd + (td>>1);
-				else
-					dist = td + (sd>>1);
-				if (dist < minlight)
-				//johnfitz -- lit support via lordhavoc
+				vec3_t temp, axis[3];
+				VectorSubtract(lights[lnum].origin, currentent->origin, temp);
+				AngleVectors(currentent->currentangles, axis[0], axis[1], axis[2]);
+				lightofs[0] = +DotProduct(temp, axis[0]);
+				lightofs[1] = -DotProduct(temp, axis[1]);
+				lightofs[2] = +DotProduct(temp, axis[2]);
+			}
+			else
+				VectorSubtract(lights[lnum].origin, currentent->origin, lightofs);
+			dist = DotProduct (lightofs, surf->plane->normal) - surf->plane->dist;
+			rad -= fabsf(dist);
+			minlight = lights[lnum].minlight;
+			if (rad < minlight)
+				continue;
+			minlight = rad - minlight;
+
+			for (i=0 ; i<3 ; i++)
+			{
+				impact[i] = lightofs[i] -
+						surf->plane->normal[i]*dist;
+			}
+
+			local[0] = DotProduct (impact, surf->lmvecs[0]) + surf->lmvecs[0][3];
+			local[1] = DotProduct (impact, surf->lmvecs[1]) + surf->lmvecs[1][3];
+
+			// Clamp luxel loop to the region where |td| < minlight and |sd| < minlight.
+			// td/sd truncate toward zero before comparing with minlight, so pad by 1 in
+			// world-distance space before dividing by lmvecscale.
+			if (surf->lmvecscale[1] > 0.0f)
+			{
+				float tspan = (minlight + 1.0f) / surf->lmvecscale[1];
+				float lo = floorf(local[1] - tspan);
+				float hi = ceilf(local[1] + tspan) + 1.0f;
+				t0 = (lo <= 0.0f) ? 0 : (lo >= (float)tmax ? tmax : (int)lo);
+				t1 = (hi <= 0.0f) ? 0 : (hi >= (float)tmax ? tmax : (int)hi);
+			}
+			else
+			{
+				t0 = 0;
+				t1 = tmax;
+			}
+			if (surf->lmvecscale[0] > 0.0f)
+			{
+				float sspan = (minlight + 1.0f) / surf->lmvecscale[0];
+				float lo = floorf(local[0] - sspan);
+				float hi = ceilf(local[0] + sspan) + 1.0f;
+				s0 = (lo <= 0.0f) ? 0 : (lo >= (float)smax ? smax : (int)lo);
+				s1 = (hi <= 0.0f) ? 0 : (hi >= (float)smax ? smax : (int)hi);
+			}
+			else
+			{
+				s0 = 0;
+				s1 = smax;
+			}
+			if (t0 >= t1 || s0 >= s1)
+				continue;
+
+			//johnfitz -- lit support via lordhavoc
+			cred = lights[lnum].color[0] * 256.0f * stylescale;
+			cgreen = lights[lnum].color[1] * 256.0f * stylescale;
+			cblue = lights[lnum].color[2] * 256.0f * stylescale;
+			//johnfitz
+			for (t = t0 ; t < t1 ; t++)
+			{
+				td = (int)((local[1] - t)*surf->lmvecscale[1]);
+				if (td < 0)
+					td = -td;
+				if (td >= minlight)
+					continue;
+				bl = blocklights + (t * smax + s0) * 3;
+				for (s = s0 ; s < s1 ; s++)
 				{
-					brightness = rad - dist;
-					bl[0] += (int) (brightness * cred);
-					bl[1] += (int) (brightness * cgreen);
-					bl[2] += (int) (brightness * cblue);
+					sd = (int)((local[0] - s)*surf->lmvecscale[0]);
+					if (sd < 0)
+						sd = -sd;
+					if (sd > td)
+						dist = sd + (td>>1);
+					else
+						dist = td + (sd>>1);
+					if (dist < minlight)
+					//johnfitz -- lit support via lordhavoc
+					{
+						brightness = rad - dist;
+						bl[0] += (int) (brightness * cred);
+						bl[1] += (int) (brightness * cgreen);
+						bl[2] += (int) (brightness * cblue);
+					}
+					bl += 3;
+					//johnfitz
 				}
-				bl += 3;
-				//johnfitz
 			}
 		}
 	}
@@ -1954,10 +2033,19 @@ void R_LightmapBuildState_Snapshot (r_lightmap_buildstate_t *state)
 	memcpy(state->lightstyles, d_lightstylevalue, sizeof(state->lightstyles));
 }
 
+static void R_BuildLightMapImpl (qmodel_t *model, msurface_t *surf, byte *dest, int stride, entity_t *currentent, int framecount, dlight_t *lights,
+	int format, int overbright, qboolean dynamic, unsigned ambient_light, const int *lightstyles);
+
 void R_BuildLightMapForState (qmodel_t *model, msurface_t *surf, byte *dest, int stride, entity_t *currentent, int framecount, dlight_t *lights, const r_lightmap_buildstate_t *state)
 {
-	const int overbright = state->overbright;
-	const qboolean add_dlights = state->dynamic && surf->dlightframe == framecount;
+	R_BuildLightMapImpl(model, surf, dest, stride, currentent, framecount, lights,
+		state->format, state->overbright, state->dynamic, state->ambient_light, state->lightstyles);
+}
+
+static void R_BuildLightMapImpl (qmodel_t *model, msurface_t *surf, byte *dest, int stride, entity_t *currentent, int framecount, dlight_t *lights,
+	int format, int overbright, qboolean dynamic, unsigned ambient_light, const int *lightstyles)
+{
+	const qboolean add_dlights = dynamic && surf->dlightframe == framecount;
 
 	int			smax, tmax;
 	unsigned		r, g, b;
@@ -1977,33 +2065,34 @@ void R_BuildLightMapForState (qmodel_t *model, msurface_t *surf, byte *dest, int
 
 	if (model->lightdata)
 	{
-	// clear to no light
-		memset (&blocklights[0], 0, size * 3 * sizeof (unsigned int)); //johnfitz -- lit support via lordhavoc
+		qboolean initialized = false;
 
-		if (state->ambient_light) // woods #rambient
+		if (ambient_light) // woods #rambient
 		{
-			unsigned ambient_light = state->ambient_light;
-
-			if (ambient_light) {
-				bl = blocklights;
-				for (i = 0; i < size; ++i) {
-					*bl++ = ambient_light;
-					*bl++ = ambient_light;
-					*bl++ = ambient_light;
-				}
+			bl = blocklights;
+			for (i = 0; i < size; ++i) {
+				*bl++ = ambient_light;
+				*bl++ = ambient_light;
+				*bl++ = ambient_light;
 			}
+			initialized = true;
 		}
 
 	// add all the lightmaps
 		if (!surf->samples)
-			;	//unlit surfaces are black... FIXME: unless lit water (could be new-qbsp + old-light)...
+		{
+			if (!initialized)
+				memset (&blocklights[0], 0, size * 3 * sizeof (unsigned int));
+		}
 		else if (model->flags & MOD_HDRLIGHTING)
 		{
 			uint32_t	*lightmap = surf->samples;
+			if (!initialized)
+				memset (&blocklights[0], 0, size * 3 * sizeof (unsigned int));
 			for (maps = 0 ; maps < MAXLIGHTMAPS && surf->styles[maps] != INVALID_LIGHTSTYLE ;
 				 maps++)
 			{
-				scale = state->lightstyles[surf->styles[maps]];
+				scale = lightstyles[surf->styles[maps]];
 				surf->cached_light[maps] = scale;	// 8.8 fraction
 				bl = blocklights;		//it sucks that blocklights is an int array. we can still massively overbright though, just not underbright quite as accurately (still quite a bit more than rgb8 precision there).
 				for (i=0 ; i<size ; i++)
@@ -2029,23 +2118,38 @@ void R_BuildLightMapForState (qmodel_t *model, msurface_t *surf, byte *dest, int
 			for (maps = 0 ; maps < MAXLIGHTMAPS && surf->styles[maps] != INVALID_LIGHTSTYLE ;
 				 maps++)
 			{
-				scale = state->lightstyles[surf->styles[maps]];
+				scale = lightstyles[surf->styles[maps]];
 				surf->cached_light[maps] = scale;	// 8.8 fraction
 				//johnfitz -- lit support via lordhavoc
 				bl = blocklights;
-				for (i=0 ; i<size ; i++)
+				if (!initialized)
 				{
-					*bl++ += *lightmap++ * scale;
-					*bl++ += *lightmap++ * scale;
-					*bl++ += *lightmap++ * scale;
+					for (i=0 ; i<size ; i++)
+					{
+						*bl++ = *lightmap++ * scale;
+						*bl++ = *lightmap++ * scale;
+						*bl++ = *lightmap++ * scale;
+					}
+					initialized = true;
+				}
+				else
+				{
+					for (i=0 ; i<size ; i++)
+					{
+						*bl++ += *lightmap++ * scale;
+						*bl++ += *lightmap++ * scale;
+						*bl++ += *lightmap++ * scale;
+					}
 				}
 				//johnfitz
 			}
+			if (!initialized)
+				memset (&blocklights[0], 0, size * 3 * sizeof (unsigned int));
 		}
 
 	// add all the dynamic lights
 		if (add_dlights)
-			R_AddDynamicLights (surf, blocklights, currentent, lights, state->lightstyles);
+			R_AddDynamicLights (surf, blocklights, currentent, lights, lightstyles);
 	}
 	else
 	{
@@ -2056,39 +2160,56 @@ void R_BuildLightMapForState (qmodel_t *model, msurface_t *surf, byte *dest, int
 
 // bound, invert, and shift
 // store:
-	switch (state->format)
+	switch (format)
 	{
 	case GL_RGB9_E5:
 		{
-			int e;
-			float m;
-			float scale, identity = 1u<<((overbright?8:7)+8);	//overbright is redundant with this, but its easier to leave it than conditionally block it.
+			// 2^(24 - be) / identity, where be = e + 15 in [0..30]
+			static const float pow2_24_minus_be[31] = {
+				(float)(1u<<24), (float)(1u<<23), (float)(1u<<22), (float)(1u<<21),
+				(float)(1u<<20), (float)(1u<<19), (float)(1u<<18), (float)(1u<<17),
+				(float)(1u<<16), (float)(1u<<15), (float)(1u<<14), (float)(1u<<13),
+				(float)(1u<<12), (float)(1u<<11), (float)(1u<<10), (float)(1u<<9),
+				(float)(1u<<8),  (float)(1u<<7),  (float)(1u<<6),  (float)(1u<<5),
+				(float)(1u<<4),  (float)(1u<<3),  (float)(1u<<2),  (float)(1u<<1),
+				1.0f,            1.0f/2.0f,       1.0f/4.0f,       1.0f/8.0f,
+				1.0f/16.0f,      1.0f/32.0f,      1.0f/64.0f
+			};
+			const float inv_identity = 1.0f / (float)(1u << ((overbright ? 8 : 7) + 8));
 			stride -= smax * 4;
 			bl = blocklights;
 			for (i=0 ; i<tmax ; i++, dest += stride)
 			{
 				for (j=0 ; j<smax ; j++)
 				{
-					e = 0;
-					m = q_max(q_max(bl[0], bl[1]), bl[2])/identity;
-					if (!overbright && m > 1.0)
-						m = 1.0; //clamp it to a logical 1.
-					if (m >= 0.5)
-					{	//positive exponent
-						while (m > (1<<(e)) && e < 30-15)	//don't do nans.
-							e++;
+					unsigned int maxbl = q_max(q_max(bl[0], bl[1]), bl[2]);
+					if (!maxbl)
+					{
+						*(unsigned int *)dest = 0;
 					}
 					else
-					{	//negative exponent...
-						while (m < 1/(1<<-e) && e > -15)	//don't do denormals.
-							e--;
+					{
+						union { float f; uint32_t u; } conv;
+						int be;
+						float inv_scale;
+						unsigned int mr, mg, mb;
+
+						conv.f = (float)maxbl * inv_identity;
+						if (!overbright && conv.f > 1.0f)
+							conv.f = 1.0f;
+						be = ((int)(((conv.u - 1u) >> 23) & 0xff) - 127) + 16;
+						if (be < 0) be = 0;
+						else if (be > 30) be = 30;
+
+						inv_scale = pow2_24_minus_be[be] * inv_identity;
+						mr = (unsigned int)(bl[0] * inv_scale + 0.5f);
+						mg = (unsigned int)(bl[1] * inv_scale + 0.5f);
+						mb = (unsigned int)(bl[2] * inv_scale + 0.5f);
+						if (mr > 0x1ffu) mr = 0x1ffu;
+						if (mg > 0x1ffu) mg = 0x1ffu;
+						if (mb > 0x1ffu) mb = 0x1ffu;
+						*(unsigned int *)dest = ((unsigned int)be << 27) | mr | (mg << 9) | (mb << 18);
 					}
-					scale = pow(2, e-9);
-					scale *= identity;
-					*(unsigned int *)dest = ((unsigned int)(e+15)<<27) |
-											CLAMP(0, (int)(bl[0]/scale + 0.5), 0x1ff)<<0 |
-											CLAMP(0, (int)(bl[1]/scale + 0.5), 0x1ff)<<9 |
-											CLAMP(0, (int)(bl[2]/scale + 0.5), 0x1ff)<<18;
 					bl += 3;
 					dest += 4;
 				}
@@ -2188,10 +2309,12 @@ void R_BuildLightMapForState (qmodel_t *model, msurface_t *surf, byte *dest, int
 
 void R_BuildLightMap (qmodel_t *model, msurface_t *surf, byte *dest, int stride, entity_t *currentent, int framecount, dlight_t *lights)
 {
-	r_lightmap_buildstate_t state;
+	unsigned ambient_light = 0;
+	if (!(cl.gametype == GAME_DEATHMATCH && cls.state == ca_connected && !cls.demoplayback))
+		ambient_light = ((unsigned)CLAMP(0.0f, r_ambient.value, 255.0f)) << 8;
 
-	R_LightmapBuildState_Snapshot(&state);
-	R_BuildLightMapForState(model, surf, dest, stride, currentent, framecount, lights, &state);
+	R_BuildLightMapImpl(model, surf, dest, stride, currentent, framecount, lights,
+		gl_lightmap_format, !!gl_overbright.value, r_dynamic.value != 0, ambient_light, d_lightstylevalue);
 }
 
 /*
