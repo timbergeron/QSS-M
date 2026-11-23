@@ -61,6 +61,7 @@ static qboolean r_alias_outline_order_changed;
 static GLuint r_alias_outline_ref = 1, r_alias_outline_refmask = 0x01;
 static qboolean r_alias_outline_unique;
 static qboolean r_alias_outline_holey; // a queued MF_HOLEY mask must alpha-test its skin
+static qboolean r_alias_stencil_bit1_dirty; // true when a normal alias fill wrote bit 0x01
 
 static qboolean R_QueueDeferredAliasOutline(entity_t *e)
 {
@@ -1550,6 +1551,8 @@ void R_BeginAliasOutlineRendering(aliasglsl_t* glsl)
 	GLuint stencil_mask = 1;
 	GLuint viewmodel_stencil_bit = GL_VIEWMODEL_STENCIL_BIT();
 
+	r_alias_stencil_bit1_dirty = true;
+
 	// Save the current OpenGL state that we are going to modify
 	glPushAttrib(GL_ENABLE_BIT | GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT | GL_POLYGON_BIT);
 
@@ -2627,9 +2630,58 @@ static void GL_DrawAliasFrame_GLSL (aliasglsl_t *glsl, aliashdr_t *paliashdr, le
 
 	else if (r_alias_outline_phase == ALIAS_OUTLINE_PHASE_NORMAL)
 	{
-		R_BeginAliasOutlineRendering(glsl); // woods #routline
-		if (surfacefade)
-			glDepthFunc(GL_EQUAL); // Only shade the surface selected by the depth prepass.
+		qboolean need_stencil = false;
+		qboolean need_pickup_shell = false;
+		qboolean need_viewmodel_shell = false;
+
+		if (e == &cl.viewent)
+		{
+			if (GL_VIEWMODEL_STENCIL_BIT() && gl_laserpoint.value)
+				need_stencil = true;
+			if (r_coloredpowerupglow.value && gl_powerupshells.value > 0.0f && gl_stencilbits && !chase_active.value)
+			{
+				int powerup_items = cl.items | (M_LivePreview_UsePowerupShells() ? IT_QUAD : 0);
+				qboolean damage_hue_active = cl_damagehue.value != 0.0f && (cl.time <= cl.faceanimtime || M_LivePreview_UseDamageTint());
+				if (damage_hue_active || (powerup_items & (IT_QUAD | IT_INVULNERABILITY)) != 0)
+				{
+					need_viewmodel_shell = true;
+					need_stencil = true;
+				}
+			}
+		}
+		else
+		{
+			if (r_coloredpowerupglow.value && gl_stencilbits && gl_powerupshells.value >= 2.0f)
+			{
+				vec3_t shellColor;
+				if (R_GetPowerupPickupShellColor(e, shellColor))
+				{
+					need_pickup_shell = true;
+					need_stencil = true;
+				}
+			}
+			// Inline outlines read stencil bit 0x01; deferred opaque outlines re-mask later.
+			// CSQC viewmodels also stay inline in R_DrawAliasModelOutline.
+			if (r_outline.value > 0.0f && gl_stencilbits &&
+				(!r_alias_outline_collecting || entalpha < 1.0f ||
+				(e->eflags & EFLAGS_VIEWMODEL) ||
+				r_num_deferred_alias_outlines >= (int)countof(r_deferred_alias_outlines)))
+			{
+				need_stencil = true;
+			}
+		}
+
+		if (need_stencil)
+		{
+			R_BeginAliasOutlineRendering(glsl); // woods #routline
+			if (surfacefade)
+				glDepthFunc(GL_EQUAL); // Only shade the surface selected by the depth prepass.
+		}
+		else
+		{
+			GL_Uniform1fFunc(glsl->outlineWidthLoc, 0.0f);
+			GL_Uniform1iFunc(glsl->isOutlinePassLoc, 0);
+		}
 
 		applied_shell = R_ApplyPowerupShellEffect(glsl, e, tex, &shell_unit); // woods #powershell
 
@@ -2642,13 +2694,16 @@ static void GL_DrawAliasFrame_GLSL (aliasglsl_t *glsl, aliashdr_t *paliashdr, le
 		{
 			if (grenade_glow.halo[3] > 0.0f)
 				R_QueueGrenadeGlow(e);
-			R_DrawPowerupPickupShell(glsl, paliashdr, &lerpdata, e); // woods #powershell
-			R_DrawAliasModelOutline(glsl, paliashdr, &lerpdata, e); // woods #routline
+			if (need_pickup_shell)
+				R_DrawPowerupPickupShell(glsl, paliashdr, &lerpdata, e); // woods #powershell
+			if (r_outline.value > 0.0f)
+				R_DrawAliasModelOutline(glsl, paliashdr, &lerpdata, e); // woods #routline
 		}
-		else
+		else if (need_viewmodel_shell)
 			R_DrawViewmodelShell(glsl, paliashdr, &lerpdata, e); // woods #powershell -- self-gating: powerup shells and damage hue
 
-		R_EndAliasOutlineRendering(); // woods #routline
+		if (need_stencil)
+			R_EndAliasOutlineRendering(); // woods #routline
 	}
 	else
 	{
@@ -4666,6 +4721,7 @@ void R_BeginDeferredAliasOutlines(void)
 	r_num_deferred_xrays = 0;
 	r_num_grenade_glows = 0;
 	r_alias_outline_holey = false;
+	r_alias_stencil_bit1_dirty = false;
 	r_alias_outline_collecting = true;
 	r_alias_outline_order_changed = false;
 	// Reverse traversal preserves the first occurrence if the list repeats an entity.
@@ -5018,12 +5074,13 @@ void R_DrawDeferredAliasOutlines(void)
 		uniquemask &= ~GL_VIEWMODEL_STENCIL_BIT();
 	}
 
-	// Normal alias fills stamped 0x01 while their immediate powerup/xray work
-	// ran. Remove that now-stale shared mask without touching the viewmodel bit,
-	// even when no normal outline was queued, so it cannot leak into the later
-	// translucent entity pass.
-	if (gl_stencilbits)
+	// Normal alias fills only stamp 0x01 when immediate powerup/outline work
+	// needs it; shadows also stamp 0x01 when r_shadows > 0. Skip the full-screen
+	// stencil clear completely when bit 0x01 is clean (or nothing will read it).
+	if (gl_stencilbits && (r_num_deferred_alias_outlines || r_alias_stencil_bit1_dirty ||
+		(r_shadows.value > 0.0f && (r_outline.value > 0.0f || (gl_powerupshells.value > 0.0f && r_coloredpowerupglow.value)))))
 		R_ClearAliasOutlineStencil(uniquemask && r_num_deferred_alias_outlines ? uniquemask : 0x01);
+	r_alias_stencil_bit1_dirty = false;
 
 	if (!r_num_deferred_alias_outlines)
 		return;
