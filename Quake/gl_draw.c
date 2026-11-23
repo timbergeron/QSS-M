@@ -974,6 +974,8 @@ void Draw_LoadPics (void)
 Draw_NewGame -- johnfitz
 ===============
 */
+static unsigned int draw_conback_cache_gen = 1;
+
 static void Draw_ResetPics (qboolean newgame)
 {
 	cachepic_t	*pic;
@@ -991,6 +993,7 @@ static void Draw_ResetPics (qboolean newgame)
 	for (pic = menu_cachepics, i = 0; i < menu_numcachepics; pic++, i++)
 		pic->name[0] = 0;
 	menu_numcachepics = 0;
+	draw_conback_cache_gen++;
 	Wheel_ClearIcons ();
 	if (newgame)
 	{
@@ -2612,6 +2615,10 @@ void Draw_ConsoleBackground (void)
 	static char      last_conback[MAX_QPATH] = "";
 	static qboolean  reported_missing = false;
 	static qboolean  reported_blocked = false; /* scr_conback ignored due to gl_load24bit 0 */
+	static qpic_t   *cached_conback_pic = NULL;
+	static unsigned int cached_conback_gen = 0;
+	static qboolean  cached_conback_load24bit = false;
+	static qboolean  cached_conback_hexen2 = false;
 	float alpha;
 	plcolour_t conback_color;
 	const char* conback_str = scr_concolor.string;
@@ -2628,6 +2635,7 @@ void Draw_ConsoleBackground (void)
 		q_strlcpy(last_conback, scr_conback.string, sizeof(last_conback));
 		reported_missing = false;
 		reported_blocked = false;
+		cached_conback_gen = 0;
 	}
 
 	use_default =
@@ -2654,7 +2662,14 @@ void Draw_ConsoleBackground (void)
 		qpic_t *pic = NULL;
 		qboolean force_package = Draw_IsConbackPackageName(scr_conback.string);
 
-		if (force_package)
+		if (cached_conback_gen == draw_conback_cache_gen &&
+			cached_conback_load24bit == draw_load24bit &&
+			cached_conback_hexen2 == char_hexen2 &&
+			cached_conback_pic != NULL)
+		{
+			pic = cached_conback_pic;
+		}
+		else if (force_package)
 		{
 			pic = Draw_TryCacheConbackPackage(scr_conback.string);
 			if (!pic && !reported_missing)
@@ -2780,6 +2795,11 @@ void Draw_ConsoleBackground (void)
 		/* Fallback to the engine default console background. */
 		if (!pic)
 			pic = Draw_CachePic(char_hexen2 ? "gfx/menu/conback.lmp" : "gfx/conback.lmp");
+
+		cached_conback_pic = pic;
+		cached_conback_gen = draw_conback_cache_gen;
+		cached_conback_load24bit = draw_load24bit;
+		cached_conback_hexen2 = char_hexen2;
 
 		pic->width = vid.conwidth;
 		pic->height = vid.conheight;

@@ -41,6 +41,8 @@ qboolean WordFilter_Check(const char* text, char* dest_buffer, size_t buffer_siz
 qpic_t		*sb_nums[2][11];
 qpic_t		*sb_colon, *sb_slash;
 qpic_t		*sb_ibar;
+static qpic_t	*sb_ibar2_pic;
+static qboolean	sb_ibar2_checked;
 qpic_t		*sb_sbar;
 qpic_t		*sb_scorebar;
 
@@ -759,6 +761,8 @@ void Sbar_InvalidatePics (void)
 	sbar_preload_started = false;
 	sbar_preloadstage = SBAR_PRELOAD_TINYFONT;
 	sbar_preloadindex = 0;
+	sb_ibar2_checked = false;
+	sb_ibar2_pic = NULL;
 }
 
 qboolean Sbar_EnsurePics (void)
@@ -1796,8 +1800,13 @@ void Sbar_DrawInventory_QW (void)
 	else
 		GL_SetCanvas(CANVAS_IBAR_QW);
 
-	has_ibar2 = COM_FileExists ("gfx/ibar2.lmp", NULL);
-	pic = has_ibar2 ? Draw_CachePic ("gfx/ibar2.lmp") : NULL;
+	if (!sb_ibar2_checked)
+	{
+		sb_ibar2_checked = true;
+		sb_ibar2_pic = COM_FileExists ("gfx/ibar2.lmp", NULL) ? Draw_CachePic ("gfx/ibar2.lmp") : NULL;
+	}
+	pic = sb_ibar2_pic;
+	has_ibar2 = (pic != NULL);
 	ammo_x = !scr_sbaralphaqwammo.value && !has_ibar2 ? 17 : 9;
 
 	//for qw hud, ammo backgrounds

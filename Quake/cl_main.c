@@ -1963,15 +1963,17 @@ static void CL_DemoEyesGetAttackAnim(qmodel_t *weapon_model, int *first, int *co
 
 static void CL_DemoEyesMaybeAnimate(entity_t *ent, int entnum)
 {
-	qmodel_t *current_model = ent->model;
+	const float alpha_value = cl_demoeyes.value;
+	qmodel_t *current_model;
+
+	if (alpha_value <= 0.0f)
+		return;
+
+	current_model = ent->model;
 	if (!current_model || !current_model->name[0])
 		return;
 	
 	if (strcmp(current_model->name, DEMOEYES_SOURCE_MODEL) != 0)
-		return;
-	
-	const float alpha_value = cl_demoeyes.value;
-	if (alpha_value <= 0.0f)
 		return;
 	
 	if (!cls.demoplayback && !CL_DemoEyesIsObserving())
@@ -2320,13 +2322,16 @@ static void CL_AddSinglePlayerCTFFallbackStaticLights (void)
 		effects = ent->baseline.effects & (EF_RED | EF_GREEN | EF_BLUE);
 		if (!effects)
 		{
-			if (!CL_IsSinglePlayerCTFFallbackStaticModel (ent))
-				continue;
-
 			if (ent->baseline.colormap == STATIC_COLORMAP_CTF_RED)
-				effects = EF_RED;
+			{
+				if (CL_IsSinglePlayerCTFFallbackStaticModel (ent))
+					effects = EF_RED;
+			}
 			else if (ent->baseline.colormap == STATIC_COLORMAP_CTF_BLUE)
-				effects = EF_BLUE;
+			{
+				if (CL_IsSinglePlayerCTFFallbackStaticModel (ent))
+					effects = EF_BLUE;
+			}
 		}
 		if (!effects)
 			continue;

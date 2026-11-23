@@ -1671,65 +1671,79 @@ void SCR_DrawClock (void)
 {
 	char	str[30];
 	int x,y;
+	int mode = (int)scr_clock.value;
 
 	int clampedSbar = CLAMP(1, (int)scr_sbar.value, 3);
 
-	if (scr_viewsize.value >= 130)
+	if (mode < 1 || mode > 8 || scr_viewsize.value >= 130)
 		return;
 
-	time_t systime = time(0);
-	struct tm* loct = localtime(&systime);
+	if (mode == 1)
+	{
+		int minutes = (int)cl.time / 60;
+		int seconds = (int)cl.time % 60;
+		sprintf(str, "%02i:%02i", minutes, seconds);
+	}
+	else
+	{
+		static time_t cached_systime = (time_t)-1;
+		static int cached_mode = -1;
+		static qboolean cached_showscores = false;
+		static char cached_str[30];
+		time_t systime = time(0);
 
-	if (loct == NULL)
-		strcpy(str, "time error");
-	else {
-		switch ((int)scr_clock.value)
+		if (systime != cached_systime || mode != cached_mode || sb_showscores != cached_showscores)
 		{
-		case 1:
-		{
-			int minutes = (int)cl.time / 60;
-			int seconds = (int)cl.time % 60;
-			sprintf(str, "%02i:%02i", minutes, seconds);
-			break;
-		}
-		case 2:
-				strftime(str, sizeof(str), "%I:%M %p", loct);
-			if (str[0] == '0')
-				memmove(str, str + 1, strlen(str));
-			break;
-		case 3:
-				strftime(str, sizeof(str), "%X", loct);
-			break;
-		case 4:
-			strftime(str, sizeof(str), "%m/%d/%Y", loct);
-			break;
-		case 5:
-			strftime(str, sizeof(str), "%m/%d/%Y %I:%M %p", loct);
-			if (str[11] == '0')
-				memmove(str + 11, str + 12, strlen(str + 11));
-			break;
-		case 6:
-			strftime(str, sizeof(str), "%m/%d/%Y %X", loct);
-			break;
-		case 7:
-			if (sb_showscores)
-				strftime(str, sizeof(str), "%m/%d/%y", loct);
+			struct tm* loct = localtime(&systime);
+			cached_systime = systime;
+			cached_mode = mode;
+			cached_showscores = sb_showscores;
+
+			if (loct == NULL)
+				strcpy(cached_str, "time error");
 			else
 			{
-				strftime(str, sizeof(str), "%I:%M %p", loct);
-				if (str[0] == '0')
-					memmove(str, str + 1, strlen(str));
+				switch (mode)
+				{
+				case 2:
+					strftime(cached_str, sizeof(cached_str), "%I:%M %p", loct);
+					if (cached_str[0] == '0')
+						memmove(cached_str, cached_str + 1, strlen(cached_str));
+					break;
+				case 3:
+					strftime(cached_str, sizeof(cached_str), "%X", loct);
+					break;
+				case 4:
+					strftime(cached_str, sizeof(cached_str), "%m/%d/%Y", loct);
+					break;
+				case 5:
+					strftime(cached_str, sizeof(cached_str), "%m/%d/%Y %I:%M %p", loct);
+					if (cached_str[11] == '0')
+						memmove(cached_str + 11, cached_str + 12, strlen(cached_str + 11));
+					break;
+				case 6:
+					strftime(cached_str, sizeof(cached_str), "%m/%d/%Y %X", loct);
+					break;
+				case 7:
+					if (sb_showscores)
+						strftime(cached_str, sizeof(cached_str), "%m/%d/%y", loct);
+					else
+					{
+						strftime(cached_str, sizeof(cached_str), "%I:%M %p", loct);
+						if (cached_str[0] == '0')
+							memmove(cached_str, cached_str + 1, strlen(cached_str));
+					}
+					break;
+				case 8:
+					if (sb_showscores)
+						strftime(cached_str, sizeof(cached_str), "%m/%d/%y", loct);
+					else
+						strftime(cached_str, sizeof(cached_str), "%X", loct);
+					break;
+				}
 			}
-			break;
-		case 8:
-			if (sb_showscores)
-				strftime(str, sizeof(str), "%m/%d/%y", loct);
-			else
-				strftime(str, sizeof(str), "%X", loct);
-			break;
-		default:
-			return;
 		}
+		q_strlcpy(str, cached_str, sizeof(str));
 	}
 
 	//draw it
@@ -2058,6 +2072,9 @@ void SCR_DrawMatchClock(void)
 		show_round_hud = false;
 
 	if (scr_viewsize.value >= 130)
+		return;
+
+	if (!teamscores && cl.minutes == 255)
 		return;
 
 	GL_SetCanvas(CANVAS_TOPRIGHT2);
@@ -3703,7 +3720,7 @@ void SCR_ShowFlagStatus(void)
 
 	// Cache the values for 100 milliseconds to prevent blinking
 
-	if (current_time - last_cache_time > 100 || cached_redflag[0] == '\0' || cached_blueflag[0] == '\0')
+	if (last_cache_time == 0 || current_time - last_cache_time > 100)
 	{
 	char buf[10];
 		const char* redflag = Info_GetKey(cl.serverinfo, "red flag", buf, sizeof(buf));
@@ -3769,6 +3786,9 @@ void SCR_ShowFlagStatus(void)
 			cl.flagstatus[sizeof(cl.flagstatus) - 1] = '\0';
 		}
 	}
+
+	if (scr_match_hud.value != 1 || cl.gametype != GAME_DEATHMATCH || cls.state != ca_connected)
+		return;
 
 	GL_SetCanvas(CANVAS_TOPRIGHT3);
 
@@ -4013,6 +4033,9 @@ void SCR_DrawSpeed (void)
 	if (scr_viewsize.value > 110 || scr_viewsize.value >= 130)
 		return;
 
+	if (!((speed_preview || scr_showspeed.value == 1) && (!cl.intermission || !qeintermission || !crxintermission)))
+		return;
+
 	if (clampedSbar == 3)
 	{
 		GL_SetCanvas(CANVAS_BOTTOMLEFTQE);
@@ -4033,7 +4056,6 @@ void SCR_DrawSpeed (void)
 			y = 233;
 	}
 
-	if ((speed_preview || scr_showspeed.value == 1) && (!cl.intermission || !qeintermission || !crxintermission))
 	{
 		speed = GetSpeedValue();
 
@@ -5090,6 +5112,9 @@ void SCR_DrawCrosshair (void)
 		Draw_FillPlayer (-9 + cross_x, -2 + cross_y, 18, 4, color, alpha); // horizontal (thicker)
 	}
 
+	if (crosshair.value != 6 && crosshair.value != 7)
+		return;
+
 	glDisable(GL_DEPTH_TEST);
 	glDisable(GL_TEXTURE_2D);
 	glEnable(GL_BLEND);
@@ -5824,7 +5849,7 @@ void SCR_DrawAutoID(void)
 	if (decimal_part < 0.0f || decimal_part > 1.0f)
 		decimal_part = 1.0f; // Default opacity
 
-	if (!scr_autoid.value)
+	if (!scr_autoid.value || autoid_count <= 0)
 		return;
 
 	GL_SetCanvas(CANVAS_AUTOID);
@@ -7819,8 +7844,6 @@ static void DrawScopeRing (float cx, float cy, float r, float thick)
 
 static void SCR_DrawScopeOverlay (void)
 {
-	GL_SetCanvas(CANVAS_DEFAULT);
-
 	float r_frac = CLAMP(scr_scoperadius.value, 0.05f, 0.49f);
 	float radius = r_frac * q_min((float)glwidth, (float)glheight);
 	float cx = 0.5f * (float)glwidth;
@@ -7844,9 +7867,9 @@ static void SCR_DrawScopeOverlay (void)
 	if (fade_alpha <= 0.004f && target_alpha <= 0.004f)
 		return;                             /* nothing to draw */
 
+	if (!gl_stencilbits) { Con_Printf("No stencil buffer; scope fade disabled\n"); return; }
 
-	GLint bits;  glGetIntegerv(GL_STENCIL_BITS, &bits);
-	if (!bits) { Con_Printf("No stencil buffer; scope fade disabled\n"); return; }
+	GL_SetCanvas(CANVAS_DEFAULT);
 
 	glPushAttrib(GL_ENABLE_BIT | GL_COLOR_BUFFER_BIT |
 		GL_STENCIL_BUFFER_BIT | GL_DEPTH_BUFFER_BIT |
