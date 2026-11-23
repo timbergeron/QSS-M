@@ -46,8 +46,28 @@ static vec4_t skybox_orientation;
 char	skybox_name[1024]; //name of current skybox, or "" if no skybox
 qboolean externalskyloaded; // woods #fastsky2
 
-static gltexture_t	*skybox_textures[6];
+typedef struct
+{
+	gltexture_t *faces[6];
+	GLuint cubemap;
+	qboolean cubemap_attempted;
+	uint64_t cubemap_bytes;
+} skybox_images_t;
+
+// Bound the inactive images independently of the currently displayed skybox.
+#define SKYBOX_CACHE_SLOTS 3
+#define SKYBOX_CACHE_BYTES (64u * 1024u * 1024u)
+static struct
+{
+	char name[sizeof(skybox_name)];
+	skybox_images_t images;
+	uint64_t bytes;
+} skybox_cache[SKYBOX_CACHE_SLOTS]; // most recently used first
+static int skybox_cache_count;
+static uint64_t skybox_cache_bytes;
+static skybox_images_t skybox_images;
 static qboolean	skybox_complete; // all 6 faces loaded; allows reuse across map changes
+static qboolean	skybox_cacheable;
 static gltexture_t	*solidskytexture, *alphaskytexture;
 
 static const char	*suf[6];
@@ -432,14 +452,11 @@ static vec3_t skywind_frame_dir = {0.0f, 0.0f, 0.0f};
 static float skywind_frame_phase = 0.0f;
 static float skywind_primary_phase = 0.0f;
 static float skywind_secondary_phase = 0.0f;
-static GLuint skybox_cubemap = 0;
-static qboolean skybox_cubemap_attempted = false;
 
 static void Skywind_InvalidateFrame(void);
 static void Skywind_UpdateFrame(void);
 void Skywind_SetupFrame(void);
 static void Skywind_Clear(void);
-static void Sky_FreeCubemap(void);
 static qboolean Sky_CreateCubemap(byte *data[6], int width[6], int height[6], enum srcformat fmt[6], int samesize);
 static void Sky_TryRebuildCubemap(void);
 static qboolean Skywind_HasSkybox(void);
@@ -505,14 +522,88 @@ static void Skywind_Clear(void)
 	Skywind_InvalidateFrame();
 }
 
-static void Sky_FreeCubemap(void)
+static void Sky_FreeCubemap(skybox_images_t *images)
 {
-	if (skybox_cubemap)
+	if (images->cubemap)
 	{
-		glDeleteTextures(1, &skybox_cubemap);
-		skybox_cubemap = 0;
+		glDeleteTextures(1, &images->cubemap);
+		images->cubemap = 0;
 		GL_ClearBindings();
 	}
+	images->cubemap_bytes = 0;
+}
+
+static void Sky_FreeImages(skybox_images_t *images)
+{
+	int i;
+
+	for (i = 0; i < 6; i++)
+		if (images->faces[i] && images->faces[i] != notexture)
+			TexMgr_FreeTexture(images->faces[i]);
+	Sky_FreeCubemap(images);
+	memset(images, 0, sizeof(*images));
+}
+
+static void Sky_EvictCachedSkybox(void)
+{
+	int oldest = --skybox_cache_count;
+
+	skybox_cache_bytes -= skybox_cache[oldest].bytes;
+	Sky_FreeImages(&skybox_cache[oldest].images);
+}
+
+static void Sky_ClearSkyboxCache(void)
+{
+	while (skybox_cache_count)
+		Sky_EvictCachedSkybox();
+	skybox_cacheable = false;
+}
+
+static qboolean Sky_TakeCachedSkybox(const char *name, skybox_images_t *images)
+{
+	int i;
+
+	for (i = 0; i < skybox_cache_count; i++)
+	{
+		if (strcmp(name, skybox_cache[i].name))
+			continue;
+		*images = skybox_cache[i].images;
+		skybox_cache_bytes -= skybox_cache[i].bytes;
+		skybox_cache_count--;
+		memmove(&skybox_cache[i], &skybox_cache[i + 1],
+			(skybox_cache_count - i) * sizeof(skybox_cache[0]));
+		return true;
+	}
+	return false;
+}
+
+static void Sky_ReleaseActiveSkybox(qboolean keep)
+{
+	if (keep && skybox_complete && skybox_cacheable)
+	{
+		int i;
+		uint64_t bytes = skybox_images.cubemap_bytes;
+
+		// Estimate managed faces at four bytes per uploaded texel.
+		for (i = 0; i < 6; i++)
+			bytes += 4u * (uint64_t)skybox_images.faces[i]->width * skybox_images.faces[i]->height;
+		if (bytes <= SKYBOX_CACHE_BYTES)
+		{
+			while (skybox_cache_count == SKYBOX_CACHE_SLOTS || skybox_cache_bytes + bytes > SKYBOX_CACHE_BYTES)
+				Sky_EvictCachedSkybox();
+			memmove(&skybox_cache[1], &skybox_cache[0], skybox_cache_count * sizeof(skybox_cache[0]));
+			q_strlcpy(skybox_cache[0].name, skybox_name, sizeof(skybox_cache[0].name));
+			skybox_cache[0].images = skybox_images;
+			skybox_cache[0].bytes = bytes;
+			skybox_cache_count++;
+			skybox_cache_bytes += bytes;
+			memset(&skybox_images, 0, sizeof(skybox_images)); // ownership moved to the cache
+		}
+	}
+	Sky_FreeImages(&skybox_images);
+	skybox_name[0] = 0;
+	skybox_complete = false;
+	skybox_cacheable = false;
 }
 
 static void Sky_TryRebuildCubemap(void)
@@ -525,10 +616,10 @@ static void Sky_TryRebuildCubemap(void)
 	int samesize, numloaded;
 	char filename[MAX_OSPATH];
 
-	if (skybox_cubemap_attempted || !skybox_name[0])
+	if (skybox_images.cubemap_attempted || !skybox_name[0])
 		return;
 
-	skybox_cubemap_attempted = true;
+	skybox_images.cubemap_attempted = true;
 
 	mark = Hunk_LowMark();
 	for (i = 0, numloaded = 0, samesize = 0; i < 6; ++i)
@@ -555,7 +646,7 @@ static void Sky_TryRebuildCubemap(void)
 	if (numloaded > 0 && samesize > 0)
 	{
 		if (!Sky_CreateCubemap(data, width, height, fmt, samesize))
-			Sky_FreeCubemap();
+			Sky_FreeCubemap(&skybox_images);
 	}
 
 	for (i = 0; i < 6; ++i)
@@ -584,14 +675,14 @@ static qboolean Sky_CreateCubemap(byte *data[6], int width[6], int height[6], en
 
 	facebytes = (size_t)samesize * (size_t)samesize * 4u;
 
-	if (!skybox_cubemap)
-		glGenTextures(1, &skybox_cubemap);
+	if (!skybox_images.cubemap)
+		glGenTextures(1, &skybox_images.cubemap);
 
-	if (!skybox_cubemap)
+	if (!skybox_images.cubemap)
 		return false;
 
 	GL_SelectTexture(GL_TEXTURE0);
-	glBindTexture(GL_TEXTURE_CUBE_MAP, skybox_cubemap);
+	glBindTexture(GL_TEXTURE_CUBE_MAP, skybox_images.cubemap);
 	GL_ClearBindings();
 
 	glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
@@ -622,7 +713,8 @@ static qboolean Sky_CreateCubemap(byte *data[6], int width[6], int height[6], en
 	if (zeroface)
 		free(zeroface);
 
-	skybox_cubemap_attempted = true;
+	skybox_images.cubemap_bytes = (uint64_t)facebytes * 6u;
+	skybox_images.cubemap_attempted = true;
 	return true;
 }
 
@@ -635,7 +727,7 @@ static qboolean Skywind_HasSkybox(void)
 
 	for (i = 0; i < 6; ++i)
 	{
-		if (skybox_textures[i] && skybox_textures[i] != notexture)
+		if (skybox_images.faces[i] && skybox_images.faces[i] != notexture)
 			return true;
 	}
 
@@ -941,11 +1033,11 @@ static qboolean Skywind_DrawSkyBox_Cubemap(const vec3_t wind_dir, float phase)
 {
 	int i;
 
-	if (!skybox_cubemap)
+	if (!skybox_images.cubemap)
 	{
 		Sky_TryRebuildCubemap();
 	}
-	if (!skybox_cubemap)
+	if (!skybox_images.cubemap)
 		return false;
 
 	if (!Skywind_EnsureCubemapShader())
@@ -980,7 +1072,7 @@ static qboolean Skywind_DrawSkyBox_Cubemap(const vec3_t wind_dir, float phase)
 			GL_Uniform3fFunc(skywind_cubemap_uniform_fogcolor, fog_color[0], fog_color[1], fog_color[2]);
 	}
 
-	glBindTexture(GL_TEXTURE_CUBE_MAP, skybox_cubemap);
+	glBindTexture(GL_TEXTURE_CUBE_MAP, skybox_images.cubemap);
 	GL_ClearBindings();
 
 	skywind_apply_offsets = false;
@@ -1066,10 +1158,10 @@ static qboolean Skywind_DrawSkyBox_Shader(const vec3_t wind_dir, float phase)
 		if (skymins[0][i] >= skymaxs[0][i] || skymins[1][i] >= skymaxs[1][i])
 			continue;
 
-		if (!skybox_textures[skytexorder[i]] || skybox_textures[skytexorder[i]] == notexture)
+		if (!skybox_images.faces[skytexorder[i]] || skybox_images.faces[skytexorder[i]] == notexture)
 			continue;
 
-		GL_Bind(skybox_textures[skytexorder[i]]);
+		GL_Bind(skybox_images.faces[skytexorder[i]]);
 
 		skymins[0][i] = -1;
 		skymins[1][i] = -1;
@@ -2031,35 +2123,36 @@ static void Sky_LoadSkyBoxInternal (const char *name, qboolean quiet) // woods #
 	qboolean malloced[6];
 	int		samesize, numloaded;
 	char	filename[MAX_OSPATH];
-	qboolean nonefound = true;
+	skybox_images_t cached_images;
+	qboolean cached;
 	qboolean prefetching = false;
 
 	if (strcmp(skybox_name, name) == 0 && skybox_complete)
 	{	//no change. the textures survive map changes (NULL texmgr owner), so a
 		//matching fully-loaded skybox skips the expensive 6-face reload here.
 		//partial skyboxes fall through so newly downloaded faces get picked up.
+		skybox_cacheable = true;
 		Skywind_LoadConfig();
 		return;
 	}
-	Skywind_Clear();
-	Sky_FreeCubemap();
-	skybox_cubemap_attempted = false;
-	skybox_complete = false;
 
-	//purge old textures
-	for (i=0; i<6; i++)
+	// Take the requested skybox first so the outgoing one cannot evict it.
+	cached = Sky_TakeCachedSkybox(name, &cached_images);
+	Skywind_Clear();
+	Sky_ReleaseActiveSkybox(true);
+	if (cached)
 	{
-		if (skybox_textures[i] && skybox_textures[i] != notexture)
-			TexMgr_FreeTexture (skybox_textures[i]);
-		skybox_textures[i] = NULL;
+		skybox_images = cached_images;
+		q_strlcpy(skybox_name, name, sizeof(skybox_name));
+		skybox_complete = true;
+		skybox_cacheable = true;
+		Skywind_LoadConfig();
+		return;
 	}
 
 	//turn off skybox if sky is set to ""
 	if (name[0] == 0)
-	{
-		skybox_name[0] = 0;
 		return;
-	}
 
 	//load textures
 	mark = Hunk_LowMark ();
@@ -2098,9 +2191,9 @@ static void Sky_LoadSkyBoxInternal (const char *name, qboolean quiet) // woods #
 	if (numloaded > 0 && samesize > 0)
 	{
 		if (!Sky_CreateCubemap(data, width, height, fmt, samesize))
-			Sky_FreeCubemap();
+			Sky_FreeCubemap(&skybox_images);
 	}
-	skybox_cubemap_attempted = true;
+	skybox_images.cubemap_attempted = true;
 
 	for (i = 0; i < 6; i++)
 	{
@@ -2108,14 +2201,13 @@ static void Sky_LoadSkyBoxInternal (const char *name, qboolean quiet) // woods #
 		{
 			q_snprintf (filename, sizeof(filename), "gfx/env/%s%s", name, suf[i]);
 			//NULL owner so the faces survive map unloads and can be reused when
-			//the next map wants the same skybox (freed explicitly on change)
-			skybox_textures[i] = TexMgr_LoadImage (NULL, filename, width[i], height[i], fmt[i], data[i], filename, 0, TEXPREF_NONE);
-			nonefound = false;
+			//the next map wants the same skybox. The sky owns their lifetime.
+			skybox_images.faces[i] = TexMgr_LoadImage (NULL, filename, width[i], height[i], fmt[i], data[i], filename, 0, TEXPREF_NONE);
 		}
 		else
 		{
 			//Con_Printf ("Couldn't load skybox %s\n", filename); // woods
-			skybox_textures[i] = notexture;
+			skybox_images.faces[i] = notexture;
 		}
 		if (malloced[i])
 			free(data[i]);
@@ -2127,21 +2219,15 @@ static void Sky_LoadSkyBoxInternal (const char *name, qboolean quiet) // woods #
 		Sky_WarnMissingSkybox(name);
 	}
 
-	if (nonefound) // go back to scrolling sky if skybox is totally missing
+	if (!numloaded) // go back to scrolling sky if skybox is totally missing
 	{
-		for (i=0; i<6; i++)
-		{
-			if (skybox_textures[i] && skybox_textures[i] != notexture)
-				TexMgr_FreeTexture (skybox_textures[i]);
-			skybox_textures[i] = NULL;
-		}
-		Sky_FreeCubemap();
-		skybox_name[0] = 0;
+		Sky_ReleaseActiveSkybox(false);
 		return;
 	}
 
 	q_strlcpy(skybox_name, name, sizeof(skybox_name));
 	skybox_complete = (numloaded == 6);
+	skybox_cacheable = true;
 	Skywind_LoadConfig();
 }
 
@@ -2588,8 +2674,6 @@ Called on map unload/game change to avoid keeping pointers to freed data
 */
 static void Sky_ClearInternal (qboolean purge_skybox)
 {
-	int i;
-
 	skyroom_enabled = false;
 	externalskyloaded = false; // woods #fastsky2
 	skyflatcolor_avg[0] = skyflatcolor_avg[1] = skyflatcolor_avg[2] = 0.0f;
@@ -2601,20 +2685,10 @@ static void Sky_ClearInternal (qboolean purge_skybox)
 	solidskytexture = NULL;
 	alphaskytexture = NULL;
 	Skywind_Clear();
+	Sky_ClearSkyboxCache();
 
 	if (purge_skybox)
-	{
-		skybox_name[0] = 0;
-		skybox_complete = false;
-		for (i=0; i<6; i++)
-		{
-			if (skybox_textures[i] && skybox_textures[i] != notexture)
-				TexMgr_FreeTexture (skybox_textures[i]);
-			skybox_textures[i] = NULL;
-		}
-		Sky_FreeCubemap();
-		skybox_cubemap_attempted = false;
-	}
+		Sky_ReleaseActiveSkybox(false);
 
 	Cvar_SetQuick (&r_skyfog, r_skyfog.default_string);
 }
@@ -2622,6 +2696,7 @@ static void Sky_ClearInternal (qboolean purge_skybox)
 /* Keep the selected skybox, wind, fog and skyroom during a live refresh. */
 void Sky_RefreshTextures (void)
 {
+	Sky_ClearSkyboxCache();
 	solidskytexture = alphaskytexture = NULL;
 	externalskyloaded = false;
 	Sky_InvalidateFlatColorAverage ();
@@ -2636,9 +2711,8 @@ void Sky_ClearAll (void)
 =================
 Sky_NewMapClear
 
-Called on map unload. Clears per-map sky state but keeps the loaded skybox
-faces/cubemap (they have no texmgr owner) so a map change that wants the same
-skybox skips the 6-face reload in Sky_LoadSkyBoxInternal.
+Called on map unload. Drops inactive skyboxes and keeps the displayed one so
+a map that wants the same skybox skips reloading its images.
 =================
 */
 void Sky_NewMapClear (void)
@@ -2666,8 +2740,9 @@ void Sky_ResetGL (void)
 	skywind_shader_enabled = false;
 	skywind_apply_offsets = false;
 
-	Sky_FreeCubemap();
-	skybox_cubemap_attempted = false;
+	Sky_ClearSkyboxCache();
+	Sky_FreeCubemap(&skybox_images);
+	skybox_images.cubemap_attempted = false;
 }
 
 /*
@@ -2959,7 +3034,6 @@ Sky_Init
 */
 void Sky_Init (void)
 {
-	int		i;
 	cmd_function_t	*cmd;
 
 	Cvar_RegisterVariable (&r_fastsky);
@@ -2995,8 +3069,6 @@ void Sky_Init (void)
 	map_skybox_name[0] = 0;
 	pending_skybox_name[0] = 0;
 	skybox_download_pending = false;
-	for (i=0; i<6; i++)
-		skybox_textures[i] = NULL;
 }
 
 //==============================================================================
@@ -3452,8 +3524,8 @@ void Sky_EmitSkyBoxVertex (float s, float t, int axis)
 		}
 	}
 
-	w = skybox_textures[skytexorder[axis]]->width;
-	h = skybox_textures[skytexorder[axis]]->height;
+	w = skybox_images.faces[skytexorder[axis]]->width;
+	h = skybox_images.faces[skytexorder[axis]]->height;
 
 	tex_base_s = (base_s + 1) * 0.5f;
 	tex_base_t = (base_t + 1) * 0.5f;
@@ -3540,7 +3612,7 @@ static void Sky_DrawSkyBox_Static(void)
 		if (skymins[0][i] >= skymaxs[0][i] || skymins[1][i] >= skymaxs[1][i])
 			continue;
 
-		GL_Bind (skybox_textures[skytexorder[i]]);
+		GL_Bind (skybox_images.faces[skytexorder[i]]);
 
 #if 1 /* FIXME: this is to avoid tjunctions until i can do it the right way */
 		skymins[0][i] = -1;
@@ -3609,7 +3681,7 @@ qboolean Sky_DrawMenuPreview (float pixel_x, float pixel_y, float pixel_w, float
 	if (!skybox_complete || pixel_w < 1.0f || pixel_h < 1.0f)
 		return false;
 	for (i = 0; i < 6; ++i)
-		if (!skybox_textures[i] || skybox_textures[i] == notexture)
+		if (!skybox_images.faces[i] || skybox_images.faces[i] == notexture)
 			return false;
 
 	glGetIntegerv(GL_VIEWPORT, old_viewport);
@@ -3653,7 +3725,7 @@ qboolean Sky_DrawMenuPreview (float pixel_x, float pixel_y, float pixel_w, float
 	for (i = 0; i < 6; ++i)
 	{
 		static const float corners[4][2] = {{-1, -1}, {-1, 1}, {1, 1}, {1, -1}};
-		gltexture_t *texture = skybox_textures[skytexorder[i]];
+		gltexture_t *texture = skybox_images.faces[skytexorder[i]];
 		int corner;
 
 		GL_Bind(texture);
