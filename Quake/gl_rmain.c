@@ -295,24 +295,33 @@ static qboolean GLSLGamma_CreateMSAA (scene_msaa_t *target, int samples, int wid
 	return true;
 }
 
-/* Resolve color only, preserving the scene's depth/stencil for later views. */
-static void GLSLGamma_ResolveMSAA (void)
+/* Resolve color only. Mid-frame reads must restore the scene's bindings and
+ * scissor, while the final resolve can leave the back buffer bound. */
+static void GLSLGamma_ResolveMSAA (qboolean finishing)
 {
-	GLint read_fbo, draw_fbo;
-	GLboolean scissor;
+	GLint read_fbo = 0, draw_fbo = 0;
+	GLboolean scissor = GL_FALSE;
 	if (!r_scene_msaa.fbo || !r_gamma_fbo_active)
 		return;
-	glGetIntegerv (GL_READ_FRAMEBUFFER_BINDING, &read_fbo);
-	glGetIntegerv (GL_DRAW_FRAMEBUFFER_BINDING, &draw_fbo);
-	scissor = glIsEnabled (GL_SCISSOR_TEST);
+	if (!finishing)
+	{
+		glGetIntegerv (GL_READ_FRAMEBUFFER_BINDING, &read_fbo);
+		glGetIntegerv (GL_DRAW_FRAMEBUFFER_BINDING, &draw_fbo);
+		scissor = glIsEnabled (GL_SCISSOR_TEST);
+	}
 	glDisable (GL_SCISSOR_TEST);
 	GL_BindFramebufferFunc (GL_READ_FRAMEBUFFER, r_scene_msaa.fbo);
 	GL_BindFramebufferFunc (GL_DRAW_FRAMEBUFFER, r_gamma_fbo);
 	GL_BlitFramebufferFunc (0, 0, glwidth, glheight, 0, 0, glwidth, glheight, GL_COLOR_BUFFER_BIT, GL_NEAREST);
-	GL_BindFramebufferFunc (GL_READ_FRAMEBUFFER, read_fbo);
-	GL_BindFramebufferFunc (GL_DRAW_FRAMEBUFFER, draw_fbo);
-	if (scissor)
-		glEnable (GL_SCISSOR_TEST);
+	if (finishing)
+		GL_BindFramebufferFunc (GL_FRAMEBUFFER, 0);
+	else
+	{
+		GL_BindFramebufferFunc (GL_READ_FRAMEBUFFER, read_fbo);
+		GL_BindFramebufferFunc (GL_DRAW_FRAMEBUFFER, draw_fbo);
+		if (scissor)
+			glEnable (GL_SCISSOR_TEST);
+	}
 }
 
 /* Save the previous read target separately: every GLuint object name is valid,
@@ -324,7 +333,7 @@ static qboolean GLSLGamma_BeginSceneRead (GLint *read_fbo)
 		glGetIntegerv (GL_READ_FRAMEBUFFER_BINDING, read_fbo);
 		if ((GLuint)*read_fbo == r_scene_msaa.fbo)
 		{
-			GLSLGamma_ResolveMSAA ();
+			GLSLGamma_ResolveMSAA (false);
 			GL_BindFramebufferFunc (GL_READ_FRAMEBUFFER, r_gamma_fbo);
 			return true;
 		}
@@ -1101,7 +1110,7 @@ void GLSLGamma_GammaCorrect (void)
 	qboolean fbo_active = r_gamma_fbo_active;
 	qboolean shader;
 
-	GLSLGamma_ResolveMSAA ();
+	GLSLGamma_ResolveMSAA (true);
 	r_gamma_fbo_active = false;
 	if (fbo_active)
 		gl_stencilbits = r_scene_window_stencilbits;
