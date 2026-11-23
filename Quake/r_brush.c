@@ -1950,6 +1950,7 @@ void R_LightmapBuildState_Snapshot (r_lightmap_buildstate_t *state)
 {
 	state->format = gl_lightmap_format;
 	state->overbright = !!gl_overbright.value;
+	state->dynamic = r_dynamic.value != 0;
 	state->ambient_light = 0;
 	if (!(cl.gametype == GAME_DEATHMATCH && cls.state == ca_connected && !cls.demoplayback))
 		state->ambient_light = ((unsigned)CLAMP(0.0f, r_ambient.value, 255.0f)) << 8;
@@ -1959,6 +1960,7 @@ void R_LightmapBuildState_Snapshot (r_lightmap_buildstate_t *state)
 void R_BuildLightMapForState (qmodel_t *model, msurface_t *surf, byte *dest, int stride, entity_t *currentent, int framecount, dlight_t *lights, const r_lightmap_buildstate_t *state)
 {
 	const int overbright = state->overbright;
+	const qboolean add_dlights = state->dynamic && surf->dlightframe == framecount;
 
 	int			smax, tmax;
 	unsigned		r, g, b;
@@ -1968,7 +1970,7 @@ void R_BuildLightMapForState (qmodel_t *model, msurface_t *surf, byte *dest, int
 	unsigned	*bl;
 	unsigned	*blocklights;	//moved this to stack, so workers working on the worldmodel won't fight the main thread processing the submodels.
 
-	surf->cached_dlight = (surf->dlightframe == framecount);
+	surf->cached_dlight = add_dlights;
 
 	smax = surf->extents[0]+1;
 	tmax = surf->extents[1]+1;
@@ -2045,7 +2047,7 @@ void R_BuildLightMapForState (qmodel_t *model, msurface_t *surf, byte *dest, int
 		}
 
 	// add all the dynamic lights
-		if (surf->dlightframe == framecount)
+		if (add_dlights)
 			R_AddDynamicLights (surf, blocklights, currentent, lights, state->lightstyles);
 	}
 	else
@@ -2385,6 +2387,56 @@ void R_UploadLightmaps (void)
 			R_UploadLightmap(lmap);
 		}
 	}
+}
+
+void R_ClearCachedDynamicLights (void)
+{
+	qmodel_t **precaches[] = {cl.model_precache, cl.model_precache_csqc};
+	r_lightmap_buildstate_t state;
+	qboolean skipupdates;
+	size_t list;
+	int modelindex, i;
+
+	if (!lightmap_count)
+		return;
+
+	// Finish queued lighting before changing the shared atlas staging memory.
+#ifndef SDL_THREADS_DISABLED
+	RSceneCache_WaitForWorker ();
+#endif
+	R_LightmapBuildState_Snapshot (&state);
+	lightmap_rebuilds++; // invalidate the scene cache's last lighting snapshot
+
+	for (list = 0; list < countof(precaches); list++)
+	for (modelindex = 1; modelindex < MAX_MODELS; modelindex++)
+	{
+		qmodel_t *model = precaches[list][modelindex];
+
+		// Each parent BSP owns the surface array for all of its inline models.
+		if (!model || model->type != mod_brush || model->needload || model->name[0] == '*')
+			continue;
+		for (i = 0; i < model->numsurfaces; i++)
+		{
+			msurface_t *surf = &model->surfaces[i];
+			struct lightmap_s *lm;
+			byte *base;
+
+			if (!surf->cached_dlight || (surf->flags & SURF_DRAWTILED) ||
+				(unsigned int)surf->lightmaptexturenum >= (unsigned int)lightmap_count)
+				continue;
+			lm = &lightmaps[surf->lightmaptexturenum];
+			base = lm->pbodata + (surf->light_t * LMBLOCK_WIDTH + surf->light_s) * lightmap_bytes;
+			R_BuildLightMapForState (model, surf, base, LMBLOCK_WIDTH * lightmap_bytes,
+				NULL, r_framecount, cl_dlights, &state);
+			R_LightmapMarkDirtyRect (lm, surf->light_s, surf->light_t, surf->extents[0] + 1, surf->extents[1] + 1);
+		}
+	}
+
+	// Publish the cleared rectangles before either rendering path draws them.
+	skipupdates = lightmaps_skipupdates;
+	lightmaps_skipupdates = false;
+	R_UploadLightmaps ();
+	lightmaps_skipupdates = skipupdates;
 }
 
 /*

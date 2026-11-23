@@ -8084,7 +8084,7 @@ static qboolean RSceneCache_InputsHaveSky(const struct rscenecache_s *cache)
  * worker. Drain every pending build/update before handing it to the main thread,
  * keeping the caches and the sleeping worker available for the main view.
  */
-static void RSceneCache_WaitForWorker(void)
+void RSceneCache_WaitForWorker(void)
 {
 	struct rscenecache_s *cache;
 	if (!rscenecache.thread)

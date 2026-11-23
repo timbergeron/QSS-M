@@ -1758,6 +1758,7 @@ R_SetupView -- johnfitz -- this is the stuff that needs to be done once per fram
 */
 void R_SetupView (void)
 {
+	static qboolean dynamic_was_enabled;
 	int viewcontents;	//spike -- rewrote this a little
 	int i;
 
@@ -1765,6 +1766,9 @@ void R_SetupView (void)
 
 	// Need to do those early because we now update dynamic light maps during R_MarkSurfaces
 	R_AnimateLight ();
+	if (dynamic_was_enabled && !r_dynamic.value)
+		R_ClearCachedDynamicLights ();
+	dynamic_was_enabled = r_dynamic.value != 0;
 
 	Skywind_SetupFrame();
 

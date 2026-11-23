@@ -607,8 +607,9 @@ void GL_BuildBModelVertexBuffer (void);
 void GLMesh_LoadVertexBuffers (void);
 void GLMesh_DeleteVertexBuffers (void);
 void GLMesh_LoadVertexBuffer (qmodel_t *m, aliashdr_t *hdr);
+void R_ClearCachedDynamicLights (void);
 void R_RebuildAllLightmaps (void);
-extern int lightmap_rebuilds; // woods #dlightskip -- bumped whenever every lightmap is rebuilt from scratch
+extern int lightmap_rebuilds; // woods #dlightskip -- invalidates the scene cache's lighting snapshot
 
 int R_LightPoint (vec3_t p);
 int R_LightPointCachedAlias (entity_t *e, vec3_t p, float raise);
@@ -619,6 +620,7 @@ typedef struct r_lightmap_buildstate_s
 {
 	int format;
 	int overbright;
+	qboolean dynamic;
 	unsigned ambient_light;
 	int lightstyles[MAX_LIGHTSTYLES];
 } r_lightmap_buildstate_t;
@@ -733,6 +735,7 @@ qboolean R_WorldSkyVisible(void);
 #ifndef SDL_THREADS_DISABLED
 void RSceneCache_Cleanup(qmodel_t *mod);
 void RSceneCache_Shutdown(void);
+void RSceneCache_WaitForWorker(void);
 void RSceneCache_AbortTeleport(void);
 qboolean RSceneCache_DrawSkySurfDepth(void);	//Draws sky surfaces.
 qboolean RSceneCache_HasSky(void);
