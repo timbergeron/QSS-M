@@ -26,7 +26,7 @@ else:
     alias_delete = 'void GLAlias_DeleteShaders (void)\n{\nint i;\n' + alias[start:end] + '\n}\n'
 world_delete = function(world, 'static void GLWorld_DeleteShaderPrograms (void)')
 uniforms = sorted(set(re.findall(r'^\t(\w+) =', world_delete, re.M)) -
-    {'r_world_program', 'r_world_instanced_program', 'r_grass_program'})
+    {'r_world_program', 'r_world_opaque_program', 'r_world_instanced_program', 'r_grass_program'})
 water_fields = sorted(set(re.findall(r'r_water\[i\]\.(\w+)', world_delete)) - {'program'})
 
 source = r'''
@@ -41,7 +41,7 @@ static int gl_vbo_able = 1, gl_bmodel_vbo = 1, gl_glsl_water_able = 1;
 static GLuint gl_programs[32];
 static int alive[32];
 static struct { GLuint program; int uniform; } r_alias_glsl[ALIAS_GLSL_MODES], r_alias_inst_glsl;
-static GLuint r_world_program, r_world_instanced_program, r_grass_program;
+static GLuint r_world_program, r_world_opaque_program, r_world_instanced_program, r_grass_program;
 static void GL_DeleteProgramFunc(GLuint id) { assert(id < 32 && alive[id]); alive[id] = 0; deleted++; }
 static void R_ItemTimersShutdownGL(void) {}
 static void PolyBlend_DeleteVignetteTexture(void) {}
@@ -64,20 +64,20 @@ int main(void) {
     for (int cycle = 0; cycle < 8; cycle++) {
         deleted = 0;
         r_alias_glsl[0].program = 1; r_alias_glsl[1].program = 2; r_alias_inst_glsl.program = 3;
-        r_world_program = 4; r_world_instanced_program = 5; r_grass_program = 6;
-        r_water[0].program = 7; r_water[1].program = 8;
-        for (GLuint id = 1; id <= 8; id++) track(id);
+        r_world_program = 4; r_world_opaque_program = 5; r_world_instanced_program = 6; r_grass_program = 7;
+        r_water[0].program = 8; r_water[1].program = 9;
+        for (GLuint id = 1; id <= 9; id++) track(id);
         R_DeleteShaders();
-        assert(deleted == 8 && gl_num_programs == 0);
+        assert(deleted == 9 && gl_num_programs == 0);
         assert(!r_alias_glsl[0].program && !r_alias_glsl[1].program && !r_alias_inst_glsl.program);
-        assert(!r_world_program && !r_world_instanced_program && !r_grass_program);
+        assert(!r_world_program && !r_world_opaque_program && !r_world_instanced_program && !r_grass_program);
         assert(!r_water[0].program && !r_water[1].program);
         /* Lazy gamma/menu shaders reuse former alias/world IDs before map loading. */
         track(1); track(4);
         GLAlias_DeleteShaders(); GLWorld_DeleteShaderPrograms();
-        assert(alive[1] && alive[4] && gl_num_programs == 2 && deleted == 8);
+        assert(alive[1] && alive[4] && gl_num_programs == 2 && deleted == 9);
         R_DeleteShaders();
-        assert(deleted == 10 && gl_num_programs == 0);
+        assert(deleted == 11 && gl_num_programs == 0);
     }
     gl_glsl_able = 0;
     r_alias_glsl[0].program = 1; r_world_program = 4;

@@ -48,15 +48,19 @@ byte *SV_FatPVS (vec3_t org, qmodel_t *worldmodel);
 #ifndef SDL_THREADS_DISABLED
 static qboolean RSceneCache_Queue(byte *vis);
 static void RSceneCache_Draw(qboolean water);
+static qboolean RSceneCache_WillDraw(void);
+static qboolean RSceneCache_HasTeleportChains(void);
 static void RSceneCache_MarkTeleportSurfaces(void);
 #endif
 void RSceneCache_Shutdown(void);
 static qboolean R_GrassBladesActive (void);
+static int R_GrassBladeMode (void);
 static float R_GrassAnimTime (void);
 static float R_GrassAmount (void);
 static float R_GrassMovement (void);
 static float R_GrassGustScale (void);
 static qboolean R_TextureUsesSurfaceGrass (const texture_t *t);
+static void R_TextureGrassBladeColors (const texture_t *t, vec3_t base, vec3_t tip);
 static void R_SetGrassColorUniforms (const texture_t *t);
 static float R_GrassWeatherNoise (float x, float y, unsigned int salt);
 static qboolean R_GrassEntityAllowsGrass (const entity_t *ent);
@@ -544,8 +548,9 @@ matrix), so brush entities pick up their transform for free. -- woods #caustics
 #define CAUSTICS_TILT 30.0f
 static void R_SetCausticsProjection (GLint locs, GLint loct, GLint locup)
 {
-	mat4_t inv;
-	float ct, st, ps[3], pt[3], es[4], et[4];
+	static mat4_t cached_world_matrix;
+	static qboolean cached_valid;
+	static float cached_es[4], cached_et[4];
 	int i, j;
 
 	// world +z in eye space from the view matrix alone: gl_ModelViewMatrix would
@@ -554,25 +559,30 @@ static void R_SetCausticsProjection (GLint locs, GLint loct, GLint locup)
 		GL_Uniform3fFunc (locup, r_world_matrix[8], r_world_matrix[9], r_world_matrix[10]);
 	if (locs == -1 || loct == -1)
 		return;
-	if (!Matrix4_Invert (r_world_matrix, inv))
-		return;
 
-	ct = cos (CAUSTICS_TILT * M_PI / 180.0);
-	st = sin (CAUSTICS_TILT * M_PI / 180.0);
-	ps[0] = (ct + 1.0f) * 0.5f;	ps[1] = (ct - 1.0f) * 0.5f;	ps[2] = -st * 0.70710678f;
-	pt[0] = (ct - 1.0f) * 0.5f;	pt[1] = (ct + 1.0f) * 0.5f;	pt[2] = -st * 0.70710678f;
-
-	for (j = 0; j < 4; j++)
+	if (!cached_valid || memcmp (cached_world_matrix, r_world_matrix, sizeof(cached_world_matrix)) != 0)
 	{
-		es[j] = et[j] = 0.0f;
-		for (i = 0; i < 3; i++)
+		// cos(30 deg) and sin(30 deg) for CAUSTICS_TILT == 30.0f
+		static const float ps[3] = { (0.86602540f + 1.0f) * 0.5f, (0.86602540f - 1.0f) * 0.5f, -0.5f * 0.70710678f };
+		static const float pt[3] = { (0.86602540f - 1.0f) * 0.5f, (0.86602540f + 1.0f) * 0.5f, -0.5f * 0.70710678f };
+		mat4_t inv;
+
+		if (!Matrix4_Invert (r_world_matrix, inv))
+			return;
+		for (j = 0; j < 4; j++)
 		{
-			es[j] += ps[i] * inv[j*4 + i] * (1.0f / 64.0f);
-			et[j] += pt[i] * inv[j*4 + i] * (1.0f / 64.0f);
+			cached_es[j] = cached_et[j] = 0.0f;
+			for (i = 0; i < 3; i++)
+			{
+				cached_es[j] += ps[i] * inv[j*4 + i] * (1.0f / 64.0f);
+				cached_et[j] += pt[i] * inv[j*4 + i] * (1.0f / 64.0f);
+			}
 		}
+		memcpy (cached_world_matrix, r_world_matrix, sizeof(cached_world_matrix));
+		cached_valid = true;
 	}
-	GL_Uniform4fFunc (locs, es[0], es[1], es[2], es[3]);
-	GL_Uniform4fFunc (loct, et[0], et[1], et[2], et[3]);
+	GL_Uniform4fFunc (locs, cached_es[0], cached_es[1], cached_es[2], cached_es[3]);
+	GL_Uniform4fFunc (loct, cached_et[0], cached_et[1], cached_et[2], cached_et[3]);
 }
 
 /*
@@ -771,6 +781,7 @@ float GL_WaterAlphaForEntitySurface (entity_t *ent, msurface_t *s)
 
 
 static GLuint r_world_program;
+static GLuint r_world_opaque_program;
 static GLuint r_world_instanced_program;
 extern GLuint gl_bmodel_vbo;
 extern GLuint gl_bmodel_lmbounds_vbo;
@@ -803,6 +814,35 @@ static GLint grassTipColorLoc; // woods #grass
 static GLint grassMovementLoc; // woods #grass
 static GLint grassGustScaleLoc; // woods #grass
 static GLint fogModeLoc;
+
+// uniforms for r_world_opaque_program (no discard -> enables hardware Early-Z / HSR)
+static GLint opaqueTexLoc = -1;
+static GLint opaqueLMTexLoc = -1;
+static GLint opaqueFullbrightTexLoc = -1;
+static GLint opaqueCausticsTexLoc = -1;
+static GLint opaqueUseFullbrightTexLoc = -1;
+static GLint opaqueUseOverbrightLoc = -1;
+static GLint opaqueUseCausticsTexLoc = -1;
+static GLint opaqueUseGrassLoc = -1;
+static GLint opaqueUseLightmapWideLoc = -1;
+static GLint opaqueUseLightmapOnlyLoc = -1;
+static GLint opaqueUseLightmapExtra4Loc = -1;
+static GLint opaqueLightmapTexelSizeLoc = -1;
+static GLint opaqueUseTexturelessDitherLoc = -1;
+static GLint opaqueUseLightmapBandingLoc = -1;
+static GLint opaqueAlphaLoc = -1;
+static GLint opaqueClTimeLoc = -1;
+static GLint opaqueCausticsOpacityLoc = -1;
+static GLint opaqueCausticsPlaneSLoc = -1;
+static GLint opaqueCausticsPlaneTLoc = -1;
+static GLint opaqueCausticsWorldUpLoc = -1;
+static GLint opaqueGrassAmountLoc = -1;
+static GLint opaqueGrassTimeLoc = -1;
+static GLint opaqueGrassBaseColorLoc = -1;
+static GLint opaqueGrassTipColorLoc = -1;
+static GLint opaqueGrassMovementLoc = -1;
+static GLint opaqueGrassGustScaleLoc = -1;
+static GLint opaqueFogModeLoc = -1;
 
 static GLint instTexLoc;
 static GLint instLMTexLoc;
@@ -962,6 +1002,7 @@ typedef struct bmodel_drawcache_s
 {
 	qboolean			valid;
 	qboolean			unsupported;
+	qboolean			has_fence;
 	unsigned int		generation;
 	int					lightmap_count;
 	unsigned int		brushpolys;
@@ -970,6 +1011,8 @@ typedef struct bmodel_drawcache_s
 	int					numbatches;
 	bmodel_drawbatch_t	*batches;
 	byte				used_lightstyles[(MAX_LIGHTSTYLES + 7) >> 3];
+	unsigned short		used_lightstyle_list[MAX_LIGHTSTYLES];
+	int					num_used_lightstyles;
 	int					lightstyle_values[MAX_LIGHTSTYLES];
 	qboolean			has_cached_dlight;
 } bmodel_drawcache_t;
@@ -988,15 +1031,16 @@ static void R_BModelDrawCache_MarkLightstyles (bmodel_drawcache_t *cache, const 
 	for (maps = 0; maps < MAXLIGHTMAPS && surf->styles[maps] != INVALID_LIGHTSTYLE; maps++)
 	{
 		unsigned short style = surf->styles[maps];
+		byte mask;
 		if (style >= MAX_LIGHTSTYLES)
 			continue;
-		cache->used_lightstyles[style >> 3] |= (1u << (style & 7));
+		mask = (byte)(1u << (style & 7));
+		if (!(cache->used_lightstyles[style >> 3] & mask))
+		{
+			cache->used_lightstyles[style >> 3] |= mask;
+			cache->used_lightstyle_list[cache->num_used_lightstyles++] = style;
+		}
 	}
-}
-
-static qboolean R_BModelDrawCache_UsesLightstyle (const bmodel_drawcache_t *cache, int style)
-{
-	return (cache->used_lightstyles[style >> 3] & (1u << (style & 7))) != 0;
 }
 
 static qboolean R_BModelDrawCache_SurfaceSupported (qmodel_t *model, msurface_t *surf)
@@ -1200,6 +1244,8 @@ static bmodel_drawcache_t *R_BModelDrawCache_Build (qmodel_t *model)
 		R_TriangleIndicesForSurf (surf, indices + batch->firstidx + fill[j]);
 		fill[j] += numidx;
 		batch->flags |= surf->flags;
+		if (surf->flags & SURF_DRAWFENCE)
+			cache->has_fence = true;
 	}
 
 	GL_GenBuffersFunc (1, &cache->ebo);
@@ -1247,9 +1293,12 @@ static qboolean R_BModelDrawCache_LightstylesChanged (const bmodel_drawcache_t *
 {
 	int i;
 
-	for (i = 0; i < MAX_LIGHTSTYLES; i++)
-		if (R_BModelDrawCache_UsesLightstyle (cache, i) && cache->lightstyle_values[i] != d_lightstylevalue[i])
+	for (i = 0; i < cache->num_used_lightstyles; i++)
+	{
+		unsigned short style = cache->used_lightstyle_list[i];
+		if (cache->lightstyle_values[style] != d_lightstylevalue[style])
 			return true;
+	}
 	return false;
 }
 
@@ -1257,9 +1306,11 @@ static void R_BModelDrawCache_StoreLightstyles (bmodel_drawcache_t *cache)
 {
 	int i;
 
-	for (i = 0; i < MAX_LIGHTSTYLES; i++)
-		if (R_BModelDrawCache_UsesLightstyle (cache, i))
-			cache->lightstyle_values[i] = d_lightstylevalue[i];
+	for (i = 0; i < cache->num_used_lightstyles; i++)
+	{
+		unsigned short style = cache->used_lightstyle_list[i];
+		cache->lightstyle_values[style] = d_lightstylevalue[style];
+	}
 }
 
 static qboolean R_BModelDrawCache_HasActiveDlights (const entity_t *ent)
@@ -1359,7 +1410,7 @@ qboolean R_DrawBModelDrawCache (qmodel_t *model, entity_t *ent)
 	const int overbright = !!gl_overbright.value;
 	const int wide10bits = (gl_lightmap_format == GL_RGB10_A2);
 	int i;
-	int lasttex = -1, lastlm = -1, lastcaustics = -1;
+	int lasttex = -1, lastlm = -1, lastcaustics = -1, lastfullbright = -1, lastgrass = -1, lastalphatest = -1;
 	texture_t *t, *animt;
 	gltexture_t *fullbright = NULL;
 
@@ -1387,10 +1438,77 @@ qboolean R_DrawBModelDrawCache (qmodel_t *model, entity_t *ent)
 		R_UploadLightmaps ();
 	}
 
+	{
+	qboolean use_opaque;
+	qboolean grass_surface_active;
+	GLuint prog;
+	GLint locUseFullbright, locUseOverbright, locUseCaustics, locUseGrass, locUseAlphaTest;
+	GLint locUseLMWide, locUseLMOnly, locUseLMExtra4, locLMTexelSize, locUseTexDither, locUseLMBanding;
+	GLint locAlpha, locClTime, locCausticsOpacity, locCausticsS, locCausticsT, locCausticsUp;
+	GLint locGrassAmt, locGrassTime, locGrassBase, locGrassTip, locGrassMove, locGrassGust, locFogMode;
+
+	use_opaque = !cache->has_fence && r_world_opaque_program != 0;
+	if (use_opaque)
+	{
+		prog = r_world_opaque_program;
+		locUseFullbright = opaqueUseFullbrightTexLoc;
+		locUseOverbright = opaqueUseOverbrightLoc;
+		locUseCaustics = opaqueUseCausticsTexLoc;
+		locUseGrass = opaqueUseGrassLoc;
+		locUseAlphaTest = -1;
+		locUseLMWide = opaqueUseLightmapWideLoc;
+		locUseLMOnly = opaqueUseLightmapOnlyLoc;
+		locUseLMExtra4 = opaqueUseLightmapExtra4Loc;
+		locLMTexelSize = opaqueLightmapTexelSizeLoc;
+		locUseTexDither = opaqueUseTexturelessDitherLoc;
+		locUseLMBanding = opaqueUseLightmapBandingLoc;
+		locAlpha = opaqueAlphaLoc;
+		locClTime = opaqueClTimeLoc;
+		locCausticsOpacity = opaqueCausticsOpacityLoc;
+		locCausticsS = opaqueCausticsPlaneSLoc;
+		locCausticsT = opaqueCausticsPlaneTLoc;
+		locCausticsUp = opaqueCausticsWorldUpLoc;
+		locGrassAmt = opaqueGrassAmountLoc;
+		locGrassTime = opaqueGrassTimeLoc;
+		locGrassBase = opaqueGrassBaseColorLoc;
+		locGrassTip = opaqueGrassTipColorLoc;
+		locGrassMove = opaqueGrassMovementLoc;
+		locGrassGust = opaqueGrassGustScaleLoc;
+		locFogMode = opaqueFogModeLoc;
+	}
+	else
+	{
+		prog = r_world_program;
+		locUseFullbright = (GLint)useFullbrightTexLoc;
+		locUseOverbright = (GLint)useOverbrightLoc;
+		locUseCaustics = (GLint)useCausticsTexLoc;
+		locUseGrass = useGrassLoc;
+		locUseAlphaTest = (GLint)useAlphaTestLoc;
+		locUseLMWide = (GLint)useLightmapWideLoc;
+		locUseLMOnly = (GLint)useLightmapOnlyLoc;
+		locUseLMExtra4 = (GLint)useLightmapExtra4Loc;
+		locLMTexelSize = (GLint)lightmapTexelSizeLoc;
+		locUseTexDither = (GLint)useTexturelessDitherLoc;
+		locUseLMBanding = useLightmapBandingLoc;
+		locAlpha = (GLint)alphaLoc;
+		locClTime = (GLint)clTimeLoc;
+		locCausticsOpacity = (GLint)causticsOpacityLoc;
+		locCausticsS = causticsPlaneSLoc;
+		locCausticsT = causticsPlaneTLoc;
+		locCausticsUp = causticsWorldUpLoc;
+		locGrassAmt = grassAmountLoc;
+		locGrassTime = grassTimeLoc;
+		locGrassBase = grassBaseColorLoc;
+		locGrassTip = grassTipColorLoc;
+		locGrassMove = grassMovementLoc;
+		locGrassGust = grassGustScaleLoc;
+		locFogMode = fogModeLoc;
+	}
+
 	glDepthMask (GL_TRUE);
 	glDisable (GL_BLEND);
 	glEnable (GL_CULL_FACE);
-	GL_UseProgramFunc (r_world_program);
+	GL_UseProgramFunc (prog);
 
 	GL_BindBuffer (GL_ARRAY_BUFFER, gl_bmodel_vbo);
 	GL_BindBuffer (GL_ELEMENT_ARRAY_BUFFER, cache->ebo);
@@ -1404,29 +1522,36 @@ qboolean R_DrawBModelDrawCache (qmodel_t *model, entity_t *ent)
 	GL_VertexAttribPointerFunc (LMCoordsAttrIndex,  2, GL_FLOAT, GL_FALSE, VERTEXSIZE * sizeof(float), ((float *)0) + 5);
 	R_SetupLightmapBoundsAttrib ();
 
-	GL_Uniform1iFunc (texLoc, 0);
-	GL_Uniform1iFunc (LMTexLoc, 1);
-	GL_Uniform1iFunc (fullbrightTexLoc, 2);
-	GL_Uniform1iFunc (causticsTexLoc, 3);
-	GL_Uniform1iFunc (useFullbrightTexLoc, 0);
-	GL_Uniform1iFunc (useOverbrightLoc, overbright);
-	GL_Uniform1iFunc (useCausticsTexLoc, 0);
-	GL_Uniform1iFunc (useGrassLoc, 0);
-	GL_Uniform1iFunc (useAlphaTestLoc, 0);
-	GL_Uniform1iFunc (useLightmapWideLoc, wide10bits);
-	GL_Uniform1iFunc (useLightmapOnlyLoc, 0);
-	R_SetLightmapExtra4Uniforms (useLightmapExtra4Loc, lightmapTexelSizeLoc);
-	R_SetTexturelessDitherUniform (useTexturelessDitherLoc);
-	R_SetLightmapBandingUniform (useLightmapBandingLoc);
-	GL_Uniform1fFunc (alphaLoc, 1.0f);
-	GL_Uniform1fFunc (clTimeLoc, cl.time);
-	R_SetCausticsProjection (causticsPlaneSLoc, causticsPlaneTLoc, causticsWorldUpLoc); // woods #caustics
-	GL_Uniform1fFunc (causticsOpacityLoc, gl_caustics.value);
-	GL_Uniform1fFunc (grassAmountLoc, R_GrassAmount());
-	GL_Uniform1fFunc (grassTimeLoc, R_GrassAnimTime());
-	GL_Uniform1fFunc (grassMovementLoc, R_GrassMovement());
-	GL_Uniform1fFunc (grassGustScaleLoc, R_GrassGustScale());
-	GL_Uniform1iFunc (fogModeLoc, Fog_GetMode());
+	GL_Uniform1iFunc (locUseFullbright, 0);
+	lastfullbright = 0;
+	GL_Uniform1iFunc (locUseOverbright, overbright);
+	GL_Uniform1iFunc (locUseCaustics, 0);
+	lastcaustics = 0;
+	GL_Uniform1iFunc (locUseGrass, 0);
+	lastgrass = 0;
+	if (locUseAlphaTest != -1)
+	{
+		GL_Uniform1iFunc (locUseAlphaTest, 0);
+		lastalphatest = 0;
+	}
+	GL_Uniform1iFunc (locUseLMWide, wide10bits);
+	GL_Uniform1iFunc (locUseLMOnly, 0);
+	R_SetLightmapExtra4Uniforms (locUseLMExtra4, locLMTexelSize);
+	R_SetTexturelessDitherUniform (locUseTexDither);
+	R_SetLightmapBandingUniform (locUseLMBanding);
+	GL_Uniform1fFunc (locAlpha, 1.0f);
+	GL_Uniform1fFunc (locClTime, cl.time);
+	R_SetCausticsProjection (locCausticsS, locCausticsT, locCausticsUp); // woods #caustics
+	GL_Uniform1fFunc (locCausticsOpacity, gl_caustics.value);
+	grass_surface_active = R_GrassBladeMode() == 0 && R_GrassEntityAllowsGrass(ent);
+	if (grass_surface_active)
+	{
+		GL_Uniform1fFunc (locGrassAmt, R_GrassAmount());
+		GL_Uniform1fFunc (locGrassTime, R_GrassAnimTime());
+		GL_Uniform1fFunc (locGrassMove, R_GrassMovement());
+		GL_Uniform1fFunc (locGrassGust, R_GrassGustScale());
+	}
+	GL_Uniform1iFunc (locFogMode, Fog_GetMode());
 
 	for (i = 0; i < cache->numbatches; i++)
 	{
@@ -1440,31 +1565,52 @@ qboolean R_DrawBModelDrawCache (qmodel_t *model, entity_t *ent)
 
 		if (batch->texture != lasttex)
 		{
+			int want_fb;
+			int want_grass;
+
 			GL_SelectTexture (GL_TEXTURE0);
 			GL_Bind (animt->gltexture);
 
-			if (gl_fullbrights.value && (fullbright = animt->fullbright))
+			want_fb = (gl_fullbrights.value && (fullbright = animt->fullbright)) ? 1 : 0;
+			if (want_fb)
 			{
 				GL_SelectTexture (GL_TEXTURE2);
 				GL_Bind (fullbright);
-				GL_Uniform1iFunc (useFullbrightTexLoc, 1);
 			}
-			else
-				GL_Uniform1iFunc (useFullbrightTexLoc, 0);
-
-			if (R_TextureUsesSurfaceGrass(t) && R_GrassEntityAllowsGrass(ent))
+			if (want_fb != lastfullbright)
 			{
-				GL_Uniform1iFunc (useGrassLoc, 1);
-				R_SetGrassColorUniforms(animt);
+				GL_Uniform1iFunc (locUseFullbright, want_fb);
+				lastfullbright = want_fb;
 			}
-			else
-				GL_Uniform1iFunc (useGrassLoc, 0);
+
+			want_grass = (grass_surface_active && R_TextureUsesSurfaceGrass(t)) ? 1 : 0;
+			if (want_grass)
+			{
+				vec3_t gbase, gtip;
+				R_TextureGrassBladeColors(animt, gbase, gtip);
+				if (locGrassBase != -1)
+					GL_Uniform3fFunc(locGrassBase, gbase[0], gbase[1], gbase[2]);
+				if (locGrassTip != -1)
+					GL_Uniform3fFunc(locGrassTip, gtip[0], gtip[1], gtip[2]);
+			}
+			if (want_grass != lastgrass)
+			{
+				GL_Uniform1iFunc (locUseGrass, want_grass);
+				lastgrass = want_grass;
+			}
 
 			lasttex = batch->texture;
-			lastlm = -1;
 		}
 
-		GL_Uniform1iFunc (useAlphaTestLoc, (batch->flags & SURF_DRAWFENCE) != 0);
+		if (locUseAlphaTest != -1)
+		{
+			int want_at = (batch->flags & SURF_DRAWFENCE) != 0;
+			if (want_at != lastalphatest)
+			{
+				GL_Uniform1iFunc (locUseAlphaTest, want_at);
+				lastalphatest = want_at;
+			}
+		}
 
 		if (batch->lightmap != lastlm)
 		{
@@ -1480,7 +1626,7 @@ qboolean R_DrawBModelDrawCache (qmodel_t *model, entity_t *ent)
 				GL_SelectTexture (GL_TEXTURE3);
 				GL_Bind (underwatertexture);
 			}
-			GL_Uniform1iFunc (useCausticsTexLoc, usecaustics);
+			GL_Uniform1iFunc (locUseCaustics, usecaustics);
 			lastcaustics = usecaustics;
 		}
 
@@ -1490,8 +1636,11 @@ qboolean R_DrawBModelDrawCache (qmodel_t *model, entity_t *ent)
 
 	rs_brushpolys += cache->brushpolys;
 
-	GL_Uniform1iFunc (useAlphaTestLoc, 0);
-	GL_Uniform1iFunc (useCausticsTexLoc, 0);
+	if (locUseAlphaTest != -1 && lastalphatest != 0)
+		GL_Uniform1iFunc (locUseAlphaTest, 0);
+	if (lastcaustics != 0)
+		GL_Uniform1iFunc (locUseCaustics, 0);
+	}
 	GL_DisableVertexAttribArrayFunc (vertAttrIndex);
 	GL_DisableVertexAttribArrayFunc (texCoordsAttrIndex);
 	GL_DisableVertexAttribArrayFunc (LMCoordsAttrIndex);
@@ -1944,12 +2093,14 @@ static void GLWorld_DeleteShaderPrograms (void)
 	int i;
 
 	GL_DeleteProgramTracked(&r_world_program);
+	GL_DeleteProgramTracked(&r_world_opaque_program);
 	GL_DeleteProgramTracked(&r_world_instanced_program);
 	GL_DeleteProgramTracked(&r_grass_program);
 	for (i = 0; i < countof(r_water); i++)
 		GL_DeleteProgramTracked(&r_water[i].program);
 
 	r_world_program = 0;
+	r_world_opaque_program = 0;
 	r_world_instanced_program = 0;
 	texLoc = 0;
 	LMTexLoc = 0;
@@ -1979,6 +2130,34 @@ static void GLWorld_DeleteShaderPrograms (void)
 	grassMovementLoc = -1;
 	grassGustScaleLoc = -1;
 	fogModeLoc = -1;
+
+	opaqueTexLoc = -1;
+	opaqueLMTexLoc = -1;
+	opaqueFullbrightTexLoc = -1;
+	opaqueCausticsTexLoc = -1;
+	opaqueUseFullbrightTexLoc = -1;
+	opaqueUseOverbrightLoc = -1;
+	opaqueUseCausticsTexLoc = -1;
+	opaqueUseGrassLoc = -1;
+	opaqueUseLightmapWideLoc = -1;
+	opaqueUseLightmapOnlyLoc = -1;
+	opaqueUseLightmapExtra4Loc = -1;
+	opaqueLightmapTexelSizeLoc = -1;
+	opaqueUseTexturelessDitherLoc = -1;
+	opaqueUseLightmapBandingLoc = -1;
+	opaqueAlphaLoc = -1;
+	opaqueClTimeLoc = -1;
+	opaqueCausticsOpacityLoc = -1;
+	opaqueCausticsPlaneSLoc = -1;
+	opaqueCausticsPlaneTLoc = -1;
+	opaqueCausticsWorldUpLoc = -1;
+	opaqueGrassAmountLoc = -1;
+	opaqueGrassTimeLoc = -1;
+	opaqueGrassBaseColorLoc = -1;
+	opaqueGrassTipColorLoc = -1;
+	opaqueGrassMovementLoc = -1;
+	opaqueGrassGustScaleLoc = -1;
+	opaqueFogModeLoc = -1;
 
 	instTexLoc = -1;
 	instLMTexLoc = -1;
@@ -6219,290 +6398,286 @@ void GLWorld_CreateShaders (void)
 		"	FogFragCoord = gl_Position.w;\n"
 		"}\n";
 	
-	const GLchar *fragSource = \
-		"#version 110\n"
-		"\n"
-		"#define M_PI 3.14159\n"
-		"\n"
-		"uniform sampler2D Tex;\n"
-		"uniform sampler2D LMTex;\n"
-		"uniform sampler2D FullbrightTex;\n"
-		"uniform sampler2D CausticsTex;\n"
-		"uniform bool UseFullbrightTex;\n"
-		"uniform bool UseOverbright;\n"
-		"uniform bool UseAlphaTest;\n"
-		"uniform bool UseCausticsTex;\n"
-		"uniform bool UseGrass;\n"
-		"uniform bool UseLightmapWide;\n"
-		"uniform bool UseLightmapOnly;\n"
-		"uniform bool UseLightmapExtra4;\n"
-		"uniform vec2 LightmapTexelSize;\n"
-		"uniform bool UseTexturelessDither;\n"
-		"uniform bool UseLightmapBanding;\n"
-		"uniform float Alpha;\n"
-		"uniform float ClTime;\n"
-		"uniform float CausticsOpacity;\n"
-		"uniform vec3 CausticsWorldUp;\n"
-		"uniform float GrassAmount;\n"
-		"uniform float GrassTime;\n"
-		"uniform vec3 GrassBaseColor;\n"
-		"uniform vec3 GrassTipColor;\n"
-		"uniform float GrassMovement;\n"
-		"uniform float GrassGustScale;\n"
-		"uniform int FogMode;\n"
-		"\n"
-		"varying float FogFragCoord;\n"
-		"varying vec2 tc_tex;\n"
-		"varying vec2 tc_lm;\n"
-		"varying vec4 tc_lmbounds;\n"
-		"varying vec3 EyePos;\n"
-		"varying vec2 CausticsPos;\n"
-		"\n"
-		"float FogFactor(float dist)\n"
-		"{\n"
-		"	if (FogMode == 1)\n"
-		"		return (gl_Fog.end - dist) / (gl_Fog.end - gl_Fog.start);\n"
-		"	if (FogMode == 2)\n"
-		"		return exp(-gl_Fog.density * dist);\n"
-		"	return exp(-gl_Fog.density * gl_Fog.density * dist * dist);\n"
-		"}\n"
-		"\n"
-		"vec4 LightmapBoundsUV()\n"
-		"{\n"
-		"\treturn (tc_lmbounds + vec4(0.5)) * LightmapTexelSize.xyxy;\n"
-		"}\n"
-		"\n"
-		"vec2 ClampLightmapUV(vec2 uv, vec2 offset, vec4 bounds)\n"
-		"{\n"
-		"\treturn clamp(uv + offset, bounds.xy, bounds.zw);\n"
-		"}\n"
-		"\n"
-		"float LightmapExtra4EdgeBlend(vec4 bounds)\n"
-		"{\n"
-		"\tvec2 edgeDistance = min(tc_lm - bounds.xy, bounds.zw - tc_lm);\n"
-		"\tvec2 edgeTexels = max(edgeDistance / LightmapTexelSize, vec2(0.0));\n"
-		"\treturn smoothstep(0.0, 0.375, min(edgeTexels.x, edgeTexels.y));\n"
-		"}\n"
-		"\n"
-		"float FogDitherHash(vec2 p)\n"
-		"{\n"
-		"	return fract(52.9829189 * fract(p.x * 0.06711056 + p.y * 0.00583715));\n"
-		"}\n"
-		"\n"
-		"float FogDither()\n"
-		"{\n"
-		"	vec2 p = floor(gl_FragCoord.xy);\n"
-		"	return (FogDitherHash(p) + FogDitherHash(p + vec2(17.0, 29.0)) - 1.0) * (1.0 / 255.0);\n"
-		"}\n"
-		"\n"
-		"float TexturelessDither()\n"
-		"{\n"
-		"	vec2 p = floor(gl_FragCoord.xy);\n"
-		"	return FogDitherHash(p + vec2(13.0, 7.0)) +\n"
-		"	       FogDitherHash(p + vec2(29.0, 17.0)) - 1.0;\n"
-		"}\n"
-		"\n"
-		"float GrassHash(vec2 p)\n"
-		"{\n"
-		"	return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453123);\n"
-		"}\n"
-		"\n"
-		"float GrassNoise(vec2 p)\n"
-		"{\n"
-		"	vec2 i = floor(p);\n"
-		"	vec2 f = fract(p);\n"
-		"	f = f * f * f * (f * (f * 6.0 - 15.0) + 10.0);\n"
-		"	return mix(mix(GrassHash(i), GrassHash(i + vec2(1.0, 0.0)), f.x),\n"
-		"	           mix(GrassHash(i + vec2(0.0, 1.0)), GrassHash(i + vec2(1.0, 1.0)), f.x), f.y);\n"
-		"}\n"
-		"\n"
-		"float GrassWindNoise(vec2 p)\n"
-		"{\n"
-		"	vec2 i = floor(p);\n"
-		"	vec2 f = fract(p);\n"
-		"	f = f * f * f * (f * (f * 6.0 - 15.0) + 10.0);\n"
-		"	i = mod(i, 256.0);\n" // tiles with the wrapped scroll below
-		"	vec2 j = mod(i + 1.0, 256.0);\n"
-		"	return mix(mix(GrassHash(i), GrassHash(vec2(j.x, i.y)), f.x),\n"
-		"	           mix(GrassHash(vec2(i.x, j.y)), GrassHash(j), f.x), f.y);\n"
-		"}\n"
-		"\n"
-		// texture-space take on the blade wind: gust bands roll across the
-		// surface, blades lean with them and flutter harder inside a gust
-		"float GrassFlow(vec2 p, float rnd, out float gustOut)\n" // p in texture tiles, so both blade layers share one gust field
-		"{\n"
-		"	float gustScale = max(GrassGustScale, 0.0);\n"
-		"	float freq = 0.6 * (0.5 + gustScale);\n"
-		"	float drift = mod(GrassTime * (0.65 + 0.65 * gustScale), 256.0);\n"
-		"	float gust = 0.7 * GrassWindNoise(p * freq - vec2(drift, drift * 0.3));\n"
-		"	gust += 0.3 * GrassWindNoise(p * (freq * 2.3) + vec2(31.0, 17.0) - vec2(mod(drift * 2.3, 256.0), mod(drift * 0.69, 256.0)));\n"
-		"	gust = smoothstep(0.36, 0.82, gust);\n"
-		"	gustOut = gust;\n"
-		"	float rate = 4.5 + 3.0 * rnd;\n"
-		"	float lean = (0.035 + 0.13 * gust) * (0.75 + 0.5 * fract(rnd * 7.31 + 0.27));\n"
-		"	float flutter = (0.008 + 0.035 * gust) * sin(mod(GrassTime * rate, 6.28318) + rnd * 6.28318);\n"
-		"	return lean + flutter;\n"
-		"}\n"
-		"\n"
-		"float GrassBlade(vec2 uv, vec2 scale, float seed, inout float sheen)\n"
-		"{\n"
-		"	vec2 q = uv * scale + seed;\n"
-		"	vec2 cell = floor(q);\n"
-		"	vec2 f = fract(q);\n"
-		"	float rnd = GrassHash(cell + seed);\n"
-		"	float hdist = (GrassHash(cell + vec2(4.7, 8.3) + seed) + GrassHash(cell + vec2(9.2, 1.6) + seed) + GrassHash(cell + vec2(2.5, 12.1) + seed) + GrassHash(cell + vec2(15.3, 5.4) + seed)) * 0.25;\n"
-		"	float height = 0.48 + 0.48 * hdist;\n"
-		"	float width = 0.018 + 0.022 * GrassHash(cell + vec2(9.1, 2.4));\n"
-		"	float root = 0.20 + 0.60 * GrassHash(cell + vec2(12.5, 6.6) + seed);\n"
-		"	float tip = f.y * f.y;\n"
-		"	float gust;\n"
-		"	float wind = GrassFlow((cell + 0.5) / scale, rnd, gust) * GrassMovement;\n"
-		"	float center = root + tip * (wind + (rnd - 0.5) * 0.18);\n"
-		"	float shape = 1.0 - smoothstep(0.0, width, abs(f.x - center));\n"
-		"	shape *= smoothstep(0.02, 0.18, f.y);\n"
-		"	shape *= 1.0 - smoothstep(height, height + 0.08, f.y);\n"
-		"	shape *= 0.65 + 0.35 * rnd;\n"
-		"	sheen = max(sheen, shape * gust * min(GrassMovement, 1.0) * tip);\n"
-		"	return shape;\n"
-		"}\n"
-		"\n"
-		"void main()\n"
-		"{\n"
-		"	vec4 result;\n"
-		"	vec4 lightmapBase;\n"
-		"	if (UseLightmapBanding)\n"
-		"	{\n"
-		"		// software surface cache: one light value per texture texel (16 per luxel)\n"
-		"		vec2 lmsize = 16.0 / LightmapTexelSize;\n"
-		"		result = texture2D(Tex, tc_tex.xy, -1.0);\n"
-		"		lightmapBase = texture2D(LMTex, (floor(tc_lm.xy * lmsize) + 0.5) / lmsize);\n"
-		"	}\n"
-		"	else\n"
-		"	{\n"
-		"		result = texture2D(Tex, tc_tex.xy);\n"
-		"		lightmapBase = texture2D(LMTex, tc_lm.xy);\n"
-		"	}\n"
-		"	vec4 lightmapColor;\n"
-		"	if (UseLightmapExtra4 && !UseLightmapBanding)\n"
-		"	{\n"
-		"		// Approximate light -extra4 with four variance-matched sub-texel samples.\n"
-		"		// The original compiler's sub-samples are not recoverable clientside,\n"
-		"		// so this deliberately trades some sharpness for smoother transitions.\n"
-		"		vec4 bounds = LightmapBoundsUV();\n"
-		"		vec2 s = LightmapTexelSize * 0.28;\n"
-		"		lightmapColor = vec4(0.0);\n"
-		"		lightmapColor += texture2D(LMTex, ClampLightmapUV(tc_lm.xy, vec2(-s.x, -s.y), bounds));\n"
-		"		lightmapColor += texture2D(LMTex, ClampLightmapUV(tc_lm.xy, vec2( s.x, -s.y), bounds));\n"
-		"		lightmapColor += texture2D(LMTex, ClampLightmapUV(tc_lm.xy, vec2(-s.x,  s.y), bounds));\n"
-		"		lightmapColor += texture2D(LMTex, ClampLightmapUV(tc_lm.xy, vec2( s.x,  s.y), bounds));\n"
-		"		lightmapColor *= 0.25;\n"
-		"		lightmapColor = mix(lightmapBase, lightmapColor, LightmapExtra4EdgeBlend(bounds));\n"
-		"	}\n"
-		"	else\n"
-		"		lightmapColor = lightmapBase; // Sample lightmap early\n"
-		"	if (UseLightmapWide)\n"
-		"	    lightmapColor.rgb *= 4.0;\n"
-		"	if (UseLightmapBanding)\n"
-		"	{\n"
-		"		// 64 colormap levels spanning 0..2x (overbright) light\n"
-		"		float lmscale = UseOverbright ? 2.0 : 1.0;\n"
-		"		lightmapColor.rgb = floor(lightmapColor.rgb * (lmscale * 31.5) + 0.5) / (lmscale * 31.5);\n"
-		"	}\n"
-		"	float lightBrightness = (lightmapColor.r + lightmapColor.g + lightmapColor.b) / 3.0;\n"
-		"	// caustics need some light, but the result is already lightmap-scaled, so gate gently\n"
-		"	float surfaceLightFactor = smoothstep(0.0, 0.35, lightBrightness);\n"
-		"	vec3 grassLightColor = lightmapColor.rgb;\n"
-		"	if (UseOverbright)\n"
-		"		grassLightColor *= 2.0;\n"
-		"	float grassLightBrightness = (grassLightColor.r + grassLightColor.g + grassLightColor.b) / 3.0;\n"
-		"	float grassLightFactor = clamp(grassLightBrightness * 1.5, 0.0, 1.0);\n"
-		"	if (UseLightmapOnly)\n"
+#define WORLD_FRAG_COMMON_HEAD \
+		"#version 110\n" \
+		"\n" \
+		"#define M_PI 3.14159\n" \
+		"\n" \
+		"uniform sampler2D Tex;\n" \
+		"uniform sampler2D LMTex;\n" \
+		"uniform sampler2D FullbrightTex;\n" \
+		"uniform sampler2D CausticsTex;\n" \
+		"uniform bool UseFullbrightTex;\n" \
+		"uniform bool UseOverbright;\n" \
+		"uniform bool UseAlphaTest;\n" \
+		"uniform bool UseCausticsTex;\n" \
+		"uniform bool UseGrass;\n" \
+		"uniform bool UseLightmapWide;\n" \
+		"uniform bool UseLightmapOnly;\n" \
+		"uniform bool UseLightmapExtra4;\n" \
+		"uniform vec2 LightmapTexelSize;\n" \
+		"uniform bool UseTexturelessDither;\n" \
+		"uniform bool UseLightmapBanding;\n" \
+		"uniform float Alpha;\n" \
+		"uniform float ClTime;\n" \
+		"uniform float CausticsOpacity;\n" \
+		"uniform vec3 CausticsWorldUp;\n" \
+		"uniform float GrassAmount;\n" \
+		"uniform float GrassTime;\n" \
+		"uniform vec3 GrassBaseColor;\n" \
+		"uniform vec3 GrassTipColor;\n" \
+		"uniform float GrassMovement;\n" \
+		"uniform float GrassGustScale;\n" \
+		"uniform int FogMode;\n" \
+		"\n" \
+		"varying float FogFragCoord;\n" \
+		"varying vec2 tc_tex;\n" \
+		"varying vec2 tc_lm;\n" \
+		"varying vec4 tc_lmbounds;\n" \
+		"varying vec3 EyePos;\n" \
+		"varying vec2 CausticsPos;\n" \
+		"\n" \
+		"float FogFactor(float dist)\n" \
+		"{\n" \
+		"	if (FogMode == 1)\n" \
+		"		return (gl_Fog.end - dist) / (gl_Fog.end - gl_Fog.start);\n" \
+		"	if (FogMode == 2)\n" \
+		"		return exp(-gl_Fog.density * dist);\n" \
+		"	return exp(-gl_Fog.density * gl_Fog.density * dist * dist);\n" \
+		"}\n" \
+		"\n" \
+		"vec4 LightmapBoundsUV()\n" \
+		"{\n" \
+		"\treturn (tc_lmbounds + vec4(0.5)) * LightmapTexelSize.xyxy;\n" \
+		"}\n" \
+		"\n" \
+		"vec2 ClampLightmapUV(vec2 uv, vec2 offset, vec4 bounds)\n" \
+		"{\n" \
+		"\treturn clamp(uv + offset, bounds.xy, bounds.zw);\n" \
+		"}\n" \
+		"\n" \
+		"float LightmapExtra4EdgeBlend(vec4 bounds)\n" \
+		"{\n" \
+		"\tvec2 edgeDistance = min(tc_lm - bounds.xy, bounds.zw - tc_lm);\n" \
+		"\tvec2 edgeTexels = max(edgeDistance / LightmapTexelSize, vec2(0.0));\n" \
+		"\treturn smoothstep(0.0, 0.375, min(edgeTexels.x, edgeTexels.y));\n" \
+		"}\n" \
+		"\n" \
+		"float FogDitherHash(vec2 p)\n" \
+		"{\n" \
+		"	return fract(52.9829189 * fract(p.x * 0.06711056 + p.y * 0.00583715));\n" \
+		"}\n" \
+		"\n" \
+		"float FogDither()\n" \
+		"{\n" \
+		"	vec2 p = floor(gl_FragCoord.xy);\n" \
+		"	return (FogDitherHash(p) + FogDitherHash(p + vec2(17.0, 29.0)) - 1.0) * (1.0 / 255.0);\n" \
+		"}\n" \
+		"\n" \
+		"float TexturelessDither()\n" \
+		"{\n" \
+		"	vec2 p = floor(gl_FragCoord.xy);\n" \
+		"	return FogDitherHash(p + vec2(13.0, 7.0)) +\n" \
+		"	       FogDitherHash(p + vec2(29.0, 17.0)) - 1.0;\n" \
+		"}\n" \
+		"\n" \
+		"float GrassHash(vec2 p)\n" \
+		"{\n" \
+		"	return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453123);\n" \
+		"}\n" \
+		"\n" \
+		"float GrassNoise(vec2 p)\n" \
+		"{\n" \
+		"	vec2 i = floor(p);\n" \
+		"	vec2 f = fract(p);\n" \
+		"	f = f * f * f * (f * (f * 6.0 - 15.0) + 10.0);\n" \
+		"	return mix(mix(GrassHash(i), GrassHash(i + vec2(1.0, 0.0)), f.x),\n" \
+		"	           mix(GrassHash(i + vec2(0.0, 1.0)), GrassHash(i + vec2(1.0, 1.0)), f.x), f.y);\n" \
+		"}\n" \
+		"\n" \
+		"float GrassWindNoise(vec2 p)\n" \
+		"{\n" \
+		"	vec2 i = floor(p);\n" \
+		"	vec2 f = fract(p);\n" \
+		"	f = f * f * f * (f * (f * 6.0 - 15.0) + 10.0);\n" \
+		"	i = mod(i, 256.0);\n" \
+		"	vec2 j = mod(i + 1.0, 256.0);\n" \
+		"	return mix(mix(GrassHash(i), GrassHash(vec2(j.x, i.y)), f.x),\n" \
+		"	           mix(GrassHash(vec2(i.x, j.y)), GrassHash(j), f.x), f.y);\n" \
+		"}\n" \
+		"\n" \
+		"float GrassFlow(vec2 p, float rnd, out float gustOut)\n" \
+		"{\n" \
+		"	float gustScale = max(GrassGustScale, 0.0);\n" \
+		"	float freq = 0.6 * (0.5 + gustScale);\n" \
+		"	float drift = mod(GrassTime * (0.65 + 0.65 * gustScale), 256.0);\n" \
+		"	float gust = 0.7 * GrassWindNoise(p * freq - vec2(drift, drift * 0.3));\n" \
+		"	gust += 0.3 * GrassWindNoise(p * (freq * 2.3) + vec2(31.0, 17.0) - vec2(mod(drift * 2.3, 256.0), mod(drift * 0.69, 256.0)));\n" \
+		"	gust = smoothstep(0.36, 0.82, gust);\n" \
+		"	gustOut = gust;\n" \
+		"	float rate = 4.5 + 3.0 * rnd;\n" \
+		"	float lean = (0.035 + 0.13 * gust) * (0.75 + 0.5 * fract(rnd * 7.31 + 0.27));\n" \
+		"	float flutter = (0.008 + 0.035 * gust) * sin(mod(GrassTime * rate, 6.28318) + rnd * 6.28318);\n" \
+		"	return lean + flutter;\n" \
+		"}\n" \
+		"\n" \
+		"float GrassBlade(vec2 uv, vec2 scale, float seed, inout float sheen)\n" \
+		"{\n" \
+		"	vec2 q = uv * scale + seed;\n" \
+		"	vec2 cell = floor(q);\n" \
+		"	vec2 f = fract(q);\n" \
+		"	float rnd = GrassHash(cell + seed);\n" \
+		"	float hdist = (GrassHash(cell + vec2(4.7, 8.3) + seed) + GrassHash(cell + vec2(9.2, 1.6) + seed) + GrassHash(cell + vec2(2.5, 12.1) + seed) + GrassHash(cell + vec2(15.3, 5.4) + seed)) * 0.25;\n" \
+		"	float height = 0.48 + 0.48 * hdist;\n" \
+		"	float width = 0.018 + 0.022 * GrassHash(cell + vec2(9.1, 2.4));\n" \
+		"	float root = 0.20 + 0.60 * GrassHash(cell + vec2(12.5, 6.6) + seed);\n" \
+		"	float tip = f.y * f.y;\n" \
+		"	float gust;\n" \
+		"	float wind = GrassFlow((cell + 0.5) / scale, rnd, gust) * GrassMovement;\n" \
+		"	float center = root + tip * (wind + (rnd - 0.5) * 0.18);\n" \
+		"	float shape = 1.0 - smoothstep(0.0, width, abs(f.x - center));\n" \
+		"	shape *= smoothstep(0.02, 0.18, f.y);\n" \
+		"	shape *= 1.0 - smoothstep(height, height + 0.08, f.y);\n" \
+		"	shape *= 0.65 + 0.35 * rnd;\n" \
+		"	sheen = max(sheen, shape * gust * min(GrassMovement, 1.0) * tip);\n" \
+		"	return shape;\n" \
+		"}\n" \
+		"\n" \
+		"void main()\n" \
+		"{\n" \
+		"	vec4 result;\n" \
+		"	vec4 lightmapBase;\n" \
+		"	if (UseLightmapBanding)\n" \
+		"	{\n" \
+		"		vec2 lmsize = 16.0 / LightmapTexelSize;\n" \
+		"		result = texture2D(Tex, tc_tex.xy, -1.0);\n" \
+		"		lightmapBase = texture2D(LMTex, (floor(tc_lm.xy * lmsize) + 0.5) / lmsize);\n" \
+		"	}\n" \
+		"	else\n" \
+		"	{\n" \
+		"		result = texture2D(Tex, tc_tex.xy);\n" \
+		"		lightmapBase = texture2D(LMTex, tc_lm.xy);\n" \
+		"	}\n" \
+		"	vec4 lightmapColor;\n" \
+		"	if (UseLightmapExtra4 && !UseLightmapBanding)\n" \
+		"	{\n" \
+		"		vec4 bounds = LightmapBoundsUV();\n" \
+		"		vec2 s = LightmapTexelSize * 0.28;\n" \
+		"		lightmapColor = vec4(0.0);\n" \
+		"		lightmapColor += texture2D(LMTex, ClampLightmapUV(tc_lm.xy, vec2(-s.x, -s.y), bounds));\n" \
+		"		lightmapColor += texture2D(LMTex, ClampLightmapUV(tc_lm.xy, vec2( s.x, -s.y), bounds));\n" \
+		"		lightmapColor += texture2D(LMTex, ClampLightmapUV(tc_lm.xy, vec2(-s.x,  s.y), bounds));\n" \
+		"		lightmapColor += texture2D(LMTex, ClampLightmapUV(tc_lm.xy, vec2( s.x,  s.y), bounds));\n" \
+		"		lightmapColor *= 0.25;\n" \
+		"		lightmapColor = mix(lightmapBase, lightmapColor, LightmapExtra4EdgeBlend(bounds));\n" \
+		"	}\n" \
+		"	else\n" \
+		"		lightmapColor = lightmapBase;\n" \
+		"	if (UseLightmapWide)\n" \
+		"	    lightmapColor.rgb *= 4.0;\n" \
+		"	if (UseLightmapBanding)\n" \
+		"	{\n" \
+		"		float lmscale = UseOverbright ? 2.0 : 1.0;\n" \
+		"		lightmapColor.rgb = floor(lightmapColor.rgb * (lmscale * 31.5) + 0.5) / (lmscale * 31.5);\n" \
+		"	}\n" \
+		"	if (UseLightmapOnly)\n" \
 		"		result = vec4(0.5, 0.5, 0.5, 1.0);\n"
+
+#define WORLD_FRAG_COMMON_TAIL \
+		"	result *= lightmapColor;\n" \
+		"	if (UseOverbright)\n" \
+		"		result.rgb *= 2.0;\n" \
+		"	if (UseGrass && GrassAmount > 0.0)\n" \
+		"	{\n" \
+		"		vec3 grassLightColor = lightmapColor.rgb;\n" \
+		"		if (UseOverbright)\n" \
+		"			grassLightColor *= 2.0;\n" \
+		"		float grassLightBrightness = (grassLightColor.r + grassLightColor.g + grassLightColor.b) / 3.0;\n" \
+		"		float grassLightFactor = clamp(grassLightBrightness * 1.5, 0.0, 1.0);\n" \
+		"		float sheen = 0.0;\n" \
+		"		float grass = GrassBlade(tc_tex.xy, vec2(48.0, 18.0), 0.0, sheen);\n" \
+		"		grass += 0.65 * GrassBlade(tc_tex.xy + vec2(0.17, 0.41), vec2(72.0, 27.0), 19.7, sheen);\n" \
+		"		grass = clamp(grass, 0.0, 1.0);\n" \
+		"		float grassVar = GrassNoise(tc_tex.xy * 18.0 + GrassTime * 0.03);\n" \
+		"		vec3 grassColor = mix(GrassBaseColor, GrassTipColor, grassVar);\n" \
+		"		grassColor *= max(grassLightColor, vec3(0.05));\n" \
+		"		grassColor *= 1.0 + vec3(0.30, 0.28, 0.15) * sheen;\n" \
+		"		float grassAlpha = grass * GrassAmount * grassLightFactor;\n" \
+		"		vec3 grassMix = mix(result.rgb * 0.65, grassColor, 0.75);\n" \
+		"		result.rgb = mix(result.rgb, grassMix, grassAlpha);\n" \
+		"	}\n" \
+		"	if (UseCausticsTex)\n" \
+		"	{\n" \
+		"       float lightBrightness = (lightmapColor.r + lightmapColor.g + lightmapColor.b) / 3.0;\n" \
+		"       float surfaceLightFactor = smoothstep(0.0, 0.35, lightBrightness);\n" \
+		"       const float aberrationAmount = 0.0015;\n" \
+		"       float causticsSpeed = 0.5;\n" \
+		"       vec2 ctc = CausticsPos;\n" \
+		"		vec2 causticsCoord = vec2(\n" \
+		"			(ctc.x + sin(0.465 * (causticsSpeed * ClTime + ctc.y))) * -0.1234375,\n" \
+		"			(ctc.y + sin(0.465 * (causticsSpeed * ClTime + ctc.x))) * -0.1234375\n" \
+		"		);\n" \
+		"       vec2 offsetR = vec2(aberrationAmount, 0.0);\n" \
+		"       vec2 offsetB = vec2(-aberrationAmount, 0.0);\n" \
+		"       float causticsR = texture2D(CausticsTex, causticsCoord + offsetR).r;\n" \
+		"       float causticsG = texture2D(CausticsTex, causticsCoord).g;\n" \
+		"       float causticsB = texture2D(CausticsTex, causticsCoord + offsetB).b;\n" \
+		"       float causticsA = texture2D(CausticsTex, causticsCoord).a;\n" \
+		"		vec4 caustics = vec4(causticsR, causticsG, causticsB, causticsA);\n" \
+		"\n" \
+		"       vec2 causticsCoord2 = vec2(\n" \
+		"           (ctc.x + sin(0.395 * (causticsSpeed * ClTime - ctc.y))) * -0.093,\n" \
+		"           (ctc.y + sin(0.475 * (causticsSpeed * ClTime - ctc.x))) * -0.093\n" \
+		"       );\n" \
+		"       vec3 c2 = texture2D(CausticsTex, causticsCoord2).rgb;\n" \
+		"       vec3 causticsRGB = max(caustics.rgb, c2);\n" \
+		"\n" \
+		"       vec3 cn = cross(dFdx(EyePos), dFdy(EyePos));\n" \
+		"       cn *= inversesqrt(max(dot(cn, cn), 1e-20));\n" \
+		"       if (dot(cn, EyePos) > 0.0)\n" \
+		"           cn = -cn;\n" \
+		"       vec3 worldUp = CausticsWorldUp;\n" \
+		"       float upness = dot(cn, worldUp);\n" \
+		"       float facingFade = mix(0.35, 1.0, clamp(upness, 0.0, 1.0)) * smoothstep(-0.5, 0.0, upness);\n" \
+		"       float distFade = 1.0 - smoothstep(1200.0, 2400.0, FogFragCoord);\n" \
+		"       float finalCausticsOpacity = CausticsOpacity * 0.7 * surfaceLightFactor * facingFade * distFade;\n" \
+		"       vec3 causticsMod = clamp((causticsRGB - 0.54) * 5.0, -1.0, 1.0) * finalCausticsOpacity;\n" \
+		"       result.rgb *= (vec3(1.0) + max(causticsMod, 0.0)) / (vec3(1.0) - min(causticsMod, 0.0));\n" \
+		"	}\n" \
+		"\n" \
+		"	if (UseFullbrightTex)\n" \
+		"		result += texture2D(FullbrightTex, tc_tex.xy);\n" \
+		"\n" \
+		"	result = clamp(result, 0.0, 1.0);\n" \
+		"	if (FogMode == 1 || gl_Fog.density > 0.0)\n" \
+		"	{\n" \
+		"		float fog = FogFactor(FogFragCoord);\n" \
+		"		fog = clamp(fog, 0.0, 1.0);\n" \
+		"		result = mix(gl_Fog.color, result, fog);\n" \
+		"	}\n" \
+		"	if (!UseLightmapBanding)\n" \
+		"	{\n" \
+		"		vec3 dither = vec3(FogDither());\n" \
+		"		if (UseTexturelessDither)\n" \
+		"			dither += vec3(TexturelessDither() * (0.35 / 255.0));\n" \
+		"		result.rgb = clamp(result.rgb + dither, 0.0, 1.0);\n" \
+		"	}\n" \
+		"	result.a = Alpha;\n" \
+		"	gl_FragColor = result;\n" \
+		"}\n"
+
+	const GLchar *fragSource =
+		WORLD_FRAG_COMMON_HEAD
 		"	if (UseAlphaTest && (result.a < 0.666))\n"
 		"		discard;\n"
-		"	result *= lightmapColor;\n"
-		"	if (UseOverbright)\n"
-		"		result.rgb *= 2.0;\n"
-		"	if (UseGrass && GrassAmount > 0.0)\n"
-		"	{\n"
-		"		float sheen = 0.0;\n"
-		"		float grass = GrassBlade(tc_tex.xy, vec2(48.0, 18.0), 0.0, sheen);\n"
-		"		grass += 0.65 * GrassBlade(tc_tex.xy + vec2(0.17, 0.41), vec2(72.0, 27.0), 19.7, sheen);\n"
-		"		grass = clamp(grass, 0.0, 1.0);\n"
-		"		float grassVar = GrassNoise(tc_tex.xy * 18.0 + GrassTime * 0.03);\n"
-		"		vec3 grassColor = mix(GrassBaseColor, GrassTipColor, grassVar);\n"
-		"		grassColor *= max(grassLightColor, vec3(0.05));\n"
-		"		grassColor *= 1.0 + vec3(0.30, 0.28, 0.15) * sheen;\n" // gust bands roll across as a lighter sheen
-		"		float grassAlpha = grass * GrassAmount * grassLightFactor;\n"
-		"		vec3 grassMix = mix(result.rgb * 0.65, grassColor, 0.75);\n"
-		"		result.rgb = mix(result.rgb, grassMix, grassAlpha);\n"
-		"	}\n"
-		"	if (UseCausticsTex)\n"
-		"	{\n"
-		"       // --- Chromatic Aberration Start --- \n"
-		"       const float aberrationAmount = 0.0015; // Hardcoded faint aberration strength \n"
-		"       float causticsSpeed = 0.5; \n"
-		"       // world-space tilted projection (64-unit reference): one continuous pattern across texture seams\n"
-		"       vec2 ctc = CausticsPos;\n"
-		"		vec2 causticsCoord = vec2(\n"
-		"			(ctc.x + sin(0.465 * (causticsSpeed * ClTime + ctc.y))) * -0.1234375,\n"
-		"			(ctc.y + sin(0.465 * (causticsSpeed * ClTime + ctc.x))) * -0.1234375\n"
-		"		);\n"
-		"       vec2 offsetR = vec2(aberrationAmount, 0.0);\n"
-		"       vec2 offsetB = vec2(-aberrationAmount, 0.0);\n"
-		"       float causticsR = texture2D(CausticsTex, causticsCoord + offsetR).r;\n"
-		"       float causticsG = texture2D(CausticsTex, causticsCoord).g;\n"
-		"       float causticsB = texture2D(CausticsTex, causticsCoord + offsetB).b;\n"
-		"       float causticsA = texture2D(CausticsTex, causticsCoord).a;\n"
-		"		vec4 caustics = vec4(causticsR, causticsG, causticsB, causticsA);\n"
-		"\n"
-		"       // --- Second Layer ----------------------------------------------------- \n"
-		"       vec2 causticsCoord2 = vec2(\n"
-		"           (ctc.x + sin(0.395 * (causticsSpeed * ClTime - ctc.y))) * -0.093,\n"
-		"           (ctc.y + sin(0.475 * (causticsSpeed * ClTime - ctc.x))) * -0.093\n"
-		"       );\n"
-		"       vec3 c2 = texture2D(CausticsTex, causticsCoord2).rgb;\n"
-		"       vec3 causticsRGB = max(caustics.rgb, c2);\n"
-		"\n"
-		"       // --- Blend using Light Factor --- \n"
-		"       // flat face normal from derivatives, oriented toward the viewer\n"
-		"       vec3 cn = cross(dFdx(EyePos), dFdy(EyePos));\n"
-		"       cn *= inversesqrt(max(dot(cn, cn), 1e-20));\n"
-		"       if (dot(cn, EyePos) > 0.0)\n"
-		"           cn = -cn;\n"
-		"       vec3 worldUp = CausticsWorldUp; // view-only, unit length (rigid view matrix)\n"
-		"       float upness = dot(cn, worldUp);\n"
-		"       // full on floors, ~35% on walls, none on ceilings\n"
-		"       float facingFade = mix(0.35, 1.0, clamp(upness, 0.0, 1.0)) * smoothstep(-0.5, 0.0, upness);\n"
-		"       // fade out far away where tiling repeats and shimmers\n"
-		"       float distFade = 1.0 - smoothstep(1200.0, 2400.0, FogFragCoord);\n"
-		"       // 0.7 keeps the default 0.5 understated after the contrast stretch below\n"
-		"       float finalCausticsOpacity = CausticsOpacity * 0.7 * surfaceLightFactor * facingFade * distFade;\n"
-		"       // the texture is low contrast (~0.41-0.71); stretch it around the two-layer mean so lines\n"
-		"       // brighten, gaps dim slightly, and average brightness stays put\n"
-		"       vec3 causticsMod = clamp((causticsRGB - 0.54) * 5.0, -1.0, 1.0) * finalCausticsOpacity;\n"
-		"       // lines brighten linearly; gaps dim by the reciprocal, which matches 1-x at low strength\n"
-		"       // but never reaches black when the slider is pushed high\n"
-		"       result.rgb *= (vec3(1.0) + max(causticsMod, 0.0)) / (vec3(1.0) - min(causticsMod, 0.0));\n"
-		"	}\n"
-		"\n"
-		"	if (UseFullbrightTex)\n"
-		"		result += texture2D(FullbrightTex, tc_tex.xy);\n"
-		"\n"
-		"	result = clamp(result, 0.0, 1.0);\n"
-		"	float fog = FogFactor(FogFragCoord);\n"
-		"	fog = clamp(fog, 0.0, 1.0);\n"
-		"	result = mix(gl_Fog.color, result, fog);\n"
-		"	if (!UseLightmapBanding)\n"
-		"	{\n"
-		"		vec3 dither = vec3(FogDither());\n"
-		"		if (UseTexturelessDither)\n"
-		"			dither += vec3(TexturelessDither() * (0.35 / 255.0));\n"
-		"		result.rgb = clamp(result.rgb + dither, 0.0, 1.0);\n"
-		"	}\n"
-		"	result.a = Alpha;\n" // FIXME: This will make almost transparent things cut holes though heavy fog
-		"	gl_FragColor = result;\n"
-		"}\n";
+		WORLD_FRAG_COMMON_TAIL;
+
+	const GLchar *fragSourceOpaque =
+		WORLD_FRAG_COMMON_HEAD
+		WORLD_FRAG_COMMON_TAIL;
+
+#undef WORLD_FRAG_COMMON_HEAD
+#undef WORLD_FRAG_COMMON_TAIL
 
 	GLWorld_DeleteShaderPrograms();
 
@@ -6547,9 +6722,58 @@ void GLWorld_CreateShaders (void)
 		GL_Uniform1iFunc (texLoc, 0);
 		GL_Uniform1iFunc (LMTexLoc, 1);
 		GL_Uniform1iFunc (fullbrightTexLoc, 2);
+		GL_Uniform1iFunc (causticsTexLoc, 3);
 		GL_Uniform1iFunc (useGrassLoc, 0);
 		GL_Uniform1fFunc (grassGustScaleLoc, R_GrassGustScale());
 		R_SetGrassColorUniforms(NULL);
+		GL_UseProgramFunc (0);
+	}
+
+	r_world_opaque_program = GL_CreateProgram (vertSource, fragSourceOpaque, sizeof(bindings)/sizeof(bindings[0]), bindings);
+	if (r_world_opaque_program != 0)
+	{
+		vec3_t gbase, gtip;
+
+		opaqueTexLoc = GL_GetUniformLocation (&r_world_opaque_program, "Tex");
+		opaqueLMTexLoc = GL_GetUniformLocation (&r_world_opaque_program, "LMTex");
+		opaqueFullbrightTexLoc = GL_GetUniformLocation (&r_world_opaque_program, "FullbrightTex");
+		opaqueCausticsTexLoc = GL_GetUniformLocation (&r_world_opaque_program, "CausticsTex");
+		opaqueUseFullbrightTexLoc = GL_GetUniformLocation (&r_world_opaque_program, "UseFullbrightTex");
+		opaqueUseOverbrightLoc = GL_GetUniformLocation (&r_world_opaque_program, "UseOverbright");
+		opaqueUseCausticsTexLoc = GL_GetUniformLocation (&r_world_opaque_program, "UseCausticsTex");
+		opaqueUseGrassLoc = GL_GetUniformLocation (&r_world_opaque_program, "UseGrass");
+		opaqueUseLightmapWideLoc = GL_GetUniformLocation (&r_world_opaque_program, "UseLightmapWide");
+		opaqueUseLightmapOnlyLoc = GL_GetUniformLocation (&r_world_opaque_program, "UseLightmapOnly");
+		opaqueUseLightmapExtra4Loc = GL_GetUniformLocation (&r_world_opaque_program, "UseLightmapExtra4");
+		opaqueLightmapTexelSizeLoc = GL_GetUniformLocation (&r_world_opaque_program, "LightmapTexelSize");
+		opaqueUseTexturelessDitherLoc = GL_GetUniformLocation (&r_world_opaque_program, "UseTexturelessDither");
+		opaqueUseLightmapBandingLoc = GL_GetUniformLocation (&r_world_opaque_program, "UseLightmapBanding");
+		opaqueAlphaLoc = GL_GetUniformLocation (&r_world_opaque_program, "Alpha");
+		opaqueClTimeLoc = GL_GetUniformLocation (&r_world_opaque_program, "ClTime");
+		opaqueCausticsOpacityLoc = GL_GetUniformLocation (&r_world_opaque_program, "CausticsOpacity");
+		opaqueCausticsPlaneSLoc = GL_GetUniformLocation (&r_world_opaque_program, "CausticsPlaneS");
+		opaqueCausticsPlaneTLoc = GL_GetUniformLocation (&r_world_opaque_program, "CausticsPlaneT");
+		opaqueCausticsWorldUpLoc = GL_GetUniformLocation (&r_world_opaque_program, "CausticsWorldUp");
+		opaqueGrassAmountLoc = GL_GetUniformLocation (&r_world_opaque_program, "GrassAmount");
+		opaqueGrassTimeLoc = GL_GetUniformLocation (&r_world_opaque_program, "GrassTime");
+		opaqueGrassBaseColorLoc = GL_GetUniformLocation (&r_world_opaque_program, "GrassBaseColor");
+		opaqueGrassTipColorLoc = GL_GetUniformLocation (&r_world_opaque_program, "GrassTipColor");
+		opaqueGrassMovementLoc = GL_GetUniformLocation (&r_world_opaque_program, "GrassMovement");
+		opaqueGrassGustScaleLoc = GL_GetUniformLocation (&r_world_opaque_program, "GrassGustScale");
+		opaqueFogModeLoc = GL_GetUniformLocation (&r_world_opaque_program, "FogMode");
+
+		GL_UseProgramFunc (r_world_opaque_program);
+		GL_Uniform1iFunc (opaqueTexLoc, 0);
+		GL_Uniform1iFunc (opaqueLMTexLoc, 1);
+		GL_Uniform1iFunc (opaqueFullbrightTexLoc, 2);
+		GL_Uniform1iFunc (opaqueCausticsTexLoc, 3);
+		GL_Uniform1iFunc (opaqueUseGrassLoc, 0);
+		GL_Uniform1fFunc (opaqueGrassGustScaleLoc, R_GrassGustScale());
+		R_TextureGrassBladeColors (NULL, gbase, gtip);
+		if (opaqueGrassBaseColorLoc != -1)
+			GL_Uniform3fFunc (opaqueGrassBaseColorLoc, gbase[0], gbase[1], gbase[2]);
+		if (opaqueGrassTipColorLoc != -1)
+			GL_Uniform3fFunc (opaqueGrassTipColorLoc, gtip[0], gtip[1], gtip[2]);
 		GL_UseProgramFunc (0);
 	}
 
@@ -7084,6 +7308,15 @@ void R_DrawWorld (void)
 	if (!r_drawworld_cheatsafe)
 		return;
 
+#ifndef SDL_THREADS_DISABLED
+	if (gl_vbo_able && gl_bmodel_vbo && RSceneCache_WillDraw())
+	{
+		R_UploadLightmaps ();
+		RSceneCache_Draw(false);
+		R_DrawGrassBlades(cl.worldmodel, NULL, chain_world);
+		return;
+	}
+#endif
 	R_DrawTextureChains (cl.worldmodel, NULL, chain_world);
 #ifndef SDL_THREADS_DISABLED
 	if (gl_vbo_able && gl_bmodel_vbo)
@@ -7102,6 +7335,15 @@ void R_DrawWorld_Water (void)
 	if (!r_drawworld_cheatsafe)
 		return;
 
+#ifndef SDL_THREADS_DISABLED
+	if (gl_vbo_able && gl_bmodel_vbo && RSceneCache_WillDraw())
+	{
+		if (RSceneCache_HasTeleportChains())
+			R_DrawTextureChains_Water (cl.worldmodel, NULL, chain_world);
+		RSceneCache_Draw(true);
+		return;
+	}
+#endif
 	R_DrawTextureChains_Water (cl.worldmodel, NULL, chain_world);
 #ifndef SDL_THREADS_DISABLED
 	if (gl_vbo_able && gl_bmodel_vbo)
@@ -7549,6 +7791,14 @@ start:
 	if (node->contents < 0)
 		return;
 
+	{
+		float r = light->radius;
+		if (lightorg[0] + r < node->minmaxs[0] || lightorg[0] - r > node->minmaxs[3] ||
+			lightorg[1] + r < node->minmaxs[1] || lightorg[1] - r > node->minmaxs[4] ||
+			lightorg[2] + r < node->minmaxs[2] || lightorg[2] - r > node->minmaxs[5])
+			return;
+	}
+
 	splitplane = node->plane;
 	if (splitplane->type < 3)
 		dist = lightorg[splitplane->type] - splitplane->dist;
@@ -7575,6 +7825,9 @@ start:
 		surf = model->surfaces + node->firstsurface;
 		for (i=0 ; i<node->numsurfaces ; i++, surf++)
 		{
+			if (surf->flags & SURF_DRAWTILED)
+				continue;
+
 			if (!surf->plane
 				|| surf->plane < model->planes
 				|| surf->plane >= model->planes + model->numplanes)
@@ -7582,6 +7835,8 @@ start:
 
 			facedist = DotProduct(lightorg, surf->plane->normal)
 				- surf->plane->dist;
+			if (facedist * facedist >= maxdist)
+				continue;
 
 			for (j=0 ; j<3 ; j++)
 				impact[j] = lightorg[j] - surf->plane->normal[j]*facedist;
@@ -7660,8 +7915,18 @@ static qboolean RSceneCache_RunDlightJob (struct rscenecache_s *cache)
 				continue;
 			RSceneCache_MarkDlightSurfs (cache->worldmodel, l, l->origin, framecount, i, cache->worldmodel->nodes, true);
 			for (j = 0; j < cache->numcachedsubmodels; j++)
+			{
 				if (cache->cachedsubmodels[j>>3] & (1u<<(j&7)))
-					RSceneCache_MarkDlightSurfs (cache->worldmodel, l, l->origin, framecount, i, cache->worldmodel->nodes + cache->worldmodel->submodels[j].headnode[0], true);
+				{
+					mmodel_t *sub = &cache->worldmodel->submodels[j];
+					float r = l->radius;
+					if (l->origin[0] + r < sub->mins[0] || l->origin[0] - r > sub->maxs[0] ||
+						l->origin[1] + r < sub->mins[1] || l->origin[1] - r > sub->maxs[1] ||
+						l->origin[2] + r < sub->mins[2] || l->origin[2] - r > sub->maxs[2])
+						continue;
+					RSceneCache_MarkDlightSurfs (cache->worldmodel, l, l->origin, framecount, i, cache->worldmodel->nodes + sub->headnode[0], true);
+				}
+			}
 		}
 	}
 
@@ -8118,6 +8383,16 @@ static qboolean RSceneCache_CanDraw(void)
 		r_world_program && gl_glsl_water_able;
 }
 
+static qboolean RSceneCache_WillDraw(void)
+{
+	return rscenecache.drawing != NULL && RSceneCache_CanDraw();
+}
+
+static qboolean RSceneCache_HasTeleportChains(void)
+{
+	return rscenecache.drawing != NULL && rscenecache.drawing->teleportchains;
+}
+
 static qboolean RSceneCache_Queue(byte *vis)
 {
 //	int type = 0;
@@ -8494,7 +8769,7 @@ static qboolean RSceneCache_Queue(byte *vis)
 		cache->dynamic = !!r_dynamic.value;
 		cache->dlightframecount = r_framecount;
 		R_LightmapBuildState_Snapshot(&cache->lightmapstate);
-		cache->hassky = RSceneCache_InputsHaveSky(cache);
+		cache->hassky = skyroom_enabled ? RSceneCache_InputsHaveSky(cache) : false;
 
 		//create the worker if it doesn't exist...
 		if (!rscenecache.thread)
@@ -8817,12 +9092,23 @@ static void RSceneCache_Draw(qboolean water)
 	texture_t *tex;
 	int b;
 	int mode;
-	int lastprog = -1;
+	GLuint lastprog = (GLuint)-1;
 	float alpha = 0;
 	const int overbright = !!gl_overbright.value;
 	const int wide10bits = (gl_lightmap_format == GL_RGB10_A2);
 	const float lightmapscale = (overbright ? 2.0f : 1.0f) * (wide10bits ? 4.0f : 1.0f);
 	const byte wantedtexture = water ? RSCENECACHE_TEX_WATER : RSCENECACHE_TEX_WORLD;
+	const qboolean caustics_enabled = (gl_caustics.value > 0 && underwatertexture != NULL);
+	const qboolean grass_surface_active = (R_GrassBladeMode() == 0 && R_GrassEnabled());
+	const int fog_mode = Fog_GetMode();
+	qboolean world_init[2] = { false, false }; // 0 = opaque, 1 = alphatest
+	int cur_fb[2] = { -1, -1 };
+	int cur_grass[2] = { -1, -1 };
+	int cur_caustics[2] = { -1, -1 };
+	int cur_alphatest = -1;
+	int last_lm = -1;
+	qboolean lm_attrib_enabled = true;
+	float last_water_alpha[2] = { -1.0f, -1.0f };
 
 	if (!cache || !RSceneCache_CanDraw())
 	{
@@ -8860,7 +9146,7 @@ static void RSceneCache_Draw(qboolean water)
 
 	rs_brushpolys += cache->brushpolys; //for r_speeds.;
 
-	if (gl_caustics.value > 0 && underwatertexture) // Bind caustics texture once if enabled
+	if (caustics_enabled) // Bind caustics texture once if enabled
 	{
 		GL_SelectTexture(GL_TEXTURE3);
 		GL_Bind(underwatertexture);
@@ -8869,6 +9155,8 @@ static void RSceneCache_Draw(qboolean water)
 
 	for (ti = 0; ti < cache->drawtexturecount; ti++)
 	{
+		int active_world_idx = -1;
+
 		i = cache->drawtextures[ti];
 		if (!(cache->drawtextureflags[i] & wantedtexture))
 			continue;
@@ -8897,13 +9185,21 @@ static void RSceneCache_Draw(qboolean water)
 				{
 					if (lm_slot>0) // changed j to lm_slot
 					{	//lit
-						GL_EnableVertexAttribArrayFunc (LMCoordsAttrIndex);
+						if (!lm_attrib_enabled)
+						{
+							GL_EnableVertexAttribArrayFunc (LMCoordsAttrIndex);
+							lm_attrib_enabled = true;
+						}
 						R_EnableLightmapBoundsAttrib (true);
 						mode = 1;
 					}
 					else	//unlit
 					{
-						GL_DisableVertexAttribArrayFunc (LMCoordsAttrIndex);
+						if (lm_attrib_enabled)
+						{
+							GL_DisableVertexAttribArrayFunc (LMCoordsAttrIndex);
+							lm_attrib_enabled = false;
+						}
 						R_EnableLightmapBoundsAttrib (false);
 						mode = 0;
 					}
@@ -8934,13 +9230,17 @@ static void RSceneCache_Draw(qboolean water)
 						lastprog = r_water[mode].program;
 						GL_UseProgramFunc (r_water[mode].program);
 						GL_Uniform1fFunc (r_water[mode].time, cl.time);
-						GL_Uniform1iFunc (r_water[mode].fogmode, Fog_GetMode());
+						GL_Uniform1iFunc (r_water[mode].fogmode, fog_mode);
 						if (r_water[mode].light_scale != -1)
 							GL_Uniform1fFunc (r_water[mode].light_scale, lightmapscale);
+						R_SetLightmapExtra4Uniforms (r_water[mode].use_extra4, r_water[mode].texel_size);
+						R_SetLightmapBandingUniform (r_water[mode].use_banding);
 					}
-					R_SetLightmapExtra4Uniforms (r_water[mode].use_extra4, r_water[mode].texel_size);
-					R_SetLightmapBandingUniform (r_water[mode].use_banding);
-					GL_Uniform1fFunc (r_water[mode].alpha_scale, alpha);
+					if (alpha != last_water_alpha[mode])
+					{
+						GL_Uniform1fFunc (r_water[mode].alpha_scale, alpha);
+						last_water_alpha[mode] = alpha;
+					}
 				}
 				else if (tex->name[0]=='s'&&tex->name[1]=='k'&&tex->name[2]=='y')
 				{
@@ -8985,75 +9285,155 @@ static void RSceneCache_Draw(qboolean water)
 				}
 				else
 				{
-					R_EnableLightmapBoundsAttrib (true);
-					if (lastprog != r_world_program)
-					{
-						lastprog = r_world_program;
-						GL_UseProgramFunc (r_world_program);
-						GL_Uniform1iFunc (useOverbrightLoc, overbright);
-						GL_Uniform1iFunc (useLightmapWideLoc, wide10bits);
-						GL_Uniform1iFunc (useLightmapOnlyLoc, 0);
-						R_SetLightmapExtra4Uniforms (useLightmapExtra4Loc, lightmapTexelSizeLoc);
-						R_SetTexturelessDitherUniform (useTexturelessDitherLoc);
-						R_SetLightmapBandingUniform (useLightmapBandingLoc);
-						GL_Uniform1fFunc (alphaLoc, 1);			//worldmodel is never translucent.
-						GL_Uniform1fFunc (grassAmountLoc, R_GrassAmount()); // woods #grass
-						GL_Uniform1fFunc (grassTimeLoc, R_GrassAnimTime()); // woods #grass
-						GL_Uniform1fFunc (grassMovementLoc, R_GrassMovement()); // woods #grass
-						GL_Uniform1fFunc (grassGustScaleLoc, R_GrassGustScale()); // woods #grass
-						GL_Uniform1iFunc (fogModeLoc, Fog_GetMode());
-						R_SetGrassColorUniforms(NULL); // woods #grass
+					const qboolean is_fence = (*tex->name == '{');
+					const int widx = (!is_fence && r_world_opaque_program != 0) ? 0 : 1;
+					const GLuint want_prog = (widx == 0) ? r_world_opaque_program : r_world_program;
+					int want_fb, want_grass;
 
-						GL_Uniform1fFunc(clTimeLoc, cl.time);
-						R_SetCausticsProjection (causticsPlaneSLoc, causticsPlaneTLoc, causticsWorldUpLoc); // woods #caustics
-						if (gl_caustics.value > 0 && underwatertexture)
+					active_world_idx = widx;
+					if (!lm_attrib_enabled)
+					{
+						GL_EnableVertexAttribArrayFunc (LMCoordsAttrIndex);
+						lm_attrib_enabled = true;
+					}
+					R_EnableLightmapBoundsAttrib (true);
+					if (lastprog != want_prog)
+					{
+						lastprog = want_prog;
+						GL_UseProgramFunc (want_prog);
+						if (!world_init[widx])
 						{
-						   GL_Uniform1iFunc(causticsTexLoc, 3); // Tell shader caustics are on unit 3
-						   GL_Uniform1fFunc(causticsOpacityLoc, gl_caustics.value);
-						} else {
-						   // Explicitly disable if necessary, though useCausticsTexLoc should handle it
-						   // GL_Uniform1iFunc(causticsTexLoc, 0); // Maybe set to a dummy texture/unit?
+							world_init[widx] = true;
+							if (widx == 0)
+							{
+								GL_Uniform1iFunc (opaqueUseOverbrightLoc, overbright);
+								GL_Uniform1iFunc (opaqueUseLightmapWideLoc, wide10bits);
+								GL_Uniform1iFunc (opaqueUseLightmapOnlyLoc, 0);
+								R_SetLightmapExtra4Uniforms (opaqueUseLightmapExtra4Loc, opaqueLightmapTexelSizeLoc);
+								R_SetTexturelessDitherUniform (opaqueUseTexturelessDitherLoc);
+								R_SetLightmapBandingUniform (opaqueUseLightmapBandingLoc);
+								GL_Uniform1fFunc (opaqueAlphaLoc, 1.0f);
+								if (grass_surface_active)
+								{
+									vec3_t gbase, gtip;
+									GL_Uniform1fFunc (opaqueGrassAmountLoc, R_GrassAmount());
+									GL_Uniform1fFunc (opaqueGrassTimeLoc, R_GrassAnimTime());
+									GL_Uniform1fFunc (opaqueGrassMovementLoc, R_GrassMovement());
+									GL_Uniform1fFunc (opaqueGrassGustScaleLoc, R_GrassGustScale());
+									R_TextureGrassBladeColors (NULL, gbase, gtip);
+									if (opaqueGrassBaseColorLoc != -1)
+										GL_Uniform3fFunc (opaqueGrassBaseColorLoc, gbase[0], gbase[1], gbase[2]);
+									if (opaqueGrassTipColorLoc != -1)
+										GL_Uniform3fFunc (opaqueGrassTipColorLoc, gtip[0], gtip[1], gtip[2]);
+								}
+								GL_Uniform1iFunc (opaqueFogModeLoc, fog_mode);
+								GL_Uniform1fFunc (opaqueClTimeLoc, cl.time);
+								if (caustics_enabled)
+								{
+									R_SetCausticsProjection (opaqueCausticsPlaneSLoc, opaqueCausticsPlaneTLoc, opaqueCausticsWorldUpLoc);
+									GL_Uniform1fFunc (opaqueCausticsOpacityLoc, gl_caustics.value);
+								}
+							}
+							else
+							{
+								GL_Uniform1iFunc (useOverbrightLoc, overbright);
+								GL_Uniform1iFunc (useLightmapWideLoc, wide10bits);
+								GL_Uniform1iFunc (useLightmapOnlyLoc, 0);
+								R_SetLightmapExtra4Uniforms (useLightmapExtra4Loc, lightmapTexelSizeLoc);
+								R_SetTexturelessDitherUniform (useTexturelessDitherLoc);
+								R_SetLightmapBandingUniform (useLightmapBandingLoc);
+								GL_Uniform1fFunc (alphaLoc, 1.0f);
+								if (grass_surface_active)
+								{
+									GL_Uniform1fFunc (grassAmountLoc, R_GrassAmount());
+									GL_Uniform1fFunc (grassTimeLoc, R_GrassAnimTime());
+									GL_Uniform1fFunc (grassMovementLoc, R_GrassMovement());
+									GL_Uniform1fFunc (grassGustScaleLoc, R_GrassGustScale());
+									R_SetGrassColorUniforms(NULL);
+								}
+								GL_Uniform1iFunc (fogModeLoc, fog_mode);
+								GL_Uniform1fFunc (clTimeLoc, cl.time);
+								if (caustics_enabled)
+								{
+									R_SetCausticsProjection (causticsPlaneSLoc, causticsPlaneTLoc, causticsWorldUpLoc);
+									GL_Uniform1fFunc (causticsOpacityLoc, gl_caustics.value);
+								}
+							}
 						}
 					}
-					GL_Uniform1iFunc (useAlphaTestLoc, *tex->name == '{');	//update alphatest. some future qbsps might actually support it properly on the worldmodel. plus there's lots of buggy bsps where it was used anyway.
-					if (R_TextureUsesSurfaceGrass(cache->worldmodel->textures[i]))
-					{
-						GL_Uniform1iFunc (useGrassLoc, 1); // woods #grass
-						R_SetGrassColorUniforms(tex); // woods #grass
-					}
-					else
-						GL_Uniform1iFunc (useGrassLoc, 0); // woods #grass
 
-					if (tex->fullbright && gl_fullbrights.value)
+					if (widx == 1)
 					{
-						GL_Uniform1iFunc (useFullbrightTexLoc, 1);
+						int want_at = is_fence ? 1 : 0;
+						if (want_at != cur_alphatest)
+						{
+							GL_Uniform1iFunc (useAlphaTestLoc, want_at);
+							cur_alphatest = want_at;
+						}
+					}
+
+					want_grass = (grass_surface_active && R_TextureUsesSurfaceGrass(cache->worldmodel->textures[i])) ? 1 : 0;
+					if (want_grass)
+					{
+						if (widx == 0)
+						{
+							vec3_t gbase, gtip;
+							R_TextureGrassBladeColors (tex, gbase, gtip);
+							if (opaqueGrassBaseColorLoc != -1)
+								GL_Uniform3fFunc (opaqueGrassBaseColorLoc, gbase[0], gbase[1], gbase[2]);
+							if (opaqueGrassTipColorLoc != -1)
+								GL_Uniform3fFunc (opaqueGrassTipColorLoc, gtip[0], gtip[1], gtip[2]);
+						}
+						else
+							R_SetGrassColorUniforms(tex);
+					}
+					if (want_grass != cur_grass[widx])
+					{
+						GL_Uniform1iFunc (widx == 0 ? opaqueUseGrassLoc : useGrassLoc, want_grass);
+						cur_grass[widx] = want_grass;
+					}
+
+					want_fb = (tex->fullbright && gl_fullbrights.value) ? 1 : 0;
+					if (want_fb)
+					{
 						GL_SelectTexture (GL_TEXTURE2);
 						GL_Bind(tex->fullbright);
 					}
-					else
+					if (want_fb != cur_fb[widx])
 					{
-						GL_Uniform1iFunc (useFullbrightTexLoc, 0);
-						//don't bother unbinding. the glsl won't use it anyway.
+						GL_Uniform1iFunc (widx == 0 ? opaqueUseFullbrightTexLoc : (GLint)useFullbrightTexLoc, want_fb);
+						cur_fb[widx] = want_fb;
 					}
 				}
 			}
 
-			// This location belongs to the world program, not the water/sky shaders.
-			if (lastprog == r_world_program)
-				GL_Uniform1iFunc(useCausticsTexLoc, gl_caustics.value > 0 && underwatertexture && uw);
+			// This location belongs to the world programs, not the water/sky shaders.
+			if (active_world_idx >= 0)
+			{
+				int want_caustics = (caustics_enabled && uw) ? 1 : 0;
+				if (want_caustics != cur_caustics[active_world_idx])
+				{
+					GL_Uniform1iFunc(active_world_idx == 0 ? opaqueUseCausticsTexLoc : (GLint)useCausticsTexLoc, want_caustics);
+					cur_caustics[active_world_idx] = want_caustics;
+				}
+			}
 
-			GL_SelectTexture (GL_TEXTURE1);
-			if (lm_slot)
-			    GL_Bind(lightmaps[lm_slot-1].texture);
-			else
-			    GL_Bind(NULL);   /* unlit */
+			if (lm_slot != last_lm)
+			{
+				GL_SelectTexture (GL_TEXTURE1);
+				if (lm_slot)
+					GL_Bind(lightmaps[lm_slot-1].texture);
+				else
+					GL_Bind(NULL);   /* unlit */
+				last_lm = lm_slot;
+			}
 
 			glDrawElements(GL_TRIANGLES, cache->batches[i*cache->lightmaps*2 + j].numidx, GL_UNSIGNED_INT, cache->batches[i*cache->lightmaps*2 + j].eboidx);
 			rs_brushpasses++;
 		}
 	}
 
-	if (gl_caustics.value > 0 && underwatertexture) // Unbind caustics texture once after all batches if it was bound
+	if (caustics_enabled) // Unbind caustics texture once after all batches if it was bound
 	{
 		GL_SelectTexture(GL_TEXTURE3);
 		GL_Bind(NULL);
