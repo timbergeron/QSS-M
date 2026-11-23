@@ -331,6 +331,8 @@ WAV loading
 ===============================================================================
 */
 
+#define WAV_FORMAT_EXTENSIBLE 0xfffe
+
 static byte	*data_p;
 static byte	*iff_end;
 static byte	*last_chunk;
@@ -413,6 +415,12 @@ GetWavinfo
 */
 wavinfo_t GetWavinfo (const char *name, byte *wav, qofs_t wavlength)
 {
+	// KSDATAFORMAT_SUBTYPE_PCM as stored in a RIFF fmt chunk.
+	static const byte pcm_subformat[] = {
+		0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x10, 0x00,
+		0x80, 0x00, 0x00, 0xaa, 0x00, 0x38, 0x9b, 0x71
+	};
+	const byte *fmt;
 	wavinfo_t	info;
 	int	i;
 	int	format;
@@ -441,13 +449,21 @@ wavinfo_t GetWavinfo (const char *name, byte *wav, qofs_t wavlength)
 #endif
 
 	FindChunk("fmt ");
-	if (!data_p)
+	if (!data_p || iff_chunk_len < 16)
 	{
-		Con_Printf("%s is missing fmt chunk\n", name);
+		Con_Printf("%s has a missing or incomplete fmt chunk\n", name);
 		return info;
 	}
 	data_p += 8;
-	format = GetLittleShort();
+	fmt = data_p;
+	format = (unsigned short)GetLittleShort();
+	if (format == WAV_FORMAT_EXTENSIBLE && iff_chunk_len >= 40)
+	{
+		int extension_size = fmt[16] | (fmt[17] << 8);
+		if (extension_size >= 22 && extension_size <= iff_chunk_len - 18 &&
+			!memcmp(fmt + 24, pcm_subformat, sizeof(pcm_subformat)))
+			format = WAV_FORMAT_PCM;
+	}
 	if (format != WAV_FORMAT_PCM)
 	{
 		Con_Printf("%s is not Microsoft PCM format\n", name);
