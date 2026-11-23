@@ -2873,8 +2873,15 @@ void Sky_SkyCommand_f (void)
 		Con_Printf("\"sky\" is \"%s\"\n", skybox_name);
 		break;
 	case 2:
-		Sky_LoadSkyBox(Cmd_Argv(1));
+	{
+		const char *name = Cmd_Argv(1);
+
+		Sky_LoadSkyBox(name);
+		// Remember a loaded skybox or an explicit return to the classic sky.
+		if (skybox_name[0] || !name[0])
+			Sky_SetMapSkybox(skybox_name);
 		break;
+	}
 	default:
 		Con_Printf("usage: sky <skyname>\n");
 	}
