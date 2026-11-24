@@ -3649,7 +3649,7 @@ static alias_inst_data_t r_alias_inst_data[MAX_ALIAS_INSTANCES];
 static int r_alias_inst_order[MAX_ALIAS_INSTANCES];
 static int r_alias_inst_draw_order[MAX_ALIAS_INSTANCES];
 static alias_inst_run_t r_alias_inst_runs[MAX_ALIAS_INSTANCES];
-static GLuint r_alias_inst_vbos[3];
+static GLuint r_alias_inst_vbos[8];
 static unsigned int r_alias_inst_ring;
 static void R_DrawAliasModelPrepared (entity_t *e, const lerpdata_t *prepared, qboolean depthonly);
 static void R_DrawAliasXray (entity_t *e, qboolean clear_bit, const GLboolean *batch_mask);
@@ -3659,19 +3659,32 @@ static int r_num_deferred_xrays;
 
 static qboolean R_AliasInst_SpecialModel (const char *name)
 {
-	static const char *const excluded[] = {
-		"progs/eyes.mdl", "progs/flag.mdl", "progs/flag2.mdl",
-		"progs/flag3.mdl", "progs/ctfmodel.mdl", "progs/quaddama.mdl",
-		"progs/invulner.mdl", "progs/invisibl.mdl", "progs/player.mdl",
-		"progs/bolt.mdl", "progs/bolt1.mdl", "progs/bolt2.mdl",
-		"progs/bolt3.mdl"
-	};
-	int i;
+	const char *s;
 
-	for (i = 0; i < countof(excluded); ++i)
-		if (!strcmp(name, excluded[i]))
-			return true;
-	return false;
+	if (strncmp (name, "progs/", 6))
+		return false;
+	s = name + 6;
+	switch (s[0])
+	{
+	case 'b':
+		return !strcmp (s, "bolt.mdl") || !strcmp (s, "bolt1.mdl") ||
+			!strcmp (s, "bolt2.mdl") || !strcmp (s, "bolt3.mdl");
+	case 'c':
+		return !strcmp (s, "ctfmodel.mdl");
+	case 'e':
+		return !strcmp (s, "eyes.mdl");
+	case 'f':
+		return !strcmp (s, "flag.mdl") || !strcmp (s, "flag2.mdl") ||
+			!strcmp (s, "flag3.mdl");
+	case 'i':
+		return !strcmp (s, "invulner.mdl") || !strcmp (s, "invisibl.mdl");
+	case 'p':
+		return !strcmp (s, "player.mdl");
+	case 'q':
+		return !strcmp (s, "quaddama.mdl");
+	default:
+		return false;
+	}
 }
 
 qboolean R_AliasInst_Eligible (entity_t *e)
@@ -3918,29 +3931,20 @@ static void R_AliasInst_BindAttribs (qmodel_t *model, aliashdr_t *hdr,
 static GLuint R_AliasInst_Upload (int ndata)
 {
 	GLuint uploadvbo;
-	int i;
+	GLsizeiptr bytes;
 
 	if (!r_alias_inst_vbos[0])
-	{
 		GL_GenBuffersFunc (countof(r_alias_inst_vbos), r_alias_inst_vbos);
-		for (i = 0; i < countof(r_alias_inst_vbos); ++i)
-		{
-			GL_BindBuffer (GL_ARRAY_BUFFER, r_alias_inst_vbos[i]);
-			GL_BufferDataFunc (GL_ARRAY_BUFFER,
-				(GLsizeiptr)(MAX_ALIAS_INSTANCES * sizeof(alias_inst_data_t)),
-				NULL, GL_STREAM_DRAW);
-		}
-		GL_ClearBufferBindings ();
-	}
 	uploadvbo = r_alias_inst_vbos[r_alias_inst_ring % countof(r_alias_inst_vbos)];
 	r_alias_inst_ring++;
 	if (!uploadvbo)
 		return 0;
 
+	bytes = (GLsizeiptr)((size_t)ndata * sizeof(alias_inst_data_t));
 	GL_BindBuffer (GL_ARRAY_BUFFER, uploadvbo);
-	GL_BufferSubDataFunc (GL_ARRAY_BUFFER, 0,
-		(GLsizeiptr)((size_t)ndata * sizeof(alias_inst_data_t)),
-		r_alias_inst_data);
+	// Single-shot glBufferData orphans the ring slot without hitting macOS
+	// OpenGLMT's synchronous large-command stall on glBufferSubData.
+	GL_BufferDataFunc (GL_ARRAY_BUFFER, bytes, r_alias_inst_data, GL_STREAM_DRAW);
 	return uploadvbo;
 }
 
@@ -5622,7 +5626,16 @@ static void R_ShadowConeFromSphere (shadowq_entry_t *q, const vec3_t c, float rs
 		return;
 	}
 	VectorScale (d, 1.0f / dist, q->dir);
-	q->angle = asin (rs / dist) + pad;
+	{
+		float x = rs / dist;
+		if (x <= 0.5f)
+		{
+			float x2 = x * x;
+			q->angle = x + x * x2 * (0.16666668f + 0.095f * x2) + pad;
+		}
+		else
+			q->angle = asinf (x) + pad;
+	}
 }
 
 // Shadow of every point p in [bmin,bmax] when the squash happens in world
@@ -5648,7 +5661,22 @@ static void R_ShadowConeFromBox (shadowq_entry_t *q, const vec3_t bmin, const ve
 // inside one wave overlaps, so a wave can be drawn and batched in any order.
 static int R_ShadowAssignLevels (shadowq_entry_t *q, int n)
 {
+	static double cos_a[MAX_SHADOWQ], sin_a[MAX_SHADOWQ];
 	int i, j, maxlevel = 0;
+
+	for (i = 0; i < n; ++i)
+	{
+		if (q[i].angle < (float)M_PI)
+		{
+			cos_a[i] = cos ((double)q[i].angle);
+			sin_a[i] = sin ((double)q[i].angle);
+		}
+		else
+		{
+			cos_a[i] = -1.0;
+			sin_a[i] = 0.0;
+		}
+	}
 
 	for (i = 0; i < n; ++i)
 	{
@@ -5662,10 +5690,12 @@ static int R_ShadowAssignLevels (shadowq_entry_t *q, int n)
 			sum = q[i].angle + q[j].angle;
 			if (!(sum >= (float)M_PI))
 			{
+				double cos_sum;
 				dot = DotProduct (q[i].dir, q[j].dir);
-				// cos (sum) >= 1 - sum^2/2, so a dot safely below that fails the
-				// test below without calling cos; the margin dwarfs its rounding
-				if ((double)dot <= 1.0 - 0.5 * (double)sum * (double)sum - 1e-9 || !(dot > cos (sum)))
+				cos_sum = cos_a[i] * cos_a[j] - sin_a[i] * sin_a[j];
+				if ((double)dot <= cos_sum - 1e-12)
+					continue;
+				if ((double)dot <= cos_sum + 1e-12 && !(dot > cos (sum)))
 					continue;
 			}
 			q[i].level = q[j].level + 1;
@@ -5893,8 +5923,6 @@ static int R_PackShadowQueueRuns (int n, int maxlevel, int *ndata_out)
 
 			for (j = i + 1; j < m && GL_AliasShadowSameBatch (first, &r_alias_shadow_recs[r_shadowq[r_shadowq_sorted[j]].index]); ++j)
 				;
-			if (j - i < 2)
-				continue;
 			run = &r_shadowq_runs[nruns++];
 			run->level = level;
 			run->first = ndata;
