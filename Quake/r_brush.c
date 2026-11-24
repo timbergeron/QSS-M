@@ -468,6 +468,7 @@ void R_DrawBrushModel (entity_t *e)
 		glPopMatrix ();
 		return;
 	}
+	R_FlushOpaqueBModelRun ();
 	// debug views draw the lightmap poly lists, which a partial clear leaves stale
 	if (!r_drawflat_cheatsafe && !r_fullbright_cheatsafe && !r_lightmap_cheatsafe)
 		numtextures = R_BrushModelTextures (clmodel, &textures);

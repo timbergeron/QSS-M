@@ -2249,7 +2249,11 @@ void R_DrawEntitiesOnList (qboolean alphapass) //johnfitz -- added parameter
 
 		R_FlushSpriteBatch ();
 		if (!alphapass && num_brush > 0)
+		{
+			R_BeginOpaqueBModelRun ();
 			R_DrawBrushModelsInstanced(brush_ents, num_brush);
+			R_EndOpaqueBModelRun ();
+		}
 		if (!alphapass && num_alias > 0)
 			R_DrawAliasModelsInstanced(alias_ents, num_alias);
 	}
@@ -2299,7 +2303,11 @@ void R_DrawEntitiesOnList (qboolean alphapass) //johnfitz -- added parameter
 
 		R_FlushSpriteBatch ();
 		if (!alphapass && num_brush > 0)
+		{
+			R_BeginOpaqueBModelRun ();
 			R_DrawBrushModelsInstanced(brush_ents, num_brush);
+			R_EndOpaqueBModelRun ();
+		}
 		if (!alphapass && num_alias > 0)
 			R_DrawAliasModelsInstanced(alias_ents, num_alias);
 	}

@@ -1403,6 +1403,54 @@ static void R_BModelDrawCache_UpdateLightmaps (qmodel_t *model, bmodel_drawcache
 	R_BModelDrawCache_StoreLightstyles (cache);
 }
 
+static struct
+{
+	qboolean	active;
+	qboolean	bound;
+	GLuint		prog;
+	GLint		locUseAlphaTest;
+	GLint		locUseCaustics;
+	int			last_lm;
+	int			last_fb;
+	int			last_grass;
+	int			last_caustics;
+	int			last_at;
+	qboolean	grass_uniforms_set;
+} r_opaque_bmodel_run;
+
+void R_BeginOpaqueBModelRun (void)
+{
+	r_opaque_bmodel_run.active = true;
+	r_opaque_bmodel_run.bound = false;
+	r_opaque_bmodel_run.prog = 0;
+}
+
+void R_FlushOpaqueBModelRun (void)
+{
+	if (!r_opaque_bmodel_run.bound)
+		return;
+	if (r_opaque_bmodel_run.locUseAlphaTest != -1 && r_opaque_bmodel_run.last_at != 0)
+		GL_Uniform1iFunc (r_opaque_bmodel_run.locUseAlphaTest, 0);
+	if (r_opaque_bmodel_run.last_caustics != 0)
+		GL_Uniform1iFunc (r_opaque_bmodel_run.locUseCaustics, 0);
+	GL_DisableVertexAttribArrayFunc (vertAttrIndex);
+	GL_DisableVertexAttribArrayFunc (texCoordsAttrIndex);
+	GL_DisableVertexAttribArrayFunc (LMCoordsAttrIndex);
+	GL_DisableVertexAttribArrayFunc (LMBoundsAttrIndex);
+	GL_UseProgramFunc (0);
+	GL_SelectTexture (GL_TEXTURE0);
+	GL_BindBuffer (GL_ARRAY_BUFFER, 0);
+	GL_BindBuffer (GL_ELEMENT_ARRAY_BUFFER, 0);
+	r_opaque_bmodel_run.bound = false;
+	r_opaque_bmodel_run.prog = 0;
+}
+
+void R_EndOpaqueBModelRun (void)
+{
+	R_FlushOpaqueBModelRun ();
+	r_opaque_bmodel_run.active = false;
+}
+
 qboolean R_DrawBModelDrawCache (qmodel_t *model, entity_t *ent)
 {
 	bmodel_drawcache_t *cache;
@@ -1435,12 +1483,19 @@ qboolean R_DrawBModelDrawCache (qmodel_t *model, entity_t *ent)
 		cache->has_cached_dlight)
 	{
 		R_BModelDrawCache_UpdateLightmaps (model, cache);
+		if (r_opaque_bmodel_run.bound)
+		{
+			GL_SelectTexture (GL_TEXTURE1);
+			r_opaque_bmodel_run.last_lm = -1;
+		}
 		R_UploadLightmaps ();
 	}
 
 	{
 	qboolean use_opaque;
 	qboolean grass_surface_active;
+	qboolean reuse_run;
+	qboolean keep_bound;
 	GLuint prog;
 	GLint locUseFullbright, locUseOverbright, locUseCaustics, locUseGrass, locUseAlphaTest;
 	GLint locUseLMWide, locUseLMOnly, locUseLMExtra4, locLMTexelSize, locUseTexDither, locUseLMBanding;
@@ -1505,53 +1560,93 @@ qboolean R_DrawBModelDrawCache (qmodel_t *model, entity_t *ent)
 		locFogMode = fogModeLoc;
 	}
 
-	glDepthMask (GL_TRUE);
-	glDisable (GL_BLEND);
-	glEnable (GL_CULL_FACE);
-	GL_UseProgramFunc (prog);
-
-	GL_BindBuffer (GL_ARRAY_BUFFER, gl_bmodel_vbo);
-	GL_BindBuffer (GL_ELEMENT_ARRAY_BUFFER, cache->ebo);
-
-	GL_EnableVertexAttribArrayFunc (vertAttrIndex);
-	GL_EnableVertexAttribArrayFunc (texCoordsAttrIndex);
-	GL_EnableVertexAttribArrayFunc (LMCoordsAttrIndex);
-
-	GL_VertexAttribPointerFunc (vertAttrIndex,      3, GL_FLOAT, GL_FALSE, VERTEXSIZE * sizeof(float), ((float *)0));
-	GL_VertexAttribPointerFunc (texCoordsAttrIndex, 2, GL_FLOAT, GL_FALSE, VERTEXSIZE * sizeof(float), ((float *)0) + 3);
-	GL_VertexAttribPointerFunc (LMCoordsAttrIndex,  2, GL_FLOAT, GL_FALSE, VERTEXSIZE * sizeof(float), ((float *)0) + 5);
-	R_SetupLightmapBoundsAttrib ();
-
-	GL_Uniform1iFunc (locUseFullbright, 0);
-	lastfullbright = 0;
-	GL_Uniform1iFunc (locUseOverbright, overbright);
-	GL_Uniform1iFunc (locUseCaustics, 0);
-	lastcaustics = 0;
-	GL_Uniform1iFunc (locUseGrass, 0);
-	lastgrass = 0;
-	if (locUseAlphaTest != -1)
-	{
-		GL_Uniform1iFunc (locUseAlphaTest, 0);
-		lastalphatest = 0;
-	}
-	GL_Uniform1iFunc (locUseLMWide, wide10bits);
-	GL_Uniform1iFunc (locUseLMOnly, 0);
-	R_SetLightmapExtra4Uniforms (locUseLMExtra4, locLMTexelSize);
-	R_SetTexturelessDitherUniform (locUseTexDither);
-	R_SetLightmapBandingUniform (locUseLMBanding);
-	GL_Uniform1fFunc (locAlpha, 1.0f);
-	GL_Uniform1fFunc (locClTime, cl.time);
-	R_SetCausticsProjection (locCausticsS, locCausticsT, locCausticsUp); // woods #caustics
-	GL_Uniform1fFunc (locCausticsOpacity, gl_caustics.value);
 	grass_surface_active = R_GrassBladeMode() == 0 && R_GrassEntityAllowsGrass(ent);
-	if (grass_surface_active)
+	reuse_run = r_opaque_bmodel_run.active && r_opaque_bmodel_run.bound && r_opaque_bmodel_run.prog == prog;
+
+	if (!reuse_run)
 	{
-		GL_Uniform1fFunc (locGrassAmt, R_GrassAmount());
-		GL_Uniform1fFunc (locGrassTime, R_GrassAnimTime());
-		GL_Uniform1fFunc (locGrassMove, R_GrassMovement());
-		GL_Uniform1fFunc (locGrassGust, R_GrassGustScale());
+		if (r_opaque_bmodel_run.bound)
+		{
+			if (r_opaque_bmodel_run.locUseAlphaTest != -1 && r_opaque_bmodel_run.last_at != 0)
+				GL_Uniform1iFunc (r_opaque_bmodel_run.locUseAlphaTest, 0);
+			if (r_opaque_bmodel_run.last_caustics != 0)
+				GL_Uniform1iFunc (r_opaque_bmodel_run.locUseCaustics, 0);
+		}
+		else
+		{
+			glDepthMask (GL_TRUE);
+			glDisable (GL_BLEND);
+			glEnable (GL_CULL_FACE);
+			GL_BindBuffer (GL_ARRAY_BUFFER, gl_bmodel_vbo);
+			GL_EnableVertexAttribArrayFunc (vertAttrIndex);
+			GL_EnableVertexAttribArrayFunc (texCoordsAttrIndex);
+			GL_EnableVertexAttribArrayFunc (LMCoordsAttrIndex);
+			GL_VertexAttribPointerFunc (vertAttrIndex,      3, GL_FLOAT, GL_FALSE, VERTEXSIZE * sizeof(float), ((float *)0));
+			GL_VertexAttribPointerFunc (texCoordsAttrIndex, 2, GL_FLOAT, GL_FALSE, VERTEXSIZE * sizeof(float), ((float *)0) + 3);
+			GL_VertexAttribPointerFunc (LMCoordsAttrIndex,  2, GL_FLOAT, GL_FALSE, VERTEXSIZE * sizeof(float), ((float *)0) + 5);
+			R_SetupLightmapBoundsAttrib ();
+		}
+
+		GL_UseProgramFunc (prog);
+
+		GL_Uniform1iFunc (locUseFullbright, 0);
+		lastfullbright = 0;
+		GL_Uniform1iFunc (locUseOverbright, overbright);
+		GL_Uniform1iFunc (locUseCaustics, 0);
+		lastcaustics = 0;
+		GL_Uniform1iFunc (locUseGrass, 0);
+		lastgrass = 0;
+		if (locUseAlphaTest != -1)
+		{
+			GL_Uniform1iFunc (locUseAlphaTest, 0);
+			lastalphatest = 0;
+		}
+		GL_Uniform1iFunc (locUseLMWide, wide10bits);
+		GL_Uniform1iFunc (locUseLMOnly, 0);
+		R_SetLightmapExtra4Uniforms (locUseLMExtra4, locLMTexelSize);
+		R_SetTexturelessDitherUniform (locUseTexDither);
+		R_SetLightmapBandingUniform (locUseLMBanding);
+		GL_Uniform1fFunc (locAlpha, 1.0f);
+		GL_Uniform1fFunc (locClTime, cl.time);
+		R_SetCausticsProjection (locCausticsS, locCausticsT, locCausticsUp); // woods #caustics
+		GL_Uniform1fFunc (locCausticsOpacity, gl_caustics.value);
+		if (grass_surface_active)
+		{
+			GL_Uniform1fFunc (locGrassAmt, R_GrassAmount());
+			GL_Uniform1fFunc (locGrassTime, R_GrassAnimTime());
+			GL_Uniform1fFunc (locGrassMove, R_GrassMovement());
+			GL_Uniform1fFunc (locGrassGust, R_GrassGustScale());
+		}
+		GL_Uniform1iFunc (locFogMode, Fog_GetMode());
+
+		if (r_opaque_bmodel_run.active)
+		{
+			r_opaque_bmodel_run.bound = true;
+			r_opaque_bmodel_run.prog = prog;
+			r_opaque_bmodel_run.locUseAlphaTest = locUseAlphaTest;
+			r_opaque_bmodel_run.locUseCaustics = locUseCaustics;
+			r_opaque_bmodel_run.last_lm = -1;
+			r_opaque_bmodel_run.grass_uniforms_set = grass_surface_active;
+		}
 	}
-	GL_Uniform1iFunc (locFogMode, Fog_GetMode());
+	else
+	{
+		lastlm = r_opaque_bmodel_run.last_lm;
+		lastfullbright = r_opaque_bmodel_run.last_fb;
+		lastgrass = r_opaque_bmodel_run.last_grass;
+		lastcaustics = r_opaque_bmodel_run.last_caustics;
+		lastalphatest = r_opaque_bmodel_run.last_at;
+		if (grass_surface_active && !r_opaque_bmodel_run.grass_uniforms_set)
+		{
+			GL_Uniform1fFunc (locGrassAmt, R_GrassAmount());
+			GL_Uniform1fFunc (locGrassTime, R_GrassAnimTime());
+			GL_Uniform1fFunc (locGrassMove, R_GrassMovement());
+			GL_Uniform1fFunc (locGrassGust, R_GrassGustScale());
+			r_opaque_bmodel_run.grass_uniforms_set = true;
+		}
+	}
+
+	GL_BindBuffer (GL_ELEMENT_ARRAY_BUFFER, cache->ebo);
 
 	for (i = 0; i < cache->numbatches; i++)
 	{
@@ -1636,19 +1731,39 @@ qboolean R_DrawBModelDrawCache (qmodel_t *model, entity_t *ent)
 
 	rs_brushpolys += cache->brushpolys;
 
-	if (locUseAlphaTest != -1 && lastalphatest != 0)
-		GL_Uniform1iFunc (locUseAlphaTest, 0);
-	if (lastcaustics != 0)
-		GL_Uniform1iFunc (locUseCaustics, 0);
+	keep_bound = r_opaque_bmodel_run.active && !R_GrassBladesActive ();
+	if (keep_bound)
+	{
+		r_opaque_bmodel_run.last_lm = lastlm;
+		r_opaque_bmodel_run.last_fb = lastfullbright;
+		r_opaque_bmodel_run.last_grass = lastgrass;
+		r_opaque_bmodel_run.last_caustics = lastcaustics;
+		r_opaque_bmodel_run.last_at = lastalphatest;
+		return true;
 	}
-	GL_DisableVertexAttribArrayFunc (vertAttrIndex);
-	GL_DisableVertexAttribArrayFunc (texCoordsAttrIndex);
-	GL_DisableVertexAttribArrayFunc (LMCoordsAttrIndex);
-	GL_DisableVertexAttribArrayFunc (LMBoundsAttrIndex);
-	GL_UseProgramFunc (0);
-	GL_SelectTexture (GL_TEXTURE0);
-	GL_BindBuffer (GL_ARRAY_BUFFER, 0);
-	GL_BindBuffer (GL_ELEMENT_ARRAY_BUFFER, 0);
+
+	if (r_opaque_bmodel_run.bound)
+	{
+		r_opaque_bmodel_run.last_at = lastalphatest;
+		r_opaque_bmodel_run.last_caustics = lastcaustics;
+		R_FlushOpaqueBModelRun ();
+	}
+	else
+	{
+		if (locUseAlphaTest != -1 && lastalphatest != 0)
+			GL_Uniform1iFunc (locUseAlphaTest, 0);
+		if (lastcaustics != 0)
+			GL_Uniform1iFunc (locUseCaustics, 0);
+		GL_DisableVertexAttribArrayFunc (vertAttrIndex);
+		GL_DisableVertexAttribArrayFunc (texCoordsAttrIndex);
+		GL_DisableVertexAttribArrayFunc (LMCoordsAttrIndex);
+		GL_DisableVertexAttribArrayFunc (LMBoundsAttrIndex);
+		GL_UseProgramFunc (0);
+		GL_SelectTexture (GL_TEXTURE0);
+		GL_BindBuffer (GL_ARRAY_BUFFER, 0);
+		GL_BindBuffer (GL_ELEMENT_ARRAY_BUFFER, 0);
+	}
+	}
 
 	R_DrawGrassBlades (model, ent, chain_model);
 	return true;
@@ -1903,6 +2018,8 @@ static void R_DrawBrushModelInstancedGroup (entity_t **ents, int count)
 		R_BModelDrawCache_UpdateLightmaps(model, cache);
 		R_UploadLightmaps();
 	}
+
+	R_FlushOpaqueBModelRun ();
 
 	GL_BindBuffer(GL_ARRAY_BUFFER, gl_bmodel_instance_vbo);
 	GL_BufferDataFunc(GL_ARRAY_BUFFER, (GLsizeiptr)((size_t)count * sizeof(r_bmodel_instance_data[0])), r_bmodel_instance_data, GL_STREAM_DRAW);
