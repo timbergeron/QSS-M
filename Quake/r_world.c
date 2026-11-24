@@ -7537,6 +7537,18 @@ enum rscenecachestatus_e
 	SCS_DISCARDED,
 };
 
+#define RSCENECACHE_MAX_SPATIAL_CELLS 64
+
+typedef struct rscenecache_cellrange_s
+{
+	unsigned int first_idx;
+	unsigned int num_idx;
+	unsigned int num_polys;
+	byte cell;
+	vec3_t mins;
+	vec3_t maxs;
+} rscenecache_cellrange_t;
+
 static struct
 {	//I'm tagging things as commented-volatile to mark the things that we depend upon before the sdl lock/unlock/wait calls.
 	SDL_Thread *thread;
@@ -7602,6 +7614,20 @@ static struct
 		qboolean teleportscomplete;
 		qboolean teleportchains; // main thread: these faces draw through texture chains this view
 
+		// Spatial frustum-culling grid for unvised / novis maps where PVS includes
+		// the entire world. Each batch's indices are ordered by cell inside cache->ebo
+		// so visible cells coalesce into minimal contiguous draws.
+		qboolean want_spatial_cells; // main-thread-owned: requested mode for cache reuse
+		qboolean spatial_ready;      // worker-written before SCS_COMPUTED, main-thread-read after SCS_FINISHED
+		unsigned int num_spatial_cells;
+		int spatial_grid[3];
+		vec3_t spatial_origin;
+		vec3_t spatial_invsize;
+		vec3_t spatial_mins[RSCENECACHE_MAX_SPATIAL_CELLS];
+		vec3_t spatial_maxs[RSCENECACHE_MAX_SPATIAL_CELLS];
+		rscenecache_cellrange_t *cellranges;
+		unsigned int num_cellranges, max_cellranges;
+
 		SDL_AtomicInt status;
 		GLuint ebo;
 		dlight_t dlights[countof(cl_dlights)];	//added this here so the cache at least gets consistent lighting without having to fight the main thread.
@@ -7619,6 +7645,11 @@ static struct
 			unsigned int *eboidx;
 			size_t numidx;
 			size_t maxidx;
+			unsigned int numpolys;
+			vec3_t mins, maxs;
+			uint64_t cellmask;
+			unsigned int first_cellrange;
+			unsigned int num_cellranges;
 		} batches[1];	//one per texturelm...
 	} *cache;	//remember a few, for skyrooms or multiple-csqc-renderscenes etc. we need at least two - previous and pending
 } rscenecache;
@@ -8249,6 +8280,321 @@ static qboolean RSceneCache_QueueDlightUpdate (struct rscenecache_s *cache, qboo
 	return queued;
 }
 
+static void RSceneCache_ResetBounds(vec3_t mins, vec3_t maxs)
+{
+	mins[0] = mins[1] = mins[2] = 1e30f;
+	maxs[0] = maxs[1] = maxs[2] = -1e30f;
+}
+
+static void RSceneCache_ExpandBounds(vec3_t mins, vec3_t maxs, const vec3_t smin, const vec3_t smax)
+{
+	if (smin[0] < mins[0]) mins[0] = smin[0];
+	if (smin[1] < mins[1]) mins[1] = smin[1];
+	if (smin[2] < mins[2]) mins[2] = smin[2];
+	if (smax[0] > maxs[0]) maxs[0] = smax[0];
+	if (smax[1] > maxs[1]) maxs[1] = smax[1];
+	if (smax[2] > maxs[2]) maxs[2] = smax[2];
+}
+
+static void RSceneCache_InitSpatialGrid(struct rscenecache_s *cache)
+{
+	size_t batchcount = (size_t)cache->numtextures * cache->lightmaps * 2;
+	size_t b;
+	unsigned int c;
+
+	cache->num_cellranges = 0;
+	for (b = 0; b < batchcount; b++)
+	{
+		struct rscenecachebath_s *batch = &cache->batches[b];
+		batch->numpolys = 0;
+		batch->cellmask = 0;
+		batch->first_cellrange = 0;
+		batch->num_cellranges = 0;
+		RSceneCache_ResetBounds(batch->mins, batch->maxs);
+	}
+
+	cache->spatial_ready = cache->want_spatial_cells;
+	if (!cache->want_spatial_cells)
+	{
+		cache->num_spatial_cells = 0;
+		return;
+	}
+
+	{
+		vec3_t size;
+		float max_xy;
+		int k;
+
+		for (k = 0; k < 3; k++)
+		{
+			size[k] = cache->worldmodel->maxs[k] - cache->worldmodel->mins[k];
+			if (size[k] < 1.0f)
+				size[k] = 1.0f;
+		}
+		max_xy = q_max(size[0], size[1]);
+		if (size[2] > 0.35f * max_xy)
+		{
+			cache->spatial_grid[0] = 4;
+			cache->spatial_grid[1] = 4;
+			cache->spatial_grid[2] = 4;
+		}
+		else if (size[2] > 0.15f * max_xy)
+		{
+			if (size[0] >= size[1])
+			{
+				cache->spatial_grid[0] = 8;
+				cache->spatial_grid[1] = 4;
+			}
+			else
+			{
+				cache->spatial_grid[0] = 4;
+				cache->spatial_grid[1] = 8;
+			}
+			cache->spatial_grid[2] = 2;
+		}
+		else
+		{
+			cache->spatial_grid[0] = 8;
+			cache->spatial_grid[1] = 8;
+			cache->spatial_grid[2] = 1;
+		}
+
+		for (k = 0; k < 3; k++)
+		{
+			cache->spatial_origin[k] = cache->worldmodel->mins[k];
+			cache->spatial_invsize[k] = (float)cache->spatial_grid[k] / size[k];
+		}
+		cache->num_spatial_cells = (unsigned int)(cache->spatial_grid[0] * cache->spatial_grid[1] * cache->spatial_grid[2]);
+		for (c = 0; c < cache->num_spatial_cells; c++)
+			RSceneCache_ResetBounds(cache->spatial_mins[c], cache->spatial_maxs[c]);
+	}
+}
+
+static byte RSceneCache_SurfCell(const struct rscenecache_s *cache, const msurface_t *surf)
+{
+	int cx = (int)((0.5f * (surf->mins[0] + surf->maxs[0]) - cache->spatial_origin[0]) * cache->spatial_invsize[0]);
+	int cy = (int)((0.5f * (surf->mins[1] + surf->maxs[1]) - cache->spatial_origin[1]) * cache->spatial_invsize[1]);
+	int cz = (int)((0.5f * (surf->mins[2] + surf->maxs[2]) - cache->spatial_origin[2]) * cache->spatial_invsize[2]);
+
+	cx = CLAMP(0, cx, cache->spatial_grid[0] - 1);
+	cy = CLAMP(0, cy, cache->spatial_grid[1] - 1);
+	cz = CLAMP(0, cz, cache->spatial_grid[2] - 1);
+	return (byte)(cx + cache->spatial_grid[0] * (cy + cache->spatial_grid[1] * cz));
+}
+
+static qboolean RSceneCache_ReserveCellRanges(struct rscenecache_s *cache, unsigned int needed)
+{
+	unsigned int newmax;
+	rscenecache_cellrange_t *grown;
+
+	if (needed <= cache->max_cellranges)
+		return true;
+	newmax = cache->max_cellranges ? cache->max_cellranges * 2 : 256;
+	if (newmax < needed)
+		newmax = needed;
+	grown = (rscenecache_cellrange_t *)realloc(cache->cellranges, (size_t)newmax * sizeof(*grown));
+	if (!grown)
+		return false;
+	cache->cellranges = grown;
+	cache->max_cellranges = newmax;
+	return true;
+}
+
+typedef struct rscenecache_staged_s
+{
+	unsigned int batch_idx;
+	unsigned int vcount;
+	msurface_t *surf;
+	byte cell;
+} rscenecache_staged_t;
+
+static qboolean RSceneCache_StageSurface(rscenecache_staged_t **staged, size_t *num, size_t *max,
+	unsigned int batch_idx, msurface_t *surf, unsigned int vcount, byte cell)
+{
+	if (*num >= *max)
+	{
+		size_t newmax = *max ? (*max * 2) : 65536;
+		rscenecache_staged_t *grown = (rscenecache_staged_t *)realloc(*staged, newmax * sizeof(*grown));
+		if (!grown)
+			return false;
+		*staged = grown;
+		*max = newmax;
+	}
+	(*staged)[*num].batch_idx = batch_idx;
+	(*staged)[*num].vcount = vcount;
+	(*staged)[*num].surf = surf;
+	(*staged)[*num].cell = cell;
+	(*num)++;
+	return true;
+}
+
+static void RSceneCache_FlushStagedFlat(struct rscenecache_s *cache, const rscenecache_staged_t *staged, size_t num_staged)
+{
+	size_t i;
+
+	cache->spatial_ready = false;
+	cache->num_spatial_cells = 0;
+	cache->num_cellranges = 0;
+	for (i = 0; i < num_staged; i++)
+	{
+		msurface_t *surf = staged[i].surf;
+		unsigned int vcount = staged[i].vcount;
+		size_t numidx = (size_t)(vcount - 2) * 3;
+		struct rscenecachebath_s *batch = &cache->batches[staged[i].batch_idx];
+		unsigned int *idx, e;
+		if (!RSceneCache_ReserveBatchIndices(batch, numidx, "spatial-fallback"))
+			continue;
+		idx = &batch->idx[batch->numidx];
+		batch->numidx += numidx;
+		batch->numpolys++;
+		RSceneCache_ExpandBounds(batch->mins, batch->maxs, surf->mins, surf->maxs);
+		for (e = 2; e < vcount; e++)
+		{
+			*idx++ = surf->vbo_firstvert;
+			*idx++ = surf->vbo_firstvert + e - 1;
+			*idx++ = surf->vbo_firstvert + e;
+		}
+	}
+}
+
+static void RSceneCache_EmitStagedSpatial(struct rscenecache_s *cache, rscenecache_staged_t *staged, size_t num_staged)
+{
+	size_t batchcount = (size_t)cache->numtextures * cache->lightmaps * 2;
+	rscenecache_staged_t *tmp = NULL;
+	unsigned int *batch_cnt = NULL;
+	unsigned int cell_cnt[RSCENECACHE_MAX_SPATIAL_CELLS];
+	unsigned int sum, c;
+	size_t i;
+
+	if (!num_staged)
+		return;
+
+	tmp = (rscenecache_staged_t *)malloc(num_staged * sizeof(*tmp));
+	batch_cnt = (unsigned int *)calloc(batchcount, sizeof(*batch_cnt));
+	if (!tmp || !batch_cnt)
+	{
+		// OOM fallback: emit unsorted into batches without per-cell ranges.
+		free(tmp);
+		free(batch_cnt);
+		RSceneCache_FlushStagedFlat(cache, staged, num_staged);
+		return;
+	}
+
+	// Pass 1: counting sort by spatial cell (0..num_spatial_cells-1).
+	memset(cell_cnt, 0, sizeof(cell_cnt));
+	for (i = 0; i < num_staged; i++)
+		cell_cnt[staged[i].cell]++;
+	sum = 0;
+	for (c = 0; c < cache->num_spatial_cells; c++)
+	{
+		unsigned int n = cell_cnt[c];
+		cell_cnt[c] = sum;
+		sum += n;
+	}
+	for (i = 0; i < num_staged; i++)
+		tmp[cell_cnt[staged[i].cell]++] = staged[i];
+
+	// Pass 2: stable counting sort by batch_idx -> sorted by (batch_idx, cell).
+	for (i = 0; i < num_staged; i++)
+		batch_cnt[tmp[i].batch_idx]++;
+	sum = 0;
+	for (i = 0; i < batchcount; i++)
+	{
+		unsigned int n = batch_cnt[i];
+		batch_cnt[i] = sum;
+		sum += n;
+	}
+	for (i = 0; i < num_staged; i++)
+		staged[batch_cnt[tmp[i].batch_idx]++] = tmp[i];
+
+	free(tmp);
+	free(batch_cnt);
+
+	// Pre-count exact (batch_idx, cell) runs and reserve range metadata upfront so
+	// allocation failure falls back to complete flat batches without dropping geometry.
+	{
+		unsigned int total_runs = 0;
+		for (i = 0; i < num_staged; i++)
+		{
+			if (i == 0 || staged[i].batch_idx != staged[i - 1].batch_idx ||
+				staged[i].cell != staged[i - 1].cell)
+			{
+				if (total_runs == UINT_MAX)
+				{
+					RSceneCache_FlushStagedFlat(cache, staged, num_staged);
+					return;
+				}
+				total_runs++;
+			}
+		}
+		if (!RSceneCache_ReserveCellRanges(cache, total_runs))
+		{
+			RSceneCache_FlushStagedFlat(cache, staged, num_staged);
+			return;
+		}
+	}
+
+	// Pass 3: emit indices per (batch_idx, cell) run and record tight cell ranges.
+	i = 0;
+	while (i < num_staged)
+	{
+		unsigned int bidx = staged[i].batch_idx;
+		struct rscenecachebath_s *batch = &cache->batches[bidx];
+		batch->first_cellrange = cache->num_cellranges;
+		batch->num_cellranges = 0;
+
+		while (i < num_staged && staged[i].batch_idx == bidx)
+		{
+			byte cell = staged[i].cell;
+			size_t run_end = i;
+			size_t run_idx = 0;
+			unsigned int first_idx = (unsigned int)batch->numidx;
+			unsigned int *idx, e;
+			rscenecache_cellrange_t *cr;
+
+			while (run_end < num_staged && staged[run_end].batch_idx == bidx && staged[run_end].cell == cell)
+			{
+				run_idx += (size_t)(staged[run_end].vcount - 2) * 3;
+				run_end++;
+			}
+
+			if (!RSceneCache_ReserveBatchIndices(batch, run_idx, "spatial"))
+			{
+				i = run_end;
+				continue;
+			}
+
+			cr = &cache->cellranges[cache->num_cellranges++];
+			cr->first_idx = first_idx;
+			cr->num_idx = (unsigned int)run_idx;
+			cr->num_polys = (unsigned int)(run_end - i);
+			cr->cell = cell;
+			RSceneCache_ResetBounds(cr->mins, cr->maxs);
+
+			idx = &batch->idx[batch->numidx];
+			batch->numidx += run_idx;
+			batch->numpolys += cr->num_polys;
+			batch->cellmask |= (1ULL << cell);
+			batch->num_cellranges++;
+
+			for (; i < run_end; i++)
+			{
+				msurface_t *surf = staged[i].surf;
+				unsigned int vcount = staged[i].vcount;
+				RSceneCache_ExpandBounds(cr->mins, cr->maxs, surf->mins, surf->maxs);
+				for (e = 2; e < vcount; e++)
+				{
+					*idx++ = surf->vbo_firstvert;
+					*idx++ = surf->vbo_firstvert + e - 1;
+					*idx++ = surf->vbo_firstvert + e;
+				}
+			}
+			RSceneCache_ExpandBounds(batch->mins, batch->maxs, cr->mins, cr->maxs);
+			RSceneCache_ExpandBounds(cache->spatial_mins[cell], cache->spatial_maxs[cell], cr->mins, cr->maxs);
+		}
+	}
+}
+
 static int RSceneCache_Thread(void *ctx)
 {
 	unsigned int i, j, e;
@@ -8290,8 +8636,12 @@ static int RSceneCache_Thread(void *ctx)
 		if (cache)
 		{
 			int dlightframecount = cache->dlightframecount;
+			rscenecache_staged_t *staged = NULL;
+			size_t num_staged = 0, max_staged = 0;
+			qboolean use_spatial = cache->want_spatial_cells;
 			cache->numteleports = 0;
 			cache->teleportscomplete = true;
+			RSceneCache_InitSpatialGrid(cache);
 
 			if (!cache->flashblend)
 				for (j = 0; j < countof(cache->dlights); j++)
@@ -8337,19 +8687,35 @@ static int RSceneCache_Thread(void *ctx)
 								unsigned int vcount = (unsigned int)R_SurfaceVertCount (surf);	// woods #collinear
 								numidx = (vcount-2)*3;
 								int uw = (surf->flags & SURF_UNDERWATER) ? 1 : 0;
-								batch = &cache->batches[
+								unsigned int bidx = (unsigned int)(
 								        surf->texinfo->materialidx * cache->lightmaps * 2   /* texture bank  */
 								      + uw                    * cache->lightmaps            /* above / under */
-								      + (1 + surf->lightmaptexturenum)];                    /* lightmap slot */
-								if (!RSceneCache_ReserveBatchIndices(batch, numidx, "world"))
-									continue;
-								idx = &batch->idx[batch->numidx];
-								batch->numidx += numidx;
-								for (e = 2; e < vcount; e++)
+								      + (1 + surf->lightmaptexturenum));                    /* lightmap slot */
+								if (use_spatial)
 								{
-									*idx++ = surf->vbo_firstvert;
-									*idx++ = surf->vbo_firstvert + e-1;
-									*idx++ = surf->vbo_firstvert + e;
+									if (!RSceneCache_StageSurface(&staged, &num_staged, &max_staged,
+										bidx, surf, vcount, RSceneCache_SurfCell(cache, surf)))
+									{
+										RSceneCache_FlushStagedFlat(cache, staged, num_staged);
+										num_staged = 0;
+										use_spatial = false;
+									}
+								}
+								if (!use_spatial)
+								{
+									batch = &cache->batches[bidx];
+									if (!RSceneCache_ReserveBatchIndices(batch, numidx, "world"))
+										continue;
+									idx = &batch->idx[batch->numidx];
+									batch->numidx += numidx;
+									batch->numpolys++;
+									RSceneCache_ExpandBounds(batch->mins, batch->maxs, surf->mins, surf->maxs);
+									for (e = 2; e < vcount; e++)
+									{
+										*idx++ = surf->vbo_firstvert;
+										*idx++ = surf->vbo_firstvert + e-1;
+										*idx++ = surf->vbo_firstvert + e;
+									}
 								}
 
 								RSceneCache_AddTeleportSurface(cache, surf);
@@ -8392,25 +8758,45 @@ static int RSceneCache_Thread(void *ctx)
 					unsigned int vcount = (unsigned int)R_SurfaceVertCount (surf);	// woods #collinear
 					numidx = (vcount-2)*3;
 					int uw = (surf->flags & SURF_UNDERWATER) ? 1 : 0;
-					batch = &cache->batches[
+					unsigned int bidx = (unsigned int)(
 					        surf->texinfo->materialidx * cache->lightmaps * 2   /* texture bank  */
 					      + uw                    * cache->lightmaps            /* above / under */
-					      + (1 + surf->lightmaptexturenum)];                    /* lightmap slot */
-					if (!RSceneCache_ReserveBatchIndices(batch, numidx, "submodel"))
-						continue;
-					idx = &batch->idx[batch->numidx];
-					batch->numidx += numidx;
-					for (e = 2; e < vcount; e++)
+					      + (1 + surf->lightmaptexturenum));                    /* lightmap slot */
+					if (use_spatial)
 					{
-						*idx++ = surf->vbo_firstvert;
-						*idx++ = surf->vbo_firstvert + e-1;
-						*idx++ = surf->vbo_firstvert + e;
+						if (!RSceneCache_StageSurface(&staged, &num_staged, &max_staged,
+							bidx, surf, vcount, RSceneCache_SurfCell(cache, surf)))
+						{
+							RSceneCache_FlushStagedFlat(cache, staged, num_staged);
+							num_staged = 0;
+							use_spatial = false;
+						}
+					}
+					if (!use_spatial)
+					{
+						batch = &cache->batches[bidx];
+						if (!RSceneCache_ReserveBatchIndices(batch, numidx, "submodel"))
+							continue;
+						idx = &batch->idx[batch->numidx];
+						batch->numidx += numidx;
+						batch->numpolys++;
+						RSceneCache_ExpandBounds(batch->mins, batch->maxs, surf->mins, surf->maxs);
+						for (e = 2; e < vcount; e++)
+						{
+							*idx++ = surf->vbo_firstvert;
+							*idx++ = surf->vbo_firstvert + e-1;
+							*idx++ = surf->vbo_firstvert + e;
+						}
 					}
 
 					RSceneCache_AddTeleportSurface(cache, surf);
 					RSceneCache_RenderDynamicLightmaps(cache, surf, dlightframecount, true);
 				}
 			}
+
+			if (use_spatial && num_staged)
+				RSceneCache_EmitStagedSpatial(cache, staged, num_staged);
+			free(staged);
 
 			cache->brushpolys = bpolys;
 
@@ -8701,6 +9087,8 @@ static qboolean RSceneCache_Queue(byte *vis)
 		bakesubmodels[m>>3] |= (1u<<(m&7));
 	}
 
+	const qboolean want_spatial_cells = (!cl.worldmodel->visdata || r_novis.value != 0.0f);
+
 	for (building = NULL, cache = rscenecache.cache; cache; cache = cache->next)
 	{
 		if (cache->worldmodel != cl.worldmodel || cache->zfix != !!gl_zfix.value)
@@ -8712,7 +9100,8 @@ static qboolean RSceneCache_Queue(byte *vis)
 		if (SDL_GetAtomicInt(&cache->status) == SCS_DISCARDED)
 			continue;
 		if (cache->lightmaps != (unsigned int)(lightmap_count + 1) ||
-			cache->numtextures != (unsigned int)cl.worldmodel->numtextures)
+			cache->numtextures != (unsigned int)cl.worldmodel->numtextures ||
+			cache->want_spatial_cells != want_spatial_cells)
 			continue;
 
 		if (!memcmp(cache->pvs, vis, rowbytes))
@@ -8904,6 +9293,8 @@ static qboolean RSceneCache_Queue(byte *vis)
 		VectorCopy(r_origin, cache->pos);	//might as well overwrite its origin
 		cache->hostframe = host_framecount;
 		cache->zfix = !!gl_zfix.value;
+		cache->want_spatial_cells = want_spatial_cells;
+		cache->spatial_ready = false;
 		memcpy(cache->pvs, vis, rowbytes);
 		memcpy(cache->cachedsubmodels, bakesubmodels, submodelbytes);
 		memset(cache->visitedsurfs, 0, surfacebytes);
@@ -9020,6 +9411,8 @@ static void RSceneCache_Uncache(struct rscenecache_s *cache)
 		free(cache->litsurfs);
 	if (cache->teleports)
 		free(cache->teleports);
+	if (cache->cellranges)
+		free(cache->cellranges);
 	for (i = 0; i < cache->numtextures*cache->lightmaps*2; i++)
 		if (cache->batches[i].idx)
 			free(cache->batches[i].idx);
@@ -9254,6 +9647,7 @@ static void RSceneCache_Draw(qboolean water)
 	int last_lm = -1;
 	qboolean lm_attrib_enabled = true;
 	float last_water_alpha[2] = { -1.0f, -1.0f };
+	uint64_t vis_cells = 0;
 
 	if (!cache || !RSceneCache_CanDraw())
 	{
@@ -9267,6 +9661,17 @@ static void RSceneCache_Draw(qboolean water)
 		return;
 	}
 	skipsubmodels = cache->cachedsubmodels;
+
+	if (cache->spatial_ready && cache->num_spatial_cells)
+	{
+		unsigned int c;
+		for (c = 0; c < cache->num_spatial_cells; c++)
+		{
+			if (cache->spatial_mins[c][0] <= cache->spatial_maxs[c][0] &&
+				!R_CullBox(cache->spatial_mins[c], cache->spatial_maxs[c]))
+				vis_cells |= (1ULL << c);
+		}
+	}
 
 	glDepthMask(GL_TRUE);
 	glDisable (GL_BLEND);
@@ -9289,8 +9694,6 @@ static void RSceneCache_Draw(qboolean water)
 	GL_VertexAttribPointerFunc (LMCoordsAttrIndex,  2, GL_FLOAT, GL_FALSE, VERTEXSIZE * sizeof(float), ((float *)0) + 5);
 	R_SetupLightmapBoundsAttrib ();
 
-	rs_brushpolys += cache->brushpolys; //for r_speeds.;
-
 	if (caustics_enabled) // Bind caustics texture once if enabled
 	{
 		GL_SelectTexture(GL_TEXTURE3);
@@ -9312,11 +9715,50 @@ static void RSceneCache_Draw(qboolean water)
 		b = false;
 		for (j = 0; j < cache->lightmaps * 2; j++)
 		{
+			struct rscenecachebath_s *batch = &cache->batches[i*cache->lightmaps*2 + j];
 			int uw      = (j >= cache->lightmaps);   // 0 = above, 1 = under
 			int lm_slot = j % cache->lightmaps;      // 0 = unlit, 1… = lightmap N
+			unsigned int run_ofs[RSCENECACHE_MAX_SPATIAL_CELLS];
+			unsigned int run_cnt[RSCENECACHE_MAX_SPATIAL_CELLS];
+			unsigned int nruns = 0, vis_polys = 0, r;
 
-			if (!cache->batches[i*cache->lightmaps*2 + j].numidx)
+			if (!batch->numidx)
 				continue;	//don't waste time on it.
+			if (cache->spatial_ready && !(batch->cellmask & vis_cells))
+				continue;
+			if (R_CullBox(batch->mins, batch->maxs))
+				continue;
+
+			if (!cache->spatial_ready || !batch->num_cellranges ||
+				(batch->cellmask & vis_cells) == batch->cellmask)
+			{
+				run_ofs[0] = 0;
+				run_cnt[0] = (unsigned int)batch->numidx;
+				nruns = 1;
+				vis_polys = batch->numpolys;
+			}
+			else
+			{
+				for (r = 0; r < batch->num_cellranges; r++)
+				{
+					const rscenecache_cellrange_t *cr = &cache->cellranges[batch->first_cellrange + r];
+					if (!(vis_cells & (1ULL << cr->cell)))
+						continue;
+					if (R_CullBox(cr->mins, cr->maxs))
+						continue;
+					vis_polys += cr->num_polys;
+					if (nruns && run_ofs[nruns - 1] + run_cnt[nruns - 1] == cr->first_idx)
+						run_cnt[nruns - 1] += cr->num_idx;
+					else
+					{
+						run_ofs[nruns] = cr->first_idx;
+						run_cnt[nruns] = cr->num_idx;
+						nruns++;
+					}
+				}
+				if (!nruns)
+					continue;
+			}
 
 			if (!b)
 			{
@@ -9573,8 +10015,13 @@ static void RSceneCache_Draw(qboolean water)
 				last_lm = lm_slot;
 			}
 
-			glDrawElements(GL_TRIANGLES, cache->batches[i*cache->lightmaps*2 + j].numidx, GL_UNSIGNED_INT, cache->batches[i*cache->lightmaps*2 + j].eboidx);
-			rs_brushpasses++;
+			for (r = 0; r < nruns; r++)
+			{
+				glDrawElements(GL_TRIANGLES, (GLsizei)run_cnt[r], GL_UNSIGNED_INT,
+					(const void *)((uintptr_t)batch->eboidx + (uintptr_t)run_ofs[r] * sizeof(unsigned int)));
+				rs_brushpasses++;
+			}
+			rs_brushpolys += vis_polys;
 		}
 	}
 
@@ -9698,8 +10145,11 @@ qboolean RSceneCache_DrawSkySurfDepth(void)
 			continue;	//we only want sky textures.
 		for (j = 0; j < cache->lightmaps * 2; j++) // Optional: Changed loop bound for robustness
 		{
-			if (!cache->batches[i*cache->lightmaps*2 + j].numidx)
+			struct rscenecachebath_s *batch = &cache->batches[i*cache->lightmaps*2 + j];
+			if (!batch->numidx)
 				continue;	//don't waste time on it.
+			if (R_CullBox(batch->mins, batch->maxs))
+				continue;
 
 			if (!ret)
 			{	//first batch of sky, set up the vertex array stuff.
@@ -9711,7 +10161,7 @@ qboolean RSceneCache_DrawSkySurfDepth(void)
 				glEnableClientState(GL_VERTEX_ARRAY);
 			}
 			//then draw it
-			glDrawElements(GL_TRIANGLES, cache->batches[i*cache->lightmaps*2 + j].numidx, GL_UNSIGNED_INT, cache->batches[i*cache->lightmaps*2 + j].eboidx);
+			glDrawElements(GL_TRIANGLES, batch->numidx, GL_UNSIGNED_INT, batch->eboidx);
 			rs_brushpasses++;
 		}
 	}
