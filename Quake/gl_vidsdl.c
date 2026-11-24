@@ -72,6 +72,17 @@ qboolean gl_texture_s3tc, gl_texture_rgtc, gl_texture_bptc, gl_texture_etc2, gl_
 static vmode_t	modelist[MAX_MODE_LIST];
 static int		nummodes;
 
+typedef struct {
+	int			native_width;
+	int			native_height;
+	int			desktop_width;
+	int			desktop_height;
+	int			max_refreshrate;
+	qboolean	has_multiple_bpps;
+} vid_display_info_t;
+
+static vid_display_info_t vid_display_info;
+
 static qboolean	vid_initialized = false;
 
 static SDL_Cursor	*vid_cursor;
@@ -866,10 +877,59 @@ float VID_GetCurrentDisplayScale (void)
 	return scale > 0.0f ? scale : 1.0f;
 }
 
+#ifdef __APPLE__
+static qboolean VID_GetCocoaNativePixelSize (int *width, int *height)
+{
+	CGDirectDisplayID display;
+	CFArrayRef modes;
+	CFIndex i, count;
+	size_t best_w = 0, best_h = 0;
+	unsigned long long best_area = 0;
+
+	if (!VID_GetCocoaDisplay (&display))
+		return false;
+
+	modes = CGDisplayCopyAllDisplayModes (display, NULL);
+	if (!modes)
+		return false;
+
+	count = CFArrayGetCount (modes);
+	for (i = 0; i < count; i++)
+	{
+		CGDisplayModeRef mode = (CGDisplayModeRef)CFArrayGetValueAtIndex (modes, i);
+		size_t pw, ph;
+		unsigned long long area;
+
+		if (!(CGDisplayModeGetIOFlags (mode) & kDisplayModeNativeFlag))
+			continue;
+		pw = CGDisplayModeGetPixelWidth (mode);
+		ph = CGDisplayModeGetPixelHeight (mode);
+		area = (unsigned long long)pw * (unsigned long long)ph;
+		if (area > best_area)
+		{
+			best_area = area;
+			best_w = pw;
+			best_h = ph;
+		}
+	}
+	CFRelease (modes);
+
+	if (!best_w || !best_h)
+		return false;
+
+	if (width)
+		*width = (int)best_w;
+	if (height)
+		*height = (int)best_h;
+	return true;
+}
+#endif
+
 int VID_GetCurrentDisplayPPI (void)
 {
 #ifdef __APPLE__
 	CGDirectDisplayID display;
+	int native_width = 0, native_height = 0;
 	if (!VID_GetCocoaDisplay (&display))
 		return 0;
 
@@ -884,23 +944,10 @@ int VID_GetCurrentDisplayPPI (void)
 		fabs (mm.height - bounds.height / fallback_pixels_per_mm) < 1.0)
 		return 0;
 
-	CFArrayRef modes = CGDisplayCopyAllDisplayModes (display, NULL);
-	if (!modes)
+	if (!VID_GetCocoaNativePixelSize (&native_width, &native_height))
 		return 0;
 
-	double native_diagonal = 0.0;
-	const CFIndex count = CFArrayGetCount (modes);
-	for (CFIndex i = 0; i < count; i++)
-	{
-		CGDisplayModeRef mode = (CGDisplayModeRef)CFArrayGetValueAtIndex (modes, i);
-		if (!(CGDisplayModeGetIOFlags (mode) & kDisplayModeNativeFlag))
-			continue;
-		double diagonal = hypot (CGDisplayModeGetPixelWidth (mode), CGDisplayModeGetPixelHeight (mode));
-		if (diagonal > native_diagonal)
-			native_diagonal = diagonal;
-	}
-	CFRelease (modes);
-	return (int)(native_diagonal * 25.4 / hypot (mm.width, mm.height) + 0.5);
+	return (int)(hypot (native_width, native_height) * 25.4 / hypot (mm.width, mm.height) + 0.5);
 #elif defined(_WIN32)
 	if (!draw_context)
 		return 0;
@@ -2852,13 +2899,109 @@ static void VID_FXAA_Completion_f (cvar_t* cvar, const char* partial)
 
 /*
 =================
+VID_UpdateDisplayInfo
+
+Caches native, desktop, and max refresh rate info for the active display.
+=================
+*/
+static void VID_UpdateDisplayInfo (SDL_DisplayID display, SDL_DisplayMode **modes, int count)
+{
+	const SDL_DisplayMode *desktop = SDL_GetDesktopDisplayMode (display);
+	int i;
+
+	memset (&vid_display_info, 0, sizeof(vid_display_info));
+
+	if (desktop)
+	{
+		const int desktop_rate = VID_RefreshRateHz (desktop);
+		vid_display_info.desktop_width = desktop->w;
+		vid_display_info.desktop_height = desktop->h;
+		if (desktop_rate > vid_display_info.max_refreshrate)
+			vid_display_info.max_refreshrate = desktop_rate;
+	}
+
+	for (i = 0; modes && i < count; i++)
+	{
+		const int rate = VID_RefreshRateHz (modes[i]);
+		if (rate > vid_display_info.max_refreshrate)
+			vid_display_info.max_refreshrate = rate;
+	}
+
+	if (nummodes > 0)
+	{
+		const int first_bpp = modelist[0].bpp;
+		for (i = 1; i < nummodes; i++)
+		{
+			if (modelist[i].bpp != first_bpp)
+			{
+				vid_display_info.has_multiple_bpps = true;
+				break;
+			}
+		}
+	}
+
+#ifdef __APPLE__
+	VID_GetCocoaNativePixelSize (&vid_display_info.native_width, &vid_display_info.native_height);
+#endif
+
+	if (vid_display_info.native_width <= 0 || vid_display_info.native_height <= 0)
+	{
+		if (desktop)
+		{
+			const float density = desktop->pixel_density > 0.0f ? desktop->pixel_density : 1.0f;
+			vid_display_info.native_width = (int)(desktop->w * density + 0.5f);
+			vid_display_info.native_height = (int)(desktop->h * density + 0.5f);
+		}
+#if defined(__linux__) && !defined(__ANDROID__)
+		// A scaled desktop can run below native; the largest physical mode is the panel's own.
+		if (modes && count > 0)
+		{
+			unsigned long long best_area = (unsigned long long)vid_display_info.native_width *
+				(unsigned long long)vid_display_info.native_height;
+			for (i = 0; i < count; i++)
+			{
+				const float density = modes[i]->pixel_density > 0.0f ? modes[i]->pixel_density : 1.0f;
+				const int pw = (int)(modes[i]->w * density + 0.5f);
+				const int ph = (int)(modes[i]->h * density + 0.5f);
+				const unsigned long long area = (unsigned long long)pw * (unsigned long long)ph;
+				if (area > best_area)
+				{
+					best_area = area;
+					vid_display_info.native_width = pw;
+					vid_display_info.native_height = ph;
+				}
+			}
+		}
+#endif
+		if ((vid_display_info.native_width <= 0 || vid_display_info.native_height <= 0) && nummodes > 0)
+		{
+			vid_display_info.native_width = modelist[0].width;
+			vid_display_info.native_height = modelist[0].height;
+		}
+	}
+
+	// Match portrait/landscape orientation with the current desktop if rotated.
+	if (vid_display_info.desktop_width > 0 && vid_display_info.desktop_height > 0 &&
+		vid_display_info.native_width > 0 && vid_display_info.native_height > 0 &&
+		((vid_display_info.desktop_width < vid_display_info.desktop_height) !=
+		 (vid_display_info.native_width < vid_display_info.native_height)))
+	{
+		int tmp = vid_display_info.native_width;
+		vid_display_info.native_width = vid_display_info.native_height;
+		vid_display_info.native_height = tmp;
+	}
+}
+
+/*
+=================
 VID_InitModelist
 =================
 */
 static void VID_InitModelist (void)
 {
+	const SDL_DisplayID display = VID_GetDisplay();
 	int i, count = 0;
-	SDL_DisplayMode **modes = SDL_GetFullscreenDisplayModes(VID_GetDisplay(), &count);
+	SDL_DisplayMode **modes = SDL_GetFullscreenDisplayModes(display, &count);
 
 	nummodes = 0;
 	for (i = 0; modes && i < count && nummodes < MAX_MODE_LIST; i++)
@@ -2877,6 +3020,7 @@ static void VID_InitModelist (void)
 		modelist[nummodes].refreshrate = refreshrate;
 		nummodes++;
 	}
+	VID_UpdateDisplayInfo(display, modes, count);
 	SDL_free(modes);
 }
 
@@ -3198,8 +3342,13 @@ void VID_SyncCvars (void)
 
 extern cvar_t host_maxfps;
 static char fps_string[16];
-#define VID_FPS_TEXT_X 188
-#define VID_FPS_TEXT_Y 88
+#define VID_MENU_LABEL_X 8
+#define VID_MENU_CURSOR_X 156
+#define VID_MENU_VALUE_X 168
+#define VID_MENU_CVAR_HINT_WIDTH (19 * 8)
+#define VID_FPS_BOX_X (VID_MENU_VALUE_X - 4)
+#define VID_FPS_TEXT_X (VID_MENU_VALUE_X + 4)
+#define VID_FPS_OFF_X (VID_MENU_VALUE_X + 58)
 #define VID_FPS_MAX_LEN 4
 static menu_textfield_t fps_field;
 static int vid_menu_mouse_x = 0;
@@ -3225,9 +3374,6 @@ static SDL_Cursor *VID_GetMenuTextCursor(void)
 
 	return menu_text_cursor;
 }
-
-#define VID_MENU_VALUE_X 184
-#define VID_MENU_CVAR_HINT_WIDTH (17 * 8)
 
 static qboolean VID_Menu_CvarHintActive(qboolean selected, cvar_t *cv)
 {
@@ -3332,10 +3478,34 @@ static qboolean VID_MenuWantsTextCursor(void)
 		(video_options_cursor == VID_OPT_FPSLIMIT || M_TextField_IsDraggingField(&fps_field)));
 }
 
+static qboolean VID_Menu_ItemVisible(int index)
+{
+	if (index < 0 || index >= VIDEO_OPTIONS_ITEMS)
+		return false;
+	if (index == VID_OPT_BPP)
+		return vid_display_info.has_multiple_bpps;
+	return true;
+}
+
+static void VID_Menu_MoveCursor(int dir)
+{
+	do
+	{
+		video_options_cursor = (video_options_cursor + dir + VIDEO_OPTIONS_ITEMS) % VIDEO_OPTIONS_ITEMS;
+	} while (!VID_Menu_ItemVisible(video_options_cursor));
+}
+
 static int VID_Menu_GetItemY(int index)
 {
-	int y = 48 + index * 8;
+	int i, row = 0, y;
 
+	for (i = 0; i < index; i++)
+	{
+		if (VID_Menu_ItemVisible(i))
+			row++;
+	}
+
+	y = 48 + row * 8;
 	if (index >= VID_OPT_FPSLIMIT)
 		y += 8;
 	if (index >= VID_OPT_TEST)
@@ -3350,9 +3520,13 @@ static int VID_Menu_GetItemAtY(int cy)
 
 	for (i = 0; i < VIDEO_OPTIONS_ITEMS; ++i)
 	{
-		int y = VID_Menu_GetItemY(i);
-		int top = (i == VID_OPT_FPSLIMIT) ? y - 8 : y;
-		int bottom = y + 8;
+		int y, top, bottom;
+
+		if (!VID_Menu_ItemVisible(i))
+			continue;
+		y = VID_Menu_GetItemY(i);
+		top = (i == VID_OPT_FPSLIMIT) ? y - 8 : y;
+		bottom = y + 8;
 
 		if (cy >= top && cy < bottom)
 			return i;
@@ -3829,7 +4003,11 @@ const char *VID_MenuSearch_GetValueText(int index)
 
 qboolean VID_MenuSearch_ItemAvailable(int index)
 {
-	return vid_menudrawfn != NULL && index >= 0 && index < VIDEO_OPTIONS_ITEMS;
+	if (vid_menudrawfn == NULL || index < 0 || index >= VIDEO_OPTIONS_ITEMS)
+		return false;
+	if (index == VID_OPT_BPP)
+		VID_EnsureModelist ();
+	return VID_Menu_ItemVisible(index);
 }
 
 /*
@@ -3839,6 +4017,10 @@ VID_MenuKey
 */
 static void VID_MenuKey (int key)
 {
+	VID_EnsureModelist ();
+	if (!VID_Menu_ItemVisible(video_options_cursor))
+		VID_Menu_MoveCursor(1);
+
 	if (video_options_cursor == VID_OPT_FPSLIMIT && M_TextField_Key(&fps_field, key))
 	{
 		VID_FPS_UpdateCvar();
@@ -3847,8 +4029,9 @@ static void VID_MenuKey (int key)
 
 	if (video_options_cursor == VID_OPT_FPSLIMIT && key == K_MOUSE1)
 	{
-		if (vid_menu_mouse_x >= 180 && vid_menu_mouse_x <= 180 + 7 * 8 &&
-			vid_menu_mouse_y >= VID_FPS_TEXT_Y - 4 && vid_menu_mouse_y <= VID_FPS_TEXT_Y + 12)
+		int fps_y = VID_Menu_GetItemY(VID_OPT_FPSLIMIT);
+		if (vid_menu_mouse_x >= VID_FPS_BOX_X && vid_menu_mouse_x <= VID_FPS_BOX_X + 7 * 8 &&
+			vid_menu_mouse_y >= fps_y - 8 && vid_menu_mouse_y <= fps_y + 8)
 		{
 			M_TextField_MouseClick(&fps_field, vid_menu_mouse_x, VID_FPS_TEXT_X);
 			return;
@@ -3905,6 +4088,8 @@ static void VID_MenuKey (int key)
 					numberOfVideoItems = 0;
 					for (int i = 0; i < VIDEO_OPTIONS_ITEMS; i++)
 					{
+						if (!VID_Menu_ItemVisible(i))
+							continue;
 						const char* itemtext = VID_Menu_GetItemText(i);
 						if (itemtext && q_strcasestr(itemtext, videomenu.search.text))
 						{
@@ -3931,6 +4116,8 @@ static void VID_MenuKey (int key)
 					numberOfVideoItems = 0;
 					for (int i = 0; i < VIDEO_OPTIONS_ITEMS; i++)
 					{
+						if (!VID_Menu_ItemVisible(i))
+							continue;
 						const char* itemtext = VID_Menu_GetItemText(i);
 						if (itemtext && q_strcasestr(itemtext, videomenu.search.text))
 						{
@@ -3957,6 +4144,8 @@ static void VID_MenuKey (int key)
 				numberOfVideoItems = 0;
 				for (int i = 0; i < VIDEO_OPTIONS_ITEMS; i++)
 				{
+					if (!VID_Menu_ItemVisible(i))
+						continue;
 					const char* itemtext = VID_Menu_GetItemText(i);
 					if (itemtext && q_strcasestr(itemtext, videomenu.search.text))
 					{
@@ -3993,9 +4182,7 @@ static void VID_MenuKey (int key)
 			else
 				M_TextField_ClearSelection(&fps_field);
 		}
-		video_options_cursor--;
-		if (video_options_cursor < 0)
-			video_options_cursor = VIDEO_OPTIONS_ITEMS-1;
+		VID_Menu_MoveCursor(-1);
 		break;
 
 	case K_DOWNARROW:
@@ -4010,9 +4197,7 @@ static void VID_MenuKey (int key)
 			else
 				M_TextField_ClearSelection(&fps_field);
 		}
-		video_options_cursor++;
-		if (video_options_cursor >= VIDEO_OPTIONS_ITEMS)
-			video_options_cursor = 0;
+		VID_Menu_MoveCursor(1);
 		break;
 
 	case K_LEFTARROW:
@@ -4178,6 +4363,228 @@ static void VID_MenuMouse(int cx, int cy)
 	video_options_cursor = cursor;
 }
 
+static void VID_Menu_FormatAspectRatio (int width, int height, char *buf, size_t bufsize)
+{
+	static const struct {
+		double ratio;
+		const char *label;
+	} known_aspects[] = {
+		{ 5.0 / 4.0,   "5:4" },
+		{ 4.0 / 3.0,   "4:3" },
+		{ 3.0 / 2.0,   "3:2" },
+		{ 16.0 / 10.0, "16:10" },
+		{ 16.0 / 9.0,  "16:9" },
+		{ 32.0 / 9.0,  "32:9" },
+	};
+	double aspect;
+	size_t i;
+
+	if (!buf || bufsize == 0)
+		return;
+	buf[0] = '\0';
+
+	if (width <= 0 || height <= 0)
+		return;
+
+	aspect = (double)width / (double)height;
+	if (aspect >= 2.32 && aspect <= 2.42)
+	{
+		q_strlcpy (buf, "21:9", bufsize);
+		return;
+	}
+
+	for (i = 0; i < countof(known_aspects); i++)
+	{
+		if (fabs (aspect - known_aspects[i].ratio) <= 0.015)
+		{
+			q_strlcpy (buf, known_aspects[i].label, bufsize);
+			return;
+		}
+	}
+}
+
+static int VID_Menu_GetModeScaleDivisor (int width, int height)
+{
+	int native_w = vid_display_info.native_width;
+	int native_h = vid_display_info.native_height;
+
+	if (native_w <= 0 || native_h <= 0 || width <= 0 || height <= 0)
+		return 0;
+	if (width >= native_w || height >= native_h)
+		return 0;
+	if (native_w % width != 0 || native_h % height != 0)
+		return 0;
+
+	if ((native_w / width) == (native_h / height))
+		return native_w / width;
+
+	return 0;
+}
+
+static int VID_Menu_GetModeMaxRefreshRate (void)
+{
+	int i, max_rate = 0;
+
+	for (i = 0; i < vid_menu_numrates; i++)
+	{
+		if (vid_menu_rates[i] > max_rate)
+			max_rate = vid_menu_rates[i];
+	}
+
+	return max_rate;
+}
+
+static void VID_Menu_GetInlineTag (int index, char *buf, size_t bufsize)
+{
+	if (!buf || bufsize == 0)
+		return;
+	buf[0] = '\0';
+
+	if (index == VID_OPT_MODE)
+	{
+		const int w = (int)vid_width.value;
+		const int h = (int)vid_height.value;
+		const qboolean is_native = (vid_display_info.native_width > 0 &&
+			w == vid_display_info.native_width && h == vid_display_info.native_height);
+		const int scale_div = is_native ? 0 : VID_Menu_GetModeScaleDivisor (w, h);
+		const qboolean is_desktop = (vid_display_info.desktop_width > 0 &&
+			w == vid_display_info.desktop_width && h == vid_display_info.desktop_height);
+
+		if (is_native)
+			q_strlcpy (buf, " (Native)", bufsize);
+		else if (scale_div >= 2)
+			q_snprintf (buf, bufsize, " (1/%d)", scale_div);
+		else if (is_desktop)
+			q_strlcpy (buf, " (Desktop)", bufsize);
+	}
+	else if (index == VID_OPT_REFRESHRATE)
+	{
+		const int rate = (int)vid_refreshrate.value;
+		const int mode_max = VID_Menu_GetModeMaxRefreshRate ();
+
+		if (vid_menu_numrates > 1 && mode_max > 0 && rate == mode_max)
+			q_strlcpy (buf, " (Max)", bufsize);
+	}
+}
+
+static void VID_Menu_GetFooterInfo (int cursor, char *buf, size_t bufsize)
+{
+	if (!buf || bufsize == 0)
+		return;
+	buf[0] = '\0';
+
+	if (cursor == VID_OPT_MODE)
+	{
+		const int w = (int)vid_width.value;
+		const int h = (int)vid_height.value;
+		const int native_w = vid_display_info.native_width;
+		const int native_h = vid_display_info.native_height;
+		const int desktop_w = vid_display_info.desktop_width;
+		const int desktop_h = vid_display_info.desktop_height;
+		const windowmode_t display_mode = VID_Menu_CycleDisplayMode (false);
+		const qboolean is_native = (native_w > 0 && w == native_w && h == native_h);
+		const int scale_div = is_native ? 0 : VID_Menu_GetModeScaleDivisor (w, h);
+		const qboolean is_desktop = (desktop_w > 0 && w == desktop_w && h == desktop_h);
+		const qboolean aspect_match = (native_w > 0 && native_h > 0 && w > 0 && h > 0) &&
+			fabs (((double)w / (double)h) - ((double)native_w / (double)native_h)) <= 0.02;
+		char aspect[16];
+
+		VID_Menu_FormatAspectRatio (w, h, aspect, sizeof(aspect));
+
+		if (is_native)
+		{
+			if (display_mode != DISPLAYMODE_FULLSCREEN &&
+				desktop_w > 0 && desktop_h > 0 && (w > desktop_w || h > desktop_h))
+				q_strlcpy (buf, "Native panel - best in fullscreen", bufsize);
+			else if (aspect[0])
+				q_snprintf (buf, bufsize, "Native panel resolution (%s)", aspect);
+			else
+				q_strlcpy (buf, "Native panel resolution", bufsize);
+		}
+		else if (scale_div >= 2)
+		{
+			if (is_desktop)
+				q_snprintf (buf, bufsize, "Desktop & 1/%d native (crisp %dx scale)", scale_div, scale_div);
+			else if (aspect[0])
+				q_snprintf (buf, bufsize, "1/%d native (%s) - crisp %dx scaling", scale_div, aspect, scale_div);
+			else
+				q_snprintf (buf, bufsize, "1/%d native - crisp %dx scaling", scale_div, scale_div);
+		}
+		else if (is_desktop)
+		{
+			if (aspect[0])
+				q_snprintf (buf, bufsize, "Matches desktop size (%s)", aspect);
+			else
+				q_strlcpy (buf, "Matches current desktop size", bufsize);
+		}
+		else if (aspect_match)
+		{
+			if (display_mode == DISPLAYMODE_FULLSCREEN)
+			{
+				if (aspect[0])
+					q_snprintf (buf, bufsize, "Scaled %s (matches panel aspect)", aspect);
+				else
+					q_strlcpy (buf, "Scaled (matches panel aspect)", bufsize);
+			}
+			else if (aspect[0])
+				q_snprintf (buf, bufsize, "%s aspect (matches panel)", aspect);
+			else
+				q_strlcpy (buf, "Matches panel aspect ratio", bufsize);
+		}
+		else if (native_w > 0 && native_h > 0 && w > 0 && h > 0)
+		{
+			if (display_mode == DISPLAYMODE_FULLSCREEN)
+			{
+				if (aspect[0])
+					q_snprintf (buf, bufsize, "%s aspect (differs from panel)", aspect);
+				else
+					q_strlcpy (buf, "Aspect ratio differs from panel", bufsize);
+			}
+			else if (aspect[0])
+				q_snprintf (buf, bufsize, "%s aspect ratio", aspect);
+		}
+	}
+	else if (cursor == VID_OPT_REFRESHRATE)
+	{
+		const int rate = (int)vid_refreshrate.value;
+		const int mode_max = VID_Menu_GetModeMaxRefreshRate ();
+		const int display_max = vid_display_info.max_refreshrate;
+
+		if (vid_menu_numrates > 1 && mode_max > 0)
+		{
+			if (rate == mode_max)
+			{
+				if (display_max > mode_max)
+					q_snprintf (buf, bufsize, "Max for mode (panel supports %d Hz)", display_max);
+				else
+					q_strlcpy (buf, "Panel maximum refresh rate", bufsize);
+			}
+			else
+				q_snprintf (buf, bufsize, "Up to %d Hz available for this mode", mode_max);
+		}
+		else if (display_max > rate && rate > 0)
+			q_snprintf (buf, bufsize, "Other modes support up to %d Hz", display_max);
+	}
+	else if (cursor == VID_OPT_FULLSCREEN)
+	{
+		switch (VID_Menu_CycleDisplayMode (false))
+		{
+		case DISPLAYMODE_FULLSCREEN:
+			if (vid_desktopfullscreen.value)
+				q_strlcpy (buf, "Uses desktop resolution (no mode switch)", bufsize);
+			else
+				q_strlcpy (buf, "Exclusive fullscreen at selected mode", bufsize);
+			break;
+		case DISPLAYMODE_BORDERLESS:
+			q_strlcpy (buf, "Borderless window at selected size", bufsize);
+			break;
+		case DISPLAYMODE_WINDOWED:
+			q_strlcpy (buf, "Resizable window at selected size", bufsize);
+			break;
+		}
+	}
+}
+
 /*
 ================
 VID_MenuDraw
@@ -4188,14 +4595,14 @@ static void VID_MenuDraw (void)
 	int i, y;
 	qpic_t *p;
 	const char *title;
+	char footer_info[64];
 
+	VID_EnsureModelist ();
+	if (!VID_Menu_ItemVisible(video_options_cursor))
+		VID_Menu_MoveCursor(1);
 	M_TextField_CheckMouseRelease();
 
 	y = 4;
-
-	// plaque
-	p = Draw_CachePic ("gfx/qplaque.lmp");
-	M_DrawTransPic (16, y, p);
 
 	p = Draw_CachePic ("gfx/p_option.lmp");
 	M_DrawPic ( (320-p->width)/2, y, p);
@@ -4211,9 +4618,12 @@ static void VID_MenuDraw (void)
 	// options
 	for (i = 0; i < VIDEO_OPTIONS_ITEMS; i++)
 	{
+		if (!VID_Menu_ItemVisible(i))
+			continue;
 		y = VID_Menu_GetItemY(i);
 		const char* text = NULL;
 		const char* value = NULL;
+		char value_tag[24] = "";
 		cvar_t *cvar_hint = VID_Menu_GetItemCvar(i);
 		const char *text_hint = VID_Menu_GetItemHintText(i);
 		qboolean show_cvar_hint = VID_Menu_CvarHintActive(video_options_cursor == i, cvar_hint);
@@ -4224,6 +4634,7 @@ static void VID_MenuDraw (void)
 		case VID_OPT_MODE:
 			text = "        Video mode";
 			value = va("%ix%i", (int)vid_width.value, (int)vid_height.value);
+			VID_Menu_GetInlineTag(i, value_tag, sizeof(value_tag));
 			break;
 
 		case VID_OPT_BPP:
@@ -4234,6 +4645,7 @@ static void VID_MenuDraw (void)
 		case VID_OPT_REFRESHRATE:
 			text = "      Refresh Rate";
 			value = va("%i Hz", (int)vid_refreshrate.value);
+			VID_Menu_GetInlineTag(i, value_tag, sizeof(value_tag));
 			break;
 
 		case VID_OPT_FULLSCREEN:
@@ -4281,16 +4693,16 @@ static void VID_MenuDraw (void)
 				const char* itemtext = VID_Menu_GetItemText(i);
 				if (itemtext && q_strcasestr(itemtext, videomenu.search.text))
 				{
-					M_PrintHighlight(16, y, text, videomenu.search.text, videomenu.search.len);
+					M_PrintHighlight(VID_MENU_LABEL_X, y, text, videomenu.search.text, videomenu.search.len);
 				}
 				else
 				{
-					M_Print(16, y, text);
+					M_Print(VID_MENU_LABEL_X, y, text);
 				}
 			}
 			else
 			{
-				M_Print(16, y, text);
+				M_Print(VID_MENU_LABEL_X, y, text);
 			}
 
 		}
@@ -4306,25 +4718,25 @@ static void VID_MenuDraw (void)
 		}
 		else if (i == VID_OPT_FPSLIMIT)
 		{
-			M_DrawTextBox(180, y - 8, 5, 1);
+			M_DrawTextBox(VID_FPS_BOX_X, y - 8, 5, 1);
 			M_TextField_DrawHighlight(&fps_field, VID_FPS_TEXT_X, y);
 
 			if (video_options_cursor == VID_OPT_FPSLIMIT)
 			{
-				M_Print(188, y, fps_string);
+				M_Print(VID_FPS_TEXT_X, y, fps_string);
 				M_TextField_DrawCursor(&fps_field, VID_FPS_TEXT_X, y);
 			}
 			else if (strlen(fps_string) == 0)
 			{
-				M_Print(188, y, "0");
+				M_Print(VID_FPS_TEXT_X, y, "0");
 			}
 			else
 			{
-				M_Print(188, y, fps_string);
+				M_Print(VID_FPS_TEXT_X, y, fps_string);
 			}
 
 			if (strlen(fps_string) == 0 || atoi(fps_string) == 0)
-				M_Print(242, y, "off");
+				M_Print(VID_FPS_OFF_X, y, "off");
 		}
 		else if (i == VID_OPT_VSYNC && gl_swap_control)
 		{
@@ -4336,19 +4748,32 @@ static void VID_MenuDraw (void)
 				(i == VID_OPT_TEST || i == VID_OPT_APPLY) &&
 				q_strcasestr(value, videomenu.search.text))
 			{
-				M_PrintHighlight(184, y, value, videomenu.search.text, videomenu.search.len);
+				M_PrintHighlight(VID_MENU_VALUE_X, y, value, videomenu.search.text, videomenu.search.len);
 			}
 			else
 			{
 				M_Print(VID_MENU_VALUE_X, y, value);
+				if (value_tag[0])
+				{
+					int tag_x = VID_MENU_VALUE_X + (int)strlen(value) * 8;
+					M_PrintRGBA(tag_x, y, value_tag, CL_PLColours_Parse("0xffffff"), 0.6f, false);
+				}
 			}
 		}
 
 		// Draw the cursor if this is the currently selected item
 		if (video_options_cursor == i)
 		{
-			M_DrawCharacter(172, y, 12 + ((int)(realtime * 4) & 1));
+			M_DrawCharacter(VID_MENU_CURSOR_X, y, 12 + ((int)(realtime * 4) & 1));
 		}
+	}
+
+	VID_Menu_GetFooterInfo(video_options_cursor, footer_info, sizeof(footer_info));
+	if (footer_info[0])
+	{
+		int info_y = VID_Menu_GetItemY(VID_OPT_APPLY) + 20;
+		M_PrintRGBA((320 - (int)strlen(footer_info) * 8) / 2, info_y, footer_info,
+			CL_PLColours_Parse("0xffffff"), 0.6f, false);
 	}
 
 	// Draw search box if search is active
@@ -4396,6 +4821,9 @@ static void VID_Menu_f (void)
 qboolean VID_MenuSearch_OpenItem(int index)
 {
 	if (index < 0 || index >= VIDEO_OPTIONS_ITEMS)
+		return false;
+	VID_EnsureModelist ();
+	if (!VID_Menu_ItemVisible(index))
 		return false;
 	if (m_state != m_video)
 		VID_Menu_f();
