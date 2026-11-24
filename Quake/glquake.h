@@ -590,6 +590,7 @@ void R_DeleteAliasModelInstancingBuffers (void);
 extern cvar_t gl_alias_instancing;
 void R_BeginDeferredAliasOutlines (void);
 void R_DrawDeferredAliasOutlines (void);
+void R_OutlineXrayChanged (cvar_t *var);
 void R_DrawDeferredGrenadeGlows (void);
 void R_DrawBrushModel (entity_t *e);
 qboolean R_BrushModelZFix (const entity_t *e);

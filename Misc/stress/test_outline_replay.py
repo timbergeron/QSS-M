@@ -82,6 +82,7 @@ source = r'''
 #define GL_FLAT 36
 #define GL_BLEND 37
 #define PV_IQM 5
+#define MF_HOLEY 0x4000
 #define ENTALPHA_DECODE(a) ((a) == 0 ? 1.0f : (float)((a) - 1) / 254)
 #define texCoordsAttrIndex 4
 #define pose1VertexAttrIndex 0
@@ -95,11 +96,15 @@ typedef unsigned char GLboolean;
 #define CHECK(cond, message) do { if (!(cond)) { puts("FAIL: " message); exit(1); } } while (0)
 #define GL_VIEWMODEL_STENCIL_BIT()  (gl_stencilbits > 1 ? (1u << (gl_stencilbits - 1)) : 0u)
 typedef int qboolean;
+typedef struct {float value;} cvar_t;
+cvar_t r_stereo;
+static cvar_t r_shadows, r_outline, gl_powerupshells, r_coloredpowerupglow;
+static qboolean r_teleport_view;
 typedef unsigned int GLuint;
 typedef int GLint;
 typedef struct { int nextsurface, numtris, numindexes, eboofs, poseverttype, numbones, md5, id; } aliashdr_t;
 /* A second surface sits far enough away for the real nextsurface walk. */
-typedef struct { aliashdr_t header; char pad[256]; aliashdr_t second; const char *meshindexesvboptr; } qmodel_t;
+typedef struct { aliashdr_t header; char pad[256]; aliashdr_t second; const char *meshindexesvboptr; int flags; } qmodel_t;
 typedef struct { qmodel_t *model; int alias_outline_order; unsigned char alpha; } entity_t;
 typedef struct { int outlineWidthLoc, isOutlinePassLoc, shellModeLoc, useShellTexLoc,
                  useAlphaTestLoc, blendLoc, bonesLoc, md5NormalsLoc, program, maxbones; } aliasglsl_t;
@@ -107,7 +112,12 @@ typedef struct { float mat[12]; } bonepose_t;
 typedef struct { int pose1, pose2; float blend, origin[3], angles[3]; bonepose_t *bonestate; } lerpdata_t;
 typedef struct { int depthwrite, colorwrite, stencilwrite, depthfunc, stencilref, cull; } glstate_t;
 static entity_t *currententity;
-static entity_t *cl_visedicts[4];
+static entity_t *cl_visedicts[4], *r_deferred_xrays[3];
+static int r_num_deferred_xrays, r_num_grenade_glows, xray_calls, state_saves;
+static void R_DrawAliasXray(entity_t *e, qboolean clear, const GLboolean *mask) {
+    CHECK(e && !clear && mask, "deferred xray lost shared state");
+    xray_calls++;
+}
 static int cl_numvisedicts;
 static int gl_stencilbits = 8, clears, saved, setups, phase_count;
 static int phases[64], refs[64], surface_index, skip_ring, rs_aliaspolys, rs_aliaspasses;
@@ -119,7 +129,7 @@ static float width;
 static glstate_t state = {1, 15, 127, 99, 77, 1}, stack[8];
 static int ring_colormask = 15;
 static int ambient_cull = 1;
-static void glPushAttrib(int bits) { (void)bits; stack[saved++] = state; }
+static void glPushAttrib(int bits) { (void)bits; state_saves++; stack[saved++] = state; }
 static void glPopAttrib(void) { state = stack[--saved]; }
 static void glEnable(int cap) { if (cap == GL_CULL_FACE) state.cull = 1; }
 static void glDisable(int cap) { if (cap == GL_CULL_FACE) state.cull = 0; }
@@ -237,6 +247,7 @@ static void glShadeModel(int a) { (void)a; }
 static void glColor3f(float r, float g, float b) { (void)r; (void)g; (void)b; }
 '''
 source += lean + "\n"
+source += function("static void R_EndDeferredAliasOutlineLean (void)") + "\n"
 source += function("void R_DrawDeferredAliasOutlines(void)")
 source += r'''
 static void reset(void) { setups = phase_count = clears = lean_setups = program_binds = 0; }
@@ -295,6 +306,7 @@ int main(void) {
           phases[4] == 30 && phases[5] == 31, "multi-surface stencil barriers changed");
     check_restored(&original);
     reset();
+    r_alias_stencil_bit1_dirty = true;
     R_DrawDeferredAliasOutlines();
     CHECK(clears == 1 && clear_masks[0] == 1 && setups == 0, "empty queue must clear stale stencil without model work");
     reset();
@@ -360,23 +372,33 @@ int main(void) {
     check_restored(&original);
     skip_ring = 0;
     reset();
+    r_alias_stencil_bit1_dirty = true;
     R_DrawDeferredAliasOutlines();
     CHECK(clears == 1 && clear_masks[0] == 1, "empty queue keeps the narrow 0x01 clear");
 
-    /* An MF_HOLEY skin needs its texture in the mask: the whole queue keeps the full path. */
+    /* A cutout requires a textured mask. Its neighbors can still use lean replay. */
     reset();
-    r_alias_outline_holey = 1;
+    b.model->flags = MF_HOLEY;
     r_deferred_alias_outlines[0] = &a;
     r_deferred_alias_outlines[1] = &b;
-    r_num_deferred_alias_outlines = 2;
+    r_deferred_alias_outlines[2] = &a;
+    r_num_deferred_alias_outlines = 3;
     R_DrawDeferredAliasOutlines();
     {
-        const int expected[] = {10,20, 10,11,20,21};
-        CHECK(lean_setups == 0 && setups == 3 && phase_count == 6 && !memcmp(phases, expected, sizeof(expected)),
-              "a holey queue must replay through R_DrawAliasModel");
+        const int expected[] = {10,20, 10,11,20,21, 10,20};
+        CHECK(lean_setups == 2 && setups == 2 && phase_count == 8 && !memcmp(phases, expected, sizeof(expected)),
+              "only the cutout should use textured replay, in order");
     }
     check_restored(&original);
-    r_alias_outline_holey = 0;
+    b.model->flags = 0;
+
+    state_saves = xray_calls = 0;
+    r_deferred_xrays[0] = &a;
+    r_deferred_xrays[1] = &b;
+    r_num_deferred_xrays = 2;
+    R_DrawDeferredAliasOutlines();
+    CHECK(xray_calls == 2 && state_saves == 1, "deferred xrays must share one state save");
+    check_restored(&original);
 
     /* The mask culls like the fill even when culling is off and every ring turned it on. */
     {
@@ -395,6 +417,7 @@ int main(void) {
     /* A stereo eye's colour mask survives the ring: the red eye stays red. */
     {
         glstate_t eye;
+        r_stereo.value = 1;
         state.colorwrite = ring_colormask = 1 | 8; eye = state;
         reset();
         r_deferred_alias_outlines[0] = &a;
@@ -403,6 +426,7 @@ int main(void) {
         R_DrawDeferredAliasOutlines();
         CHECK(lean_setups == 2 && phase_count == 6, "anaglyph lean replay lost passes");
         check_restored(&eye);
+        r_stereo.value = 0;
         state.colorwrite = ring_colormask = 15;
     }
 

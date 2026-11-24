@@ -688,6 +688,8 @@ void R_Init (void)
 	Cvar_RegisterVariable(&r_outline); // woods #routline
 	Cvar_RegisterVariable(&r_outline_minpixels); // woods #routline
 	Cvar_RegisterVariable(&r_player_xray); // woods #routline
+	Cvar_SetCallback (&r_player_xray, R_OutlineXrayChanged);
+	R_OutlineXrayChanged (&r_player_xray);
 	Cvar_SetCompletion (&r_player_xray, &R_Player_Xray_Completion_f); // woods #iwtabcomplete
 #ifdef MACBOOK_ARM_HACK // woods #collinear
 	Cvar_RegisterVariable (&r_remove_collinear_vertices);

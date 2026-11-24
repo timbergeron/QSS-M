@@ -32,7 +32,6 @@ extern cvar_t r_model_light_desat_list; // woods - #desat
 extern cvar_t r_outline; // woods #obmodelslist #routline
 extern cvar_t r_outline_minpixels; // woods #routline
 extern cvar_t r_nooutline_list; // woods #routline
-extern cvar_t r_player_xray; // woods #routline
 
 extern qboolean nameInList(const char* list, const char* name); // woods #desat #routline
 extern qboolean IsOneVsOneMatch(void); // woods #routline
@@ -60,7 +59,6 @@ static qboolean r_alias_outline_order_changed;
 // ("not my value") needs no scrub draw and one clear ends the replay.
 static GLuint r_alias_outline_ref = 1, r_alias_outline_refmask = 0x01;
 static qboolean r_alias_outline_unique;
-static qboolean r_alias_outline_holey; // a queued MF_HOLEY mask must alpha-test its skin
 static qboolean r_alias_stencil_bit1_dirty; // true when a normal alias fill wrote bit 0x01
 
 static qboolean R_QueueDeferredAliasOutline(entity_t *e)
@@ -77,8 +75,6 @@ static qboolean R_QueueDeferredAliasOutline(entity_t *e)
 			r_deferred_alias_outlines[r_num_deferred_alias_outlines - 1]->alias_outline_order > e->alias_outline_order)
 			r_alias_outline_order_changed = true;
 		r_deferred_alias_outlines[r_num_deferred_alias_outlines++] = e;
-		if (e->model->flags & MF_HOLEY)
-			r_alias_outline_holey = true;
 		return true;
 	}
 
@@ -1030,11 +1026,18 @@ static int R_DetectBalancedTeamMatchSize(void)
 	return team_size;
 }
 
-static void R_ParseOutlineXrayParams(vec3_t color, vec3_t enemy_color, vec3_t team_color, float *alpha, float *dist, int *target_mode, int *color_mode, int *max_match_size, int *render_mode)
+static struct
 {
-	const char *text = r_player_xray.string;
-	qboolean saw_enemy_color = false;
-	qboolean saw_team_color = false;
+	vec3_t enemy_color, team_color;
+	float alpha, dist;
+	int target_mode, color_mode, max_match_size, render_mode;
+	qboolean explicit_enemy_color, explicit_team_color;
+} r_xray;
+
+void R_OutlineXrayChanged(cvar_t *var)
+{
+	const char *text = var->string;
+	vec3_t color;
 	qboolean saw_color = false;
 	qboolean saw_alpha = false;
 	qboolean saw_dist = false;
@@ -1044,18 +1047,10 @@ static void R_ParseOutlineXrayParams(vec3_t color, vec3_t enemy_color, vec3_t te
 	color[0] = 1.0f;
 	color[1] = 0.0f;
 	color[2] = 0.0f;
-	VectorCopy(color, enemy_color);
-	VectorCopy(color, team_color);
-	*alpha = 1.0f;
-	*dist = 0.0f;
-	if (target_mode)
-		*target_mode = XRAY_TARGET_BOTH;
-	if (color_mode)
-		*color_mode = XRAY_COLOR_SPLIT;
-	if (max_match_size)
-		*max_match_size = 0;
-	if (render_mode)
-		*render_mode = XRAY_RENDER_FILL;
+	memset(&r_xray, 0, sizeof(r_xray));
+	VectorCopy(color, r_xray.enemy_color);
+	VectorCopy(color, r_xray.team_color);
+	r_xray.alpha = 1.0f;
 
 	if (!text || !*text)
 		return;
@@ -1071,56 +1066,52 @@ static void R_ParseOutlineXrayParams(vec3_t color, vec3_t enemy_color, vec3_t te
 
 		text += consumed;
 
-		if (R_ParseOutlineXrayNamedColorToken(token, "enemycolor", enemy_color))
+		if (R_ParseOutlineXrayNamedColorToken(token, "enemycolor", r_xray.enemy_color))
 		{
-			saw_enemy_color = true;
+			r_xray.explicit_enemy_color = true;
 			continue;
 		}
-		if (R_ParseOutlineXrayNamedColorToken(token, "teamcolor", team_color))
+		if (R_ParseOutlineXrayNamedColorToken(token, "teamcolor", r_xray.team_color))
 		{
-			saw_team_color = true;
+			r_xray.explicit_team_color = true;
 			continue;
 		}
 
 		parsed_target_mode = R_ParseOutlineXrayTargetToken(token);
 		if (parsed_target_mode >= 0)
 		{
-			if (target_mode)
-				*target_mode = parsed_target_mode;
+			r_xray.target_mode = parsed_target_mode;
 			continue;
 		}
 
 		parsed_color_mode = R_ParseOutlineXrayColorModeToken(token);
 		if (parsed_color_mode >= 0)
 		{
-			if (color_mode)
-				*color_mode = parsed_color_mode;
+			r_xray.color_mode = parsed_color_mode;
 			continue;
 		}
 
 		parsed_render_mode = R_ParseOutlineXrayRenderModeToken(token);
 		if (parsed_render_mode >= 0)
 		{
-			if (render_mode)
-				*render_mode = parsed_render_mode;
+			r_xray.render_mode = parsed_render_mode;
 			continue;
 		}
 
 		parsed_match_size = R_ParseOutlineXrayMatchSizeToken(token);
 		if (parsed_match_size >= 0)
 		{
-			if (max_match_size)
-				*max_match_size = parsed_match_size;
+			r_xray.max_match_size = parsed_match_size;
 			continue;
 		}
 
 		if (R_ParseOutlineXrayHexColorToken(token, color))
 		{
 			saw_color = true;
-			if (!saw_enemy_color)
-				VectorCopy(color, enemy_color);
-			if (!saw_team_color)
-				VectorCopy(color, team_color);
+			if (!r_xray.explicit_enemy_color)
+				VectorCopy(color, r_xray.enemy_color);
+			if (!r_xray.explicit_team_color)
+				VectorCopy(color, r_xray.team_color);
 			continue;
 		}
 
@@ -1130,30 +1121,20 @@ static void R_ParseOutlineXrayParams(vec3_t color, vec3_t enemy_color, vec3_t te
 
 		if (!saw_alpha && value >= 0.0f && value <= 1.0f)
 		{
-			*alpha = value;
+			r_xray.alpha = value;
 			saw_alpha = true;
 		}
 		else
 		{
-			*dist = q_max(0.0f, value);
+			r_xray.dist = q_max(0.0f, value);
 			saw_dist = true;
 		}
 	}
 
-	*alpha = CLAMP(0.0f, *alpha, 1.0f);
+	r_xray.alpha = CLAMP(0.0f, r_xray.alpha, 1.0f);
 
-	if (!saw_dist && (saw_color || (saw_alpha && *alpha > 0.0f) || r_player_xray.value > 1.0f))
-		*dist = 4096.0f;
-
-	/* If explicit xray enemy/team colors were not provided, inherit engine
-	 * enemy/team color overrides when available. */
-	if (!(color_mode && *color_mode == XRAY_COLOR_MATCH))
-	{
-		if (!saw_enemy_color)
-			R_ParseOutlineXrayPlayerColorFallback(gl_enemycolor.string, enemy_color);
-		if (!saw_team_color)
-			R_ParseOutlineXrayPlayerColorFallback(gl_teamcolor.string, team_color);
-	}
+	if (!saw_dist && (saw_color || (saw_alpha && r_xray.alpha > 0.0f) || var->value > 1.0f))
+		r_xray.dist = 4096.0f;
 }
 
 /*
@@ -1222,15 +1203,9 @@ static qboolean R_IsAliasOutlineXray(entity_t *e, vec3_t color, float *alpha, fl
 	int local_playernum;
 	int observer_viewent;
 	int playernum;
-	int target_mode;
-	int color_mode;
-	int max_match_size;
-	int parsed_render_mode;
-	vec3_t parsedColor;
-	vec3_t parsedEnemyColor;
-	vec3_t parsedTeamColor;
-	float parsedAlpha;
-	float dist;
+	const int target_mode = r_xray.target_mode;
+	const int max_match_size = r_xray.max_match_size;
+	const float dist = r_xray.dist;
 	vec3_t delta;
 	float distance_to_view;
 	int detected_match_size;
@@ -1238,7 +1213,7 @@ static qboolean R_IsAliasOutlineXray(entity_t *e, vec3_t color, float *alpha, fl
 	qboolean is_observer_slot;
 	qboolean is_same_team;
 
-	if (!e->model || strcmp(e->model->name, "progs/player.mdl") || e == &cl.viewent)
+	if (dist <= 0.0f || !e->model || strcmp(e->model->name, "progs/player.mdl") || e == &cl.viewent)
 		return false;
 
 	/* Only real client player slots should get xray outlines. This excludes
@@ -1269,10 +1244,6 @@ static qboolean R_IsAliasOutlineXray(entity_t *e, vec3_t color, float *alpha, fl
 		is_observer_slot = ((obs[0] && q_strcasecmp(obs, "off")) ||
 			(star_obs[0] && q_strcasecmp(star_obs, "off")));
 	}
-
-	R_ParseOutlineXrayParams(parsedColor, parsedEnemyColor, parsedTeamColor, &parsedAlpha, &dist, &target_mode, &color_mode, &max_match_size, &parsed_render_mode);
-	if (dist <= 0.0f)
-		return false;
 
 	if (max_match_size > 0 && max_match_size < 5)
 	{
@@ -1312,24 +1283,23 @@ static qboolean R_IsAliasOutlineXray(entity_t *e, vec3_t color, float *alpha, fl
 
 	if (color)
 	{
-		if (color_mode == XRAY_COLOR_MATCH)
+		if (r_xray.color_mode == XRAY_COLOR_MATCH)
 			R_GetPlayerMatchColor(&cl.scores[playernum], color);
 		else
 		{
-			if (target_mode == XRAY_TARGET_ENEMY)
-				VectorCopy(parsedEnemyColor, color);
-			else if (target_mode == XRAY_TARGET_TEAM)
-				VectorCopy(parsedTeamColor, color);
-			else if (can_classify_team)
-				VectorCopy(is_same_team ? parsedTeamColor : parsedEnemyColor, color);
-			else
-				VectorCopy(parsedEnemyColor, color);
+			qboolean use_team = target_mode == XRAY_TARGET_TEAM ||
+				(target_mode == XRAY_TARGET_BOTH && can_classify_team && is_same_team);
+			qboolean explicit_color = use_team ? r_xray.explicit_team_color : r_xray.explicit_enemy_color;
+
+			VectorCopy(use_team ? r_xray.team_color : r_xray.enemy_color, color);
+			if (!explicit_color)
+				R_ParseOutlineXrayPlayerColorFallback(use_team ? gl_teamcolor.string : gl_enemycolor.string, color);
 		}
 	}
 	if (alpha)
-		*alpha = parsedAlpha;
+		*alpha = r_xray.alpha;
 	if (render_mode)
-		*render_mode = parsed_render_mode;
+		*render_mode = r_xray.render_mode;
 	if (alpha_fade)
 	{
 		float t = CLAMP(0.0f, distance_to_view / dist, 1.0f);
@@ -3682,7 +3652,7 @@ static alias_inst_run_t r_alias_inst_runs[MAX_ALIAS_INSTANCES];
 static GLuint r_alias_inst_vbos[3];
 static unsigned int r_alias_inst_ring;
 static void R_DrawAliasModelPrepared (entity_t *e, const lerpdata_t *prepared, qboolean depthonly);
-static void R_DrawAliasXray (entity_t *e, qboolean clear_bit);
+static void R_DrawAliasXray (entity_t *e, qboolean clear_bit, const GLboolean *batch_mask);
 static GLuint R_AliasXrayStencilBit (void);
 static entity_t *r_deferred_xrays[MAX_SCOREBOARD];
 static int r_num_deferred_xrays;
@@ -4254,7 +4224,7 @@ static void R_DrawAliasModelPrepared (entity_t *e, const lerpdata_t *prepared, q
 				r_deferred_xrays[r_num_deferred_xrays++] = e;
 		}
 		else
-			R_DrawAliasXray(e, true);
+			R_DrawAliasXray(e, true, NULL);
 	}
 
 	// Fade the visible model surface as a whole. Without this prepass, hidden
@@ -4742,7 +4712,6 @@ void R_BeginDeferredAliasOutlines(void)
 	r_num_deferred_alias_outlines = 0;
 	r_num_deferred_xrays = 0;
 	r_num_grenade_glows = 0;
-	r_alias_outline_holey = false;
 	r_alias_stencil_bit1_dirty = false;
 	r_alias_outline_collecting = true;
 	r_alias_outline_order_changed = false;
@@ -4812,7 +4781,7 @@ static GLuint R_AliasXrayStencilBit (void)
 	return 0;
 }
 
-static void R_DrawAliasXray (entity_t *e, qboolean clear_bit)
+static void R_DrawAliasXray (entity_t *e, qboolean clear_bit, const GLboolean *batch_mask)
 {
 	aliashdr_t *first, *paliashdr;
 	aliasglsl_t *glsl;
@@ -4822,7 +4791,8 @@ static void R_DrawAliasXray (entity_t *e, qboolean clear_bit)
 	float color[4];
 	int render_mode, step;
 	GLuint bit;
-	GLboolean colormask[4];
+	GLboolean colormask[4] = {GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE};
+	const GLboolean *write_mask = batch_mask ? batch_mask : colormask;
 
 	if (r_teleport_view && r_telestyle_detail.value < 2)
 		return; /* r_telestyle_detail: no outlines in teleporter views */
@@ -4853,10 +4823,16 @@ static void R_DrawAliasXray (entity_t *e, qboolean clear_bit)
 		return;
 	blend = (lerpdata.pose1 != lerpdata.pose2) ? lerpdata.blend : 0;
 
-	// The caller's mask, so a stereo eye keeps only its own channels.
-	glGetBooleanv (GL_COLOR_WRITEMASK, colormask);
-	glPushAttrib (GL_ENABLE_BIT | GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT |
-		GL_STENCIL_BUFFER_BIT | GL_POLYGON_BIT);
+	if (!batch_mask)
+	{
+		extern cvar_t r_stereo;
+
+		// A stereo eye keeps only its own channels.
+		if (r_stereo.value && !r_teleport_view)
+			glGetBooleanv (GL_COLOR_WRITEMASK, colormask);
+		glPushAttrib (GL_ENABLE_BIT | GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT |
+			GL_STENCIL_BUFFER_BIT | GL_POLYGON_BIT);
+	}
 	if (clear_bit && bit)
 		R_ClearAliasOutlineStencil (bit);
 
@@ -4898,7 +4874,7 @@ static void R_DrawAliasXray (entity_t *e, qboolean clear_bit)
 			continue;
 
 		if (step == XRAY_STEP_FILL)
-			glColorMask (colormask[0], colormask[1], colormask[2], colormask[3]);
+			glColorMask (write_mask[0], write_mask[1], write_mask[2], write_mask[3]);
 		else
 			glColorMask (GL_FALSE, GL_FALSE, GL_FALSE, GL_FALSE);
 
@@ -4966,7 +4942,8 @@ static void R_DrawAliasXray (entity_t *e, qboolean clear_bit)
 	GL_DisableVertexAttribArrayFunc (pose2NormalAttrIndex);
 	GL_DisableVertexAttribArrayFunc (vertColoursAttrIndex);
 	GL_UseProgramFunc (0);
-	glPopAttrib ();
+	if (!batch_mask)
+		glPopAttrib ();
 }
 
 /*
@@ -5071,21 +5048,52 @@ static void R_DrawDeferredAliasOutlineLean (entity_t *e, GLuint *program, GLbool
 	glPopMatrix ();
 }
 
+static void R_EndDeferredAliasOutlineLean (void)
+{
+	GL_DisableVertexAttribArrayFunc (texCoordsAttrIndex);
+	GL_DisableVertexAttribArrayFunc (pose1VertexAttrIndex);
+	GL_DisableVertexAttribArrayFunc (pose2VertexAttrIndex);
+	GL_DisableVertexAttribArrayFunc (pose1NormalAttrIndex);
+	GL_DisableVertexAttribArrayFunc (pose2NormalAttrIndex);
+	GL_DisableVertexAttribArrayFunc (vertColoursAttrIndex);
+	GL_UseProgramFunc (0);
+	GL_SelectTexture (GL_TEXTURE0);
+	glPopAttrib ();
+
+	// Leave what the full path's per-model cleanup leaves for later passes.
+	glTexEnvf (GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_REPLACE);
+	glHint (GL_PERSPECTIVE_CORRECTION_HINT, GL_NICEST);
+	glShadeModel (GL_FLAT);
+	glDepthMask (GL_TRUE);
+	glDisable (GL_BLEND);
+	glColor3f (1, 1, 1);
+}
+
 void R_DrawDeferredAliasOutlines(void)
 {
+	extern cvar_t r_stereo;
 	int i;
 	GLuint uniquemask = 0;
 	GLuint program = 0;
-	GLboolean lean, cull = GL_FALSE;
+	qboolean lean_bound = false, have_cull = false;
+	GLboolean cull = GL_FALSE;
 	GLboolean colormask[4] = {GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE};
 
 	r_alias_outline_collecting = false;
 
 	// Every opaque occluder is in place now, and the xray bit is still clean:
 	// the outline replay below may leave per-model values in it.
-	for (i = 0; i < r_num_deferred_xrays; ++i)
-		R_DrawAliasXray(r_deferred_xrays[i], false);
-	r_num_deferred_xrays = 0;
+	if ((r_num_deferred_xrays || r_num_deferred_alias_outlines) && r_stereo.value && !r_teleport_view)
+		glGetBooleanv (GL_COLOR_WRITEMASK, colormask);
+	if (r_num_deferred_xrays)
+	{
+		glPushAttrib (GL_ENABLE_BIT | GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT |
+			GL_STENCIL_BUFFER_BIT | GL_POLYGON_BIT);
+		for (i = 0; i < r_num_deferred_xrays; ++i)
+			R_DrawAliasXray(r_deferred_xrays[i], false, colormask);
+		r_num_deferred_xrays = 0;
+		glPopAttrib ();
+	}
 
 	// Every stencil bit below the viewmodel/laser bit can hold a per-model value.
 	// Nothing else is live in them here: shadows and normal alias fills only
@@ -5117,25 +5125,6 @@ void R_DrawDeferredAliasOutlines(void)
 		qsort(r_deferred_alias_outlines, r_num_deferred_alias_outlines,
 			sizeof(r_deferred_alias_outlines[0]), R_CompareDeferredAliasOutlines);
 
-	// One state save, program and attribute setup for the whole queue. Cull
-	// mode is always GL_BACK here; only whether it is enabled varies.
-	lean = r_alias_outline_unique && !r_alias_outline_holey;
-	if (lean)
-	{
-		cull = glIsEnabled (GL_CULL_FACE);
-		glGetBooleanv (GL_COLOR_WRITEMASK, colormask);
-		glPushAttrib (GL_ENABLE_BIT | GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT |
-			GL_STENCIL_BUFFER_BIT | GL_POLYGON_BIT);
-		glEnable (GL_DEPTH_TEST);
-		glEnable (GL_STENCIL_TEST);
-		glDepthFunc (GL_LEQUAL);
-		GL_EnableVertexAttribArrayFunc (texCoordsAttrIndex);
-		GL_EnableVertexAttribArrayFunc (pose1VertexAttrIndex);
-		GL_EnableVertexAttribArrayFunc (pose2VertexAttrIndex);
-		GL_EnableVertexAttribArrayFunc (pose1NormalAttrIndex);
-		GL_EnableVertexAttribArrayFunc (pose2NormalAttrIndex);
-	}
-
 	for (i = 0; i < r_num_deferred_alias_outlines; ++i)
 	{
 		aliashdr_t *paliashdr;
@@ -5155,10 +5144,38 @@ void R_DrawDeferredAliasOutlines(void)
 			}
 		}
 
-		if (lean)
+		// Cutout skins keep the textured mask path. Preserve draw order by
+		// closing the lean run only at those models.
+		if (r_alias_outline_unique && !(currententity->model->flags & MF_HOLEY))
 		{
+			if (!lean_bound)
+			{
+				if (!have_cull)
+				{
+					cull = glIsEnabled (GL_CULL_FACE);
+					have_cull = true;
+				}
+				glPushAttrib (GL_ENABLE_BIT | GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT |
+					GL_STENCIL_BUFFER_BIT | GL_POLYGON_BIT);
+				glEnable (GL_DEPTH_TEST);
+				glEnable (GL_STENCIL_TEST);
+				glDepthFunc (GL_LEQUAL);
+				GL_EnableVertexAttribArrayFunc (texCoordsAttrIndex);
+				GL_EnableVertexAttribArrayFunc (pose1VertexAttrIndex);
+				GL_EnableVertexAttribArrayFunc (pose2VertexAttrIndex);
+				GL_EnableVertexAttribArrayFunc (pose1NormalAttrIndex);
+				GL_EnableVertexAttribArrayFunc (pose2NormalAttrIndex);
+				lean_bound = true;
+			}
 			R_DrawDeferredAliasOutlineLean (currententity, &program, cull, colormask);
 			continue;
+		}
+
+		if (lean_bound)
+		{
+			R_EndDeferredAliasOutlineLean ();
+			lean_bound = false;
+			program = 0;
 		}
 
 		if (!paliashdr->nextsurface)
@@ -5181,26 +5198,8 @@ void R_DrawDeferredAliasOutlines(void)
 		}
 	}
 
-	if (lean)
-	{
-		GL_DisableVertexAttribArrayFunc (texCoordsAttrIndex);
-		GL_DisableVertexAttribArrayFunc (pose1VertexAttrIndex);
-		GL_DisableVertexAttribArrayFunc (pose2VertexAttrIndex);
-		GL_DisableVertexAttribArrayFunc (pose1NormalAttrIndex);
-		GL_DisableVertexAttribArrayFunc (pose2NormalAttrIndex);
-		GL_DisableVertexAttribArrayFunc (vertColoursAttrIndex);
-		GL_UseProgramFunc (0);
-		GL_SelectTexture (GL_TEXTURE0);
-		glPopAttrib ();
-
-		// Leave what the full path's per-model cleanup leaves for later passes.
-		glTexEnvf (GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_REPLACE);
-		glHint (GL_PERSPECTIVE_CORRECTION_HINT, GL_NICEST);
-		glShadeModel (GL_FLAT);
-		glDepthMask (GL_TRUE);
-		glDisable (GL_BLEND);
-		glColor3f (1, 1, 1);
-	}
+	if (lean_bound)
+		R_EndDeferredAliasOutlineLean ();
 
 	// Leave the stencil as zero as the scrubbed replay did, for the translucent
 	// pass's own outlines.
