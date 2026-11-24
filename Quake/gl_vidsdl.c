@@ -2602,8 +2602,17 @@ static void GL_Init (void)
 
 	// query max size from hardware
 	glGetIntegerv (GL_MAX_TEXTURE_SIZE, &gl_hardware_maxsize);
-	LMBLOCK_WIDTH = q_min(gl_hardware_maxsize, 512);	//keeping this small potentially allows for more efficient texsubimage calls.
-	LMBLOCK_HEIGHT = q_min(gl_hardware_maxsize, 16384);
+	if (lightmap_count <= 0 || LMBLOCK_WIDTH <= 0 || LMBLOCK_HEIGHT <= 0)
+	{
+		LMBLOCK_WIDTH = q_min(gl_hardware_maxsize, LMBLOCK_DEFAULT_WIDTH);	//keeping this small potentially allows for more efficient texsubimage calls.
+		LMBLOCK_HEIGHT = q_min(gl_hardware_maxsize, LMBLOCK_DEFAULT_HEIGHT);
+	}
+	else if (LMBLOCK_WIDTH > gl_hardware_maxsize || LMBLOCK_HEIGHT > gl_hardware_maxsize)
+	{
+		// Preserve active atlas dimensions across normal vid_restart; if the new
+		// context caps texture size below the live atlas, rebuild lightmaps + VBOs.
+		lightmaps_latecached = true;
+	}
 
 	/* The menu uses fixed-function drawing. Compile gameplay programs during
 	 * map loading, or immediately when a connected video restart needs them. */

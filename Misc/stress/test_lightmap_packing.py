@@ -43,9 +43,9 @@ int main(void) {
    if(!overbright&&target>1) target=1;
    assert(fabs(decoded-target)<=step+1e-12);
   }
-  word=pack(samples[i],overbright,GL_RGB10_A2);assert((word&3)==3);
+  word=pack(samples[i],overbright,GL_RGB10_A2);assert((word>>30)==3);
   for(int channel=0;channel<3;channel++) {
-   unsigned decoded=(word>>(22-channel*10))&1023;
+   unsigned decoded=(word>>(channel*10))&1023;
    unsigned target=samples[i][channel]>>(overbright?8:7);
    unsigned limit=overbright?1023:255;if(target>limit) target=limit;
    assert(decoded==target);

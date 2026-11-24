@@ -771,7 +771,7 @@ void R_LightmapMarkDirtyRect (struct lightmap_s *lm, int light_s, int light_t, i
 	}
 	// merge when the grown rect adds little dead area (or we're out of slots);
 	// adjacent surfaces of the same dlight typically collapse into one rect.
-	if (best >= 0 && (bestwaste <= 4096 || lm->numdirtyrects == LM_DIRTYRECTS))
+	if (best >= 0 && (bestwaste <= 1024 || lm->numdirtyrects == LM_DIRTYRECTS))
 	{
 		glRect_t *dr = &lm->dirtyrects[best];
 		int ul = q_min(l, (int)dr->l), ut = q_min(t, (int)dr->t);
@@ -1575,6 +1575,103 @@ void GL_BuildLightmaps (void)
 		Sys_Error ("GL_BuildLightmaps: bad lightmap format");
 	}
 
+	// Size lightmap atlas dimensions to fit large maps in fewer atlases without
+	// allocating oversized 16384px-tall backing buffers, while keeping small maps
+	// at 512px wide and guaranteeing every surface fits.
+	if (gl_hardware_maxsize > 0)
+	{
+		size_t total_luxels = 0;
+		const int default_width = q_min(gl_hardware_maxsize, LMBLOCK_DEFAULT_WIDTH);
+		const int max_width = q_min(gl_hardware_maxsize, LMBLOCK_MAX_WIDTH);
+		const int max_height = q_min(gl_hardware_maxsize, LMBLOCK_DEFAULT_HEIGHT);
+		int max_surf_w = 0, max_surf_h = 0;
+		int k;
+
+		for (j = 1; j < MAX_MODELS; j++)
+		{
+			m = cl.model_precache[j];
+			if (!m || m->type != mod_brush || m->needload || m->name[0] == '*')
+				continue;
+			for (k = 0; k < m->numsurfaces; k++)
+			{
+				const msurface_t *surf = &m->surfaces[k];
+				int sw, sh;
+				if (surf->flags & SURF_DRAWTILED)
+					continue;
+				sw = surf->extents[0] + 1;
+				sh = surf->extents[1] + 1;
+				if (sw > max_surf_w)
+					max_surf_w = sw;
+				if (sh > max_surf_h)
+					max_surf_h = sh;
+				total_luxels += (size_t)sw * (size_t)((sh + 3) & ~3);
+			}
+		}
+		for (j = 1; j < MAX_MODELS; j++)
+		{
+			m = cl.model_precache_csqc[j];
+			if (!m)
+				break;
+			if (m->type != mod_brush || m->needload || m->name[0] == '*')
+				continue;
+			for (k = 0; k < m->numsurfaces; k++)
+			{
+				const msurface_t *surf = &m->surfaces[k];
+				int sw, sh;
+				if (surf->flags & SURF_DRAWTILED)
+					continue;
+				sw = surf->extents[0] + 1;
+				sh = surf->extents[1] + 1;
+				if (sw > max_surf_w)
+					max_surf_w = sw;
+				if (sh > max_surf_h)
+					max_surf_h = sh;
+				total_luxels += (size_t)sw * (size_t)((sh + 3) & ~3);
+			}
+		}
+
+		LMBLOCK_WIDTH = default_width;
+		LMBLOCK_HEIGHT = max_height;
+		while (LMBLOCK_WIDTH < gl_hardware_maxsize && LMBLOCK_WIDTH < max_surf_w)
+			LMBLOCK_WIDTH <<= 1;
+		if (LMBLOCK_WIDTH > gl_hardware_maxsize)
+			LMBLOCK_WIDTH = gl_hardware_maxsize;
+		while (LMBLOCK_WIDTH < max_width &&
+			(double)total_luxels > 0.88 * (double)LMBLOCK_WIDTH * (double)max_height)
+		{
+			LMBLOCK_WIDTH <<= 1;
+		}
+		if (LMBLOCK_WIDTH > default_width)
+		{
+			// Fit total_luxels with ~14% packing headroom so we normally land in one
+			// atlas without allocating a full 16384px-tall CPU+GPU buffer.
+			size_t target_luxels = total_luxels + (total_luxels / 7u) + (size_t)LMBLOCK_WIDTH;
+			size_t need_h = (target_luxels + (size_t)LMBLOCK_WIDTH - 1u) / (size_t)LMBLOCK_WIDTH;
+			int h;
+
+			if (need_h < (size_t)max_surf_h)
+				need_h = (size_t)max_surf_h;
+			if (need_h < 512u)
+				need_h = 512u;
+
+			if (need_h >= (size_t)max_height)
+				h = max_height;
+			else if (gl_texture_NPOT)
+				h = (int)((need_h + 511u) & ~(size_t)511u);
+			else
+			{
+				h = 512;
+				while ((size_t)h < need_h && h < max_height)
+					h <<= 1;
+			}
+			if (h > max_height)
+				h = max_height;
+			if (h < max_surf_h)
+				h = q_min(max_height, max_surf_h);
+			LMBLOCK_HEIGHT = h;
+		}
+	}
+
 	lm_defer_fill = true;	//tb -- queue surface fills, then run them on worker threads below
 	for (j=1 ; j<MAX_MODELS ; j++)
 	{
@@ -1711,6 +1808,13 @@ void GL_DeleteBModelVertexBuffer (void)
 	//tb -- above the capability check: the index buffers reference gl_bmodel_vbo,
 	//and the CPU-side nodes must be released even when GL support is absent.
 	GL_BrushShadowCache_Clear ();
+
+	if (lm_scratchpbo)
+	{
+		if (GL_DeleteBuffersFunc)
+			GL_DeleteBuffersFunc (1, &lm_scratchpbo);
+		lm_scratchpbo = 0;
+	}
 
 	if (!(gl_vbo_able && gl_mtexable && gl_max_texture_units >= 3))
 		return;
@@ -2246,7 +2350,7 @@ static void R_BuildLightMapImpl (qmodel_t *model, msurface_t *surf, byte *dest, 
 					b = (b > 255) ? 255 : b;
 				}
 
-				*(unsigned int*)dest = (r<<22) | (g<<12) | (b<<2) | 3;
+				*(unsigned int*)dest = (3u<<30) | (b<<20) | (g<<10) | r;
 				dest += 4;
 			}
 		}
@@ -2332,7 +2436,7 @@ static void R_TexSubImageLightmap (int x, int t, int w, int h, const GLvoid *src
 				GL_UNSIGNED_INT_5_9_9_9_REV, src);
 	else if (gl_lightmap_format == GL_RGB10_A2)
 		glTexSubImage2D(GL_TEXTURE_2D, 0, x, t, w, h, GL_RGBA,
-				GL_UNSIGNED_INT_10_10_10_2, src);
+				GL_UNSIGNED_INT_2_10_10_10_REV, src);
 	else
 		glTexSubImage2D(GL_TEXTURE_2D, 0, x, t, w, h, gl_lightmap_format,
 				GL_UNSIGNED_BYTE, src);
@@ -2632,7 +2736,7 @@ void R_RebuildAllLightmaps (void)
 							GL_UNSIGNED_INT_5_9_9_9_REV, NULL);
 				else if (gl_lightmap_format == GL_RGB10_A2)
 					glTexSubImage2D (GL_TEXTURE_2D, 0, 0, 0, LMBLOCK_WIDTH, LMBLOCK_HEIGHT, GL_RGBA,
-							GL_UNSIGNED_INT_10_10_10_2, NULL);
+							GL_UNSIGNED_INT_2_10_10_10_REV, NULL);
 				else
 					glTexSubImage2D (GL_TEXTURE_2D, 0, 0, 0, LMBLOCK_WIDTH, LMBLOCK_HEIGHT, gl_lightmap_format,
 							GL_UNSIGNED_BYTE, NULL);
@@ -2645,7 +2749,7 @@ void R_RebuildAllLightmaps (void)
 							GL_UNSIGNED_INT_5_9_9_9_REV, lightmaps[i].pbodata);
 				else if (gl_lightmap_format == GL_RGB10_A2)
 					glTexSubImage2D (GL_TEXTURE_2D, 0, 0, 0, LMBLOCK_WIDTH, LMBLOCK_HEIGHT, GL_RGBA,
-							GL_UNSIGNED_INT_10_10_10_2, lightmaps[i].pbodata);
+							GL_UNSIGNED_INT_2_10_10_10_REV, lightmaps[i].pbodata);
 				else
 					glTexSubImage2D (GL_TEXTURE_2D, 0, 0, 0, LMBLOCK_WIDTH, LMBLOCK_HEIGHT, gl_lightmap_format,
 							GL_UNSIGNED_BYTE, lightmaps[i].pbodata);

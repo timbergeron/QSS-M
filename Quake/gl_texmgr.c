@@ -3511,7 +3511,7 @@ static void TexMgr_LoadLightmap (gltexture_t *glt, byte *data)
 	if (gl_lightmap_format == GL_RGB9_E5)
 		glTexImage2D (GL_TEXTURE_2D, 0, GL_RGB9_E5, glt->width, glt->height, 0, GL_RGB, GL_UNSIGNED_INT_5_9_9_9_REV, data);
 	else if (gl_lightmap_format == GL_RGB10_A2)
-		glTexImage2D (GL_TEXTURE_2D, 0, GL_RGB10_A2, glt->width, glt->height, 0, GL_RGBA, GL_UNSIGNED_INT_10_10_10_2, data);
+		glTexImage2D (GL_TEXTURE_2D, 0, GL_RGB10_A2, glt->width, glt->height, 0, GL_RGBA, GL_UNSIGNED_INT_2_10_10_10_REV, data);
 	else
 		glTexImage2D (GL_TEXTURE_2D, 0, GL_RGBA, glt->width, glt->height, 0, gl_lightmap_format/*rgba or bgra*/, GL_UNSIGNED_BYTE, data);
 

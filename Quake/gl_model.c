@@ -3208,6 +3208,9 @@ static void CalcSurfaceExtents (msurface_t *s, int lmshift)
 
 	lmscale = 1<<lmshift;
 
+	const int max_lm_width = (gl_hardware_maxsize > 0) ? q_min(gl_hardware_maxsize, LMBLOCK_DEFAULT_WIDTH) : 0;
+	const int max_lm_height = (gl_hardware_maxsize > 0) ? q_min(gl_hardware_maxsize, LMBLOCK_DEFAULT_HEIGHT) : 0;
+
 	for (i=0 ; i<2 ; i++)
 	{
 		bmins[i] = floor(mins[i]/lmscale);
@@ -3223,7 +3226,7 @@ static void CalcSurfaceExtents (msurface_t *s, int lmshift)
 			s->lmvecscale[i] = 1.0f/VectorLength(s->lmvecs[i]);	//luxels->qu
 		s->extents[i] = bmaxs[i] - bmins[i];
 
-		if ( !(tex->flags & TEX_SPECIAL) && s->extents[i] >= (i?LMBLOCK_HEIGHT:LMBLOCK_WIDTH)) //johnfitz -- was 512 in glquake, 256 in winquake
+		if ( !(tex->flags & TEX_SPECIAL) && s->extents[i] >= (i?max_lm_height:max_lm_width)) //johnfitz -- was 512 in glquake, 256 in winquake
 		{
 			s->extents[i] = 1;
 //			Sys_Error ("Bad surface extents");
@@ -3556,10 +3559,14 @@ static void Mod_LoadFaces (lump_t *l, qboolean bsp2)
 			decoupledlm++;
 
 			//make sure we don't segfault even if the texture coords get crappified.
-			if (out->extents[0] >= LMBLOCK_WIDTH || out->extents[1] >= LMBLOCK_HEIGHT)
 			{
-				Con_Warning("%s: Bad surface extents (%i*%i, max %i*%u).\n", scalebuf, out->extents[0], out->extents[1], LMBLOCK_WIDTH, LMBLOCK_HEIGHT);
-				out->extents[0] = out->extents[1] = 1;
+				const int max_lm_width = (gl_hardware_maxsize > 0) ? q_min(gl_hardware_maxsize, LMBLOCK_DEFAULT_WIDTH) : 0;
+				const int max_lm_height = (gl_hardware_maxsize > 0) ? q_min(gl_hardware_maxsize, LMBLOCK_DEFAULT_HEIGHT) : 0;
+				if (out->extents[0] >= max_lm_width || out->extents[1] >= max_lm_height)
+				{
+					Con_Warning("%s: Bad surface extents (%i*%i, max %i*%u).\n", scalebuf, out->extents[0], out->extents[1], max_lm_width, max_lm_height);
+					out->extents[0] = out->extents[1] = 1;
+				}
 			}
 		}
 		else

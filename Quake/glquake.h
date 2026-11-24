@@ -441,6 +441,9 @@ void GL_PolygonOffset (int);
 #ifndef GL_UNSIGNED_INT_10_10_10_2
 #define GL_UNSIGNED_INT_10_10_10_2 0x8036
 #endif
+#ifndef GL_UNSIGNED_INT_2_10_10_10_REV
+#define GL_UNSIGNED_INT_2_10_10_10_REV 0x8368
+#endif
 extern qboolean gl_packed_pixels;
 
 //johnfitz -- GL_EXT_texture_env_combine
@@ -490,6 +493,9 @@ extern int gl_lightmap_format, lightmap_bytes;
 extern qboolean lightmaps_latecached;	//we need to rebuild lightmaps and model vbos before rendering.
 void R_LightmapFormatChanged (cvar_t *var);
 void R_ApplyLightmapSettings (void);
+#define LMBLOCK_DEFAULT_WIDTH	512
+#define LMBLOCK_MAX_WIDTH		4096
+#define LMBLOCK_DEFAULT_HEIGHT	16384
 extern int LMBLOCK_WIDTH, LMBLOCK_HEIGHT;	//FIXME: use texture arrays.
 
 typedef struct glRect_s {
@@ -506,7 +512,7 @@ struct lightmap_s
 	// scattered dlight/lightstyle surfaces merged into multi-megabyte uploads per
 	// frame on Apple's GL-on-Metal. Rects keep uploads proportional to the texels
 	// actually rebuilt.
-#define LM_DIRTYRECTS 8
+#define LM_DIRTYRECTS 64
 	glRect_t	dirtyrects[LM_DIRTYRECTS];
 	int			numdirtyrects;
 
