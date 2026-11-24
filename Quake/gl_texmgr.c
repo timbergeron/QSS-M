@@ -456,9 +456,15 @@ static glmode_t glmodes[] = {
 static int glmode_idx = 5; /* trilinear */
 #define GLMODE_NEAREST_LINEAR_MIPMAP 8
 
+static qboolean texmgr_softemu_filter_override;
+
 static qboolean TexMgr_UsesSoftEmuFilterOverride (void)
 {
-	if (glmode_idx == 0)
+	// Honor explicit nearest-minification modes (n.n, nnn, nln) and their anisotropy.
+	if (glmodes[glmode_idx].magfilter == GL_NEAREST &&
+		(glmodes[glmode_idx].minfilter == GL_NEAREST ||
+		 glmodes[glmode_idx].minfilter == GL_NEAREST_MIPMAP_NEAREST ||
+		 glmodes[glmode_idx].minfilter == GL_NEAREST_MIPMAP_LINEAR))
 		return false;
 	// ironwail: forced lightmap banding also gets the software-style filtering
 	if (r_softemu_lightmap_banding.value > 0.0f)
@@ -550,6 +556,7 @@ static void TexMgr_UpdateAllFilterModes (void)
 {
 	gltexture_t	*glt;
 
+	texmgr_softemu_filter_override = TexMgr_UsesSoftEmuFilterOverride ();
 	for (glt = active_gltextures; glt; glt = glt->next)
 		TexMgr_SetFilterModes (glt);
 	Sbar_Changed (); //sbar graphics need to be redrawn with new filter mode
@@ -650,7 +657,6 @@ TexMgr_SoftEmu_f -- called when r_softemu changes
 */
 void TexMgr_SoftEmu_f (cvar_t *var)
 {
-	static qboolean old_filter_override;
 	int mode = CLAMP(0, (int)var->value, 3);
 	qboolean filter_override = TexMgr_UsesSoftEmuFilterOverride ();
 
@@ -660,10 +666,9 @@ void TexMgr_SoftEmu_f (cvar_t *var)
 		return;
 	}
 
-	if (filter_override != old_filter_override)
+	if (filter_override != texmgr_softemu_filter_override)
 		TexMgr_UpdateAllFilterModes ();
 
-	old_filter_override = filter_override;
 	if (mode > 0)
 		GLSLGamma_SoftEmuPrecache ();
 }
