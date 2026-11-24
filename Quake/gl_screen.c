@@ -4168,10 +4168,11 @@ float SCR_GrenadeGlowTimeRemaining(int entnum)
 
 	ent = EDICT_NUM(entnum);
 	if (!ent->free && ent->v.classname &&
-		!strcmp(PR_GetString(ent->v.classname), "grenade") &&
 		ent->v.owner == EDICT_TO_PROG(EDICT_NUM(cl.viewentity)) &&
-		ent->v.model && *PR_GetString(ent->v.model) &&
-		ent->v.modelindex == cl.entities[entnum].netstate.modelindex)
+		ent->v.model &&
+		ent->v.modelindex == cl.entities[entnum].netstate.modelindex &&
+		!strcmp(PR_GetString(ent->v.classname), "grenade") &&
+		*PR_GetString(ent->v.model))
 	{
 		remaining = !ent->v.touch ? 0.0f : ent->v.nextthink - cl.time;
 		if (!(remaining >= 0.0f && remaining < GRENADE_EXPLOSION_TIME))

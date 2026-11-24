@@ -625,9 +625,20 @@ typedef struct qmodel_s
 	int			chainnumtextures;		// -1: more than fit
 	unsigned short	chaintextures[MAX_MODEL_CHAIN_TEXTURES];
 
+	// cached per-model render classification bits (invalidated via mod_generation)
+	int			renderflags_modgen;
+	unsigned int	renderflags;
+
 	cache_user_t	cache;		// only access through Mod_Extradata
 
 } qmodel_t;
+
+#define MOD_RFLAG_SOLIDRUN_TESTED	(1u << 0)
+#define MOD_RFLAG_SOLIDRUN_OK		(1u << 1)
+#define MOD_RFLAG_FLAME_TESTED		(1u << 2)
+#define MOD_RFLAG_FLAME				(1u << 3)
+#define MOD_RFLAG_PLAYER_TESTED		(1u << 4)
+#define MOD_RFLAG_PLAYER			(1u << 5)
 
 typedef struct map_surface_areas_s
 {

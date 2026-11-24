@@ -1465,6 +1465,9 @@ qboolean CL_ApplyModelRotation(entity_t* ent, vec3_t angles, float dt) // true i
 		return false;
 	}
 
+	if (!cl_rotatemodels_count && !ent->rot_frozen && !ent->rot_started)
+		return false;
+
 	/*---------------------------------------------------------------
 	*  PER-ENTITY RESET: if the server has swapped in a different
 	*  model (or removed the model entirely) we wipe all rotation
@@ -1522,8 +1525,22 @@ qboolean CL_ApplyModelRotation(entity_t* ent, vec3_t angles, float dt) // true i
 		return true;
 	}
 
-	if (strstr(ent->model->name, "player.mdl") || strstr(ent->model->name, "/player.mdl")) // Player models never spin
-		return false;
+	{
+		qmodel_t *m = ent->model;
+		int want_gen = mod_generation + 1;
+		if (m->renderflags_modgen != want_gen)
+		{
+			m->renderflags_modgen = want_gen;
+			m->renderflags = 0;
+		}
+		if (!(m->renderflags & MOD_RFLAG_PLAYER_TESTED))
+		{
+			qboolean is_player = strstr(m->name, "player.mdl") != NULL;
+			m->renderflags |= MOD_RFLAG_PLAYER_TESTED | (is_player ? MOD_RFLAG_PLAYER : 0u);
+		}
+		if (m->renderflags & MOD_RFLAG_PLAYER) // Player models never spin
+			return false;
+	}
 
 	for (int i = 0; i < cl_rotatemodels_count; ++i) // Apply spin for whitelisted models
 	{

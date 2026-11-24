@@ -1949,8 +1949,22 @@ static qboolean R_ShouldDrawEntity(entity_t *ent, qboolean alphapass)
 		return false;
 
 	if (!r_drawflame.value) // woods
-		if (!strcmp(ent->model->name, "progs/flame.mdl") || !strcmp(ent->model->name, "progs/flame2.mdl"))
+	{
+		qmodel_t *m = ent->model;
+		int want_gen = mod_generation + 1;
+		if (m->renderflags_modgen != want_gen)
+		{
+			m->renderflags_modgen = want_gen;
+			m->renderflags = 0;
+		}
+		if (!(m->renderflags & MOD_RFLAG_FLAME_TESTED))
+		{
+			qboolean is_flame = !strcmp(m->name, "progs/flame.mdl") || !strcmp(m->name, "progs/flame2.mdl");
+			m->renderflags |= MOD_RFLAG_FLAME_TESTED | (is_flame ? MOD_RFLAG_FLAME : 0u);
+		}
+		if (m->renderflags & MOD_RFLAG_FLAME)
 			return false;
+	}
 
 	// Determine if entity should be treated as translucent for sorting purposes -- woods #alphasort
 	// Original behavior: only alpha < 1 triggers alpha pass

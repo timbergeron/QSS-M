@@ -6186,6 +6186,7 @@ qboolean R_SolidRunModel (entity_t *ent)
 	qmodel_t *m = ent->model;
 	msurface_t *s;
 	int i;
+	int want_gen;
 
 	if (!r_world_program || r_drawflat_cheatsafe || r_lightmap_cheatsafe || r_fullbright_cheatsafe)
 		return false;
@@ -6193,10 +6194,25 @@ qboolean R_SolidRunModel (entity_t *ent)
 		return false;
 	if (m->nummodelsurfaces <= 0)
 		return false;
-	for (i = 0, s = &m->surfaces[m->firstmodelsurface]; i < m->nummodelsurfaces; i++, s++)
-		if (s->flags & (SURF_DRAWTURB | SURF_DRAWTILED | SURF_NOTEXTURE | SURF_DRAWSKY))
-			return false;
-	return true;
+
+	want_gen = mod_generation + 1;
+	if (m->renderflags_modgen != want_gen)
+	{
+		m->renderflags_modgen = want_gen;
+		m->renderflags = 0;
+	}
+	if (!(m->renderflags & MOD_RFLAG_SOLIDRUN_TESTED))
+	{
+		qboolean ok = true;
+		for (i = 0, s = &m->surfaces[m->firstmodelsurface]; i < m->nummodelsurfaces; i++, s++)
+			if (s->flags & (SURF_DRAWTURB | SURF_DRAWTILED | SURF_NOTEXTURE | SURF_DRAWSKY))
+			{
+				ok = false;
+				break;
+			}
+		m->renderflags |= MOD_RFLAG_SOLIDRUN_TESTED | (ok ? MOD_RFLAG_SOLIDRUN_OK : 0u);
+	}
+	return (m->renderflags & MOD_RFLAG_SOLIDRUN_OK) != 0;
 }
 
 void R_SolidRunBegin (float entalpha)
