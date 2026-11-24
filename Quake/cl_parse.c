@@ -1290,7 +1290,12 @@ static void CL_ParseStartSoundPacket(void)
 	for (i = 0; i < 3; i++)
 		pos[i] = MSG_ReadCoord (cl.protocolflags);
 
-
+	// FTE servers implement QuakeC stopsound() by sending svc_sound with sample index 0
+	if (!sound_num)
+	{
+		S_StopSound (ent, channel);
+		return;
+	}
 
 	if (!CL_DemoSeekActive() && cl.qcvm.extfuncs.CSQC_Event_Sound && cl.sound_precache[sound_num] && !cl.qcvm.nogameaccess)
 	{	//blocked with csqc, too easy to do dead-reckoning.
