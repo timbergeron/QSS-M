@@ -1669,9 +1669,11 @@ void Cvar_WriteVariables (FILE *f)
 
 		if (flags & CVAR_ARCHIVE)
 		{
+			Config_BeginEntry (f, "cvar", var->name); // woods #cfgcomments
 			if (flags & (CVAR_USERDEFINED|CVAR_SETA))
 				fprintf (f, "seta ");
-			fprintf (f, "%s \"%s\"\n", var->name, value);
+			fprintf (f, "%s \"%s\"", var->name, value);
+			Config_EndEntry (f, "cvar", var->name);
 		}
 	}
 }

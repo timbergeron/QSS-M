@@ -755,6 +755,14 @@ int CompareAliases(const void* a, const void* b)
 	return q_strcasecmp(alias_a->name, alias_b->name);
 }
 
+// woods #cfgcomments -- writes one alias line, keeping any user comments attached to it
+static void Alias_WriteOne(FILE* f, const char* name, const char* value)
+{
+	Config_BeginEntry(f, "alias", name);
+	fprintf(f, "alias \"%s\" \"%s\"", name, value);
+	Config_EndEntry(f, "alias", name);
+}
+
 void Alias_WriteAliases(FILE* f) 
 {
 	cmdalias_t* alias;
@@ -772,7 +780,9 @@ void Alias_WriteAliases(FILE* f)
 	}
 
 	// Print unaliasall at the top
-	fprintf(f, "unaliasall\n");
+	Config_BeginEntry(f, "cmd", "unaliasall"); // woods #cfgcomments
+	fprintf(f, "unaliasall");
+	Config_EndEntry(f, "cmd", "unaliasall");
 
 	// Gather and categorize the aliases
 	for (alias = cmd_alias; alias; alias = alias->next) {
@@ -824,8 +834,8 @@ void Alias_WriteAliases(FILE* f)
 				Q_strncpy(minus_value, minus_alias->value, MAX_ALIAS_VALUE);
 				RemoveTrailingNewline(minus_value);
 
-				fprintf(f, "alias \"%s\" \"%s\"\n", plus_alias->name, plus_value);
-				fprintf(f, "alias \"%s\" \"%s\"\n", minus_alias->name, minus_value);
+				Alias_WriteOne(f, plus_alias->name, plus_value);
+				Alias_WriteOne(f, minus_alias->name, minus_value);
 
 				found_partner = true;
 				break;
@@ -838,7 +848,7 @@ void Alias_WriteAliases(FILE* f)
 			Q_strncpy(plus_value, plus_alias->value, MAX_ALIAS_VALUE);
 			RemoveTrailingNewline(plus_value);
 
-			fprintf(f, "alias \"%s\" \"%s\"\n", plus_alias->name, plus_value);
+			Alias_WriteOne(f, plus_alias->name, plus_value);
 		}
 	}
 
@@ -862,7 +872,7 @@ void Alias_WriteAliases(FILE* f)
 			Q_strncpy(minus_value, minus_alias->value, MAX_ALIAS_VALUE);
 			RemoveTrailingNewline(minus_value);
 
-			fprintf(f, "alias \"%s\" \"%s\"\n", minus_alias->name, minus_value);
+			Alias_WriteOne(f, minus_alias->name, minus_value);
 		}
 	}
 
@@ -873,7 +883,7 @@ void Alias_WriteAliases(FILE* f)
 		Q_strncpy(value_copy, alias->value, MAX_ALIAS_VALUE);
 		RemoveTrailingNewline(value_copy);
 
-		fprintf(f, "alias \"%s\" \"%s\"\n", alias->name, value_copy);
+		Alias_WriteOne(f, alias->name, value_copy);
 	}
 }
 
