@@ -842,6 +842,11 @@ void Sbar_DrawPic (int x, int y, qpic_t *pic)
 	Draw_Pic (x, y + 24, pic);
 }
 
+static void Sbar_BatchPic (drawpicbatch_t *batch, int x, int y, qpic_t *pic)
+{
+	Draw_BatchPic (batch, x, y + 24, pic);
+}
+
 /*
 =============
 Sbar_DrawSubPicsAlpha -- // woods #sbarstyles
@@ -909,6 +914,17 @@ void Sbar_DrawCharacter (int x, int y, int num)
 Sbar_DrawString -- johnfitz -- rewritten now that GL_SetCanvas is doing the work
 ================
 */
+static void Sbar_BatchString (drawcharbatch_t *batch, int x, int y, const char *str, int mask)
+{
+	while (*str)
+	{
+		int ch = ((unsigned char)*str + mask) & 255;
+		Draw_BatchCharacter (batch, x, y, ch);
+		str++;
+		x += 8;
+	}
+}
+
 void Sbar_DrawString (int x, int y, const char *str)
 {
 	Draw_String (x, y + 24, str);
@@ -916,21 +932,26 @@ void Sbar_DrawString (int x, int y, const char *str)
 
 static void Sbar_DrawMaskedRedString (int x, int y, const char *str)
 {
+	drawcharbatch_t batch;
+	Draw_BeginCharacterBatch (&batch);
 	while (*str)
 	{
 		unsigned char ch = (unsigned char)*str;
 		if (ch < 128)
 			ch += 128;
-		Draw_Character (x, y + 24, ch);
+		Draw_BatchCharacter (&batch, x, y + 24, ch);
 		str++;
 		x += 8;
 	}
+	Draw_EndCharacterBatch (&batch);
 }
 
 // woods -- draw a string with text inside parentheses masked (the map bsp name)
 static void Sbar_DrawStringMaskedParens (int x, int y, const char *str)
 {
 	qboolean masked = false;
+	drawcharbatch_t batch;
+	Draw_BeginCharacterBatch (&batch);
 	while (*str)
 	{
 		unsigned char ch = (unsigned char)*str;
@@ -938,12 +959,13 @@ static void Sbar_DrawStringMaskedParens (int x, int y, const char *str)
 			masked = false;
 		if (masked && ch < 128)
 			ch += 128;
-		Draw_Character (x, y + 24, ch);
+		Draw_BatchCharacter (&batch, x, y + 24, ch);
 		if (ch == '(')
 			masked = true;
 		str++;
 		x += 8;
 	}
+	Draw_EndCharacterBatch (&batch);
 }
 
 /*
@@ -1044,7 +1066,7 @@ int Sbar_itoa (int num, char *buf)
 Sbar_DrawNum
 =============
 */
-void Sbar_DrawNum (int x, int y, int num, int digits, int color)
+static void Sbar_BatchNum (drawpicbatch_t *batch, int x, int y, int num, int digits, int color)
 {
 	char	str[12];
 	char	*ptr;
@@ -1066,10 +1088,18 @@ void Sbar_DrawNum (int x, int y, int num, int digits, int color)
 		else
 			frame = *ptr -'0';
 
-		Sbar_DrawPic (x,y,sb_nums[color][frame]); //johnfitz -- DrawTransPic is obsolete
+		Sbar_BatchPic (batch, x, y, sb_nums[color][frame]); //johnfitz -- DrawTransPic is obsolete
 		x += 24;
 		ptr++;
 	}
+}
+
+void Sbar_DrawNum (int x, int y, int num, int digits, int color)
+{
+	drawpicbatch_t pics;
+	Draw_BeginPicBatch (&pics);
+	Sbar_BatchNum (&pics, x, y, num, digits, color);
+	Draw_EndPicBatch (&pics);
 }
 
 /*
@@ -1565,6 +1595,7 @@ void Sbar_DrawInventory (void)
 {
 	int	i;
 	drawcharbatch_t ammo;
+	drawpicbatch_t pics;
 	float	time;
 	int	flashon;
 
@@ -1581,6 +1612,7 @@ void Sbar_DrawInventory (void)
 	}
 
 // weapons
+	Draw_BeginPicBatch (&pics);
 	for (i = 0; i < 7; i++)
 	{
 		if (cl.items & (IT_SHOTGUN<<i) )
@@ -1602,7 +1634,7 @@ void Sbar_DrawInventory (void)
 			else
 				flashon = (flashon%5) + 2;
 
-			Sbar_DrawPic (i*24, -16, sb_weapons[flashon][i]);
+			Sbar_BatchPic (&pics, i*24, -16, sb_weapons[flashon][i]);
 
 			if (flashon > 1)
 				sb_updates = 0;		// force update to remove flash
@@ -1638,7 +1670,7 @@ void Sbar_DrawInventory (void)
 						if (flashon)
 						{
 							grenadeflashing = 1;
-							Sbar_DrawPic (96, -16, hsb_weapons[flashon][2]);
+							Sbar_BatchPic (&pics, 96, -16, hsb_weapons[flashon][2]);
 						}
 					}
 				}
@@ -1648,18 +1680,18 @@ void Sbar_DrawInventory (void)
 					{
 						if (flashon && !grenadeflashing)
 						{
-							Sbar_DrawPic (96, -16, hsb_weapons[flashon][3]);
+							Sbar_BatchPic (&pics, 96, -16, hsb_weapons[flashon][3]);
 						}
 						else if (!grenadeflashing)
 						{
-							Sbar_DrawPic (96, -16, hsb_weapons[0][3]);
+							Sbar_BatchPic (&pics, 96, -16, hsb_weapons[0][3]);
 						}
 					}
 					else
-						Sbar_DrawPic (96, -16, hsb_weapons[flashon][4]);
+						Sbar_BatchPic (&pics, 96, -16, hsb_weapons[flashon][4]);
 				}
 				else
-					Sbar_DrawPic (176 + (i*24), -16, hsb_weapons[flashon][i]);
+					Sbar_BatchPic (&pics, 176 + (i*24), -16, hsb_weapons[flashon][i]);
 
 				if (flashon > 1)
 					sb_updates = 0;	// force update to remove flash
@@ -1676,11 +1708,12 @@ void Sbar_DrawInventory (void)
 			{
 				if (cl.stats[STAT_ACTIVEWEAPON] == (RIT_LAVA_NAILGUN << i))
 				{
-					Sbar_DrawPic ((i+2)*24, -16, rsb_weapons[i]);
+					Sbar_BatchPic (&pics, (i+2)*24, -16, rsb_weapons[i]);
 				}
 			}
 		}
 	}
+	Draw_EndPicBatch (&pics);
 
 // ammo counts
 	Draw_BeginCharacterBatch (&ammo);
@@ -1690,6 +1723,7 @@ void Sbar_DrawInventory (void)
 
 	flashon = 0;
 	// items
+	Draw_BeginPicBatch (&pics);
 	for (i = 0; i < 6; i++)
 	{
 		if (cl.items & (1<<(17+i)))
@@ -1704,7 +1738,7 @@ void Sbar_DrawInventory (void)
 				//MED 01/04/97 changed keys
 				if (!hipnotic || (i > 1))
 				{
-					Sbar_DrawPic (192 + i*16, -16, sb_items[i]);
+					Sbar_BatchPic (&pics, 192 + i*16, -16, sb_items[i]);
 				}
 			}
 			if (time && time > cl.time - 2)
@@ -1726,7 +1760,7 @@ void Sbar_DrawInventory (void)
 				}
 				else
 				{
-					Sbar_DrawPic (288 + i*16, -16, hsb_items[i]);
+					Sbar_BatchPic (&pics, 288 + i*16, -16, hsb_items[i]);
 				}
 				if (time && time > cl.time - 2)
 					sb_updates = 0;
@@ -1748,7 +1782,7 @@ void Sbar_DrawInventory (void)
 				}
 				else
 				{
-					Sbar_DrawPic (288 + i*16, -16, rsb_items[i]);
+					Sbar_BatchPic (&pics, 288 + i*16, -16, rsb_items[i]);
 				}
 				if (time && time > cl.time - 2)
 					sb_updates = 0;
@@ -1769,12 +1803,13 @@ void Sbar_DrawInventory (void)
 					sb_updates = 0;
 				}
 				else
-					Sbar_DrawPic (320-32 + i*8, -16, sb_sigil[i]);
+					Sbar_BatchPic (&pics, 320-32 + i*8, -16, sb_sigil[i]);
 				if (time && time > cl.time - 2)
 					sb_updates = 0;
 			}
 		}
 	}
+	Draw_EndPicBatch (&pics);
 }
 
 /*
@@ -1786,6 +1821,7 @@ void Sbar_DrawInventory_QW (void)
 {
 	int	i, ammo_x;
 	drawcharbatch_t ammo;
+	drawpicbatch_t pics;
 	drawsubpic_t backgrounds[4];
 	float	time;
 	int	flashon;
@@ -1830,6 +1866,7 @@ void Sbar_DrawInventory_QW (void)
 	Sbar_DrawSubPicsAlpha (background, backgrounds, countof(backgrounds), background_alpha);
 
 	// weapons
+	Draw_BeginPicBatchAlpha (&pics, scr_sbaralpha.value);
 	for (i = 0; i < 7; i++)
 	{
 		if (cl.items & (IT_SHOTGUN << i))
@@ -1846,7 +1883,7 @@ void Sbar_DrawInventory_QW (void)
 			else
 				flashon = (flashon % 5) + 2;
 
-			Sbar_DrawPicAlpha(20, 32 + i * 16 - (16 * extraguns) - 24, sb_weapons[flashon][i], scr_sbaralpha.value);
+			Sbar_BatchPic (&pics, 20, 32 + i * 16 - (16 * extraguns) - 24, sb_weapons[flashon][i]);
 
 			if (flashon > 1)
 				sb_updates = 0;		// force update to remove flash
@@ -1882,7 +1919,7 @@ void Sbar_DrawInventory_QW (void)
 						if (flashon)
 						{
 							grenadeflashing = 1;
-							Sbar_DrawPicAlpha(20, 40, hsb_weapons[flashon][2], scr_sbaralpha.value);
+							Sbar_BatchPic (&pics, 20, 40, hsb_weapons[flashon][2]);
 						}
 					}
 				}
@@ -1892,18 +1929,18 @@ void Sbar_DrawInventory_QW (void)
 					{
 						if (flashon && !grenadeflashing)
 						{
-							Sbar_DrawPicAlpha(20, 40, hsb_weapons[flashon][3], scr_sbaralpha.value);
+							Sbar_BatchPic (&pics, 20, 40, hsb_weapons[flashon][3]);
 						}
 						else if (!grenadeflashing)
 						{
-							Sbar_DrawPicAlpha(20, 40, hsb_weapons[0][3], scr_sbaralpha.value);
+							Sbar_BatchPic (&pics, 20, 40, hsb_weapons[0][3]);
 						}
 					}
 					else
-						Sbar_DrawPicAlpha(20, 40, hsb_weapons[flashon][4], scr_sbaralpha.value);
+						Sbar_BatchPic (&pics, 20, 40, hsb_weapons[flashon][4]);
 				}
 				else
-					Sbar_DrawPicAlpha(20, (i + 7) * 16 - 24, hsb_weapons[flashon][i], scr_sbaralpha.value);
+					Sbar_BatchPic (&pics, 20, (i + 7) * 16 - 24, hsb_weapons[flashon][i]);
 
 				if (flashon > 1)
 					sb_updates = 0;	// force update to remove flash
@@ -1920,11 +1957,12 @@ void Sbar_DrawInventory_QW (void)
 			{
 				if (cl.stats[STAT_ACTIVEWEAPON] == (RIT_LAVA_NAILGUN << i))
 				{
-					Sbar_DrawPicAlpha(20, (i + 2) * 16 - 24 + 32, rsb_weapons[i], scr_sbaralpha.value);
+					Sbar_BatchPic (&pics, 20, (i + 2) * 16 - 24 + 32, rsb_weapons[i]);
 				}
 			}
 		}
 	}
+	Draw_EndPicBatch (&pics);
 	
 	// ammo counts
 	Draw_BeginCharacterBatch (&ammo);
@@ -1939,6 +1977,7 @@ void Sbar_DrawInventory_QW (void)
 
 	flashon = 0;
 	// items
+	Draw_BeginPicBatch (&pics);
 	for (i = 0; i < 6; i++)
 	{
 		if (cl.items & (1 << (17 + i)))
@@ -1953,7 +1992,7 @@ void Sbar_DrawInventory_QW (void)
 				//MED 01/04/97 changed keys
 				if (!hipnotic || (i > 1))
 				{
-					Sbar_DrawPic(192 + i * 16, -16, sb_items[i]);
+					Sbar_BatchPic (&pics, 192 + i * 16, -16, sb_items[i]);
 				}
 			}
 			if (time && time > cl.time - 2)
@@ -1975,7 +2014,7 @@ void Sbar_DrawInventory_QW (void)
 				}
 				else
 				{
-					Sbar_DrawPic(288 + i * 16, -16, hsb_items[i]);
+					Sbar_BatchPic (&pics, 288 + i * 16, -16, hsb_items[i]);
 				}
 				if (time && time > cl.time - 2)
 					sb_updates = 0;
@@ -1997,7 +2036,7 @@ void Sbar_DrawInventory_QW (void)
 				}
 				else
 				{
-					Sbar_DrawPic(288 + i * 16, -16, rsb_items[i]);
+					Sbar_BatchPic (&pics, 288 + i * 16, -16, rsb_items[i]);
 				}
 				if (time && time > cl.time - 2)
 					sb_updates = 0;
@@ -2018,12 +2057,13 @@ void Sbar_DrawInventory_QW (void)
 						sb_updates = 0;
 					}
 					else
-						Sbar_DrawPic(320 - 32 + i * 8, -16, sb_sigil[i]);
+						Sbar_BatchPic (&pics, 320 - 32 + i * 8, -16, sb_sigil[i]);
 					if (time && time > cl.time - 2)
 						sb_updates = 0;
 				}
 			}
 	}
+	Draw_EndPicBatch (&pics);
 	GL_SetCanvas(CANVAS_SBAR);
 }
 
@@ -2035,6 +2075,7 @@ Sbar_DrawInventory_QE -- woods - keys and runes only #qehud
 void Sbar_DrawInventory_QE (void)
 {
 	int	i, x, y;
+	drawpicbatch_t pics;
 
 	GL_SetCanvas(CANVAS_BOTTOMRIGHTQE);
 	
@@ -2046,11 +2087,12 @@ void Sbar_DrawInventory_QE (void)
 	if (!scr_sbarshowqeammo.value)
 		y -= 24;
 
+	Draw_BeginPicBatch (&pics);
 	for (i = 0; i < 2; i++)
 	{
 		if (cl.items & (IT_KEY1 << i))
 		{
-			Sbar_DrawPic(x, y, sb_items[i]);
+			Sbar_BatchPic (&pics, x, y, sb_items[i]);
 			x -= sb_items[i]->width;
 		}
 	}
@@ -2068,10 +2110,11 @@ void Sbar_DrawInventory_QE (void)
 	{
 		if (cl.items & (IT_SIGIL1 << i))
 		{
-			Sbar_DrawPic(x, y, sb_sigil[i]);
+			Sbar_BatchPic (&pics, x, y, sb_sigil[i]);
 			x -= sb_sigil[i]->width;
 		}
 	}
+	Draw_EndPicBatch (&pics);
 	GL_SetCanvas(CANVAS_SBAR);
 }
 
@@ -2234,8 +2277,13 @@ void Sbar_DrawFrags(void)
 				sprintf(num, "%3d:%02d", minutes, seconds);
 		}
 
-		for (i = 0; i < 6; i++)
-			Sbar_DrawCharacter (((x + 9 + i) * 8)+3, -24, num[i] + mask);
+		{
+			drawcharbatch_t chars;
+			Draw_BeginCharacterBatch (&chars);
+			for (i = 0; i < 6; i++)
+				Draw_BatchCharacter (&chars, ((x + 9 + i) * 8)+3, 0, num[i] + mask);
+			Draw_EndCharacterBatch (&chars);
+		}
 	}
 
 	// display frag/team colors
@@ -2244,6 +2292,7 @@ void Sbar_DrawFrags(void)
 	{
 		for (i = 0; i < l; i++)
 		{
+			drawcharbatch_t chars;
 			k = fragsort[i];
 			colors = cl.teamscores[k].colors;
 
@@ -2257,15 +2306,17 @@ void Sbar_DrawFrags(void)
 
 			// draw number
 			sprintf (num, "%3i", f);
-			Sbar_DrawCharacter (((x + 1) * 8) + 4, -24, num[0]);
-			Sbar_DrawCharacter (((x + 2) * 8) + 4, -24, num[1]);
-			Sbar_DrawCharacter (((x + 3) * 8) + 4, -24, num[2]);
+			Draw_BeginCharacterBatch (&chars);
+			Draw_BatchCharacter (&chars, ((x + 1) * 8) + 4, 0, num[0]);
+			Draw_BatchCharacter (&chars, ((x + 2) * 8) + 4, 0, num[1]);
+			Draw_BatchCharacter (&chars, ((x + 3) * 8) + 4, 0, num[2]);
 
 			if ((teamscores && bottom == (cl.scores[cl.viewentity - 1].pants.basic & 15) << 4) || (!teamscores && (k == cl.viewentity - 1)))
 			{
-				Sbar_DrawCharacter((x) * 8 + 5, -24, 16);
-				Sbar_DrawCharacter((x + 4) * 8 + 1, -24, 17);
+				Draw_BatchCharacter (&chars, (x) * 8 + 5, 0, 16);
+				Draw_BatchCharacter (&chars, (x + 4) * 8 + 1, 0, 17);
 			}
+			Draw_EndCharacterBatch (&chars);
 
 			x += 4;
 		}
@@ -2277,6 +2328,7 @@ void Sbar_DrawFrags(void)
 
 		for (i = 0, x = 184; i < numscores; i++, x += 32)
 		{
+			drawcharbatch_t chars;
 			s = &cl.scores[fragsort[i]];
 			if (!s->name[0])
 				continue;
@@ -2289,16 +2341,18 @@ void Sbar_DrawFrags(void)
 
 			// number
 			sprintf(num, "%3i", s->frags);
-			Sbar_DrawCharacter (x + 12, -24, num[0]);
-			Sbar_DrawCharacter (x + 20, -24, num[1]);
-			Sbar_DrawCharacter (x + 28, -24, num[2]);
+			Draw_BeginCharacterBatch (&chars);
+			Draw_BatchCharacter (&chars, x + 12, 0, num[0]);
+			Draw_BatchCharacter (&chars, x + 20, 0, num[1]);
+			Draw_BatchCharacter (&chars, x + 28, 0, num[2]);
 
 			// brackets
 			if (fragsort[i] == cl.viewentity - 1)
 			{
-				Sbar_DrawCharacter (x + 6, -24, 16);
-				Sbar_DrawCharacter (x + 32, -24, 17);
+				Draw_BatchCharacter (&chars, x + 6, 0, 16);
+				Draw_BatchCharacter (&chars, x + 32, 0, 17);
 			}
+			Draw_EndCharacterBatch (&chars);
 		}
 
 	}
@@ -2836,6 +2890,8 @@ void Sbar_Draw (void)
 
 	if (clampedSbar == 3 && scr_viewsize.value <= 110) // qe hud does not use 'traditional sbar' #qehud
 	{
+		drawpicbatch_t pics;
+
 		GL_SetCanvas(CANVAS_BOTTOMLEFTQE);
 
 		// armor
@@ -2847,40 +2903,42 @@ void Sbar_Draw (void)
 		{
 			Sbar_DrawSubPicAlpha(18, 116, sb_sbar, 0, 0, 24, 24, 1); // armor sbar background
 
+			Draw_BeginPicBatch (&pics);
 			if (cl.items & IT_INVULNERABILITY)
 			{
 				if (invuln && !observer && !mpdemo) // woods #obspent
-					Sbar_DrawNum(50, 116, 666, 3, 1);
+					Sbar_BatchNum(&pics, 50, 116, 666, 3, 1);
 				else
-					Sbar_DrawNum(50, 115, cl.stats[STAT_ARMOR], 3
+					Sbar_BatchNum(&pics, 50, 115, cl.stats[STAT_ARMOR], 3
 						, cl.stats[STAT_ARMOR] <= 25);
-				Sbar_DrawPic(18, 116, draw_disc);
+				Sbar_BatchPic(&pics, 18, 116, draw_disc);
 			}
 			else
 			{
 				if (rogue)
 				{
-					Sbar_DrawNum(50, 115, cl.stats[STAT_ARMOR], 3,
+					Sbar_BatchNum(&pics, 50, 115, cl.stats[STAT_ARMOR], 3,
 						cl.stats[STAT_ARMOR] <= 25);
 					if (cl.items & RIT_ARMOR3)
-						Sbar_DrawPic(18, 115, sb_armor[2]);
+						Sbar_BatchPic(&pics, 18, 115, sb_armor[2]);
 					else if (cl.items & RIT_ARMOR2)
-						Sbar_DrawPic(18, 115, sb_armor[1]);
+						Sbar_BatchPic(&pics, 18, 115, sb_armor[1]);
 					else if (cl.items & RIT_ARMOR1)
-						Sbar_DrawPic(18, 115, sb_armor[0]);
+						Sbar_BatchPic(&pics, 18, 115, sb_armor[0]);
 				}
 				else
 				{
-					Sbar_DrawNum(50, 115, cl.stats[STAT_ARMOR], 3
+					Sbar_BatchNum(&pics, 50, 115, cl.stats[STAT_ARMOR], 3
 						, cl.stats[STAT_ARMOR] <= 25);
 					if (cl.items & IT_ARMOR3)
-						Sbar_DrawPic(18, 115, sb_armor[2]);
+						Sbar_BatchPic(&pics, 18, 115, sb_armor[2]);
 					else if (cl.items & IT_ARMOR2)
-						Sbar_DrawPic(18, 115, sb_armor[1]);
+						Sbar_BatchPic(&pics, 18, 115, sb_armor[1]);
 					else if (cl.items & IT_ARMOR1)
-						Sbar_DrawPic(18, 115, sb_armor[0]);
+						Sbar_BatchPic(&pics, 18, 115, sb_armor[0]);
 				}
 			}
+			Draw_EndPicBatch (&pics);
 		}
 
 		// face
@@ -2896,57 +2954,60 @@ void Sbar_Draw (void)
 		if (scr_sbarshowqeammo.value)
 			Sbar_DrawSubPicAlpha(280, 140, sb_sbar, 0, 0, 24, 24, 1); // ammo sbar background
 
-		// ammo icon
+		// ammo icon & count
 		if (scr_sbarshowqeammo.value)
 		{
+			Draw_BeginPicBatch (&pics);
 			if (rogue)
 			{
 				if (cl.items & RIT_SHELLS)
-					Sbar_DrawPic(280, 140, sb_ammo[0]);
+					Sbar_BatchPic(&pics, 280, 140, sb_ammo[0]);
 				else if (cl.items & RIT_NAILS)
-					Sbar_DrawPic(280, 140, sb_ammo[1]);
+					Sbar_BatchPic(&pics, 280, 140, sb_ammo[1]);
 				else if (cl.items & RIT_ROCKETS)
-					Sbar_DrawPic(280, 140, sb_ammo[2]);
+					Sbar_BatchPic(&pics, 280, 140, sb_ammo[2]);
 				else if (cl.items & RIT_CELLS)
-					Sbar_DrawPic(280, 140, sb_ammo[3]);
+					Sbar_BatchPic(&pics, 280, 140, sb_ammo[3]);
 				else if (cl.items & RIT_LAVA_NAILS)
-					Sbar_DrawPic(280, 140, rsb_ammo[0]);
+					Sbar_BatchPic(&pics, 280, 140, rsb_ammo[0]);
 				else if (cl.items & RIT_PLASMA_AMMO)
-					Sbar_DrawPic(280, 140, rsb_ammo[1]);
+					Sbar_BatchPic(&pics, 280, 140, rsb_ammo[1]);
 				else if (cl.items & RIT_MULTI_ROCKETS)
-					Sbar_DrawPic(280, 140, rsb_ammo[2]);
+					Sbar_BatchPic(&pics, 280, 140, rsb_ammo[2]);
 			}
 			else
 			{
 				if (cl.items & IT_SHELLS)
-					Sbar_DrawPic(280, 140, sb_ammo[0]);
+					Sbar_BatchPic(&pics, 280, 140, sb_ammo[0]);
 				else if (cl.items & IT_NAILS)
-					Sbar_DrawPic(280, 140, sb_ammo[1]);
+					Sbar_BatchPic(&pics, 280, 140, sb_ammo[1]);
 				else if (cl.items & IT_ROCKETS)
-					Sbar_DrawPic(280, 140, sb_ammo[2]);
+					Sbar_BatchPic(&pics, 280, 140, sb_ammo[2]);
 				else if (cl.items & IT_CELLS)
-					Sbar_DrawPic(280, 140, sb_ammo[3]);
+					Sbar_BatchPic(&pics, 280, 140, sb_ammo[3]);
 			}
+			Sbar_BatchNum(&pics, 198, 140, cl.stats[STAT_AMMO], 3,
+				cl.stats[STAT_AMMO] <= 10);
+			Draw_EndPicBatch (&pics);
 		}
-
-		if (scr_sbarshowqeammo.value) //draw ammo if you have it
-			Sbar_DrawNum(198, 140, cl.stats[STAT_AMMO], 3,
-			cl.stats[STAT_AMMO] <= 10);
 	}
 	else // end qe hud, use traditional sbar
 	{
 		if (scr_viewsize.value < 120) //johnfitz -- check viewsize instead of sb_lines
 		{
+			drawpicbatch_t pics;
+
 			Sbar_DrawPicAlpha (0, 0, sb_sbar, scr_sbaralpha.value); //johnfitz -- scr_sbaralpha
 
 	   // keys (hipnotic only)
 			//MED 01/04/97 moved keys here so they would not be overwritten
+			Draw_BeginPicBatch (&pics);
 			if (hipnotic)
 			{
 				if (cl.items & IT_KEY1)
-					Sbar_DrawPic (209, 3, sb_items[0]);
+					Sbar_BatchPic (&pics, 209, 3, sb_items[0]);
 				if (cl.items & IT_KEY2)
-					Sbar_DrawPic (209, 12, sb_items[1]);
+					Sbar_BatchPic (&pics, 209, 12, sb_items[1]);
 			}
 			if (sb_showscores == false)
 			{
@@ -2954,77 +3015,84 @@ void Sbar_Draw (void)
 				if (cl.items & IT_INVULNERABILITY)
 				{
 					if (!observer && !mpdemo) // woods #obspent
-						Sbar_DrawNum (24, 0, 666, 3, 1);
+						Sbar_BatchNum (&pics, 24, 0, 666, 3, 1);
 					else
-						Sbar_DrawNum(24, 0, cl.stats[STAT_ARMOR], 3
+						Sbar_BatchNum (&pics, 24, 0, cl.stats[STAT_ARMOR], 3
 							, cl.stats[STAT_ARMOR] <= 25);
-					Sbar_DrawPic (0, 0, draw_disc);
+					Sbar_BatchPic (&pics, 0, 0, draw_disc);
 				}
 				else
 				{
 					if (rogue)
 					{
-						Sbar_DrawNum (24, 0, cl.stats[STAT_ARMOR], 3,
+						Sbar_BatchNum (&pics, 24, 0, cl.stats[STAT_ARMOR], 3,
 							cl.stats[STAT_ARMOR] <= 25);
 						if (cl.items & RIT_ARMOR3)
-							Sbar_DrawPic (0, 0, sb_armor[2]);
+							Sbar_BatchPic (&pics, 0, 0, sb_armor[2]);
 						else if (cl.items & RIT_ARMOR2)
-							Sbar_DrawPic (0, 0, sb_armor[1]);
+							Sbar_BatchPic (&pics, 0, 0, sb_armor[1]);
 						else if (cl.items & RIT_ARMOR1)
-							Sbar_DrawPic (0, 0, sb_armor[0]);
+							Sbar_BatchPic (&pics, 0, 0, sb_armor[0]);
 					}
 					else
 					{
-						Sbar_DrawNum (24, 0, cl.stats[STAT_ARMOR], 3
+						Sbar_BatchNum (&pics, 24, 0, cl.stats[STAT_ARMOR], 3
 							, cl.stats[STAT_ARMOR] <= 25);
 						if (cl.items & IT_ARMOR3)
-							Sbar_DrawPic (0, 0, sb_armor[2]);
+							Sbar_BatchPic (&pics, 0, 0, sb_armor[2]);
 						else if (cl.items & IT_ARMOR2)
-							Sbar_DrawPic (0, 0, sb_armor[1]);
+							Sbar_BatchPic (&pics, 0, 0, sb_armor[1]);
 						else if (cl.items & IT_ARMOR1)
-							Sbar_DrawPic (0, 0, sb_armor[0]);
+							Sbar_BatchPic (&pics, 0, 0, sb_armor[0]);
 					}
 				}
+				Draw_EndPicBatch (&pics);
 
 				// face
 				Sbar_DrawFace ();
 
+				Draw_BeginPicBatch (&pics);
 				// health
-				Sbar_DrawNum (136, 0, cl.stats[STAT_HEALTH], 3
+				Sbar_BatchNum (&pics, 136, 0, cl.stats[STAT_HEALTH], 3
 					, cl.stats[STAT_HEALTH] <= 25);
 
 				// ammo icon
 				if (rogue)
 				{
 					if (cl.items & RIT_SHELLS)
-						Sbar_DrawPic (224, 0, sb_ammo[0]);
+						Sbar_BatchPic (&pics, 224, 0, sb_ammo[0]);
 					else if (cl.items & RIT_NAILS)
-						Sbar_DrawPic (224, 0, sb_ammo[1]);
+						Sbar_BatchPic (&pics, 224, 0, sb_ammo[1]);
 					else if (cl.items & RIT_ROCKETS)
-						Sbar_DrawPic (224, 0, sb_ammo[2]);
+						Sbar_BatchPic (&pics, 224, 0, sb_ammo[2]);
 					else if (cl.items & RIT_CELLS)
-						Sbar_DrawPic (224, 0, sb_ammo[3]);
+						Sbar_BatchPic (&pics, 224, 0, sb_ammo[3]);
 					else if (cl.items & RIT_LAVA_NAILS)
-						Sbar_DrawPic (224, 0, rsb_ammo[0]);
+						Sbar_BatchPic (&pics, 224, 0, rsb_ammo[0]);
 					else if (cl.items & RIT_PLASMA_AMMO)
-						Sbar_DrawPic (224, 0, rsb_ammo[1]);
+						Sbar_BatchPic (&pics, 224, 0, rsb_ammo[1]);
 					else if (cl.items & RIT_MULTI_ROCKETS)
-						Sbar_DrawPic (224, 0, rsb_ammo[2]);
+						Sbar_BatchPic (&pics, 224, 0, rsb_ammo[2]);
 				}
 				else
 				{
 					if (cl.items & IT_SHELLS)
-						Sbar_DrawPic (224, 0, sb_ammo[0]);
+						Sbar_BatchPic (&pics, 224, 0, sb_ammo[0]);
 					else if (cl.items & IT_NAILS)
-						Sbar_DrawPic (224, 0, sb_ammo[1]);
+						Sbar_BatchPic (&pics, 224, 0, sb_ammo[1]);
 					else if (cl.items & IT_ROCKETS)
-						Sbar_DrawPic (224, 0, sb_ammo[2]);
+						Sbar_BatchPic (&pics, 224, 0, sb_ammo[2]);
 					else if (cl.items & IT_CELLS)
-						Sbar_DrawPic (224, 0, sb_ammo[3]);
+						Sbar_BatchPic (&pics, 224, 0, sb_ammo[3]);
 				}
 
-				Sbar_DrawNum (248, 0, cl.stats[STAT_AMMO], 3,
+				Sbar_BatchNum (&pics, 248, 0, cl.stats[STAT_AMMO], 3,
 					cl.stats[STAT_AMMO] <= 10);
+				Draw_EndPicBatch (&pics);
+			}
+			else
+			{
+				Draw_EndPicBatch (&pics);
 			}
 		}
 
@@ -3190,14 +3258,17 @@ Sbar_IntermissionText
 */
 void Sbar_IntermissionText (int x, int y, const char *str, int color)
 {
+	drawpicbatch_t pics;
+	Draw_BeginPicBatch (&pics);
 	while (*str)
 	{
 		qpic_t *pic = Sbar_IntermissionPicForChar (*str++, color);
 		if (!pic)
 			continue;
-		Draw_Pic (x, y, pic);
-		x += pic ? pic->width : 24;
+		Draw_BatchPic (&pics, x, y, pic);
+		x += pic->width;
 	}
+	Draw_EndPicBatch (&pics);
 }
 
 /*
@@ -3410,72 +3481,50 @@ void Sbar_DeathmatchOverlay (void)
 		Draw_Fill(x - 64, y, 1, 10, 0, 1);	//Border - Left // woods #scoreboard
 		Draw_Fill(x + 296 + w, y, 1, 10, 0, 1);	//Border - Right // woods #scoreboard
 
-		if (s->spectator == 1)	//2 is 'spectator-with-scores' (temporarily inactive players).
-		{
-			Draw_String (score_x, y, "spect");
-		}
-		else
+		if (s->spectator != 1)
 		{
 			Draw_FillPlayer ( score_x, y, 40, 4, s->shirt, 1); //johnfitz -- stretched overlays
 			Draw_FillPlayer ( score_x, y+4, 40, 4, s->pants, 1); //johnfitz -- stretched overlays
-
-		// draw number
-			f = s->frags;
-			sprintf (num, "%3i",f);
-
-			Draw_Character ( score_x+8 , y, num[0]); //johnfitz -- stretched overlays
-			Draw_Character ( score_x+16 , y, num[1]); //johnfitz -- stretched overlays
-			Draw_Character ( score_x+24 , y, num[2]); //johnfitz -- stretched overlays
-
-			if (k == cl.viewentity - 1)
-				Draw_Character ( score_x + 48, y, 12); //johnfitz -- stretched overlays
 		}
 
-#if 0
 		{
-			int total;
-			int n, minutes, tens, units;
+			drawcharbatch_t rowchars;
+			Draw_BeginCharacterBatch (&rowchars);
 
-			// draw time
-			total = cl.completed_time - s->entertime;
-			minutes = (int)total/60;
-			n = total - minutes*60;
-			tens = n/10;
-			units = n%10;
-
-			sprintf (num, "%3i:%i%i", minutes, tens, units);
-
-			M_Print ( x+48 , y, num); //johnfitz -- was Draw_String, changed for stretched overlays
-		}
-#endif
-
-		sprintf (num, "%4i", CLAMP(1, s->ping, 9999)); // a real connection never reads 0ms
-		if (ct > 5) // woods don't print 0 print on connect
-			Draw_String ((x-8*4)-22, y, num); // woods centered ping #scoreboard
-
-		if (ct > 5 && s->packetloss > 0) // blank when clean -- 0 also means 'not measured' on servers without pings support
-		{
-			sprintf (num, "%3i", CLAMP(0, s->packetloss, 100));
-			if (s->packetloss >= 10)
-				Draw_StringMasked (x - 10, y, num); // colored so chronic loss stands out
+			if (s->spectator == 1)	//2 is 'spectator-with-scores' (temporarily inactive players).
+			{
+				Sbar_BatchString (&rowchars, score_x, y, "spect", 0);
+			}
 			else
-				Draw_String (x - 10, y, num);
-		}
+			{
+			// draw number
+				f = s->frags;
+				sprintf (num, "%3i",f);
 
-	// draw name
-		/*if (cl.matchinp) // match running 0 for CRCTF, 255 for CDMOD
-		{
-			sprintf (shortname, "%.15s", s->name); // woods only show name, not 'ready' or 'afk' -- 15 characters
-			M_PrintWhite (x + 64, y, shortname); //johnfitz -- was Draw_String, changed for stretched overlays // woods changed to white #scoreboard
-		}
-		else*/
+				Draw_BatchCharacter (&rowchars, score_x+8 , y, num[0]); //johnfitz -- stretched overlays
+				Draw_BatchCharacter (&rowchars, score_x+16 , y, num[1]); //johnfitz -- stretched overlays
+				Draw_BatchCharacter (&rowchars, score_x+24 , y, num[2]); //johnfitz -- stretched overlays
 
-		if (cl_contentfilter.value == 2 && was_filtered) // woods #contentfilter
-		{
-			Draw_String(score_x + 64, y, filtered_name);
-		}
-		else {
-			Draw_String(score_x + 64, y, s->name); // woods white names #scoreboard
+				if (k == cl.viewentity - 1)
+					Draw_BatchCharacter (&rowchars, score_x + 48, y, 12); //johnfitz -- stretched overlays
+			}
+
+			sprintf (num, "%4i", CLAMP(1, s->ping, 9999)); // a real connection never reads 0ms
+			if (ct > 5) // woods don't print 0 print on connect
+				Sbar_BatchString (&rowchars, (x-8*4)-22, y, num, 0); // woods centered ping #scoreboard
+
+			if (ct > 5 && s->packetloss > 0) // blank when clean -- 0 also means 'not measured' on servers without pings support
+			{
+				sprintf (num, "%3i", CLAMP(0, s->packetloss, 100));
+				Sbar_BatchString (&rowchars, x - 10, y, num, (s->packetloss >= 10) ? 128 : 0);
+			}
+
+			if (cl_contentfilter.value == 2 && was_filtered) // woods #contentfilter
+				Sbar_BatchString (&rowchars, score_x + 64, y, filtered_name, 0);
+			else
+				Sbar_BatchString (&rowchars, score_x + 64, y, s->name, 0); // woods white names #scoreboard
+
+			Draw_EndCharacterBatch (&rowchars);
 		}
 		
 		y += 10;
@@ -3576,22 +3625,28 @@ void Sbar_MiniDeathmatchOverlay (void)
 		Draw_FillPlayer (x, y+1, 40, 4, s->shirt, 1);
 		Draw_FillPlayer (x, y+5, 40, 3, s->pants, 1);
 
-	// number
-		f = s->frags;
-		sprintf (num, "%3i",f);
-		Draw_Character (x+ 8, y, num[0]);
-		Draw_Character (x+16, y, num[1]);
-		Draw_Character (x+24, y, num[2]);
-
-	// brackets
-		if (k == cl.viewentity - 1)
 		{
-			Draw_Character (x, y, 16);
-			Draw_Character (x+32, y, 17);
-		}
+			drawcharbatch_t rowchars;
+			Draw_BeginCharacterBatch (&rowchars);
 
-	// name
-		Draw_String (x+48, y, s->name);
+		// number
+			f = s->frags;
+			sprintf (num, "%3i",f);
+			Draw_BatchCharacter (&rowchars, x+ 8, y, num[0]);
+			Draw_BatchCharacter (&rowchars, x+16, y, num[1]);
+			Draw_BatchCharacter (&rowchars, x+24, y, num[2]);
+
+		// brackets
+			if (k == cl.viewentity - 1)
+			{
+				Draw_BatchCharacter (&rowchars, x, y, 16);
+				Draw_BatchCharacter (&rowchars, x+32, y, 17);
+			}
+
+		// name
+			Sbar_BatchString (&rowchars, x+48, y, s->name, 0);
+			Draw_EndCharacterBatch (&rowchars);
+		}
 	}
 }
 

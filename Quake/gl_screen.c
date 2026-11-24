@@ -1581,18 +1581,23 @@ void SCR_DrawDemoControls(void)
 	M_Print(x - strlen(name) * DEMOBAR_CHAR_W / 2, y, name);
 
 	// Draw seek bar rail
-	x = (canvasleft + canvasright) / 2 - DEMOBAR_TIMEBAR_CHARS / 2 * DEMOBAR_CHAR_W;
-	y -= DEMOBAR_CHAR_W;
-	Draw_Character(x - DEMOBAR_CHAR_W, y, 128);
-	for (i = 0; i < DEMOBAR_TIMEBAR_CHARS; i++)
-		Draw_Character(x + i * DEMOBAR_CHAR_W, y, 129);
-	Draw_Character(x + i * DEMOBAR_CHAR_W, y, 130);
+	{
+		drawcharbatch_t rail;
+		x = (canvasleft + canvasright) / 2 - DEMOBAR_TIMEBAR_CHARS / 2 * DEMOBAR_CHAR_W;
+		y -= DEMOBAR_CHAR_W;
+		Draw_BeginCharacterBatch (&rail);
+		Draw_BatchCharacter(&rail, x - DEMOBAR_CHAR_W, y, 128);
+		for (i = 0; i < DEMOBAR_TIMEBAR_CHARS; i++)
+			Draw_BatchCharacter(&rail, x + i * DEMOBAR_CHAR_W, y, 129);
+		Draw_BatchCharacter(&rail, x + i * DEMOBAR_CHAR_W, y, 130);
 
-	x += ((DEMOBAR_TIMEBAR_CHARS - 1) * DEMOBAR_CHAR_W - (2 * DEMOBAR_CURSOR_MARGIN)) * frac;
-	x += DEMOBAR_CURSOR_MARGIN;
+		x += ((DEMOBAR_TIMEBAR_CHARS - 1) * DEMOBAR_CHAR_W - (2 * DEMOBAR_CURSOR_MARGIN)) * frac;
+		x += DEMOBAR_CURSOR_MARGIN;
 
-	// Now draw the seek bar cursor with the adjusted 'x' position
-	Draw_Character(x, y, 131);
+		// Now draw the seek bar cursor with the adjusted 'x' position
+		Draw_BatchCharacter(&rail, x, y, 131);
+		Draw_EndCharacterBatch (&rail);
+	}
 
 	// Print current time above the cursor
 	y -= 11;
@@ -2467,10 +2472,14 @@ int SCR_DrawTeamScores(int x, int y, int l, qboolean use_demo_calculation, int* 
 
 				// draw number
 				sprintf(num, "%3i", f);
-
-				Sbar_DrawCharacter(((x + 1) * 8) + 7, y - 23, num[0]);
-				Sbar_DrawCharacter(((x + 2) * 8) + 7, y - 23, num[1]);
-				Sbar_DrawCharacter(((x + 3) * 8) + 7, y - 23, num[2]);
+				{
+					drawcharbatch_t chars;
+					Draw_BeginCharacterBatch (&chars);
+					Draw_BatchCharacter (&chars, ((x + 1) * 8) + 7, y + 1, num[0]);
+					Draw_BatchCharacter (&chars, ((x + 2) * 8) + 7, y + 1, num[1]);
+					Draw_BatchCharacter (&chars, ((x + 3) * 8) + 7, y + 1, num[2]);
+					Draw_EndCharacterBatch (&chars);
+				}
 
 				y += 9;  // woods to position vertical
 			}

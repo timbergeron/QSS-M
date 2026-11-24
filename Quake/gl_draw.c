@@ -2391,6 +2391,102 @@ void Draw_Pic (int x, int y, qpic_t *pic)
 	glEnd ();
 }
 
+void Draw_BeginPicBatch (drawpicbatch_t *batch)
+{
+	batch->active = false;
+	batch->started = false;
+	batch->blend = false;
+	batch->alpha = 1.0f;
+	batch->texture = NULL;
+}
+
+void Draw_BeginPicBatchAlpha (drawpicbatch_t *batch, float alpha)
+{
+	Draw_BeginPicBatch (batch);
+	batch->blend = true;
+	batch->alpha = alpha;
+}
+
+void Draw_BatchPic (drawpicbatch_t *batch, int x, int y, qpic_t *pic)
+{
+	glpic_t gl;
+
+	if (!pic || (uintptr_t)pic->data < 0x1000)
+		return;
+
+	if (scrap_dirty)
+	{
+		if (batch->active)
+		{
+			glEnd ();
+			batch->active = false;
+			batch->texture = NULL;
+		}
+		Scrap_Upload ();
+	}
+
+	memcpy (&gl, pic->data, sizeof(gl));
+
+	if (!batch->started)
+	{
+		if (batch->blend)
+		{
+			if (premul_hud)
+				glColor4f (batch->alpha, batch->alpha, batch->alpha, batch->alpha);
+			else
+			{
+				glDisable (GL_ALPHA_TEST);
+				glEnable (GL_BLEND);
+				glTexEnvf (GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_MODULATE);
+				glColor4f (1.0f, 1.0f, 1.0f, batch->alpha);
+			}
+		}
+		batch->started = true;
+	}
+
+	if (!batch->active || batch->texture != (void *)gl.gltexture)
+	{
+		if (batch->active)
+			glEnd ();
+		GL_Bind (gl.gltexture);
+		glBegin (GL_QUADS);
+		batch->active = true;
+		batch->texture = (void *)gl.gltexture;
+	}
+
+	glTexCoord2f (gl.sl, gl.tl);
+	glVertex2f (x, y);
+	glTexCoord2f (gl.sh, gl.tl);
+	glVertex2f (x + pic->width, y);
+	glTexCoord2f (gl.sh, gl.th);
+	glVertex2f (x + pic->width, y + pic->height);
+	glTexCoord2f (gl.sl, gl.th);
+	glVertex2f (x, y + pic->height);
+}
+
+void Draw_EndPicBatch (drawpicbatch_t *batch)
+{
+	if (batch->active)
+	{
+		glEnd ();
+		batch->active = false;
+		batch->texture = NULL;
+	}
+	if (batch->started && batch->blend)
+	{
+		if (premul_hud)
+			glColor4f (1.0f, 1.0f, 1.0f, 1.0f);
+		else
+		{
+			glColor4f (1.0f, 1.0f, 1.0f, 1.0f);
+			glTexEnvf (GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_REPLACE);
+			glDisable (GL_BLEND);
+			glEnable (GL_ALPHA_TEST);
+		}
+	}
+	batch->started = false;
+}
+
 /*
 =============
 Draw_PicRGBA -- woods #cursorcolor
