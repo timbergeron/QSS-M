@@ -109,6 +109,7 @@ void Con_SelectAll (void);
 void Con_MoveSelection (int dir_x, int dir_y);
 qboolean Con_CopySelectionToClipboard (void);
 qboolean Con_ChatMouseButton (qboolean down);
+qboolean Con_CopyHotLink (void); // woods #conurl -- right-click copies the hovered link
 void Con_ReloadIBeamCursor (void); // woods #customcursor - reload console cursors
 
 //

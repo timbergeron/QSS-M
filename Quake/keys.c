@@ -3836,6 +3836,8 @@ void Key_EventWithKeycode (int key, qboolean down, int keycode)
 	if (key_dest == key_console) // woods mouse2 to get to menu from console
 		if (down && (key == K_MOUSE2 || key == K_MOUSE4))
 		{
+			if (key == K_MOUSE2 && Con_CopyHotLink()) // woods #conurl -- right-click on a link copies it
+				return;
 			if (CSQC_HandleKeyEvent(down, key, 0))	//Spike -- CSQC needs to be able to intercept escape. Note that shift+escape will always give the console for buggy mods.
 				return;
 			M_ToggleMenu(1);

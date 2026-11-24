@@ -132,7 +132,8 @@ qboolean	con_initialized;
 // woods #conselection ported from ironwail
 
 typedef struct { int line; int col; } conofs_t;
-typedef struct { const char *path; conofs_t begin, end; } conlink_t;
+typedef enum { CLT_FILE, CLT_WEB, CLT_SERVER } conlinktype_t; // woods #conurl
+typedef struct { const char *path; conofs_t begin, end; conlinktype_t type; } conlink_t;
 typedef struct { conofs_t begin, end; } conselection_t;
 
 typedef enum {
@@ -165,7 +166,7 @@ static void Con_SetHotLink(conlink_t* link) { con_hotlink = Con_LinksEnabled() ?
 static void Con_ClearSelection(void) { memset(&con_selection, 0, sizeof(con_selection)); }
 static void Con_EnterCursorMode(void);
 static void Con_LeaveCursorMode(void);
-static qboolean Con_IsWebURL (const char *s); // woods #conurl
+static qboolean Con_OpenLink (const conlink_t *link); // woods #conurl
 
 
 extern double host_frametime;
@@ -998,7 +999,7 @@ static void Con_SetMouseState (conmouse_t state)
         break;
     case CMS_NOTPRESSED:
         if (con_mousestate != CMS_DRAGGING && Con_LinksEnabled() && con_hotlink &&
-            !(Con_IsWebURL(con_hotlink->path) ? SDL_OpenURL(con_hotlink->path) : Sys_Explore(con_hotlink->path))) // woods #conurl
+            !Con_OpenLink(con_hotlink)) // woods #conurl
             S_LocalSound("misc/menu2.wav");
         con_scrolldelta = 0.f; con_scrollspeed = 0.f;
         break;
@@ -1875,18 +1876,19 @@ static void RideDelay_Deferred(void *param) // runequake changelevel hack -- run
 ================
 Con_AutoLink -- woods #conurl
 
-Web URLs inside printed text become console links. The source text is
-scanned once per print (no allocation unless a URL is found); offsets are
-recorded as Con_Print writes the URL's characters, so word wrap, markup and
-colour masks don't need to be mirrored here.
+Web URLs and server addresses (host:port) inside printed text become console
+links. The source text is scanned once per print (no allocation unless a link
+is found); offsets are recorded as Con_Print writes the link's characters, so
+word wrap, markup and colour masks don't need to be mirrored here.
 ================
 */
 #define CON_MAX_AUTOLINKS 8
 
 typedef struct
 {
-	const char	*start, *end;	// source text range [start, end)
-	qboolean	www;			// "www." with no scheme: prefix https://
+	const char		*start, *end;	// source text range [start, end)
+	conlinktype_t	type;
+	qboolean		www;			// "www." with no scheme: prefix https://
 } conurl_t;
 
 typedef struct
@@ -1897,7 +1899,13 @@ typedef struct
 	conofs_t	begin, end;
 } conautolink_t;
 
-static qboolean con_autolink_suppress = false; // set while Con_LinkPrintf prints its own link
+// set while Con_LinkPrintf prints: records the printed text's non-blank
+// extent, and keeps the auto scan from adding a second link over it
+static struct
+{
+	qboolean	active, started;
+	conofs_t	begin, end;
+} con_capture;
 
 static qboolean Con_IsURLChar (int c)
 {
@@ -1917,9 +1925,125 @@ static qboolean Con_IsWebURL (const char *s)
 	return !q_strncasecmp (s, "https://", 8) || !q_strncasecmp (s, "http://", 7);
 }
 
-static int Con_FindURLs (const char *txt, conurl_t *urls, int maxurls)
+static qboolean Con_IsHostChar (int c)
 {
-	const char	*s, *host, *e, *p;
+	return q_isalnum (c) || c == '.' || c == '-';
+}
+
+// file extensions that would otherwise pass as a TLD ("defs.qc:120")
+static qboolean Con_IsFileExtension (const char *s, size_t len)
+{
+	static const char *const exts[] = {
+		"qc", "bsp", "dat", "cfg", "rc", "mdl", "md3", "md5mesh", "iqm", "spr", "lmp",
+		"wad", "pak", "pk3", "zip", "wav", "ogg", "mp3", "flac", "txt", "log", "dem",
+		"mvd", "qwd", "dz", "ent", "lit", "loc", "png", "tga", "jpg", "jpeg", "pcx",
+		"json", "exe", "dll", "cpp", NULL
+	};
+	int i;
+
+	for (i = 0; exts[i]; i++)
+		if (strlen (exts[i]) == len && !q_strncasecmp (s, exts[i], len))
+			return true;
+	return false;
+}
+
+/*
+Matches "host:port" around the ':' at colon. host is a dotted IPv4 address
+or a hostname whose last label is alphabetic; the port is required, which
+keeps times ("12:30") and plain domains out. Returns the start or NULL.
+*/
+static const char *Con_MatchServer (const char *txt, const char *minstart, const char *colon, const char **out_end)
+{
+	const char	*start, *p, *label, *e;
+	int			labels, port, digits;
+	qboolean	numeric;
+
+	start = colon;
+	while (start > minstart && Con_IsHostChar ((unsigned char)start[-1]))
+		start--;
+	if (start == minstart && minstart > txt)
+		return NULL; // runs into the previous link
+	if (start > txt && strchr ("/@:_\\", start[-1]))
+		return NULL; // part of a path, URL or e-mail address
+
+	// a colour code right before the host ("^7host", "^x0f0host")
+	if (start > txt && start[-1] == '^')
+	{
+		if ((*start == 'x' || *start == 'X') && colon - start > 4)
+			start += 4;
+		else
+			start++;
+	}
+	while (start < colon && (*start == '.' || *start == '-'))
+		start++;
+	if (start == colon || colon[-1] == '.' || colon[-1] == '-')
+		return NULL;
+
+	// labels: non-empty, all numeric (IPv4) or ending in an alphabetic TLD
+	labels = 0;
+	numeric = true;
+	label = start;
+	for (p = start; ; p++)
+	{
+		if (p == colon || *p == '.')
+		{
+			if (p == label)
+				return NULL;
+			labels++;
+			if (numeric)
+			{
+				const char *d;
+				int v = 0;
+				for (d = label; d < p; d++)
+				{
+					if (!q_isdigit ((unsigned char)*d))
+					{
+						numeric = false;
+						break;
+					}
+					v = v * 10 + (*d - '0');
+				}
+				if (numeric && (p - label > 3 || v > 255))
+					return NULL;
+			}
+			if (p == colon)
+				break;
+			label = p + 1;
+		}
+	}
+	if (labels < 2)
+		return NULL;
+	if (numeric)
+	{
+		if (labels != 4)
+			return NULL;
+	}
+	else
+	{
+		for (p = label; p < colon; p++)
+			if (!q_isalpha ((unsigned char)*p))
+				return NULL;
+		if (colon - label < 2 || Con_IsFileExtension (label, colon - label))
+			return NULL;
+	}
+
+	for (e = colon + 1, port = 0, digits = 0; q_isdigit ((unsigned char)*e) && digits < 6; e++, digits++)
+		port = port * 10 + (*e - '0');
+	if (!digits || digits > 5 || port < 1 || port > 65535)
+		return NULL;
+	// must end the word: "host:26000/x", "host:26000:1" and "host:123abc" aren't servers
+	if (q_isalnum ((unsigned char)*e) || (*e && strchr ("/:@_-", *e)))
+		return NULL;
+	if (*e == '.' && q_isalnum ((unsigned char)e[1]))
+		return NULL;
+
+	*out_end = e;
+	return start;
+}
+
+static int Con_FindLinks (const char *txt, conurl_t *urls, int maxurls)
+{
+	const char	*s, *host, *e, *p, *minstart = txt;
 	int			n = 0, skip, open, close;
 	qboolean	www;
 
@@ -1927,6 +2051,20 @@ static int Con_FindURLs (const char *txt, conurl_t *urls, int maxurls)
 	{
 		switch (*s)
 		{
+		case ':':
+			if (!q_isdigit ((unsigned char)s[1]))
+				continue;
+			host = Con_MatchServer (txt, minstart, s, &e);
+			if (!host)
+				continue;
+			urls[n].start = host;
+			urls[n].end = e;
+			urls[n].type = CLT_SERVER;
+			urls[n].www = false;
+			n++;
+			minstart = e;
+			s = e - 1;
+			continue;
 		case 'h': case 'H':
 			if (!q_strncasecmp (s, "https://", 8))
 				skip = 8;
@@ -1990,45 +2128,63 @@ static int Con_FindURLs (const char *txt, conurl_t *urls, int maxurls)
 
 		urls[n].start = s;
 		urls[n].end = e;
+		urls[n].type = CLT_WEB;
 		urls[n].www = www;
 		n++;
+		minstart = e;
 		s = e - 1;
 	}
 
 	return n;
 }
 
-static void Con_AutoLinkFinish (conautolink_t *al)
+/*
+Con_PushLink -- shared by Con_LinkPrintf and the auto scan. [begin, end)
+must be the newest text in the console.
+*/
+static void Con_PushLink (conlinktype_t type, const char *prefix, const char *addr, size_t len,
+						  const conofs_t *begin, const conofs_t *end)
 {
-	const conurl_t	*url = &al->urls[al->cur];
-	const char		*prefix = url->www ? "https://" : "";
-	size_t			prefixlen = strlen (prefix), len = url->end - url->start, n;
-	conlink_t		*link;
+	size_t		prefixlen = strlen (prefix), n;
+	conlink_t	*link;
 
-	if (!al->open)
+	if (Con_OfsCompare (begin, end) >= 0)
 		return;
-	al->open = false;
 
 	// a '\r' overwrite can reprint over lines that already hold links;
 	// drop those so con_links stays sorted by end offset
-	while ((n = CON_VEC_SIZE (con_links)) && Con_OfsCompare (&con_links[n-1]->end, &al->begin) > 0)
+	while ((n = CON_VEC_SIZE (con_links)) && Con_OfsCompare (&con_links[n-1]->end, begin) > 0)
 	{
 		if (con_hotlink == con_links[n-1])
 			con_hotlink = NULL;
 		free (con_links[n-1]);
-		((size_t *)con_links)[-1] = n - 1;
+		if (n == 1)
+			CON_VEC_CLEAR (con_links);
+		else
+			((size_t *)con_links)[-1] = n - 1;
 	}
 
 	link = (conlink_t *) malloc (sizeof(conlink_t) + prefixlen + len + 1);
 	if (!link)
 		return;
 	memcpy (link + 1, prefix, prefixlen);
-	memcpy ((char *)(link + 1) + prefixlen, url->start, len);
+	memcpy ((char *)(link + 1) + prefixlen, addr, len);
 	((char *)(link + 1))[prefixlen + len] = 0;
 	link->path = (const char *)(link + 1);
-	link->begin = al->begin;
-	link->end = al->end;
+	link->begin = *begin;
+	link->end = *end;
+	link->type = type;
 	CON_VEC_PUSH (con_links, link);
+}
+
+static void Con_AutoLinkFinish (conautolink_t *al)
+{
+	const conurl_t *url = &al->urls[al->cur];
+
+	if (!al->open)
+		return;
+	al->open = false;
+	Con_PushLink (url->type, url->www ? "https://" : "", url->start, url->end - url->start, &al->begin, &al->end);
 }
 
 // called for each character Con_Print writes; src is its source position
@@ -2047,6 +2203,33 @@ static qboolean Con_AutoLinkBeginChar (conautolink_t *al, const char *src)
 		al->begin.line = con_current;
 		al->begin.col = con_x;
 	}
+	return true;
+}
+
+static qboolean Con_OpenLink (const conlink_t *link)
+{
+	switch (link->type)
+	{
+	case CLT_WEB:
+		return SDL_OpenURL (link->path);
+	case CLT_SERVER:
+		Cbuf_AddText (va ("connect %s\n", link->path));
+		return true;
+	default:
+		return Sys_Explore (link->path);
+	}
+}
+
+/*
+Con_CopyHotLink -- right-click on a link copies its address. Returns true
+when the click was used, so it doesn't also open the menu.
+*/
+qboolean Con_CopyHotLink (void)
+{
+	if (key_dest != key_console || !Con_LinksEnabled () || !con_hotlink)
+		return false;
+	if (Clipboard_SetText (con_hotlink->path))
+		S_NotificationSound_Copy ();
 	return true;
 }
 
@@ -2345,8 +2528,8 @@ static void Con_Print (const char *txt)
 
 	boundary = true;
 
-	autolink.count = (!con_autolink_suppress && con_initialized && cls.state != ca_dedicated)
-		? Con_FindURLs (txt, autolink.urls, CON_MAX_AUTOLINKS) : 0; // woods #conurl
+	autolink.count = (!con_capture.active && con_initialized && cls.state != ca_dedicated)
+		? Con_FindLinks (txt, autolink.urls, CON_MAX_AUTOLINKS) : 0; // woods #conurl
 	autolink.cur = 0;
 	autolink.open = false;
 
@@ -2523,6 +2706,17 @@ static void Con_Print (const char *txt)
 			in_url = autolink.count && Con_AutoLinkBeginChar (&autolink, src); // woods #conurl
 			y = con_current % con_totallines;
 			con_text[y*con_linewidth+con_x] = c | mask;
+			if (con_capture.active && (c & 0x7f) != ' ') // woods #conurl -- Con_LinkPrintf extent
+			{
+				if (!con_capture.started)
+				{
+					con_capture.started = true;
+					con_capture.begin.line = con_current;
+					con_capture.begin.col = con_x;
+				}
+				con_capture.end.line = con_current;
+				con_capture.end.col = con_x + 1; // col == linewidth orders as (line+1, 0)
+			}
 			con_x++;
 			if (in_url)
 			{
@@ -3034,8 +3228,6 @@ Prints text that opens a link when clicked in windowed mode
 */
 void Con_LinkPrintf (const char *addr, const char *fmt, ...)
 {
-	conlink_t	*link;
-	size_t		len;
 	va_list		argptr;
 	char		msg[MAXPRINTMSG];
 
@@ -3043,49 +3235,21 @@ void Con_LinkPrintf (const char *addr, const char *fmt, ...)
 	q_vsnprintf (msg, sizeof(msg), fmt, argptr);
 	va_end (argptr);
 
-	if (!addr || !addr[0] || !con_initialized || cls.state == ca_dedicated)
+	if (!addr || !addr[0] || !con_initialized || cls.state == ca_dedicated || con_capture.active)
 	{
 		Con_SafePrintf ("%s", msg);
 		return;
 	}
 
-	len = strlen (addr);
-	link = (conlink_t *) malloc (sizeof(conlink_t) + len + 1);
-	if (!link)
-		Sys_Error ("Con_LinkPrintf: out of memory on %" SDL_PRIu64 " bytes", (uint64_t)(sizeof(conlink_t) + len + 1));
-
-	memcpy (link + 1, addr, len + 1);
-	link->path = (const char *)(link + 1);
-	link->begin.col = con_x;
-	link->begin.line = con_current + (con_x == 0 && msg[0] ? 1 : 0);
-	link->end = link->begin;
-
-	con_autolink_suppress = true; // woods #conurl -- this text is already one link
+	// Con_Print records where the text's non-blank characters land
+	con_capture.active = true;
+	con_capture.started = false;
 	Con_SafePrintf ("%s", msg);
-	con_autolink_suppress = false;
+	con_capture.active = false;
 
-	link->end.line = con_current;
-	link->end.col = con_x;
-
-	while (Con_OfsCompare(&link->begin, &link->end) < 0)
-	{
-		const char *text = Con_GetLine(link->begin.line);
-		if ((text[link->begin.col] & 0x7f) != ' ')
-			break;
-		if (++link->begin.col == con_linewidth)
-		{
-			link->begin.col = 0;
-			link->begin.line++;
-		}
-	}
-
-	if (Con_OfsCompare(&link->begin, &link->end) >= 0)
-	{
-		free(link);
-		return;
-	}
-
-	CON_VEC_PUSH(con_links, link);
+	if (con_capture.started)
+		Con_PushLink (Con_IsWebURL (addr) ? CLT_WEB : CLT_FILE, "", addr, strlen (addr),
+					  &con_capture.begin, &con_capture.end);
 }
 
 
