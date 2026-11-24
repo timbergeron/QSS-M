@@ -327,25 +327,28 @@ static void Mod_DecompressVis_VisError (qmodel_t *model, const char *reason)
 	Con_DPrintf ("Mod_DecompressVis: %s on model \"%s\"\n", reason, model->name);
 }
 
-static byte *Mod_DecompressVis (byte *in, qmodel_t *model)
+static byte *Mod_DecompressVis (const byte *in, qmodel_t *model, int numvisleafs)
 {
-	int		c;
-	byte	*out, *inend;
-	byte	*outend;
-	int		row;
+	int			c;
+	byte		*out;
+	const byte	*inend;
+	byte		*outend;
+	int			row, padded;
 
-	row = (model->numleafs+7)>>3;
+	row = (numvisleafs > 0) ? ((numvisleafs + 7) >> 3) : 0;
 	// pad to whole 32-bit words like Mod_NoVisPVS: SV_AddToFatPVS ORs rows a word at a time
-	if (mod_decompressed == NULL || ((row+3)&~3) > mod_decompressed_capacity)
+	padded = row ? ((row + 3) & ~3) : 4;
+	if (mod_decompressed == NULL || padded > mod_decompressed_capacity)
 	{
-		mod_decompressed_capacity = (row+3)&~3;
+		mod_decompressed_capacity = padded;
 		mod_decompressed = (byte *) realloc (mod_decompressed, mod_decompressed_capacity);
 		if (!mod_decompressed)
 			Sys_Error ("Mod_DecompressVis: realloc() failed on %d bytes", mod_decompressed_capacity);
-		memset (mod_decompressed, 0, mod_decompressed_capacity);
 	}
 	out = mod_decompressed;
 	outend = mod_decompressed + row;
+	if (padded > row)
+		memset (outend, 0, padded - row);
 
 	if (in && model->visdata && model->visdata_size > 0)
 	{
@@ -361,15 +364,12 @@ static byte *Mod_DecompressVis (byte *in, qmodel_t *model)
 
 	if (!in)
 	{	// no vis info, so make all visible
-		while (row)
-		{
-			*out++ = 0xff;
-			row--;
-		}
+		if (row)
+			memset (out, 0xff, row);
 		return mod_decompressed;
 	}
 
-	do
+	while (out < outend)
 	{
 		if (inend && in >= inend)
 		{
@@ -399,19 +399,14 @@ static byte *Mod_DecompressVis (byte *in, qmodel_t *model)
 			memset (out, 0xff, outend - out);
 			return mod_decompressed;
 		}
-		if (c > row - (out - mod_decompressed))
-			c = (int)(row - (out - mod_decompressed));	//now that we're dynamically allocating pvs buffers, we have to be more careful to avoid heap overflows with buggy maps.
-		while (c)
+		if (c > outend - out)
 		{
-			if (out == outend)
-			{
-				Mod_DecompressVis_VisError (model, "output overrun");
-				return mod_decompressed;
-			}
-			*out++ = 0;
-			c--;
+			c = (int)(outend - out);	//now that we're dynamically allocating pvs buffers, we have to be more careful to avoid heap overflows with buggy maps.
+			Mod_DecompressVis_VisError (model, "output overrun");
 		}
-	} while (out - mod_decompressed < row);
+		memset (out, 0, c);
+		out += c;
+	}
 
 	return mod_decompressed;
 }
@@ -420,15 +415,15 @@ byte *Mod_LeafPVS (mleaf_t *leaf, qmodel_t *model)
 {
 	if (leaf == model->leafs)
 		return Mod_NoVisPVS (model);
-	return Mod_DecompressVis (leaf->compressed_vis, model);
+	return Mod_DecompressVis (leaf->compressed_vis, model, model->numleafs);
 }
 
 byte *Mod_NoVisPVS (qmodel_t *model)
 {
 	int pvsbytes;
 
-	pvsbytes = (model->numleafs+7)>>3;
-	pvsbytes = (pvsbytes+3)&~3;
+	pvsbytes = (model->numleafs > 0) ? ((model->numleafs + 7) >> 3) : 0;
+	pvsbytes = pvsbytes ? ((pvsbytes + 3) & ~3) : 4;
 	if (mod_novis == NULL || pvsbytes > mod_novis_capacity)
 	{
 		mod_novis_capacity = pvsbytes;
@@ -4022,16 +4017,19 @@ void Mod_CheckWaterVis(void)
 			continue;	//found one of this type already
 		}
 		contentfound |= contenttype;
-		vis = Mod_DecompressVis(leaf->compressed_vis, loadmodel);
+		vis = Mod_DecompressVis(leaf->compressed_vis, loadmodel, numclusters);
 		for (j = 0; j < (numclusters+7)/8; j++)
 		{
 			if (vis[j])
 			{
 				for (k = 0; k < 8; k++)
 				{
+					int otherleaf = (j<<3)+k;
+					if (otherleaf >= numclusters)
+						break;
 					if (vis[j] & (1u<<k))
 					{
-						other = &loadmodel->leafs[(j<<3)+k+1];
+						other = &loadmodel->leafs[otherleaf+1];
 						if (leaf->contents != other->contents)
 						{
 //							Con_Printf("%p:%i sees %p:%i\n", leaf, leaf->contents, other, other->contents);
