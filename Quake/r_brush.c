@@ -2338,60 +2338,58 @@ static void R_TexSubImageLightmap (int x, int t, int w, int h, const GLvoid *src
 				GL_UNSIGNED_BYTE, src);
 }
 
-static void R_UploadLightmapRows (struct lightmap_s *lm, int x, int t, int w, int h) // woods #lmbands #lmrect
+static qboolean R_UploadLightmapScratch (const struct lightmap_s *lm, const glRect_t *rects, int count)
 {
-	size_t offset = ((size_t)t*LMBLOCK_WIDTH + x)*lightmap_bytes;
+	size_t offsets[LM_DIRTYRECTS], bytes = 0;
+	const size_t stride = (size_t)LMBLOCK_WIDTH * lightmap_bytes;
+	byte *dst;
+	int i;
 
-	if (lm->pbohandle)
-	{	// persistently-mapped PBO, bound by the caller: src is a byte offset; rows use the atlas stride
-		if (w != LMBLOCK_WIDTH)
-			glPixelStorei(GL_UNPACK_ROW_LENGTH, LMBLOCK_WIDTH);
-		R_TexSubImageLightmap(x, t, w, h, (const GLvoid*)(uintptr_t)offset);
-		if (w != LMBLOCK_WIDTH)
-			glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
-		return;
-	}
+	if (!gl_vbo_able || !GL_GenBuffersFunc || !GL_BufferDataFunc || !GL_MapBufferFunc || !GL_UnmapBufferFunc)
+		return false;
+	if (!lm_scratchpbo)
+		GL_GenBuffersFunc(1, &lm_scratchpbo);
+	if (!lm_scratchpbo)
+		return false;
 
-	if (gl_vbo_able && GL_GenBuffersFunc && GL_BufferDataFunc && GL_MapBufferFunc && GL_UnmapBufferFunc)
+	for (i = 0; i < count; i++)
 	{
-		size_t rowbytes = (size_t)w*lightmap_bytes;
-		byte *dst;
-
-		if (!lm_scratchpbo)
-			GL_GenBuffersFunc(1, &lm_scratchpbo);
-		if (lm_scratchpbo)
+		offsets[i] = bytes;
+		bytes += (size_t)rects[i].w * rects[i].h * lightmap_bytes;
+	}
+	GL_BindBufferFunc(GL_PIXEL_UNPACK_BUFFER_ARB, lm_scratchpbo);
+	GL_BufferDataFunc(GL_PIXEL_UNPACK_BUFFER_ARB, bytes, NULL, GL_STREAM_DRAW);
+	dst = GL_MapBufferFunc(GL_PIXEL_UNPACK_BUFFER_ARB, GL_WRITE_ONLY);
+	if (dst)
+	{
+		for (i = 0; i < count; i++)
 		{
-			GL_BindBufferFunc(GL_PIXEL_UNPACK_BUFFER_ARB, lm_scratchpbo);
-			GL_BufferDataFunc(GL_PIXEL_UNPACK_BUFFER_ARB, rowbytes*h, NULL, GL_STREAM_DRAW);	//orphan; never stalls
-			dst = (byte *)GL_MapBufferFunc(GL_PIXEL_UNPACK_BUFFER_ARB, GL_WRITE_ONLY);
-			if (dst)
-			{
-				const byte *srcrow = lm->pbodata + offset;
-				int r;
-				for (r = 0; r < h; r++, dst += rowbytes, srcrow += (size_t)LMBLOCK_WIDTH*lightmap_bytes)
-					memcpy(dst, srcrow, rowbytes);
-				GL_UnmapBufferFunc(GL_PIXEL_UNPACK_BUFFER_ARB);
-				R_TexSubImageLightmap(x, t, w, h, NULL);	//rows are packed tight, ROW_LENGTH stays 0
-				GL_BindBufferFunc(GL_PIXEL_UNPACK_BUFFER_ARB, 0);
-				return;
-			}
+			const glRect_t *rect = &rects[i];
+			const size_t rowbytes = (size_t)rect->w * lightmap_bytes;
+			const byte *src = lm->pbodata + rect->t * stride + rect->l * lightmap_bytes;
+			int row;
+
+			for (row = 0; row < rect->h; row++, src += stride)
+				memcpy(dst + offsets[i] + row * rowbytes, src, rowbytes);
+		}
+		if (GL_UnmapBufferFunc(GL_PIXEL_UNPACK_BUFFER_ARB))
+		{
+			for (i = 0; i < count; i++)
+				R_TexSubImageLightmap(rects[i].l, rects[i].t, rects[i].w, rects[i].h,
+					(const GLvoid *)(uintptr_t)offsets[i]);
 			GL_BindBufferFunc(GL_PIXEL_UNPACK_BUFFER_ARB, 0);
+			return true;
 		}
 	}
-
-	// fallback: direct client-memory upload
-	if (w != LMBLOCK_WIDTH)
-		glPixelStorei(GL_UNPACK_ROW_LENGTH, LMBLOCK_WIDTH);
-	R_TexSubImageLightmap(x, t, w, h, (const GLvoid*)(lm->pbodata + offset));
-	if (w != LMBLOCK_WIDTH)
-		glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
+	GL_BindBufferFunc(GL_PIXEL_UNPACK_BUFFER_ARB, 0);
+	return false;
 }
 
 static void R_UploadLightmap(int lmap)
 {
 	struct lightmap_s *lm = &lightmaps[lmap];
 	glRect_t rects[LM_DIRTYRECTS]; // woods #lmrect
-	int i, n;
+	int i, n, valid;
 
 	if (!lm->modified)
 		return;
@@ -2417,29 +2415,39 @@ static void R_UploadLightmap(int lmap)
 	lm->rectchange.w = 0;
 	SDL_UnlockMutex(lm_dirty_mutex);
 
-	if (n <= 0)
-		return; // nothing dirty (modified flag without rects; shouldn't happen)
-
-	if (lm->pbohandle)
-		GL_BindBufferFunc(GL_PIXEL_UNPACK_BUFFER_ARB, lm->pbohandle);
-
-	// woods #lmrect -- upload each accumulated dirty rect; bytes stay
-	// proportional to the texels actually rebuilt rather than full-width bands
-	// of the (up to 512x16384) atlas, which made per-frame dlight updates cost
-	// megabytes of texture traffic on Apple's GL-on-Metal.
-	for (i = 0; i < n; i++)
+	for (i = 0, valid = 0; i < n; i++)
 	{
-		int x = rects[i].l, t = rects[i].t;
-		int w = rects[i].w, h = rects[i].h;
-		if (x >= LMBLOCK_WIDTH || t >= LMBLOCK_HEIGHT)
+		glRect_t rect = rects[i];
+
+		if (rect.l >= LMBLOCK_WIDTH || rect.t >= LMBLOCK_HEIGHT)
 			continue;
-		w = q_min(w, LMBLOCK_WIDTH - x);
-		h = q_min(h, LMBLOCK_HEIGHT - t);
-		if (w <= 0 || h <= 0)
-			continue;
-		R_UploadLightmapRows(lm, x, t, w, h);
+		rect.w = q_min(rect.w, LMBLOCK_WIDTH - rect.l);
+		rect.h = q_min(rect.h, LMBLOCK_HEIGHT - rect.t);
+		if (rect.w > 0 && rect.h > 0)
+			rects[valid++] = rect;
 	}
 
+	if (!valid)
+		return;
+	if (!lm->pbohandle && R_UploadLightmapScratch(lm, rects, valid))
+	{
+		rs_dynamiclightmaps++;
+		return;
+	}
+
+	// The persistent PBO and client-memory fallback both use the atlas stride.
+	if (lm->pbohandle)
+		GL_BindBufferFunc(GL_PIXEL_UNPACK_BUFFER_ARB, lm->pbohandle);
+	glPixelStorei(GL_UNPACK_ROW_LENGTH, LMBLOCK_WIDTH);
+	for (i = 0; i < valid; i++)
+	{
+		const glRect_t *rect = &rects[i];
+		size_t offset = ((size_t)rect->t * LMBLOCK_WIDTH + rect->l) * lightmap_bytes;
+		const GLvoid *src = lm->pbohandle ? (const GLvoid *)(uintptr_t)offset : lm->pbodata + offset;
+
+		R_TexSubImageLightmap(rect->l, rect->t, rect->w, rect->h, src);
+	}
+	glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
 	if (lm->pbohandle)
 		GL_BindBufferFunc(GL_PIXEL_UNPACK_BUFFER_ARB, 0);
 
