@@ -1074,7 +1074,8 @@ static struct
 	vec3_t savedorigin, savedvpn, savedright, savedup;
 	mleaf_t *savedleaf;
 	entity_t *savedentity;
-	GLint savedfbo, savedrenderbuffer, savedfront, savedscissor[4], stencilmask;
+	GLuint savedfbo, savedreadfbo, savedrenderbuffer;
+	GLint savedfront, savedscissor[4], stencilmask;
 	GLfloat clearcolor[4];
 	GLboolean colormask[4], scissor, depthmask, stenciltest;
 	int savedcount;
@@ -1093,6 +1094,8 @@ static void R_TeleportRestoreView (void)
 	skyroom_drawn = teleport_restore.skyroom;
 	R_SetFrustum(r_fovx, r_fovy);
 	GL_BindFramebufferFunc(GL_FRAMEBUFFER, teleport_restore.savedfbo);
+	if (teleport_restore.savedreadfbo != teleport_restore.savedfbo)
+		GL_BindFramebufferFunc(GL_READ_FRAMEBUFFER, teleport_restore.savedreadfbo);
 	GL_BindRenderbufferFunc(GL_RENDERBUFFER, teleport_restore.savedrenderbuffer);
 	glFrontFace(teleport_restore.savedfront);
 	glClearColor(teleport_restore.clearcolor[0], teleport_restore.clearcolor[1], teleport_restore.clearcolor[2], teleport_restore.clearcolor[3]);
@@ -1200,30 +1203,6 @@ void R_TeleportPrepare (void)
 	R_TeleportSharePlanes();
 
 	savedents = teleport_savedents;
-	memcpy(savedents, cl_visedicts, teleport_restore.savedcount * sizeof(*savedents));
-	teleport_restore.savedentity = currententity;
-	teleport_restore.savedref = r_refdef;
-	teleport_restore.savedleaf = r_viewleaf;
-	VectorCopy(r_origin, teleport_restore.savedorigin);
-	VectorCopy(vpn, teleport_restore.savedvpn);
-	VectorCopy(vright, teleport_restore.savedright);
-	VectorCopy(vup, teleport_restore.savedup);
-	memcpy(teleport_restore.savedview, r_world_matrix, sizeof(mat4_t));
-	memcpy(teleport_restore.savedprojection, r_projection_matrix, sizeof(mat4_t));
-	glGetIntegerv(GL_FRAMEBUFFER_BINDING, &teleport_restore.savedfbo);
-	glGetIntegerv(GL_RENDERBUFFER_BINDING, &teleport_restore.savedrenderbuffer);
-	glGetIntegerv(GL_FRONT_FACE, &teleport_restore.savedfront);
-	glGetIntegerv(GL_SCISSOR_BOX, teleport_restore.savedscissor);
-	glGetFloatv(GL_COLOR_CLEAR_VALUE, teleport_restore.clearcolor);
-	glGetBooleanv(GL_COLOR_WRITEMASK, teleport_restore.colormask);
-	teleport_restore.scissor = glIsEnabled(GL_SCISSOR_TEST);
-	glGetBooleanv(GL_DEPTH_WRITEMASK, &teleport_restore.depthmask);
-	glGetIntegerv(GL_STENCIL_WRITEMASK, &teleport_restore.stencilmask);
-	teleport_restore.stenciltest = glIsEnabled(GL_STENCIL_TEST);
-	teleport_restore.skyroom = skyroom_drawn;
-	teleport_restore.active = true;
-	skyroom_drawn = false;
-	r_teleport_view = true;
 
 	for (i = 0; i < teleport_numplanes && !teleport_failed; i++)
 	{
@@ -1241,6 +1220,37 @@ void R_TeleportPrepare (void)
 		{	/* hidden in the views just drawn: show its last images */
 			plane->ready = true;
 			continue;
+		}
+		if (!teleport_restore.active)
+		{
+			memcpy(savedents, cl_visedicts, teleport_restore.savedcount * sizeof(*savedents));
+			teleport_restore.savedentity = currententity;
+			teleport_restore.savedref = r_refdef;
+			teleport_restore.savedleaf = r_viewleaf;
+			VectorCopy(r_origin, teleport_restore.savedorigin);
+			VectorCopy(vpn, teleport_restore.savedvpn);
+			VectorCopy(vright, teleport_restore.savedright);
+			VectorCopy(vup, teleport_restore.savedup);
+			memcpy(teleport_restore.savedview, r_world_matrix, sizeof(mat4_t));
+			memcpy(teleport_restore.savedprojection, r_projection_matrix, sizeof(mat4_t));
+			teleport_restore.savedfbo = gl_draw_framebuffer;
+			teleport_restore.savedreadfbo = gl_read_framebuffer;
+			teleport_restore.savedrenderbuffer = gl_renderbuffer;
+			glGetIntegerv(GL_FRONT_FACE, &teleport_restore.savedfront);
+			glGetIntegerv(GL_SCISSOR_BOX, teleport_restore.savedscissor);
+			glGetFloatv(GL_COLOR_CLEAR_VALUE, teleport_restore.clearcolor);
+			glGetBooleanv(GL_COLOR_WRITEMASK, teleport_restore.colormask);
+			teleport_restore.scissor = glIsEnabled(GL_SCISSOR_TEST);
+			glGetBooleanv(GL_DEPTH_WRITEMASK, &teleport_restore.depthmask);
+			glGetIntegerv(GL_STENCIL_WRITEMASK, &teleport_restore.stencilmask);
+			teleport_restore.stenciltest = glIsEnabled(GL_STENCIL_TEST);
+			teleport_restore.skyroom = skyroom_drawn;
+			teleport_restore.active = true;
+			skyroom_drawn = false;
+			r_teleport_view = true;
+#ifndef SDL_THREADS_DISABLED
+			RSceneCache_WaitForWorker();
+#endif
 		}
 		for (pass = firstpass; pass <= lastpass; pass++)
 		{
@@ -1328,6 +1338,8 @@ void R_TeleportPrepare (void)
 		plane->ready = plane->ready && teleport_planes[plane->shareof].ready;
 	}
 
+	if (!teleport_restore.active)
+		return;
 	R_TeleportRestoreView();
 	/* Static entity stamps remain the main view's stamps. Rebuild chains with
 	 * an empty list, then restore exactly the original visible entities. */

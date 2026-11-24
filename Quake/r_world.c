@@ -8561,7 +8561,6 @@ static qboolean RSceneCache_Queue(byte *vis)
 		if (rscenecache.drawing)
 			rscenecache.teleportmain = rscenecache.drawing;
 		rscenecache.drawing = NULL;
-		RSceneCache_WaitForWorker();
 		return false;
 	}
 	if (rscenecache.teleportmain)

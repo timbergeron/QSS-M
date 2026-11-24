@@ -76,9 +76,15 @@ static qboolean RSceneCache_SurfaceListReserve(msurface_t ***surfs, size_t *max,
 source += function(world, 'static void RSceneCache_AddTeleportSurface(')
 
 for name in ('R_TeleportPlane', 'R_TeleportFindPlane', 'R_TeleportScreenBounds',
-             'R_TeleportMergePVS', 'R_TeleportCollect', 'R_TeleportScissorBounds',
+             'R_TeleportMergePVS', 'R_TeleportResetPlane', 'R_TeleportAllocPlane',
+             'R_TeleportCollect', 'R_TeleportScissorBounds',
              'R_TeleportScissor', 'R_TeleportFrustum', 'R_TeleportClip'):
-    declaration = ('static int ' if name == 'R_TeleportFindPlane' else 'static void ') + name + ' ('
+    result_type = {
+        'R_TeleportFindPlane': 'int',
+        'R_TeleportAllocPlane': 'int',
+        'R_TeleportScreenBounds': 'qboolean',
+    }.get(name, 'void')
+    declaration = 'static ' + result_type + ' ' + name + ' ('
     source += function(warp, declaration)
 source += r'''
 static unsigned rng=0x17efa341;
@@ -178,8 +184,9 @@ int main(void) {
              -1-randomf()*200,1+randomf()*100,1+randomf()*100);
         teleport_width=1+(int)(randomf()*1920);
         teleport_height=1+(int)(randomf()*1080);
-        R_TeleportScreenBounds(&surf,matrix,teleport_planes[0].screenmins,
-                              teleport_planes[0].screenmaxs);
+        if (!R_TeleportScreenBounds(&surf,matrix,teleport_planes[0].screenmins,
+                                   teleport_planes[0].screenmaxs))
+            continue;
         for(int pass=0;pass<2;pass++) {
             R_TeleportScissor(teleport_planes,pass);
             float strength=pass?TELEPORT_REFLECT_STRENGTH:TELEPORT_REFRACT_STRENGTH;

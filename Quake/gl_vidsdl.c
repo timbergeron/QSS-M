@@ -197,6 +197,57 @@ PFNGLRENDERBUFFERSTORAGEMULTISAMPLEPROC GL_RenderbufferStorageMultisampleFunc = 
 PFNGLGETRENDERBUFFERPARAMETERIVPROC GL_GetRenderbufferParameterivFunc = NULL;
 PFNGLBLITFRAMEBUFFERPROC GL_BlitFramebufferFunc = NULL;
 
+// All engine FBO binds use these entry points. GL also unbinds deleted
+// objects, so track deletion as well as explicit changes.
+GLuint gl_read_framebuffer, gl_draw_framebuffer, gl_renderbuffer;
+unsigned int gl_fbo_delete_gen;
+static PFNGLBINDFRAMEBUFFERPROC gl_bind_framebuffer;
+static PFNGLDELETEFRAMEBUFFERSPROC gl_delete_framebuffers;
+static PFNGLBINDRENDERBUFFERPROC gl_bind_renderbuffer;
+static PFNGLDELETERENDERBUFFERSPROC gl_delete_renderbuffers;
+
+static void GLAPIENTRY GL_TrackBindFramebuffer (GLenum target, GLuint name)
+{
+	gl_bind_framebuffer (target, name);
+	if (target != GL_DRAW_FRAMEBUFFER)
+		gl_read_framebuffer = name;
+	if (target != GL_READ_FRAMEBUFFER)
+		gl_draw_framebuffer = name;
+}
+
+static void GLAPIENTRY GL_TrackDeleteFramebuffers (GLsizei count, const GLuint *names)
+{
+	GLsizei i;
+
+	gl_delete_framebuffers (count, names);
+	if (count > 0)
+		gl_fbo_delete_gen++;
+	for (i = 0; i < count; i++)
+	{
+		if (gl_read_framebuffer == names[i])
+			gl_read_framebuffer = 0;
+		if (gl_draw_framebuffer == names[i])
+			gl_draw_framebuffer = 0;
+	}
+}
+
+static void GLAPIENTRY GL_TrackBindRenderbuffer (GLenum target, GLuint name)
+{
+	gl_bind_renderbuffer (target, name);
+	gl_renderbuffer = name;
+}
+
+static void GLAPIENTRY GL_TrackDeleteRenderbuffers (GLsizei count, const GLuint *names)
+{
+	GLsizei i;
+
+	gl_delete_renderbuffers (count, names);
+	for (i = 0; i < count; i++)
+		if (gl_renderbuffer == names[i])
+			gl_renderbuffer = 0;
+}
+
+
 PFNGLBLENDFUNCSEPARATEPROC GL_BlendFuncSeparateFunc = NULL; // woods #fxaa Blend function pointer for FXAA transparency fix  
 
 // // woods #fxaa quality presets
@@ -1853,7 +1904,11 @@ static qboolean GL_ParseExtensionList (const char *list, const char *name)
 static void GL_CheckFramebufferExtensions (void)
 {
 	qboolean core = gl_version_major >= 3 || GL_ParseExtensionList (gl_extensions, "GL_ARB_framebuffer_object");
+	qboolean split_bindings;
+	GLint binding;
 
+	gl_read_framebuffer = gl_draw_framebuffer = gl_renderbuffer = 0;
+	gl_fbo_delete_gen++;
 	gl_fbo_able = false;
 	gl_fbo_arb = false;
 	gl_msaa_able = false;
@@ -1898,15 +1953,35 @@ static void GL_CheckFramebufferExtensions (void)
 		Con_Warning ("Framebuffer Objects not available\n");
 		return;
 	}
+	gl_bind_framebuffer = GL_BindFramebufferFunc;
+	gl_delete_framebuffers = GL_DeleteFramebuffersFunc;
+	gl_bind_renderbuffer = GL_BindRenderbufferFunc;
+	gl_delete_renderbuffers = GL_DeleteRenderbuffersFunc;
+	GL_BindFramebufferFunc = GL_TrackBindFramebuffer;
+	GL_DeleteFramebuffersFunc = GL_TrackDeleteFramebuffers;
+	GL_BindRenderbufferFunc = GL_TrackBindRenderbuffer;
+	GL_DeleteRenderbuffersFunc = GL_TrackDeleteRenderbuffers;
 	gl_fbo_able = true;
 	gl_fbo_arb = core;
+	split_bindings = core || GL_ParseExtensionList (gl_extensions, "GL_EXT_framebuffer_blit");
+
+	/* SDL can reuse the context on vid_restart with GL objects still bound. */
+	glGetIntegerv (GL_FRAMEBUFFER_BINDING, &binding);
+	gl_read_framebuffer = gl_draw_framebuffer = (GLuint)binding;
+	if (split_bindings)
+	{
+		glGetIntegerv (GL_READ_FRAMEBUFFER_BINDING, &binding);
+		gl_read_framebuffer = (GLuint)binding;
+	}
+	glGetIntegerv (GL_RENDERBUFFER_BINDING, &binding);
+	gl_renderbuffer = (GLuint)binding;
 	if (cls.state == ca_disconnected)
 		Con_Printf ("FOUND: Framebuffer Objects\n");
 
 	/* EXT framebuffer_object alone does not provide multisampling or resolves. */
 	if (!gl_texture_NPOT || (!core &&
 		(!GL_ParseExtensionList (gl_extensions, "GL_EXT_framebuffer_multisample") ||
-		 !GL_ParseExtensionList (gl_extensions, "GL_EXT_framebuffer_blit") ||
+		 !split_bindings ||
 		 !GL_ParseExtensionList (gl_extensions, "GL_EXT_packed_depth_stencil"))))
 		return;
 	LOAD_FBO (RenderbufferStorageMultisample, PFNGLRENDERBUFFERSTORAGEMULTISAMPLEPROC);

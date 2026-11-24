@@ -4044,6 +4044,15 @@ void GL_EnableMultitexture(void)
 GL_Bind -- johnfitz -- heavy revision
 ================
 */
+void GL_BindTextureName (GLuint name)
+{
+	int unit = (int)(currenttarget - GL_TEXTURE0_ARB);
+
+	glBindTexture (GL_TEXTURE_2D, name);
+	if (unit >= 0 && unit < (int)countof(currenttexture))
+		currenttexture[unit] = name;
+}
+
 void GL_Bind (gltexture_t *texture)
 {
 	int unit = (int)(currenttarget - GL_TEXTURE0_ARB);

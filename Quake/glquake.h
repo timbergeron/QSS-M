@@ -391,6 +391,8 @@ extern QS_PFNGLGETQUERYOBJECTUIVPROC GL_GetQueryObjectuivFunc;
 // woods -- Ffamebuffer function pointers for #fxaa
 extern PFNGLGENFRAMEBUFFERSPROC GL_GenFramebuffersFunc;
 extern PFNGLBINDFRAMEBUFFERPROC GL_BindFramebufferFunc;
+extern GLuint gl_read_framebuffer, gl_draw_framebuffer, gl_renderbuffer;
+extern unsigned int gl_fbo_delete_gen;
 extern PFNGLFRAMEBUFFERTEXTURE2DPROC GL_FramebufferTexture2DFunc;
 extern PFNGLCHECKFRAMEBUFFERSTATUSPROC GL_CheckFramebufferStatusFunc;
 extern PFNGLGETFRAMEBUFFERATTACHMENTPARAMETERIVPROC GL_GetFramebufferAttachmentParameterivFunc;
@@ -762,6 +764,7 @@ void GLSLGamma_DeleteTexture (void);
 void GLSLGamma_BeginFrame (void);
 void R_SetSceneFBOCleared (qboolean cleared);
 GLuint GLSLGamma_SceneFBO (void);
+GLuint FXAA_SceneFramebuffer (void);
 void GLSLGamma_MSAAChanged (void);
 int GLSLGamma_MSAASamples (void);
 int GLSLGamma_NextMSAA (int dir);

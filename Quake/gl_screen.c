@@ -9531,6 +9531,11 @@ void FXAA_BeginFrame(void)
     R_SetSceneFBOCleared(true);
 }
 
+GLuint FXAA_SceneFramebuffer(void)
+{
+	return fxaa_frame_active ? fxaa.framebuffer : 0;
+}
+
 /*
 ===============
 FXAA_EndFrame
@@ -9566,7 +9571,7 @@ void FXAA_EndFrame(void)
     GL_UseProgramFunc(prog);
     
     // Bind texture and set uniforms
-    glBindTexture(GL_TEXTURE_2D, fxaa.color_texture);
+    GL_BindTextureName(fxaa.color_texture);
     
     if (prog == fxaa.program_fte) {
         GL_Uniform1iFunc(fxaa.u_tex_fte, 0);
@@ -9591,5 +9596,4 @@ void FXAA_EndFrame(void)
     glEnable(GL_ALPHA_TEST);
     if (GL_SelectTextureFunc)
         GL_SelectTexture(activeTexture);
-    GL_ClearBindings();
 }

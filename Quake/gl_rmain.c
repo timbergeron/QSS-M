@@ -300,16 +300,12 @@ static qboolean GLSLGamma_CreateMSAA (scene_msaa_t *target, int samples, int wid
  * scissor, while the final resolve can leave the back buffer bound. */
 static void GLSLGamma_ResolveMSAA (qboolean finishing)
 {
-	GLint read_fbo = 0, draw_fbo = 0;
-	GLboolean scissor = GL_FALSE;
+	const GLuint read_fbo = gl_read_framebuffer, draw_fbo = gl_draw_framebuffer;
+
 	if (!r_scene_msaa.fbo || !r_gamma_fbo_active)
 		return;
 	if (!finishing)
-	{
-		glGetIntegerv (GL_READ_FRAMEBUFFER_BINDING, &read_fbo);
-		glGetIntegerv (GL_DRAW_FRAMEBUFFER_BINDING, &draw_fbo);
-		scissor = glIsEnabled (GL_SCISSOR_TEST);
-	}
+		glPushAttrib (GL_SCISSOR_BIT);
 	glDisable (GL_SCISSOR_TEST);
 	GL_BindFramebufferFunc (GL_READ_FRAMEBUFFER, r_scene_msaa.fbo);
 	GL_BindFramebufferFunc (GL_DRAW_FRAMEBUFFER, r_gamma_fbo);
@@ -320,35 +316,34 @@ static void GLSLGamma_ResolveMSAA (qboolean finishing)
 	{
 		GL_BindFramebufferFunc (GL_READ_FRAMEBUFFER, read_fbo);
 		GL_BindFramebufferFunc (GL_DRAW_FRAMEBUFFER, draw_fbo);
-		if (scissor)
-			glEnable (GL_SCISSOR_TEST);
+		glPopAttrib ();
 	}
 }
 
-/* Save the previous read target separately: every GLuint object name is valid,
- * including names whose bit pattern is negative when queried as a GLint. */
-static qboolean GLSLGamma_BeginSceneRead (GLint *read_fbo)
+static qboolean GLSLGamma_BeginSceneRead (GLuint *read_fbo)
 {
-	if (r_scene_msaa.fbo && r_gamma_fbo_active)
-	{
-		glGetIntegerv (GL_READ_FRAMEBUFFER_BINDING, read_fbo);
-		if ((GLuint)*read_fbo == r_scene_msaa.fbo)
-		{
-			GLSLGamma_ResolveMSAA (false);
-			GL_BindFramebufferFunc (GL_READ_FRAMEBUFFER, r_gamma_fbo);
-			return true;
-		}
-	}
-	return false;
+	if (!r_scene_msaa.fbo || !r_gamma_fbo_active || gl_read_framebuffer != r_scene_msaa.fbo)
+		return false;
+
+	*read_fbo = gl_read_framebuffer;
+	GLSLGamma_ResolveMSAA (false);
+	GL_BindFramebufferFunc (GL_READ_FRAMEBUFFER, r_gamma_fbo);
+	return true;
 }
 
 // A chase player's self-occlusion depth is temporary: later alpha entities and
 // particles must still test against world depth. Keep its existing alpha order.
 static struct {
-	GLuint fbo, depth;
-	GLint width, height, samples, format;
-	GLint read_fbo, draw_fbo, viewport[4];
+	GLuint fbo, depth, read_fbo, draw_fbo;
+	GLint width, height, samples, format, viewport[4];
+	unsigned int copy_gen;
+	qboolean copy_checked, copy_ok;
 } r_alias_fade_depth;
+
+static struct {
+	qboolean queried;
+	GLint samples, format;
+} r_window_depth;
 
 static void R_DeleteAliasFadeDepth (void)
 {
@@ -362,7 +357,7 @@ static void R_DeleteAliasFadeDepth (void)
 static void R_CopyAliasFadeDepth (qboolean restore)
 {
 	GLint *v = r_alias_fade_depth.viewport;
-	GLboolean scissor = glIsEnabled(GL_SCISSOR_TEST);
+	glPushAttrib(GL_SCISSOR_BIT);
 	glDisable(GL_SCISSOR_TEST);
 	GL_BindFramebufferFunc(GL_READ_FRAMEBUFFER, restore ? r_alias_fade_depth.fbo : r_alias_fade_depth.draw_fbo);
 	GL_BindFramebufferFunc(GL_DRAW_FRAMEBUFFER, restore ? r_alias_fade_depth.draw_fbo : r_alias_fade_depth.fbo);
@@ -372,57 +367,75 @@ static void R_CopyAliasFadeDepth (qboolean restore)
 		GL_BlitFramebufferFunc(v[0], v[1], v[0]+v[2], v[1]+v[3], 0, 0, v[2], v[3], GL_DEPTH_BUFFER_BIT, GL_NEAREST);
 	GL_BindFramebufferFunc(GL_READ_FRAMEBUFFER, r_alias_fade_depth.read_fbo);
 	GL_BindFramebufferFunc(GL_DRAW_FRAMEBUFFER, r_alias_fade_depth.draw_fbo);
-	if (scissor)
-		glEnable(GL_SCISSOR_TEST);
+	glPopAttrib();
 }
 
-qboolean R_SaveAliasFadeDepth (void)
+static qboolean R_AliasFadeDepthFormat (GLuint draw_fbo, GLint *samples, GLint *format)
 {
-	GLint read_fbo, draw_fbo, renderbuffer, viewport[4], samples, format;
 	GLint type, name, bits, stencilbits;
-	GLenum status;
+	const GLuint renderbuffer = gl_renderbuffer;
 
-	if (!gl_fbo_able || !GL_BlitFramebufferFunc || !GL_GetRenderbufferParameterivFunc ||
-		!GL_GetFramebufferAttachmentParameterivFunc)
-		return false;
-	glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &read_fbo);
-	glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &draw_fbo);
-	glGetIntegerv(GL_RENDERBUFFER_BINDING, &renderbuffer);
-	glGetIntegerv(GL_VIEWPORT, viewport);
-	glGetIntegerv(GL_SAMPLES, &samples);
-	if (viewport[2] <= 0 || viewport[3] <= 0)
-		return false;
-
+	if (draw_fbo && (draw_fbo == r_scene_msaa.fbo || draw_fbo == r_gamma_fbo ||
+		draw_fbo == FXAA_SceneFramebuffer()))
+	{
+		*samples = draw_fbo == r_scene_msaa.fbo ? r_scene_msaa.samples : 0;
+		*format = GL_DEPTH24_STENCIL8;
+		return true;
+	}
 	if (draw_fbo)
 	{
+		glGetIntegerv(GL_SAMPLES, samples);
 		GL_GetFramebufferAttachmentParameterivFunc(GL_DRAW_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_FRAMEBUFFER_ATTACHMENT_OBJECT_TYPE, &type);
 		if (type != GL_RENDERBUFFER)
 			return false;
 		GL_GetFramebufferAttachmentParameterivFunc(GL_DRAW_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_FRAMEBUFFER_ATTACHMENT_OBJECT_NAME, &name);
 		GL_BindRenderbufferFunc(GL_RENDERBUFFER, name);
-		GL_GetRenderbufferParameterivFunc(GL_RENDERBUFFER, GL_RENDERBUFFER_INTERNAL_FORMAT, &format);
+		GL_GetRenderbufferParameterivFunc(GL_RENDERBUFFER, GL_RENDERBUFFER_INTERNAL_FORMAT, format);
 		GL_BindRenderbufferFunc(GL_RENDERBUFFER, renderbuffer);
+		return glGetError() == GL_NO_ERROR;
 	}
-	else
+
+	if (!r_window_depth.queried)
 	{
+		glGetIntegerv(GL_SAMPLES, &r_window_depth.samples);
 		glGetIntegerv(GL_DEPTH_BITS, &bits);
 		glGetIntegerv(GL_STENCIL_BITS, &stencilbits);
 		if (bits == 16)
-			format = GL_DEPTH_COMPONENT16;
+			r_window_depth.format = GL_DEPTH_COMPONENT16;
 		else if (bits == 24)
-			format = stencilbits ? GL_DEPTH24_STENCIL8 : GL_DEPTH_COMPONENT24;
+			r_window_depth.format = stencilbits ? GL_DEPTH24_STENCIL8 : GL_DEPTH_COMPONENT24;
 		else if (bits == 32)
 		{
-			// EXT_framebuffer_object cannot query default framebuffer attachments.
 			type = GL_UNSIGNED_NORMALIZED;
 			if (gl_fbo_arb)
 				GL_GetFramebufferAttachmentParameterivFunc(GL_DRAW_FRAMEBUFFER, GL_DEPTH, GL_FRAMEBUFFER_ATTACHMENT_COMPONENT_TYPE, &type);
-			format = type == GL_FLOAT ? (stencilbits ? GL_DEPTH32F_STENCIL8 : GL_DEPTH_COMPONENT32F) : GL_DEPTH_COMPONENT32;
+			r_window_depth.format = type == GL_FLOAT ? (stencilbits ? GL_DEPTH32F_STENCIL8 : GL_DEPTH_COMPONENT32F) : GL_DEPTH_COMPONENT32;
 		}
-		else
-			return false;
+		r_window_depth.queried = true;
 	}
-	if (glGetError() != GL_NO_ERROR)
+	*samples = r_window_depth.samples;
+	*format = r_window_depth.format;
+	return *format != 0;
+}
+
+qboolean R_SaveAliasFadeDepth (void)
+{
+	const GLuint read_fbo = gl_read_framebuffer, draw_fbo = gl_draw_framebuffer;
+	const GLuint renderbuffer = gl_renderbuffer;
+	GLint samples, format, fallback_viewport[4];
+	GLenum status;
+	const GLint *viewport = r_viewport;
+
+	if (!gl_fbo_able || !GL_BlitFramebufferFunc || !GL_GetRenderbufferParameterivFunc ||
+		!GL_GetFramebufferAttachmentParameterivFunc)
+		return false;
+	if (draw_fbo && draw_fbo != r_scene_msaa.fbo && draw_fbo != r_gamma_fbo && draw_fbo != FXAA_SceneFramebuffer())
+	{
+		glGetIntegerv(GL_VIEWPORT, fallback_viewport);
+		viewport = fallback_viewport;
+	}
+	if (viewport[2] <= 0 || viewport[3] <= 0 || !R_AliasFadeDepthFormat(draw_fbo, &samples, &format) ||
+		(samples && !GL_RenderbufferStorageMultisampleFunc))
 		return false;
 
 	if (!r_alias_fade_depth.fbo || r_alias_fade_depth.width != viewport[2] ||
@@ -430,6 +443,7 @@ qboolean R_SaveAliasFadeDepth (void)
 		r_alias_fade_depth.format != format)
 	{
 		R_DeleteAliasFadeDepth();
+		while (glGetError () != GL_NO_ERROR) {}
 		GL_GenFramebuffersFunc(1, &r_alias_fade_depth.fbo);
 		GL_GenRenderbuffersFunc(1, &r_alias_fade_depth.depth);
 		GL_BindRenderbufferFunc(GL_RENDERBUFFER, r_alias_fade_depth.depth);
@@ -445,7 +459,7 @@ qboolean R_SaveAliasFadeDepth (void)
 		GL_BindRenderbufferFunc(GL_RENDERBUFFER, renderbuffer);
 		GL_BindFramebufferFunc(GL_READ_FRAMEBUFFER, read_fbo);
 		GL_BindFramebufferFunc(GL_DRAW_FRAMEBUFFER, draw_fbo);
-		if (status != GL_FRAMEBUFFER_COMPLETE || glGetError() != GL_NO_ERROR)
+		if (glGetError() != GL_NO_ERROR || status != GL_FRAMEBUFFER_COMPLETE)
 		{
 			R_DeleteAliasFadeDepth();
 			return false;
@@ -455,11 +469,25 @@ qboolean R_SaveAliasFadeDepth (void)
 		r_alias_fade_depth.samples = samples;
 		r_alias_fade_depth.format = format;
 	}
+	if (r_alias_fade_depth.draw_fbo != draw_fbo || r_alias_fade_depth.copy_gen != gl_fbo_delete_gen)
+		r_alias_fade_depth.copy_checked = false;
 	r_alias_fade_depth.read_fbo = read_fbo;
 	r_alias_fade_depth.draw_fbo = draw_fbo;
-	memcpy(r_alias_fade_depth.viewport, viewport, sizeof(viewport));
+	r_alias_fade_depth.copy_gen = gl_fbo_delete_gen;
+	memcpy(r_alias_fade_depth.viewport, viewport, sizeof(r_alias_fade_depth.viewport));
+	if (r_alias_fade_depth.copy_checked && !r_alias_fade_depth.copy_ok)
+		return false;
+	if (!r_alias_fade_depth.copy_checked)
+		while (glGetError () != GL_NO_ERROR) {}
 	R_CopyAliasFadeDepth(false);
-	return glGetError() == GL_NO_ERROR;
+	// Depth formats must match exactly. Check on target changes, when a
+	// driver may reject the copy, and keep successful frames query-free.
+	if (!r_alias_fade_depth.copy_checked)
+	{
+		r_alias_fade_depth.copy_ok = glGetError() == GL_NO_ERROR;
+		r_alias_fade_depth.copy_checked = true;
+	}
+	return r_alias_fade_depth.copy_ok;
 }
 
 void R_RestoreAliasFadeDepth (void)
@@ -470,7 +498,7 @@ void R_RestoreAliasFadeDepth (void)
 /* User-created multisample FBOs cannot be read by CopyTexSubImage or ReadPixels. */
 void GL_CopySceneToTexture (int x, int y, int width, int height)
 {
-	GLint read_fbo;
+	GLuint read_fbo;
 	qboolean resolved = GLSLGamma_BeginSceneRead (&read_fbo);
 	glCopyTexSubImage2D (GL_TEXTURE_2D, 0, 0, 0, x, y, width, height);
 	if (resolved)
@@ -479,7 +507,7 @@ void GL_CopySceneToTexture (int x, int y, int width, int height)
 
 void GL_ReadScenePixels (int x, int y, int width, int height, GLenum format, GLenum type, void *pixels)
 {
-	GLint read_fbo;
+	GLuint read_fbo;
 	qboolean resolved = GLSLGamma_BeginSceneRead (&read_fbo);
 	glReadPixels (x, y, width, height, format, type, pixels);
 	if (resolved)
@@ -516,6 +544,7 @@ GLSLGamma_DeleteTexture
 */
 void GLSLGamma_DeleteTexture (void)
 {
+	memset(&r_window_depth, 0, sizeof(r_window_depth));
 	if (r_gamma_fbo_active)
 		gl_stencilbits = r_scene_window_stencilbits;
 	R_DeleteAliasFadeDepth();
@@ -4101,7 +4130,10 @@ void R_RenderScene (void)
 	LOC_ShowLocs(); // woods #locext
 }
 
-static GLuint r_warpscale_texture;
+static GLuint r_warpscale_texture, r_warpscale_fbo;
+static qboolean r_warpscale_fbo_failed, r_warpscale_blit_checked, r_warpscale_blit_ok;
+static GLuint r_warpscale_blit_source;
+static unsigned int r_warpscale_blit_gen;
 static int r_warpscale_texture_width, r_warpscale_texture_height;
 static GLuint r_warpscale_program;
 static GLint r_warpscale_textureLoc = -1;
@@ -4126,6 +4158,10 @@ R_WarpScaleView_DeleteTexture
 */
 void R_WarpScaleView_DeleteTexture (void)
 {
+	if (r_warpscale_fbo && GL_DeleteFramebuffersFunc)
+		GL_DeleteFramebuffersFunc (1, &r_warpscale_fbo);
+	r_warpscale_fbo = 0;
+	r_warpscale_fbo_failed = r_warpscale_blit_checked = false;
 	glDeleteTextures (1, &r_warpscale_texture);
 	r_warpscale_texture = 0;
 	r_warpscale_program = 0; // deleted in R_DeleteShaders
@@ -4224,6 +4260,63 @@ static float R_WaterWarpTime (void)
 	return (key_dest == key_menu || cl.paused) ? (float)realtime : cl.time;
 }
 
+static qboolean R_WarpScaleView_Blit (int x, int y, int width, int height)
+{
+	const GLuint read_fbo = gl_read_framebuffer, draw_fbo = gl_draw_framebuffer;
+	qboolean complete = true;
+
+	if (!GL_BlitFramebufferFunc || !gl_fbo_able || r_warpscale_fbo_failed || !r_warpscale_texture)
+		return false;
+	if (draw_fbo != r_warpscale_blit_source || r_warpscale_blit_gen != gl_fbo_delete_gen)
+	{
+		r_warpscale_blit_source = draw_fbo;
+		r_warpscale_blit_gen = gl_fbo_delete_gen;
+		r_warpscale_blit_checked = false;
+	}
+	if (r_warpscale_blit_checked && !r_warpscale_blit_ok)
+		return false;
+	if (!r_warpscale_fbo)
+	{
+		GL_GenFramebuffersFunc (1, &r_warpscale_fbo);
+		if (!r_warpscale_fbo)
+			return false;
+		GL_BindFramebufferFunc (GL_DRAW_FRAMEBUFFER, r_warpscale_fbo);
+		GL_FramebufferTexture2DFunc (GL_DRAW_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, r_warpscale_texture, 0);
+		complete = GL_CheckFramebufferStatusFunc (GL_DRAW_FRAMEBUFFER) == GL_FRAMEBUFFER_COMPLETE;
+	}
+	else
+		GL_BindFramebufferFunc (GL_DRAW_FRAMEBUFFER, r_warpscale_fbo);
+
+	if (complete)
+	{
+		// Resolve only the view rectangle straight into the warp texture.
+		if (read_fbo != draw_fbo)
+			GL_BindFramebufferFunc (GL_READ_FRAMEBUFFER, draw_fbo);
+		if (!r_warpscale_blit_checked)
+			while (glGetError () != GL_NO_ERROR) {}
+		glPushAttrib (GL_SCISSOR_BIT);
+		glDisable (GL_SCISSOR_TEST);
+		GL_BlitFramebufferFunc (x, y, x + width, y + height, 0, 0, width, height,
+			GL_COLOR_BUFFER_BIT, GL_NEAREST);
+		glPopAttrib ();
+		if (!r_warpscale_blit_checked)
+		{
+			r_warpscale_blit_ok = glGetError () == GL_NO_ERROR;
+			r_warpscale_blit_checked = true;
+		}
+		if (read_fbo != draw_fbo)
+			GL_BindFramebufferFunc (GL_READ_FRAMEBUFFER, read_fbo);
+	}
+	GL_BindFramebufferFunc (GL_DRAW_FRAMEBUFFER, draw_fbo);
+	if (!complete && r_warpscale_fbo)
+	{
+		GL_DeleteFramebuffersFunc (1, &r_warpscale_fbo);
+		r_warpscale_fbo = 0;
+	}
+	r_warpscale_fbo_failed = !complete;
+	return complete && r_warpscale_blit_ok;
+}
+
 /*
 ================
 R_WarpScaleView
@@ -4266,7 +4359,7 @@ void R_WarpScaleView (void)
 		r_warpscale_texture_width = 0;
 		r_warpscale_texture_height = 0;
 	}
-	glBindTexture (GL_TEXTURE_2D, r_warpscale_texture);
+	GL_BindTextureName (r_warpscale_texture);
 
 	// resize render-to-texture texture if needed
 	if (r_warpscale_texture_width < srcw
@@ -4274,6 +4367,7 @@ void R_WarpScaleView (void)
 	{
 		r_warpscale_texture_width = srcw;
 		r_warpscale_texture_height = srch;
+		r_warpscale_blit_checked = false;
 
 		if (!gl_texture_NPOT)
 		{
@@ -4281,16 +4375,15 @@ void R_WarpScaleView (void)
 			r_warpscale_texture_height = TexMgr_Pad(r_warpscale_texture_height);
 		}
 
-		glTexImage2D (GL_TEXTURE_2D, 0, GL_RGBA, r_warpscale_texture_width, r_warpscale_texture_height, 0, GL_RGBA, GL_UNSIGNED_BYTE, NULL);
+		glTexImage2D (GL_TEXTURE_2D, 0, GL_RGBA8, r_warpscale_texture_width, r_warpscale_texture_height, 0, GL_RGBA, GL_UNSIGNED_BYTE, NULL);
 		glTexParameteri (GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
 		glTexParameteri (GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
 		glTexParameteri (GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
 		glTexParameteri (GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
 	}
 
-	// copy the framebuffer to the texture
-	glBindTexture (GL_TEXTURE_2D, r_warpscale_texture);
-	GL_CopySceneToTexture (srcx, srcy, srcw, srch);
+	if (!R_WarpScaleView_Blit (srcx, srcy, srcw, srch))
+		GL_CopySceneToTexture (srcx, srcy, srcw, srch);
 
 	// draw the texture back to the framebuffer
 	glDisable (GL_ALPHA_TEST);
@@ -4333,8 +4426,6 @@ void R_WarpScaleView (void)
 	if (use_warp_shader)
 		GL_UseProgramFunc (0);
 
-	// clear cached binding
-	GL_ClearBindings ();
 }
 
 static qboolean R_SkyroomWasVisible(void)

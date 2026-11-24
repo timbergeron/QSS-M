@@ -1,6 +1,7 @@
 """Test production screenshot readbacks against a real offscreen OpenGL context.
 
-Requires cc, SDL3 via pkg-config, and Mesa's offscreen driver. Exercises pixel
+Requires cc and SDL3 via pkg-config. Uses Cocoa OpenGL on macOS and an
+offscreen GL driver elsewhere. Exercises pixel
 identity, frame ownership, nonblocking polling, bounded queues, GL state,
 driver failures, and draining before context destruction. No game data needed.
 """
@@ -8,6 +9,7 @@ from pathlib import Path
 import os
 import shlex
 import subprocess
+import sys
 import tempfile
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -74,7 +76,7 @@ static void SCR_ImageJobProcess(scr_screenshot_job_t *job) { (void)job; abort();
 static void SCR_ImageJobFinish(scr_screenshot_job_t *job, qboolean publish) {
     (void)job; (void)publish; abort();
 }
-static qboolean GLSLGamma_BeginSceneRead(GLint *old_fbo) { (void)old_fbo; return false; }
+static qboolean GLSLGamma_BeginSceneRead(GLuint *old_fbo) { (void)old_fbo; return false; }
 static PFNGLBINDFRAMEBUFFERPROC GL_BindFramebufferFunc;
 '''
 rmain = (ROOT / "Quake/gl_rmain.c").read_text()
@@ -214,8 +216,10 @@ with tempfile.TemporaryDirectory(prefix="qssm-screenshot-") as tmp:
     tmp = Path(tmp)
     (tmp / "test.c").write_text(code)
     flags = shlex.split(subprocess.check_output(["pkg-config", "--cflags", "--libs", "sdl3"], text=True))
+    macos = sys.platform == "darwin"
+    gl_libraries = ["-framework", "OpenGL"] if macos else ["-lGL"]
     subprocess.run(["cc", "-std=gnu11", "-O1", "-g", "-Wall", "-Wextra",
                     "-fsanitize=address,undefined", str(tmp / "test.c"), "-o", str(tmp / "test"),
-                    *flags, "-lGL"], check=True)
-    env = dict(os.environ, SDL_VIDEODRIVER="offscreen", ASAN_OPTIONS="detect_leaks=0")
+                    *flags, *gl_libraries], check=True)
+    env = dict(os.environ, SDL_VIDEODRIVER="cocoa" if macos else "offscreen", ASAN_OPTIONS="detect_leaks=0")
     subprocess.run([str(tmp / "test")], env=env, check=True)
