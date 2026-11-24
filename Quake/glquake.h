@@ -596,6 +596,9 @@ qboolean R_BrushModelZFix (const entity_t *e);
 void R_DrawBrushModelsInstanced (entity_t **ents, int count);
 void R_DeleteBrushModelInstancingBuffers (void);
 void R_DrawSpriteModel (entity_t *e);
+void R_BeginSpriteBatch (void);
+void R_FlushSpriteBatch (void);
+void R_EndSpriteBatch (void);
 mspriteframe_t *R_GetSpriteFrame (entity_t *currentent); // woods #alphasort
 
 void R_DrawTextureChains_Water (qmodel_t *model, entity_t *ent, texchain_t chain);

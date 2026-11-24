@@ -2011,9 +2011,20 @@ Reduces code duplication between alpha and non-alpha rendering paths.
 */
 static void R_DrawEntityModel(entity_t *ent)
 {
-	if (ent->model->type == mod_brush && R_QueueLiquidBrush (ent))
+	if (ent->model->type == mod_brush)
+	{
+		R_FlushSpriteBatch ();
+		if (R_QueueLiquidBrush (ent))
+			return;
+	}
+	if (ent->model->type == mod_sprite)
+	{
+		R_FlushLiquidBrushes ();	// keep the translucent pass in order
+		R_DrawSpriteModel (ent);
 		return;
+	}
 	R_FlushLiquidBrushes ();	// keep the translucent pass in order
+	R_FlushSpriteBatch ();
 	switch (ent->model->type)
 	{
 	case mod_alias:
@@ -2128,6 +2139,7 @@ void R_DrawEntitiesOnList (qboolean alphapass) //johnfitz -- added parameter
 	}
 	else
 		R_BeginLiquidBrushes ();
+	R_BeginSpriteBatch ();
 
 	//johnfitz -- sprites are not a special case
 	
@@ -2155,7 +2167,8 @@ void R_DrawEntitiesOnList (qboolean alphapass) //johnfitz -- added parameter
 		}
 
 		// Sort back-to-front (farthest first) for correct alpha blending
-		qsort(sorted_ents, num_sorted, sizeof(sortable_entity_t), CompareAlphaEntities);
+		if (num_sorted > 1)
+			qsort(sorted_ents, num_sorted, sizeof(sortable_entity_t), CompareAlphaEntities);
 
 		// Render sorted entities
 		for (i = 0; i < num_sorted; i++)
@@ -2226,6 +2239,7 @@ void R_DrawEntitiesOnList (qboolean alphapass) //johnfitz -- added parameter
 					alias_ents[num_alias++] = currententity;
 					continue;
 				}
+				R_FlushSpriteBatch ();
 				R_DrawAliasModel(currententity);
 				continue;
 			}
@@ -2233,6 +2247,7 @@ void R_DrawEntitiesOnList (qboolean alphapass) //johnfitz -- added parameter
 			R_DrawEntityModel(currententity);
 		}
 
+		R_FlushSpriteBatch ();
 		if (!alphapass && num_brush > 0)
 			R_DrawBrushModelsInstanced(brush_ents, num_brush);
 		if (!alphapass && num_alias > 0)
@@ -2274,6 +2289,7 @@ void R_DrawEntitiesOnList (qboolean alphapass) //johnfitz -- added parameter
 					alias_ents[num_alias++] = currententity;
 					continue;
 				}
+				R_FlushSpriteBatch ();
 				R_DrawAliasModel(currententity);
 				continue;
 			}
@@ -2281,12 +2297,14 @@ void R_DrawEntitiesOnList (qboolean alphapass) //johnfitz -- added parameter
 			R_DrawEntityModel(currententity);
 		}
 
+		R_FlushSpriteBatch ();
 		if (!alphapass && num_brush > 0)
 			R_DrawBrushModelsInstanced(brush_ents, num_brush);
 		if (!alphapass && num_alias > 0)
 			R_DrawAliasModelsInstanced(alias_ents, num_alias);
 	}
 
+	R_EndSpriteBatch ();
 	if (alphapass)
 		R_EndLiquidBrushes ();
 	if (!alphapass)
