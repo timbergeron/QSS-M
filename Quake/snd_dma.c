@@ -1174,12 +1174,22 @@ void S_StopSound (int entnum, int entchannel)
 
 	for (i = NUM_AMBIENTS; i < NUM_AMBIENTS + MAX_DYNAMIC_CHANNELS; i++) // woods
 	{
-		if (snd_channels[i].entnum == entnum
+		if (snd_channels[i].sfx
+			&& snd_channels[i].entnum == entnum
 			&& snd_channels[i].entchannel == entchannel)
 		{
+			if (cls.demoplayback && cls.demospeed > 0.f)
+			{
+				sfxcache_t *sc = S_LoadSound (snd_channels[i].sfx);
+				if (sc && sc->loopstart != -1)
+					CL_AddDemoRewindSound (entnum, entchannel, snd_channels[i].sfx,
+						snd_channels[i].origin, snd_channels[i].master_vol,
+						snd_channels[i].dist_mult * sound_nominal_clip_dist);
+			}
 			snd_channels[i].end = 0;
 			snd_channels[i].sfx = NULL;
-			return;
+			if (entchannel != 0)
+				return;
 		}
 	}
 }
