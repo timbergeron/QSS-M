@@ -950,6 +950,7 @@ CL_AddDemoRewindSound
 void CL_AddDemoRewindSound(int entnum, int channel, sfx_t* sfx, vec3_t pos, int vol, float atten)
 {
 	soundevent_t sound;
+	int scaled_atten;
 
 	if (entnum <= 0 || channel <= 0)
 		return;
@@ -958,7 +959,8 @@ void CL_AddDemoRewindSound(int entnum, int channel, sfx_t* sfx, vec3_t pos, int 
 	sound.ent = entnum;
 	sound.channel = channel;
 	sound.volume = vol;
-	sound.attenuation = (int)(atten + 0.5f) * 64.f;
+	scaled_atten = (int)(atten * 64.f + 0.5f);
+	sound.attenuation = (byte)CLAMP(0, scaled_atten, 255);
 	sound.pos[0] = pos[0];
 	sound.pos[1] = pos[1];
 	sound.pos[2] = pos[2];
