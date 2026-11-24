@@ -184,6 +184,8 @@ typedef struct clippeddecal_s
 	float		valpha[3];
 
 	vec4_t		rgba;
+	vec3_t		center;
+	float		radius;
 } clippeddecal_t;
 
 #define BS_LASTSEG 0x1 // no draw to next, no delete
@@ -485,12 +487,7 @@ static cvar_t r_part_contentswitch = {"r_part_contentswitch", "1"};
 static cvar_t r_part_density = {"r_part_density", "1"};
 static cvar_t r_part_maxparticles = {"r_part_maxparticles", "65536"};
 static cvar_t r_part_maxdecals = {"r_part_maxdecals", "8192"};
-// woods -- default off on Apple: AppleMetalOpenGLRenderer flushes glBufferSubData synchronously per call (slower than client arrays for particles)
-#ifdef __APPLE__
-static cvar_t r_part_vbo = {"r_part_vbo", "0"};
-#else
 static cvar_t r_part_vbo = {"r_part_vbo", "1"};
-#endif
 static cvar_t r_part_cullbehind = {"r_part_cullbehind", "1"};
 static cvar_t r_lightflicker = {"r_lightflicker", "1"};
 extern cvar_t r_particles; // woods (vk)
@@ -548,18 +545,32 @@ static unsigned int cl_numstrisvert;
 static unsigned int cl_maxstrisvert;
 static unsigned short *cl_strisidx;
 static unsigned int cl_numstrisidx;
-static GLuint cl_strisarrayvbo;
-static GLuint cl_strisidxvbo;
+#define PSCRIPT_VBO_RING 4
+typedef struct
+{
+	vec3_t xyz;
+	vec2_t st;
+	vec4_t rgba;
+} strisvert_t;
+static strisvert_t *cl_strispacked;
+static unsigned int cl_maxstrispacked;
+static GLuint cl_strisarrayvbo[PSCRIPT_VBO_RING];
+static GLuint cl_strisidxvbo[PSCRIPT_VBO_RING];
+static unsigned int cl_strisvboslot;
 
 void PScript_ShutdownGL(void)
 {
-	GLuint buffers[2];
+	GLuint buffers[PSCRIPT_VBO_RING * 2];
 	GLsizei count = 0;
+	int i;
 
-	if (cl_strisarrayvbo)
-		buffers[count++] = cl_strisarrayvbo;
-	if (cl_strisidxvbo)
-		buffers[count++] = cl_strisidxvbo;
+	for (i = 0; i < PSCRIPT_VBO_RING; i++)
+	{
+		if (cl_strisarrayvbo[i])
+			buffers[count++] = cl_strisarrayvbo[i];
+		if (cl_strisidxvbo[i])
+			buffers[count++] = cl_strisidxvbo[i];
+	}
 
 	if (count && gl_vbo_able && GL_DeleteBuffersFunc)
 	{
@@ -569,38 +580,48 @@ void PScript_ShutdownGL(void)
 		GL_ClearBufferBindings();
 	}
 
-	cl_strisarrayvbo = 0;
-	cl_strisidxvbo = 0;
+	memset(cl_strisarrayvbo, 0, sizeof(cl_strisarrayvbo));
+	memset(cl_strisidxvbo, 0, sizeof(cl_strisidxvbo));
+	cl_strisvboslot = 0;
 }
 
 static qboolean PScript_EnsureParticleVBOs(void)
 {
-	GLuint buffers[2];
+	GLuint buffers[PSCRIPT_VBO_RING * 2];
+	int i;
 
-	if (!r_part_vbo.value || !gl_vbo_able || !GL_GenBuffersFunc || !GL_BufferDataFunc || !GL_BufferSubDataFunc || !GL_DeleteBuffersFunc)
+	if (!r_part_vbo.value || !gl_vbo_able || !GL_GenBuffersFunc || !GL_BufferDataFunc || !GL_DeleteBuffersFunc)
 		return false;
 
-	if (cl_strisarrayvbo && cl_strisidxvbo)
+	if (cl_strisarrayvbo[0] && cl_strisidxvbo[0])
 		return true;
 
 	PScript_ShutdownGL();
 	memset(buffers, 0, sizeof(buffers));
-	GL_GenBuffersFunc(2, buffers);
-	if (!buffers[0] || !buffers[1])
+	GL_GenBuffersFunc(PSCRIPT_VBO_RING * 2, buffers);
+	for (i = 0; i < PSCRIPT_VBO_RING * 2; i++)
 	{
-		GLsizei count = 0;
-		for (int i = 0; i < 2; i++)
+		if (!buffers[i])
 		{
-			if (buffers[i])
-				buffers[count++] = buffers[i];
+			GLsizei count = 0;
+			int j;
+			for (j = 0; j < PSCRIPT_VBO_RING * 2; j++)
+			{
+				if (buffers[j])
+					buffers[count++] = buffers[j];
+			}
+			if (count)
+				GL_DeleteBuffersFunc(count, buffers);
+			return false;
 		}
-		if (count)
-			GL_DeleteBuffersFunc(count, buffers);
-		return false;
 	}
 
-	cl_strisarrayvbo = buffers[0];
-	cl_strisidxvbo = buffers[1];
+	for (i = 0; i < PSCRIPT_VBO_RING; i++)
+	{
+		cl_strisarrayvbo[i] = buffers[i * 2 + 0];
+		cl_strisidxvbo[i] = buffers[i * 2 + 1];
+	}
+	cl_strisvboslot = 0;
 	return true;
 }
 static unsigned int cl_maxstrisidx;
@@ -784,10 +805,11 @@ float CL_TraceLine (vec3_t start, vec3_t end, vec3_t impact, vec3_t normal, int 
 	static int num_trace_line_ents;
 	static int trace_line_ents[MAX_EDICTS];
 	static int cache_valid_count = -1;
+	vec3_t tracemins, tracemaxs;
 	if (cache_valid_count != r_trace_line_cache_counter)
 	{
 		num_trace_line_ents = 0;
-		for (i = 0; i < cl.num_entities; i++)
+		for (i = 1; i < cl.num_entities; i++)
 		{
 			ent = &cl.entities[i];
 			// Collision-only brushes should not catch particles or visual effects.
@@ -814,12 +836,36 @@ float CL_TraceLine (vec3_t start, vec3_t end, vec3_t impact, vec3_t normal, int 
 				return frac;
 		}
 	}
+	if (num_trace_line_ents)
+	{
+		for (i = 0; i < 3; i++)
+		{
+			if (start[i] < impact[i])
+			{
+				tracemins[i] = start[i];
+				tracemaxs[i] = impact[i];
+			}
+			else
+			{
+				tracemins[i] = impact[i];
+				tracemaxs[i] = start[i];
+			}
+		}
+	}
 	for (i = 0; i < num_trace_line_ents; i++)
 	{
-		if (!trace_line_ents[i])
-			continue;
+		qmodel_t *m;
 		ent = &cl.entities[trace_line_ents[i]];
-		if (!ent->model || ent->model->needload || ent->model->type != mod_brush)
+		m = ent->model;
+		if (!m || m->needload || m->type != mod_brush)
+			continue;
+
+		if (tracemaxs[0] < ent->origin[0] + m->mins[0] - 1.0f ||
+			tracemins[0] > ent->origin[0] + m->maxs[0] + 1.0f ||
+			tracemaxs[1] < ent->origin[1] + m->mins[1] - 1.0f ||
+			tracemins[1] > ent->origin[1] + m->maxs[1] + 1.0f ||
+			tracemaxs[2] < ent->origin[2] + m->mins[2] - 1.0f ||
+			tracemins[2] > ent->origin[2] + m->maxs[2] + 1.0f)
 			continue;
 
 		//FIXME: deal with rotations
@@ -828,11 +874,12 @@ float CL_TraceLine (vec3_t start, vec3_t end, vec3_t impact, vec3_t normal, int 
 
 		memset (&trace, 0, sizeof(trace));
 		trace.fraction = 1;
-		Q1BSP_RecursiveHullCheck(&ent->model->hulls[0], ent->model->hulls[0].firstclipnode, 0, 1, relstart, relend, &trace);
+		Q1BSP_RecursiveHullCheck(&m->hulls[0], m->hulls[0].firstclipnode, 0, 1, relstart, relend, &trace);
 //		SV_RecursiveHullCheck (ent->model->hulls, ent->model->hulls[0].firstclipnode, 0, 1, relstart, relend, &trace);
 
 		if (frac > trace.fraction)
 		{
+			int a;
 			frac = trace.fraction;
 
 			//FIXME: deal with rotations.
@@ -843,6 +890,20 @@ float CL_TraceLine (vec3_t start, vec3_t end, vec3_t impact, vec3_t normal, int 
 				*entnum = trace_line_ents[i];
 			if (frac <= 0)
 				break;
+
+			for (a = 0; a < 3; a++)
+			{
+				if (start[a] < impact[a])
+				{
+					tracemins[a] = start[a];
+					tracemaxs[a] = impact[a];
+				}
+				else
+				{
+					tracemins[a] = impact[a];
+					tracemaxs[a] = start[a];
+				}
+			}
 		}
 	}
 	return frac;
@@ -5967,6 +6028,34 @@ static void PScript_AddDecals(void *vctx, vec3_t *points, size_t numtris)
 		}
 		points += 3;
 
+		{
+			vec3_t dmin, dmax, diff;
+			float maxr2 = 0.0f;
+			VectorCopy(d->vertex[0], dmin);
+			VectorCopy(d->vertex[0], dmax);
+			for (i = 1; i < 3; i++)
+			{
+				int a;
+				for (a = 0; a < 3; a++)
+				{
+					if (d->vertex[i][a] < dmin[a]) dmin[a] = d->vertex[i][a];
+					if (d->vertex[i][a] > dmax[a]) dmax[a] = d->vertex[i][a];
+				}
+			}
+			d->center[0] = 0.5f * (dmin[0] + dmax[0]);
+			d->center[1] = 0.5f * (dmin[1] + dmax[1]);
+			d->center[2] = 0.5f * (dmin[2] + dmax[2]);
+			for (i = 0; i < 3; i++)
+			{
+				float r2;
+				VectorSubtract(d->vertex[i], d->center, diff);
+				r2 = DotProduct(diff, diff);
+				if (r2 > maxr2)
+					maxr2 = r2;
+			}
+			d->radius = sqrtf(maxr2) + 1.0f;
+		}
+
 		d->entity = ctx->entity;
 		d->model = ctx->model;
 		d->die = ptype->randdie*frandom();
@@ -8576,6 +8665,78 @@ static void PScript_MarkDecalForReuse(void)
 		r_decalrecycle = 0;
 }
 
+static qboolean PScript_CullDecalFrustum(clippeddecal_t *d)
+{
+	extern cvar_t r_stereo;
+	vec3_t wcenter;
+	float rad = d->radius;
+	int i;
+
+	if (r_stereo.value)
+		return false;
+
+	if (d->entity > 0)
+	{
+		entity_t *le = CL_EntityNum(d->entity);
+		if (le->angles[0] || le->angles[1] || le->angles[2])
+		{
+			d->die = -1;
+			return true;
+		}
+		VectorAdd(d->center, le->origin, wcenter);
+	}
+	else
+	{
+		VectorCopy(d->center, wcenter);
+	}
+
+	if ((wcenter[0] - r_origin[0]) * vpn[0] +
+		(wcenter[1] - r_origin[1]) * vpn[1] +
+		(wcenter[2] - r_origin[2]) * vpn[2] < -rad)
+		return true;
+
+	for (i = 0; i < r_frustumplanes; i++)
+	{
+		if (DotProduct(wcenter, frustum[i].normal) < frustum[i].dist - rad)
+			return true;
+	}
+	return false;
+}
+
+static scenetris_t *PScript_EnsureSceneTri(scenetris_t *scenetri, gltexture_t *texture, blendmode_t blendmode, unsigned int beflags)
+{
+	if (!scenetri)
+	{
+		if (cl_numstris &&
+			cl_stris[cl_numstris - 1].texture == texture &&
+			cl_stris[cl_numstris - 1].blendmode == blendmode &&
+			cl_stris[cl_numstris - 1].beflags == beflags &&
+			cl_numstrisvert - cl_stris[cl_numstris - 1].firstvert < MAX_INDICIES - 6)
+		{
+			return &cl_stris[cl_numstris - 1];
+		}
+	}
+	else if (cl_numstrisvert - scenetri->firstvert < MAX_INDICIES - 6)
+	{
+		return scenetri;
+	}
+
+	if (cl_numstris == cl_maxstris)
+	{
+		cl_maxstris += 8;
+		cl_stris = Z_Realloc(cl_stris, sizeof(*cl_stris) * cl_maxstris);
+	}
+	scenetri = &cl_stris[cl_numstris++];
+	scenetri->texture = texture;
+	scenetri->blendmode = blendmode;
+	scenetri->beflags = beflags;
+	scenetri->firstidx = cl_numstrisidx;
+	scenetri->firstvert = cl_numstrisvert;
+	scenetri->numvert = 0;
+	scenetri->numidx = 0;
+	return scenetri;
+}
+
 static void PScript_DrawParticleTypes (float pframetime)
 {
 #if UNSUPPORTED
@@ -8680,24 +8841,7 @@ static void PScript_DrawParticleTypes (float pframetime)
 	{
 		if (type->clippeddecals)
 		{
-			if (cl_numstris && cl_stris[cl_numstris-1].texture == type->looks.texture && cl_stris[cl_numstris-1].blendmode == type->looks.blendmode && cl_stris[cl_numstris-1].beflags == 0)
-				scenetri = &cl_stris[cl_numstris-1];
-			else
-			{
-				if (cl_numstris == cl_maxstris)
-				{
-					cl_maxstris+=8;
-					cl_stris = Z_Realloc(cl_stris, sizeof(*cl_stris)*cl_maxstris);
-				}
-				scenetri = &cl_stris[cl_numstris++];
-				scenetri->texture = type->looks.texture;
-				scenetri->blendmode = type->looks.blendmode;
-				scenetri->beflags = 0;
-				scenetri->firstidx = cl_numstrisidx;
-				scenetri->firstvert = cl_numstrisvert;
-				scenetri->numvert = 0;
-				scenetri->numidx = 0;
-			}
+			scenetri = NULL;
 
 			for ( ;; )
 			{
@@ -8770,23 +8914,9 @@ static void PScript_DrawParticleTypes (float pframetime)
 					}
 				}
 
-				if (cl_numstrisvert - scenetri->firstvert >= MAX_INDICIES-6)
-				{
-					//generate a new mesh if the old one overflowed. yay smc...
-					if (cl_numstris == cl_maxstris)
-					{
-						cl_maxstris+=8;
-						cl_stris = Z_Realloc(cl_stris, sizeof(*cl_stris)*cl_maxstris);
-					}
-					scenetri = &cl_stris[cl_numstris++];
-					scenetri->texture = scenetri[-1].texture;
-					scenetri->blendmode = scenetri[-1].blendmode;
-					scenetri->beflags = scenetri[-1].beflags;
-					scenetri->firstidx = cl_numstrisidx;
-					scenetri->firstvert = cl_numstrisvert;
-					scenetri->numvert = 0;
-					scenetri->numidx = 0;
-				}
+				if (PScript_CullDecalFrustum(d))
+					continue;
+				scenetri = PScript_EnsureSceneTri(scenetri, type->looks.texture, type->looks.blendmode, 0);
 				R_AddClippedDecal(scenetri, d, type->slooks);
 			}
 		}
@@ -8825,48 +8955,15 @@ static void PScript_DrawParticleTypes (float pframetime)
 			break;
 		}
 
-		if (cl_numstris && cl_stris[cl_numstris-1].texture == type->looks.texture && cl_stris[cl_numstris-1].blendmode == type->looks.blendmode && cl_stris[cl_numstris-1].beflags == batchflags)
-			scenetri = &cl_stris[cl_numstris-1];
-		else
-		{
-			if (cl_numstris == cl_maxstris)
-			{
-				cl_maxstris+=8;
-				cl_stris = Z_Realloc(cl_stris, sizeof(*cl_stris)*cl_maxstris);
-			}
-			scenetri = &cl_stris[cl_numstris++];
-			scenetri->texture = type->looks.texture;
-			scenetri->blendmode = type->looks.blendmode;
-			scenetri->beflags = batchflags;
-			scenetri->firstidx = cl_numstrisidx;
-			scenetri->firstvert = cl_numstrisvert;
-			scenetri->numvert = 0;
-			scenetri->numidx = 0;
-		}
+		scenetri = NULL;
 
 		if (!type->die)
 		{
 			while ((p=type->particles))
 			{
-				if (scenetri && tdraw && !PScript_CullParticleDrawBehindView(p, type->slooks))
+				if (tdraw && !PScript_CullParticleDrawBehindView(p, type->slooks))
 				{
-					if (cl_numstrisvert - scenetri->firstvert >= MAX_INDICIES-6)
-					{
-						//generate a new mesh if the old one overflowed. yay smc...
-						if (cl_numstris == cl_maxstris)
-						{
-							cl_maxstris+=8;
-							cl_stris = Z_Realloc(cl_stris, sizeof(*cl_stris)*cl_maxstris);
-						}
-						scenetri = &cl_stris[cl_numstris++];
-						scenetri->texture = scenetri[-1].texture;
-						scenetri->blendmode = scenetri[-1].blendmode;
-						scenetri->beflags = scenetri[-1].beflags;
-						scenetri->firstidx = cl_numstrisidx;
-						scenetri->firstvert = cl_numstrisvert;
-						scenetri->numvert = 0;
-						scenetri->numidx = 0;
-					}
+					scenetri = PScript_EnsureSceneTri(scenetri, type->looks.texture, type->looks.blendmode, batchflags);
 					tdraw(scenetri, p, type->slooks);
 				}
 
@@ -8920,7 +9017,10 @@ static void PScript_DrawParticleTypes (float pframetime)
 					VectorSubtract(stop, oldorg, b->next->dir);
 					VectorNormalize(b->next->dir);
 					if (bdraw)
+					{
+						scenetri = PScript_EnsureSceneTri(scenetri, type->looks.texture, type->looks.blendmode, batchflags);
 						bdraw(scenetri, b, type->slooks);
+					}
 				}
 
 				// clean up dead entries ahead of current
@@ -9242,25 +9342,9 @@ static void PScript_DrawParticleTypes (float pframetime)
 			}
 #endif
 
-			if (scenetri && tdraw && !PScript_CullParticleDrawBehindView(p, type->slooks))
+			if (tdraw && !PScript_CullParticleDrawBehindView(p, type->slooks))
 			{
-				if (cl_numstrisvert - scenetri->firstvert >= MAX_INDICIES-6)
-				{
-					//generate a new mesh if the old one overflowed. yay smc...
-					if (cl_numstris == cl_maxstris)
-					{
-						cl_maxstris+=8;
-						cl_stris = Z_Realloc(cl_stris, sizeof(*cl_stris)*cl_maxstris);
-					}
-					scenetri = &cl_stris[cl_numstris++];
-					scenetri->texture = scenetri[-1].texture;
-					scenetri->blendmode = scenetri[-1].blendmode;
-					scenetri->beflags = scenetri[-1].beflags;
-					scenetri->firstidx = cl_numstrisidx;
-					scenetri->firstvert = cl_numstrisvert;
-					scenetri->numvert = 0;
-					scenetri->numidx = 0;
-				}
+				scenetri = PScript_EnsureSceneTri(scenetri, type->looks.texture, type->looks.blendmode, batchflags);
 				tdraw(scenetri, p, type->slooks);
 			}
 		}
@@ -9397,20 +9481,25 @@ endtype:
 
 	//mess around with where glDrawElements gets its data from
 	qboolean usevbo = PScript_EnsureParticleVBOs();
-	size_t vbovertofs = 0;
-	size_t vbotexofs = sizeof(*cl_strisvertv) * (size_t)cl_numstrisvert;
-	size_t vbocolorofs = vbotexofs + sizeof(*cl_strisvertt) * (size_t)cl_numstrisvert;
 	if (usevbo)
 	{
-		size_t vertbytes = sizeof(*cl_strisvertv) * (size_t)cl_numstrisvert;
-		size_t texbytes = sizeof(*cl_strisvertt) * (size_t)cl_numstrisvert;
-		size_t colorbytes = sizeof(*cl_strisvertc) * (size_t)cl_numstrisvert;
-		GL_BindBuffer(GL_ARRAY_BUFFER, cl_strisarrayvbo);
-		GL_BufferDataFunc(GL_ARRAY_BUFFER, (GLsizeiptr)(vertbytes + texbytes + colorbytes), NULL, GL_STREAM_DRAW);
-		GL_BufferSubDataFunc(GL_ARRAY_BUFFER, vbovertofs, vertbytes, cl_strisvertv);
-		GL_BufferSubDataFunc(GL_ARRAY_BUFFER, vbotexofs, texbytes, cl_strisvertt);
-		GL_BufferSubDataFunc(GL_ARRAY_BUFFER, vbocolorofs, colorbytes, cl_strisvertc);
-		GL_BindBuffer(GL_ELEMENT_ARRAY_BUFFER, cl_strisidxvbo);
+		unsigned int slot = cl_strisvboslot;
+		unsigned int v;
+		cl_strisvboslot = (slot + 1) & (PSCRIPT_VBO_RING - 1);
+		if (cl_numstrisvert > cl_maxstrispacked)
+		{
+			cl_maxstrispacked = (cl_numstrisvert + 255u) & ~255u;
+			cl_strispacked = Z_Realloc(cl_strispacked, sizeof(*cl_strispacked) * cl_maxstrispacked);
+		}
+		for (v = 0; v < cl_numstrisvert; v++)
+		{
+			VectorCopy(cl_strisvertv[v], cl_strispacked[v].xyz);
+			Vector2Copy(cl_strisvertt[v], cl_strispacked[v].st);
+			Vector4Copy(cl_strisvertc[v], cl_strispacked[v].rgba);
+		}
+		GL_BindBuffer(GL_ARRAY_BUFFER, cl_strisarrayvbo[slot]);
+		GL_BufferDataFunc(GL_ARRAY_BUFFER, (GLsizeiptr)(sizeof(*cl_strispacked) * (size_t)cl_numstrisvert), cl_strispacked, GL_STREAM_DRAW);
+		GL_BindBuffer(GL_ELEMENT_ARRAY_BUFFER, cl_strisidxvbo[slot]);
 		GL_BufferDataFunc(GL_ELEMENT_ARRAY_BUFFER, (GLsizeiptr)(sizeof(*cl_strisidx) * (size_t)cl_numstrisidx), cl_strisidx, GL_STREAM_DRAW);
 	}
 	else
@@ -9427,6 +9516,7 @@ endtype:
 	GLenum lastdstf = 0;
 	qboolean textureenabled = true;
 	qboolean smoothlines = false;
+	unsigned int last_firstvert = ~0u;
 
 	for (o = 0; o < 3; o++)
 	{
@@ -9464,10 +9554,14 @@ endtype:
 
 			if (usevbo)
 			{
-				GL_BindBuffer(GL_ARRAY_BUFFER, cl_strisarrayvbo);
-				glVertexPointer(3, GL_FLOAT, sizeof(*cl_strisvertv), (const GLvoid *)(uintptr_t)(vbovertofs + (size_t)cl_stris[i].firstvert * sizeof(*cl_strisvertv)));
-				glTexCoordPointer(2, GL_FLOAT, sizeof(*cl_strisvertt), (const GLvoid *)(uintptr_t)(vbotexofs + (size_t)cl_stris[i].firstvert * sizeof(*cl_strisvertt)));
-				glColorPointer(4, GL_FLOAT, sizeof(*cl_strisvertc), (const GLvoid *)(uintptr_t)(vbocolorofs + (size_t)cl_stris[i].firstvert * sizeof(*cl_strisvertc)));
+				if (last_firstvert != cl_stris[i].firstvert)
+				{
+					size_t base = (size_t)cl_stris[i].firstvert * sizeof(*cl_strispacked);
+					glVertexPointer(3, GL_FLOAT, sizeof(*cl_strispacked), (const GLvoid *)(uintptr_t)(base + offsetof(strisvert_t, xyz)));
+					glTexCoordPointer(2, GL_FLOAT, sizeof(*cl_strispacked), (const GLvoid *)(uintptr_t)(base + offsetof(strisvert_t, st)));
+					glColorPointer(4, GL_FLOAT, sizeof(*cl_strispacked), (const GLvoid *)(uintptr_t)(base + offsetof(strisvert_t, rgba)));
+					last_firstvert = cl_stris[i].firstvert;
+				}
 				indices = (const GLvoid *)(uintptr_t)((size_t)cl_stris[i].firstidx * sizeof(*cl_strisidx));
 			}
 			else
