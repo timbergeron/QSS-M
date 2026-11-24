@@ -165,6 +165,7 @@ static void Con_SetHotLink(conlink_t* link) { con_hotlink = Con_LinksEnabled() ?
 static void Con_ClearSelection(void) { memset(&con_selection, 0, sizeof(con_selection)); }
 static void Con_EnterCursorMode(void);
 static void Con_LeaveCursorMode(void);
+static qboolean Con_IsWebURL (const char *s); // woods #conurl
 
 
 extern double host_frametime;
@@ -996,7 +997,8 @@ static void Con_SetMouseState (conmouse_t state)
         Con_SetHotLink(NULL);
         break;
     case CMS_NOTPRESSED:
-        if (con_mousestate != CMS_DRAGGING && Con_LinksEnabled() && con_hotlink && !Sys_Explore(con_hotlink->path))
+        if (con_mousestate != CMS_DRAGGING && Con_LinksEnabled() && con_hotlink &&
+            !(Con_IsWebURL(con_hotlink->path) ? SDL_OpenURL(con_hotlink->path) : Sys_Explore(con_hotlink->path))) // woods #conurl
             S_LocalSound("misc/menu2.wav");
         con_scrolldelta = 0.f; con_scrollspeed = 0.f;
         break;
@@ -1871,6 +1873,185 @@ static void RideDelay_Deferred(void *param) // runequake changelevel hack -- run
 
 /*
 ================
+Con_AutoLink -- woods #conurl
+
+Web URLs inside printed text become console links. The source text is
+scanned once per print (no allocation unless a URL is found); offsets are
+recorded as Con_Print writes the URL's characters, so word wrap, markup and
+colour masks don't need to be mirrored here.
+================
+*/
+#define CON_MAX_AUTOLINKS 8
+
+typedef struct
+{
+	const char	*start, *end;	// source text range [start, end)
+	qboolean	www;			// "www." with no scheme: prefix https://
+} conurl_t;
+
+typedef struct
+{
+	conurl_t	urls[CON_MAX_AUTOLINKS];
+	int			count, cur;
+	qboolean	open;
+	conofs_t	begin, end;
+} conautolink_t;
+
+static qboolean con_autolink_suppress = false; // set while Con_LinkPrintf prints its own link
+
+static qboolean Con_IsURLChar (int c)
+{
+	if (c <= ' ' || c >= 0x7f)
+		return false;
+	switch (c)
+	{
+	case '"': case '<': case '>': case '^': case '`':
+	case '{': case '}': case '|': case '\\':
+		return false;
+	}
+	return true;
+}
+
+static qboolean Con_IsWebURL (const char *s)
+{
+	return !q_strncasecmp (s, "https://", 8) || !q_strncasecmp (s, "http://", 7);
+}
+
+static int Con_FindURLs (const char *txt, conurl_t *urls, int maxurls)
+{
+	const char	*s, *host, *e, *p;
+	int			n = 0, skip, open, close;
+	qboolean	www;
+
+	for (s = txt; *s && n < maxurls; s++)
+	{
+		switch (*s)
+		{
+		case 'h': case 'H':
+			if (!q_strncasecmp (s, "https://", 8))
+				skip = 8;
+			else if (!q_strncasecmp (s, "http://", 7))
+				skip = 7;
+			else
+				continue;
+			www = false;
+			break;
+		case 'w': case 'W':
+			if (q_strncasecmp (s, "www.", 4))
+				continue;
+			skip = 4;
+			www = true;
+			break;
+		default:
+			continue;
+		}
+
+		// must start a word: "foohttp://" and "a.www.b" aren't links,
+		// but a colour code right before it ("^7https://", "^x0f0www.") is
+		if (s > txt && (q_isalnum ((unsigned char)s[-1]) || (www && (s[-1] == '.' || s[-1] == '/')))
+			&& !(s - txt >= 2 && s[-2] == '^')
+			&& !(s - txt >= 5 && s[-5] == '^' && s[-4] == 'x'))
+			continue;
+
+		host = s + skip;
+		for (e = host; Con_IsURLChar ((unsigned char)*e); e++)
+			;
+
+		// trailing sentence punctuation isn't part of the URL; keep a
+		// closing paren only when it balances one inside the URL
+		while (e > host)
+		{
+			if (strchr (".,;:!?'*", e[-1]))
+			{
+				e--;
+				continue;
+			}
+			if (e[-1] == ')')
+			{
+				for (open = close = 0, p = host; p < e; p++)
+				{
+					open += (*p == '(');
+					close += (*p == ')');
+				}
+				if (close > open)
+				{
+					e--;
+					continue;
+				}
+			}
+			break;
+		}
+
+		if (e - host < (www ? 3 : 1) || (www && !memchr (host, '.', e - host)))
+		{
+			s = (e > s) ? e - 1 : s;
+			continue;
+		}
+
+		urls[n].start = s;
+		urls[n].end = e;
+		urls[n].www = www;
+		n++;
+		s = e - 1;
+	}
+
+	return n;
+}
+
+static void Con_AutoLinkFinish (conautolink_t *al)
+{
+	const conurl_t	*url = &al->urls[al->cur];
+	const char		*prefix = url->www ? "https://" : "";
+	size_t			prefixlen = strlen (prefix), len = url->end - url->start, n;
+	conlink_t		*link;
+
+	if (!al->open)
+		return;
+	al->open = false;
+
+	// a '\r' overwrite can reprint over lines that already hold links;
+	// drop those so con_links stays sorted by end offset
+	while ((n = CON_VEC_SIZE (con_links)) && Con_OfsCompare (&con_links[n-1]->end, &al->begin) > 0)
+	{
+		if (con_hotlink == con_links[n-1])
+			con_hotlink = NULL;
+		free (con_links[n-1]);
+		((size_t *)con_links)[-1] = n - 1;
+	}
+
+	link = (conlink_t *) malloc (sizeof(conlink_t) + prefixlen + len + 1);
+	if (!link)
+		return;
+	memcpy (link + 1, prefix, prefixlen);
+	memcpy ((char *)(link + 1) + prefixlen, url->start, len);
+	((char *)(link + 1))[prefixlen + len] = 0;
+	link->path = (const char *)(link + 1);
+	link->begin = al->begin;
+	link->end = al->end;
+	CON_VEC_PUSH (con_links, link);
+}
+
+// called for each character Con_Print writes; src is its source position
+static qboolean Con_AutoLinkBeginChar (conautolink_t *al, const char *src)
+{
+	while (al->cur < al->count && src >= al->urls[al->cur].end)
+	{
+		Con_AutoLinkFinish (al);
+		al->cur++;
+	}
+	if (al->cur >= al->count || src < al->urls[al->cur].start)
+		return false;
+	if (!al->open)
+	{
+		al->open = true;
+		al->begin.line = con_current;
+		al->begin.col = con_x;
+	}
+	return true;
+}
+
+/*
+================
 Con_Print
 
 Handles cursor positioning, line wrapping, etc
@@ -1888,6 +2069,9 @@ static void Con_Print (const char *txt)
 	qboolean	gold_digits;
 	qboolean	boundary, skipnotify;
 	static int fixline = 0; // woods #confilter
+	conautolink_t	autolink; // woods #conurl
+	const char	*src;
+	qboolean	in_url;
 
 	//con_backscroll = 0; //johnfitz -- better console scrolling
 
@@ -2161,8 +2345,14 @@ static void Con_Print (const char *txt)
 
 	boundary = true;
 
+	autolink.count = (!con_autolink_suppress && con_initialized && cls.state != ca_dedicated)
+		? Con_FindURLs (txt, autolink.urls, CON_MAX_AUTOLINKS) : 0; // woods #conurl
+	autolink.cur = 0;
+	autolink.open = false;
+
 	while ( (c = *txt) )
 	{
+		src = txt; // woods #conurl
 		if ((cl.modtype == 4 || cl.modtype == 5) && strstr(txt, "&c")) // woods ezquake console colors filter
 		{
 			switch (*txt)
@@ -2330,14 +2520,23 @@ static void Con_Print (const char *txt)
 		default:	// display character and advance
 			if (gold_digits && c >= '0' && c <= '9')
 				c -= 30;
+			in_url = autolink.count && Con_AutoLinkBeginChar (&autolink, src); // woods #conurl
 			y = con_current % con_totallines;
 			con_text[y*con_linewidth+con_x] = c | mask;
 			con_x++;
+			if (in_url)
+			{
+				autolink.end.line = con_current;
+				autolink.end.col = con_x; // col == linewidth orders as (line+1, 0)
+			}
 			if (con_x >= con_linewidth)
 				con_x = 0;
 			break;
 		}
 	}
+
+	if (autolink.count)
+		Con_AutoLinkFinish (&autolink); // woods #conurl
 }
 
 /*
@@ -2861,7 +3060,9 @@ void Con_LinkPrintf (const char *addr, const char *fmt, ...)
 	link->begin.line = con_current + (con_x == 0 && msg[0] ? 1 : 0);
 	link->end = link->begin;
 
+	con_autolink_suppress = true; // woods #conurl -- this text is already one link
 	Con_SafePrintf ("%s", msg);
+	con_autolink_suppress = false;
 
 	link->end.line = con_current;
 	link->end.col = con_x;
