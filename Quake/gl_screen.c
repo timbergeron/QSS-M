@@ -5207,7 +5207,8 @@ static qboolean SCR_AutoIDBModelCanBlock (const entity_t *ent)
 SCR_TraceBSPSubmodels - trace against visible BSP submodels (doors, plats, etc.)
 ================
 */
-static qboolean SCR_TraceBSPSubmodels (vec3_t start, vec3_t impact, qboolean autoid_blockers_only)
+static qboolean SCR_TraceBSPSubmodels (vec3_t start, vec3_t impact, qboolean autoid_blockers_only,
+	entity_t *const *brushes, int numbrushes)
 {
 	int i;
 	trace_t trace;
@@ -5223,9 +5224,14 @@ static qboolean SCR_TraceBSPSubmodels (vec3_t start, vec3_t impact, qboolean aut
 	VectorSubtract (end, start, ray_delta);
 	best_dist = VecLength2 (start, impact);
 
-	for (i = 0; i < cl_numvisedicts; i++)
+	if (!brushes)
 	{
-		entity_t *ent = cl_visedicts[i];
+		brushes = cl_visedicts;
+		numbrushes = cl_numvisedicts;
+	}
+	for (i = 0; i < numbrushes; i++)
+	{
+		entity_t *ent = brushes[i];
 		vec3_t f, r, u, temp, mins, maxs;
 		qboolean rotated;
 
@@ -5336,7 +5342,7 @@ static qboolean SCR_GetLaserPointTrace (vec3_t wall, vec3_t crosshair, vec3_t or
 
 	VectorMA (start, 4096, forward, crosshair);
 	TraceLine (start, crosshair, 0, wall);
-	SCR_TraceBSPSubmodels (start, wall, false);
+	SCR_TraceBSPSubmodels (start, wall, false, NULL, 0);
 
 	return true;
 }
@@ -5615,66 +5621,70 @@ int qglProject(float objx, float objy, float objz, const float* model, const flo
 	return 1;
 }
 
-static qboolean SCR_AutoIDTraceLine (vec3_t start, vec3_t end, vec3_t impact)
+static int SCR_CollectAutoIDBrushes (entity_t **brushes, int capacity)
 {
-	TraceLine(start, end, 0, impact);
-	return SCR_TraceBSPSubmodels(start, impact, true);
+	int i, count = 0;
+
+	if (!cl.worldmodel || cls.signon < SIGNONS)
+		return 0;
+	for (i = 0; i < cl_numvisedicts; i++)
+	{
+		entity_t *ent = cl_visedicts[i];
+
+		if (!ent || !ent->model || ent->model->type != mod_brush ||
+			ent->model->surfaces != cl.worldmodel->surfaces || !SCR_AutoIDBModelCanBlock(ent))
+			continue;
+		if (count == capacity)
+			return -1;
+		brushes[count++] = ent;
+	}
+	return count;
 }
 
-qboolean TP_IsItemVisible(item_vis_t* visitem)
+static qboolean TP_IsItemVisible (item_vis_t *visitem, entity_t *const *brushes, int numbrushes)
 {
-	vec3_t impact, end, raw_end, v;
+	vec3_t center_impact, impact, end, raw_end, v;
 	int i;
-	qboolean blocked;
-
-	blocked = SCR_AutoIDTraceLine(visitem->vieworg, visitem->entorg, impact); // trace from the viewer's origin to the target's position
-	if (blocked)
-		return false;
-
-	if (VecLength2(impact, visitem->entorg) <= visitem->radius) // did trace hit the target directly within the radius
-		return true; // Target is visible
-
-	if (visitem->dist <= visitem->radius) // Check if the distance to the target is within the radius
-		return true;
-
-	vec3_t offsets[] = {
-		// { x, y, z } offsets relative to the target's origin
-		{ 0, 0, 0 },                            // Center (already checked, can be omitted)
-		{ -visitem->radius, 0, 0 },             // Left
-		{ visitem->radius, 0, 0 },              // Right
-		{ 0, 0, visitem->radius },              // Above
-		{ 0, 0, -visitem->radius / 2 },         // Below (half radius)
-		{ 0, visitem->radius, 0 },              // Forward
-		{ 0, -visitem->radius, 0 }              // Backward
+	const float radius = visitem->radius;
+	const vec3_t offsets[] = {
+		{ 0, 0, 0 }, // The shortened center probe still needs its own trace.
+		{ -radius, 0, 0 }, { radius, 0, 0 },
+		{ 0, 0, radius }, { 0, 0, -radius / 2 },
+		{ 0, radius, 0 }, { 0, -radius, 0 }
 	};
 
-	int num_offsets = sizeof(offsets) / sizeof(offsets[0]);
+	TraceLine(visitem->vieworg, visitem->entorg, 0, center_impact);
+	if (VecLength2(center_impact, visitem->entorg) <= radius || visitem->dist <= radius)
+		return !SCR_TraceBSPSubmodels(visitem->vieworg, center_impact, true, brushes, numbrushes);
 
-	for (i = 0; i < num_offsets; i++) // Loop through the offsets
+	for (i = 0; i < (int)countof(offsets); i++)
 	{
-		VectorAdd(visitem->entorg, offsets[i], raw_end); // Compute the end point trace by adding the offset to the target's origin
-
-		// Check the full probe before pulling it toward the camera; otherwise a nearby door can be skipped.
-		if (SCR_AutoIDTraceLine(visitem->vieworg, raw_end, impact))
-			continue;
-
-		VectorCopy(raw_end, end);
-
-		VectorSubtract(end, visitem->vieworg, v); // Compute the direction vector from the viewer to the end point
+		VectorAdd(visitem->entorg, offsets[i], raw_end);
+		VectorSubtract(raw_end, visitem->vieworg, v);
 		VectorNormalize(v);
+		VectorMA(raw_end, -radius, v, end);
 
-		VectorMA(end, -visitem->radius, v, end); // Adjust the end point slightly towards the viewer to account for the target's radius
+		TraceLine(visitem->vieworg, end, 0, impact);
+		if (VecLength2(impact, end) > radius)
+			continue; // The world already blocks this probe.
 
-		blocked = SCR_AutoIDTraceLine(visitem->vieworg, end, impact); // Perform the trace from the viewer's origin to the adjusted end point
+		if (i != 0)
+		{
+			vec3_t raw_impact;
 
-		if (!blocked && VecLength2(impact, end) <= visitem->radius) // Check if the trace hit within the target's radius
-			return true; // Target is visible
+			// Test the full probe too, so pulling the endpoint back cannot skip a door.
+			TraceLine(visitem->vieworg, raw_end, 0, raw_impact);
+			if (SCR_TraceBSPSubmodels(visitem->vieworg, raw_impact, true, brushes, numbrushes))
+				continue;
+		}
+
+		if (!SCR_TraceBSPSubmodels(visitem->vieworg, impact, true, brushes, numbrushes))
+			return !SCR_TraceBSPSubmodels(visitem->vieworg, center_impact, true, brushes, numbrushes);
 	}
-
-	return false; // If none of the checks are successful, the item is not visible
+	return false;
 }
 
-qboolean TP_IsPlayerVisible(vec3_t origin)
+static qboolean TP_IsPlayerVisible (vec3_t origin, entity_t *const *brushes, int numbrushes)
 {
 	item_vis_t visitem;
 
@@ -5684,12 +5694,12 @@ qboolean TP_IsPlayerVisible(vec3_t origin)
 	VectorCopy(r_origin, visitem.vieworg);
 
 	VectorCopy(origin, visitem.entorg);
-	visitem.entorg[2] += 27; // Adjust to player's head height
+	visitem.entorg[2] += 27;
 	VectorSubtract(visitem.entorg, visitem.vieworg, visitem.dir);
 	visitem.dist = DotProduct(visitem.dir, visitem.forward);
-	visitem.radius = 25; // Player's approximate radius
+	visitem.radius = 25;
 
-	return TP_IsItemVisible(&visitem);
+	return TP_IsItemVisible(&visitem, brushes, numbrushes);
 }
 
 static qboolean SCR_IsOutsideMapView(void)
@@ -5742,6 +5752,9 @@ static int SCR_FloorToInt(float x)
 
 void SCR_SetupAutoID(void)
 {
+	static entity_t *brushes[MAX_EDICTS];
+	int numbrushes = 0;
+	qboolean collected_brushes = false;
 	int		i;
 	float		winz;
 	vec3_t origin, base_origin;
@@ -5826,8 +5839,16 @@ void SCR_SetupAutoID(void)
 		if (R_CullSphere(origin, 0))
 			continue;
 
-		if (!skip_vis && !TP_IsPlayerVisible(base_origin))
-			continue;
+		if (!skip_vis)
+		{
+			if (!collected_brushes)
+			{
+				numbrushes = SCR_CollectAutoIDBrushes(brushes, countof(brushes));
+				collected_brushes = true;
+			}
+			if (!TP_IsPlayerVisible(base_origin, numbrushes >= 0 ? brushes : NULL, numbrushes))
+				continue;
+		}
 
 		if (autoid_count >= (int)(sizeof(autoids) / sizeof(autoids[0])))
 			continue;
@@ -5990,7 +6011,7 @@ static qboolean SCR_IsGrenadeVisible(vec3_t origin)
 	visitem.dist = DotProduct(visitem.dir, visitem.forward);
 	visitem.radius = 8.0f;
 
-	return TP_IsItemVisible(&visitem);
+	return TP_IsItemVisible(&visitem, NULL, 0);
 }
 
 /*
