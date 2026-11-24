@@ -289,7 +289,7 @@ void GLAlias_CreateShaders (void)
 {
 	int i;
 	aliasglsl_t *glsl;
-	char processedVertSource[8192], *defines;
+	char processedVertSource[8192], processedFragSource[8192], *defines;
 	const glsl_attrib_binding_t bindings[] = {
 		{ "TexCoords", texCoordsAttrIndex },
 		{ "Pose1Vert", pose1VertexAttrIndex },
@@ -316,6 +316,7 @@ void GLAlias_CreateShaders (void)
 		"#version 110\n"
 		"%s"
 		"\n"
+		"#ifndef INSTANCED\n"
 		"uniform float ClTime;\n" // woods #powershell
 		"varying vec2 ShellCoord;\n" // woods #powershell
 		"varying vec2 ShellCoord2;\n" // woods #powershell
@@ -323,6 +324,10 @@ void GLAlias_CreateShaders (void)
 		"uniform int shellMode;\n"      // 0=normal, 1=outline, 2=shell
 		"uniform float shellTime;\n"    // Time for animation
 		"uniform vec4 shellWaveParams;\n" // x=amplitude, y=frequency, z=phase, w=unused
+		"uniform float outlineWidth; // Amount to expand vertices\n" // woods #routline
+		"uniform int isOutlinePass; // Indicates if this is the outline pass\n" // woods #routline
+		"uniform float xrayPull; // world units to slide each vertex toward the eye\n" // woods #routline
+		"#endif\n"
 		"\n"
 		"#ifdef INSTANCED\n"
 		"attribute vec4 InstMat0;\n"
@@ -340,11 +345,6 @@ void GLAlias_CreateShaders (void)
 		"#define AliasShadeVector ShadeVector\n"
 		"#define AliasLightColor LightColor\n"
 		"#define AliasBlend Blend\n"
-		"#endif\n"
-		"uniform float outlineWidth; // Amount to expand vertices\n" // woods #routline
-		"uniform int isOutlinePass; // Indicates if this is the outline pass\n" // woods #routline
-		"#ifndef INSTANCED\n"
-		"uniform float xrayPull; // world units to slide each vertex toward the eye\n" // woods #routline
 		"#endif\n"
 		"attribute vec4 TexCoords; // only xy are used \n"
 		"attribute vec4 Pose1Vert;\n"
@@ -381,8 +381,8 @@ void GLAlias_CreateShaders (void)
 		"	gl_TexCoord[0] = TexCoords;\n"
 		"\n"
 		"	vec4 lerpedVert;\n" // woods #routline
-		"	vec3 lerpedNormal;\n" // woods #routline
-		"\n"
+		"#ifndef INSTANCED\n"
+		"	vec3 lerpedNormal = vec3(0.0);\n" // woods #routline
 		"\n" // woods #powershell
 		"	float s = TexCoords.x + sin(0.4 * (ClTime + TexCoords.y));\n"
 		"	s *= -140.0 * (0.5 / 64.0);\n"
@@ -395,6 +395,7 @@ void GLAlias_CreateShaders (void)
 		"	float t2 = TexCoords.y + sin(0.4 * (-ClTime + TexCoords.x));\n"
 		"	t2 *= -140.0 * (0.5 / 64.0);\n"
 		"	ShellCoord2 = vec2(s2, t2);\n"
+		"#endif\n"
 		"\n"
 		"#ifdef SKELETAL\n"
 		"	mat4 wmat;"
@@ -411,11 +412,11 @@ void GLAlias_CreateShaders (void)
 		"	wmat[2] += BoneTable[2+3*int(BoneIndex.z)] * BoneWeight.z;"
 		"	wmat[2] += BoneTable[2+3*int(BoneIndex.w)] * BoneWeight.w;"
 		"	wmat[3] = vec4(0.0,0.0,0.0,1.0);\n"
-		"	float dot1 = r_avertexnormal_dot(normalize((vec4(Pose1Normal.xyz, 0.0) * wmat).xyz));\n"
+		"	vec3 transformedNormal = normalize((vec4(Pose1Normal.xyz, 0.0) * wmat).xyz);\n"
+		"	float dot1 = r_avertexnormal_dot(transformedNormal);\n"
 		"\n"
 		"	// Transform the vertex position\n" // woods #routline
 		"	vec4 basePos = (vec4(Pose1Vert.xyz, 1.0) * wmat);\n"
-		"	vec3 transformedNormal = normalize((vec4(Pose1Normal.xyz, 0.0) * wmat).xyz);\n"
 		"	// MD5 normals point inward, so flip them for the outline and powerup shell expansion\n" // woods #routline #powershell
 		"	lerpedNormal = md5Normals != 0 ? -transformedNormal : transformedNormal;\n"
 		"\n"
@@ -435,30 +436,27 @@ void GLAlias_CreateShaders (void)
 		"	lerpedVert = mix(vec4(Pose1Vert.xyz, 1.0), vec4(Pose2Vert.xyz, 1.0), AliasBlend);\n"
 		"	float dot1 = mix(r_avertexnormal_dot(Pose1Normal), r_avertexnormal_dot(Pose2Normal), AliasBlend);\n"
 		"\n"
-		" 	// Normal interpolation\n" // woods #routline
-		"	lerpedNormal = mix(Pose1Normal, Pose2Normal, AliasBlend);\n"
-		"	lerpedNormal = normalize(lerpedNormal);\n"
-		"\n"
-		"	// Apply outline expansion if in the outline pass\n" // woods #routline
-		"	if (isOutlinePass == 1 && outlineWidth > 0.0)\n"
+		"#ifndef INSTANCED\n"
+		"	if ((isOutlinePass == 1 && outlineWidth > 0.0) || shellMode == 2)\n"
 		"	{\n"
-		"		lerpedVert.xyz += lerpedNormal * outlineWidth;\n"
+		"		lerpedNormal = normalize(mix(Pose1Normal, Pose2Normal, AliasBlend));\n"
+		"		if (isOutlinePass == 1 && outlineWidth > 0.0)\n"
+		"			lerpedVert.xyz += lerpedNormal * outlineWidth;\n"
 		"	}\n"
+		"#endif\n"
 		"\n"
 		"#endif\n"
+		"#ifndef INSTANCED\n"
 		"	if (shellMode == 2)\n" // woods #powershell
-		"		{\n"
-		"		// Start with the original vertex position\n"
+		"	{\n"
 		"		vec3 finalPos = lerpedVert.xyz;\n"
-		"		// Get a properly normalized normal vector\n"
 		"		vec3 normalDir = normalize(lerpedNormal);\n"
-		"		// Add scaled offset along the normal direction using outlineWidth\n"
 		"		finalPos += normalDir * outlineWidth;\n"
-		"		// Add a wave effect along the normal direction\n"
 		"		float wave = sin(shellTime * shellWaveParams.y + dot(lerpedVert.xyz, vec3(0.1, 0.1, 0.1)));\n"
 		"		finalPos += normalDir * wave * shellWaveParams.x;\n"
 		"		lerpedVert = vec4(finalPos, 1.0);\n"
 		"	}\n"
+		"#endif\n"
 		"#ifdef INSTANCED\n"
 		"	mat4 InstanceMatrix = mat4(InstMat0, InstMat1, InstMat2, InstMat3);\n"
 		"	gl_Position = gl_ModelViewProjectionMatrix * InstanceMatrix * lerpedVert;\n"
@@ -490,29 +488,29 @@ void GLAlias_CreateShaders (void)
 
 		const GLchar *fragSource = \
 			"#version 110\n"
+			"%s"
 			"\n"
 			"uniform sampler2D Tex;\n"
+			"#ifndef INSTANCED\n"
 			"uniform sampler2D LowerTex;\n"	//team colour
 			"uniform sampler2D UpperTex;\n"	//personal colour
-			"uniform sampler2D FullbrightTex;\n"
-			"\n"
 			"uniform sampler2D ShellTex;\n" // woods #powershell
 			"uniform bool UseShellTex;\n" // woods #powershell
 			"uniform vec3 ShellColor;\n" // woods #powershell
 			"uniform float ShellAlpha;\n" // woods #powershell
 			"uniform float shellTime;\n" // woods #powershell
-			"\n"
+			"uniform int isOutlinePass;\n" // woods #routline
+			"uniform vec4 outlineColor;\n" // woods #routline
+			"uniform vec4 GrenadeGlow;\n"
+			"varying vec2 ShellCoord;\n" // woods #powershell
+			"varying vec2 ShellCoord2;\n" // woods #powershell
+			"#endif\n"
+			"uniform sampler2D FullbrightTex;\n"
 			"uniform bool UseFullbrightTex;\n"
 			"uniform bool UseOverbright;\n"
 			"uniform bool UseAlphaTest;\n"
 			"uniform vec4 ColourTint[3];\n"	//base+bot+top+fb
-			"uniform int isOutlinePass;      // Indicates if this is the outline pass\n" // woods #routline
-			"uniform vec4 outlineColor;       // Color to use for the outline\n" // woods #routline
 			"uniform int FogMode;\n"
-			"uniform vec4 GrenadeGlow;\n"
-			"\n"
-			"varying vec2 ShellCoord;\n" // woods #powershell
-			"varying vec2 ShellCoord2;\n" // woods #powershell
 			"\n"
 			"varying float FogFragCoord;\n"
 			"\n"
@@ -538,6 +536,7 @@ void GLAlias_CreateShaders (void)
 			"\n"
 			"void main()\n"
 			"{\n"
+			"#ifndef INSTANCED\n"
 			"    if (isOutlinePass == 4)\n"
 			"    {\n"
 			"        if (UseAlphaTest && texture2D(Tex, gl_TexCoord[0].xy).a < 0.666) discard;\n"
@@ -545,63 +544,70 @@ void GLAlias_CreateShaders (void)
 			"        gl_FragColor = vec4(outlineColor.rgb, outlineColor.a * fog);\n"
 			"        return;\n"
 			"    }\n"
-			"if (isOutlinePass == 1 || isOutlinePass == 3)\n" // woods #powershell -- flat outline or glow
+			"    if (isOutlinePass == 1 || isOutlinePass == 3)\n" // woods #powershell -- flat outline or glow
 			"    {\n"
-			"        // Render the outline with a solid color\n"
 			"        gl_FragColor = outlineColor;\n"
 			"        return;\n"
 			"    }\n"
 			"    else if (isOutlinePass == 2)\n" // woods #powershell
-			"	{\n"
-			"        // Create a complex shell effect with animated patterns\n"
+			"    {\n"
 			"        float pattern = sin(gl_TexCoord[0].x * 10.0 + shellTime) * \n"
 			"                       sin(gl_TexCoord[0].y * 10.0 + shellTime) * 0.25 + 0.75;\n"
 			"        gl_FragColor = vec4(outlineColor.rgb * pattern, outlineColor.a);\n"
 			"        return;\n"
 			"    }\n"
+			"#endif\n"
 			"\n"
 			"	vec4 result = texture2D(Tex, gl_TexCoord[0].xy);\n"	//base
 			"\n"
-			"if (UseShellTex)\n" // woods #powershell
-			"{\n"
-			"    vec4 shell1 = texture2D(ShellTex, ShellCoord);\n"
-			"    float brightness1 = shell1.r;\n"
-			"    vec3 coloredShell1 = mix(vec3(1.0), ShellColor, brightness1);\n"
-			"    shell1.rgb *= coloredShell1;\n"
-			"    shell1.a = brightness1 * ShellAlpha;\n"
+			"#ifndef INSTANCED\n"
+			"	if (UseShellTex)\n" // woods #powershell
+			"	{\n"
+			"		vec4 shell1 = texture2D(ShellTex, ShellCoord);\n"
+			"		float brightness1 = shell1.r;\n"
+			"		vec3 coloredShell1 = mix(vec3(1.0), ShellColor, brightness1);\n"
+			"		shell1.rgb *= coloredShell1;\n"
+			"		shell1.a = brightness1 * ShellAlpha;\n"
 			"\n"
-			"    vec4 shell2 = texture2D(ShellTex, ShellCoord2);\n"
-			"    float brightness2 = shell2.r;\n"
-			"    vec3 coloredShell2 = mix(vec3(1.0), ShellColor, brightness2);\n"
-			"    shell2.rgb *= coloredShell2;\n"
-			"    shell2.a = brightness2 * ShellAlpha;\n"
+			"		vec4 shell2 = texture2D(ShellTex, ShellCoord2);\n"
+			"		float brightness2 = shell2.r;\n"
+			"		vec3 coloredShell2 = mix(vec3(1.0), ShellColor, brightness2);\n"
+			"		shell2.rgb *= coloredShell2;\n"
+			"		shell2.a = brightness2 * ShellAlpha;\n"
 			"\n"
-			"    vec4 combinedShell = mix(shell1, shell2, 0.5);\n"
-			"    result = mix(result, combinedShell * result + result * combinedShell, combinedShell.a);\n"
-			"}\n"
-
+			"		vec4 combinedShell = mix(shell1, shell2, 0.5);\n"
+			"		result = mix(result, combinedShell * result + result * combinedShell, combinedShell.a);\n"
+			"	}\n"
 			"\n"
 			"	if (ColourTint[0].a != 0.0) result.rgb += texture2D(LowerTex, gl_TexCoord[0].xy).rgb * ColourTint[0].rgb;\n"	//team/lower/trousers
 			"	if (ColourTint[1].a != 0.0) result.rgb += texture2D(UpperTex, gl_TexCoord[0].xy).rgb * ColourTint[1].rgb;\n"	//personal/upper/torso
+			"#endif\n"
 			"	if (UseAlphaTest && (result.a < 0.666))\n"
 			"		discard;\n"
-			"    vec3 grenadeBase = result.rgb;\n"
+			"#ifndef INSTANCED\n"
+			"	vec3 grenadeBase = result.rgb;\n"
+			"#endif\n"
 			"	result *= gl_Color;\n"	//vertex lighting results (and colormod).
 			"	if (UseOverbright)\n"
 			"		result.rgb *= 2.0;\n"
 			"	if (UseFullbrightTex)\n"
 			"		result += texture2D(FullbrightTex, gl_TexCoord[0].xy) * ColourTint[2];\n" //fullbrights (with glowmod)
 			"	result = clamp(result, 0.0, 1.0);\n"
-			"    if (GrenadeGlow.a > 0.0)\n"
-			"    {\n"
-			"        float detail = dot(grenadeBase, vec3(0.299, 0.587, 0.114));\n"
-			"        result.rgb = mix(result.rgb, GrenadeGlow.rgb * (0.55 + 0.45 * detail), GrenadeGlow.a);\n"
-			"    }\n"
-			"	float fog = FogFactor(FogFragCoord);\n"
-			"	fog = clamp(fog, 0.0, 1.0) * gl_Fog.color.a;\n"
-			"	result.rgb = mix(gl_Fog.color.rgb, result.rgb, fog);\n"
+			"#ifndef INSTANCED\n"
+			"	if (GrenadeGlow.a > 0.0)\n"
+			"	{\n"
+			"		float detail = dot(grenadeBase, vec3(0.299, 0.587, 0.114));\n"
+			"		result.rgb = mix(result.rgb, GrenadeGlow.rgb * (0.55 + 0.45 * detail), GrenadeGlow.a);\n"
+			"	}\n"
+			"#endif\n"
+			"	if (FogMode == 1 || gl_Fog.density > 0.0 || gl_Fog.color.a < 1.0)\n"
+			"	{\n"
+			"		float fog = FogFactor(FogFragCoord);\n"
+			"		fog = clamp(fog, 0.0, 1.0) * gl_Fog.color.a;\n"
+			"		result.rgb = mix(gl_Fog.color.rgb, result.rgb, fog);\n"
+			"	}\n"
 			"	result.rgb = clamp(result.rgb + vec3(FogDither()), 0.0, 1.0);\n"
-			"	result.a *= gl_Color.a;\n" // FIXME: This will make almost transparent things cut holes though heavy fog
+			"	result.a *= gl_Color.a;\n"
 			"	gl_FragColor = result;\n"
 			"}\n";
 
@@ -610,6 +616,7 @@ void GLAlias_CreateShaders (void)
 	if (!gl_glsl_alias_able)
 		return;
 
+	q_snprintf(processedFragSource, sizeof(processedFragSource), fragSource, "");
 	for (i = 0; i < ALIAS_GLSL_MODES; i++)
 	{
 		glsl = &r_alias_glsl[i];
@@ -626,7 +633,7 @@ void GLAlias_CreateShaders (void)
 		}
 		q_snprintf(processedVertSource, sizeof(processedVertSource), vertSource, defines);
 
-		glsl->program = GL_CreateProgram (processedVertSource, fragSource, sizeof(bindings)/sizeof(bindings[0]), bindings);
+		glsl->program = GL_CreateProgram (processedVertSource, processedFragSource, sizeof(bindings)/sizeof(bindings[0]), bindings);
 
 		if (glsl->program != 0)
 		{
@@ -693,7 +700,9 @@ void GLAlias_CreateShaders (void)
 		glsl = &r_alias_inst_glsl;
 		q_snprintf(processedVertSource, sizeof(processedVertSource), vertSource,
 			"#define INSTANCED\n");
-		glsl->program = GL_CreateProgram (processedVertSource, fragSource,
+		q_snprintf(processedFragSource, sizeof(processedFragSource), fragSource,
+			"#define INSTANCED\n");
+		glsl->program = GL_CreateProgram (processedVertSource, processedFragSource,
 			sizeof(instancedBindings) / sizeof(instancedBindings[0]), instancedBindings);
 		if (glsl->program != 0)
 		{
@@ -703,40 +712,31 @@ void GLAlias_CreateShaders (void)
 			glsl->shadevectorLoc = -1;
 			glsl->lightColorLoc = -1;
 			glsl->texLoc = GL_GetUniformLocation (&glsl->program, "Tex");
-			glsl->lowerTexLoc = GL_GetUniformLocation (&glsl->program, "LowerTex");
-			glsl->upperTexLoc = GL_GetUniformLocation (&glsl->program, "UpperTex");
+			glsl->lowerTexLoc = -1;
+			glsl->upperTexLoc = -1;
 			glsl->fullbrightTexLoc = GL_GetUniformLocation (&glsl->program, "FullbrightTex");
 			glsl->useFullbrightTexLoc = GL_GetUniformLocation (&glsl->program, "UseFullbrightTex");
 			glsl->useOverbrightLoc = GL_GetUniformLocation (&glsl->program, "UseOverbright");
 			glsl->useAlphaTestLoc = GL_GetUniformLocation (&glsl->program, "UseAlphaTest");
 			glsl->colorTintLoc = GL_GetUniformLocation (&glsl->program, "ColourTint");
-			glsl->outlineWidthLoc = GL_GetUniformLocation (&glsl->program, "outlineWidth");
-			glsl->isOutlinePassLoc = GL_GetUniformLocation (&glsl->program, "isOutlinePass");
+			glsl->outlineWidthLoc = -1;
+			glsl->isOutlinePassLoc = -1;
 			glsl->xrayPullLoc = -1;
-			glsl->outlineColorLoc = GL_GetUniformLocation (&glsl->program, "outlineColor");
-			glsl->clTimeLoc = GL_GetUniformLocation (&glsl->program, "ClTime");
-			glsl->shellTexLoc = GL_GetUniformLocation (&glsl->program, "ShellTex");
-			glsl->useShellTexLoc = GL_GetUniformLocation (&glsl->program, "UseShellTex");
-			glsl->shellColorLoc = GL_GetUniformLocation (&glsl->program, "ShellColor");
-			glsl->shellAlphaLoc = GL_GetUniformLocation (&glsl->program, "ShellAlpha");
-			glsl->shellModeLoc = GL_GetUniformLocation (&glsl->program, "shellMode");
-			glsl->shellTimeLoc = GL_GetUniformLocation (&glsl->program, "shellTime");
-			glsl->shellWaveParamsLoc = GL_GetUniformLocation (&glsl->program, "shellWaveParams");
+			glsl->outlineColorLoc = -1;
+			glsl->clTimeLoc = -1;
+			glsl->shellTexLoc = -1;
+			glsl->useShellTexLoc = -1;
+			glsl->shellColorLoc = -1;
+			glsl->shellAlphaLoc = -1;
+			glsl->shellModeLoc = -1;
+			glsl->shellTimeLoc = -1;
+			glsl->shellWaveParamsLoc = -1;
 			glsl->fogModeLoc = GL_GetUniformLocation (&glsl->program, "FogMode");
-			glsl->grenadeGlowLoc = GL_GetUniformLocation (&glsl->program, "GrenadeGlow");
+			glsl->grenadeGlowLoc = -1;
 
 			GL_UseProgramFunc (glsl->program);
 			GL_Uniform1iFunc (glsl->texLoc, 0);
 			GL_Uniform1iFunc (glsl->fullbrightTexLoc, 1);
-			GL_Uniform1iFunc (glsl->lowerTexLoc, 2);
-			GL_Uniform1iFunc (glsl->upperTexLoc, ALIAS_UPPER_TEXTURE_UNIT_INDEX);
-			GL_Uniform1fFunc (glsl->outlineWidthLoc, 0.0f);
-			GL_Uniform1iFunc (glsl->isOutlinePassLoc, 0);
-			GL_Uniform1iFunc (glsl->shellTexLoc, ALIAS_UPPER_TEXTURE_UNIT_INDEX);
-			GL_Uniform1iFunc (glsl->shellModeLoc, 0);
-			GL_Uniform1iFunc (glsl->useShellTexLoc, 0);
-			GL_Uniform1fFunc (glsl->shellTimeLoc, 0.0f);
-			GL_Uniform4fFunc (glsl->shellWaveParamsLoc, 0.1f, 4.0f, 0.0f, 0.0f);
 			GL_UseProgramFunc (0);
 		}
 	}
@@ -3887,22 +3887,39 @@ static int R_AliasInst_Prepare (entity_t *e, alias_inst_rec_t *rec)
 	return ALIAS_INST_PREP_OK;
 }
 
-// Bind one run's mesh poses plus its slice of the most recently uploaded
-// instance buffer. Shared by the instanced fill and the instanced shadow pass.
-static void R_AliasInst_BindAttribs (qmodel_t *model, aliashdr_t *hdr,
-	const lerpdata_t *lerp, int first)
+// Enable all vertex attribute arrays and constant instance divisors once per pass.
+static void R_AliasInst_BeginAttribs (void)
 {
-	size_t base = (size_t)first * sizeof(alias_inst_data_t);
 	int attrib;
 
 	GL_DisableMultitexture ();
-	GL_BindBuffer (GL_ARRAY_BUFFER, model->meshvbo);
-	GL_BindBuffer (GL_ELEMENT_ARRAY_BUFFER, model->meshindexesvbo);
 	GL_EnableVertexAttribArrayFunc (texCoordsAttrIndex);
 	GL_EnableVertexAttribArrayFunc (pose1VertexAttrIndex);
 	GL_EnableVertexAttribArrayFunc (pose2VertexAttrIndex);
 	GL_EnableVertexAttribArrayFunc (pose1NormalAttrIndex);
 	GL_EnableVertexAttribArrayFunc (pose2NormalAttrIndex);
+	for (attrib = aliasInstMat0AttrIndex; attrib <= aliasInstShadeBlendAttrIndex; ++attrib)
+	{
+		GL_EnableVertexAttribArrayFunc (attrib);
+		GL_VertexAttribDivisorFunc (attrib, 1);
+	}
+}
+
+// Bind one run's mesh poses plus its slice of the most recently uploaded
+// instance buffer. Shared by the instanced fill and the instanced shadow pass.
+static void R_AliasInst_BindAttribs (qmodel_t *model, aliashdr_t *hdr,
+	const lerpdata_t *lerp, int first, GLuint *last_ebo)
+{
+	size_t base = (size_t)first * sizeof(alias_inst_data_t);
+	int attrib;
+
+	GL_BindBuffer (GL_ARRAY_BUFFER, model->meshvbo);
+	if (!last_ebo || *last_ebo != model->meshindexesvbo)
+	{
+		GL_BindBuffer (GL_ELEMENT_ARRAY_BUFFER, model->meshindexesvbo);
+		if (last_ebo)
+			*last_ebo = model->meshindexesvbo;
+	}
 	GL_VertexAttribPointerFunc (texCoordsAttrIndex, 2, GL_FLOAT, GL_FALSE, 0,
 		model->meshvboptr + hdr->vbostofs);
 	GL_VertexAttribPointerFunc (pose1VertexAttrIndex, 4, GL_UNSIGNED_BYTE, GL_FALSE,
@@ -3917,20 +3934,14 @@ static void R_AliasInst_BindAttribs (qmodel_t *model, aliashdr_t *hdr,
 	GL_BindBuffer (GL_ARRAY_BUFFER, r_alias_inst_vbos[(r_alias_inst_ring - 1) % countof(r_alias_inst_vbos)]);
 	for (attrib = aliasInstMat0AttrIndex; attrib <= aliasInstMat3AttrIndex; ++attrib)
 	{
-		GL_EnableVertexAttribArrayFunc (attrib);
 		GL_VertexAttribPointerFunc (attrib, 4, GL_FLOAT, GL_FALSE,
 			sizeof(alias_inst_data_t), (void *)(base +
 			(size_t)(attrib - aliasInstMat0AttrIndex) * 4 * sizeof(float)));
-		GL_VertexAttribDivisorFunc (attrib, 1);
 	}
-	GL_EnableVertexAttribArrayFunc (aliasInstLightAttrIndex);
 	GL_VertexAttribPointerFunc (aliasInstLightAttrIndex, 4, GL_FLOAT, GL_FALSE,
 		sizeof(alias_inst_data_t), (void *)(base + offsetof(alias_inst_data_t, light)));
-	GL_VertexAttribDivisorFunc (aliasInstLightAttrIndex, 1);
-	GL_EnableVertexAttribArrayFunc (aliasInstShadeBlendAttrIndex);
 	GL_VertexAttribPointerFunc (aliasInstShadeBlendAttrIndex, 4, GL_FLOAT, GL_FALSE,
 		sizeof(alias_inst_data_t), (void *)(base + offsetof(alias_inst_data_t, shade_blend)));
-	GL_VertexAttribDivisorFunc (aliasInstShadeBlendAttrIndex, 1);
 }
 
 // Upload ndata instance records into the next ring buffer; 0 if unavailable.
@@ -3979,39 +3990,39 @@ static void R_AliasInst_Unbind (void)
 }
 
 static void R_AliasInst_DrawRun (const alias_inst_rec_t *rec, int first,
-	int count)
+	int count, GLuint *last_ebo, int *last_use_fb, int *last_use_at)
 {
 	const aliasglsl_t *glsl = &r_alias_inst_glsl;
 	aliashdr_t *hdr = (aliashdr_t *)Mod_Extradata (rec->model);
-	GLfloat tints[3][4] = {{0, 0, 0, 0}, {0, 0, 0, 0}, {1, 1, 1, 1}};
+	int use_fb, use_at;
 
 	if (!hdr)
 		return;
 
 	currententity = rec->ent;
-	R_AliasInst_BindAttribs (rec->model, hdr, &rec->lerp, first);
+	R_AliasInst_BindAttribs (rec->model, hdr, &rec->lerp, first, last_ebo);
 
 	GL_SelectTexture (GL_TEXTURE0);
 	GL_Bind (rec->tex.base);
-	if (rec->tex.luma)
+	use_fb = rec->tex.luma ? 1 : 0;
+	if (use_fb)
 	{
 		GL_SelectTexture (GL_TEXTURE1);
 		GL_Bind (rec->tex.luma);
+		GL_SelectTexture (GL_TEXTURE0);
 	}
-	else
-		memset (tints[2], 0, sizeof(tints[2]));
-	GL_SelectTexture (GL_TEXTURE0);
 
-	GL_Uniform1iFunc (glsl->useFullbrightTexLoc, rec->tex.luma ? 1 : 0);
-	GL_Uniform1fFunc (glsl->useOverbrightLoc, gl_overbright_models.value ? 1.0f : 0.0f);
-	GL_Uniform1iFunc (glsl->useAlphaTestLoc, (rec->model->flags & MF_HOLEY) ? 1 : 0);
-	GL_Uniform4fvFunc (glsl->colorTintLoc, countof(tints), tints[0]);
-	GL_Uniform1iFunc (glsl->fogModeLoc, Fog_GetMode());
-	GL_Uniform1fFunc (glsl->clTimeLoc, cl.time);
-	GL_Uniform1fFunc (glsl->outlineWidthLoc, 0.0f);
-	GL_Uniform1iFunc (glsl->isOutlinePassLoc, 0);
-	GL_Uniform1iFunc (glsl->shellModeLoc, 0);
-	GL_Uniform1iFunc (glsl->useShellTexLoc, 0);
+	if (*last_use_fb != use_fb)
+	{
+		GL_Uniform1iFunc (glsl->useFullbrightTexLoc, use_fb);
+		*last_use_fb = use_fb;
+	}
+	use_at = (rec->model->flags & MF_HOLEY) ? 1 : 0;
+	if (*last_use_at != use_at)
+	{
+		GL_Uniform1iFunc (glsl->useAlphaTestLoc, use_at);
+		*last_use_at = use_at;
+	}
 
 	GL_DrawElementsInstancedFunc (GL_TRIANGLES, hdr->numindexes, GL_UNSIGNED_SHORT,
 		rec->model->meshindexesvboptr + hdr->eboofs, count);
@@ -4021,9 +4032,11 @@ static void R_AliasInst_DrawRun (const alias_inst_rec_t *rec, int first,
 
 void R_DrawAliasModelsInstanced (entity_t **ents, int count)
 {
+	static const GLfloat fulltints[3][4] = {{0, 0, 0, 0}, {0, 0, 0, 0}, {1, 1, 1, 1}};
 	entity_t *saved = currententity;
 	int i, nrec = 0, ndata = 0, nruns = 0;
-	GLuint uploadvbo;
+	GLuint uploadvbo, last_ebo = 0;
+	int last_use_fb = -1, last_use_at = -1;
 
 	if (!ents || count <= 0)
 		return;
@@ -4049,24 +4062,27 @@ void R_DrawAliasModelsInstanced (entity_t **ents, int count)
 		nrec++;
 	}
 
-	qsort (r_alias_inst_order, nrec, sizeof(r_alias_inst_order[0]),
-		R_CompareAliasInstances);
+	if (nrec > 1)
+		qsort (r_alias_inst_order, nrec, sizeof(r_alias_inst_order[0]),
+			R_CompareAliasInstances);
 	for (i = 0; i < nrec; )
 	{
 		int j, k;
 		alias_inst_rec_t *first = &r_alias_inst_recs[r_alias_inst_order[i]];
+		alias_inst_run_t *run;
 
 		for (j = i + 1; j < nrec; ++j)
 			if (!R_AliasInst_SameBatch(first,
 				&r_alias_inst_recs[r_alias_inst_order[j]]))
 				break;
-		if (j - i < 2)
+
+		if (j - i == 1)
 		{
 			R_DrawAliasModelPrepared(first->ent, &first->lerp, false);
 		}
 		else
 		{
-			alias_inst_run_t *run = &r_alias_inst_runs[nruns++];
+			run = &r_alias_inst_runs[nruns++];
 			run->first = ndata;
 			run->count = j - i;
 			run->recindex = r_alias_inst_order[i];
@@ -4113,6 +4129,11 @@ void R_DrawAliasModelsInstanced (entity_t **ents, int count)
 	}
 
 	GL_UseProgramFunc (r_alias_inst_glsl.program);
+	R_AliasInst_BeginAttribs ();
+	GL_Uniform1fFunc (r_alias_inst_glsl.useOverbrightLoc, gl_overbright_models.value ? 1.0f : 0.0f);
+	GL_Uniform4fvFunc (r_alias_inst_glsl.colorTintLoc, countof(fulltints), fulltints[0]);
+	GL_Uniform1iFunc (r_alias_inst_glsl.fogModeLoc, Fog_GetMode());
+
 	glDepthMask (GL_TRUE);
 	glDisable (GL_BLEND);
 	glDisable (GL_ALPHA_TEST);
@@ -4120,7 +4141,8 @@ void R_DrawAliasModelsInstanced (entity_t **ents, int count)
 		glShadeModel (GL_SMOOTH);
 	for (i = 0; i < nruns; ++i)
 		R_AliasInst_DrawRun (&r_alias_inst_recs[r_alias_inst_runs[i].recindex],
-			r_alias_inst_runs[i].first, r_alias_inst_runs[i].count);
+			r_alias_inst_runs[i].first, r_alias_inst_runs[i].count,
+			&last_ebo, &last_use_fb, &last_use_at);
 	glShadeModel (GL_FLAT);
 
 	R_AliasInst_Unbind ();
@@ -5903,35 +5925,40 @@ static void R_DrawShadowQueueRuns (int level, int nruns)
 	static const GLfloat zerotints[3][4] = {{0,0,0,0},{0,0,0,0},{0,0,0,0}};
 	const aliasglsl_t *glsl = &r_alias_inst_glsl;
 	qboolean bound = false;
+	GLuint last_ebo = 0;
+	int last_use_at = -1;
 	int i;
 
 	for (i = 0; i < nruns; ++i)
 	{
 		const shadowq_run_t *run = &r_shadowq_runs[i];
 		const alias_shadow_rec_t *first;
+		int use_at;
 
 		if (run->level != level)
 			continue;
 		if (!bound)
 		{
 			GL_UseProgramFunc (glsl->program);
+			R_AliasInst_BeginAttribs ();
 			glDepthMask (GL_FALSE);
 			glEnable (GL_BLEND);
 			GL_Uniform1iFunc (glsl->useFullbrightTexLoc, 0);
 			GL_Uniform1fFunc (glsl->useOverbrightLoc, 0.0f);
 			GL_Uniform4fvFunc (glsl->colorTintLoc, 3, zerotints[0]);
 			GL_Uniform1iFunc (glsl->fogModeLoc, Fog_GetMode());
-			GL_Uniform1fFunc (glsl->outlineWidthLoc, 0.0f);
-			GL_Uniform1iFunc (glsl->isOutlinePassLoc, 0);
-			GL_Uniform1iFunc (glsl->shellModeLoc, 0);
-			GL_Uniform1iFunc (glsl->useShellTexLoc, 0);
 			bound = true;
 		}
 		first = &r_alias_shadow_recs[r_shadowq[run->entry].index];
-		R_AliasInst_BindAttribs (first->ent->model, first->hdr, &first->lerp, run->first);
+		R_AliasInst_BindAttribs (first->ent->model, first->hdr, &first->lerp, run->first, &last_ebo);
 		GL_SelectTexture (GL_TEXTURE0);
 		GL_Bind (first->skin);
-		GL_Uniform1iFunc (glsl->useAlphaTestLoc, (first->ent->model->flags & MF_HOLEY) ? 1 : 0);
+		use_at = (first->ent->model->flags & MF_HOLEY) ? 1 : 0;
+		if (last_use_at != use_at)
+		{
+			GL_Uniform1iFunc (glsl->useAlphaTestLoc, use_at);
+			last_use_at = use_at;
+		}
 		GL_DrawElementsInstancedFunc (GL_TRIANGLES, first->hdr->numindexes, GL_UNSIGNED_SHORT,
 			first->ent->model->meshindexesvboptr + first->hdr->eboofs, run->count);
 		rs_aliaspasses += first->hdr->numtris * run->count;
