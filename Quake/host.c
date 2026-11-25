@@ -983,6 +983,16 @@ void Host_Startup_f (void)
 	Startup_Place ();
 }
 
+static qboolean host_startup_config_pending;
+
+static void Host_FinishStartupConfig_f (void)
+{
+	if (!host_startup_config_pending || Cmd_IsUntrusted ())
+		return;
+	host_startup_config_pending = false;
+	Cvar_MarkArchiveSaved ();
+}
+
 /*
 =======================
 Host_InitLocal
@@ -993,6 +1003,7 @@ void Host_InitLocal (void)
 	Cmd_AddCommand ("version", Host_Version_f);
 	Cmd_AddCommand ("svnextmap", SV_Next_Map_f); // woods #maprotation
 	Cmd_AddCommand ("startup", Host_Startup_f); // woods #onload
+	Cmd_AddCommand ("__startupconfigdone", Host_FinishStartupConfig_f);
 	Cmd_AddCommand ("host_cvar_migrate", Host_RunCvarMigrations); // woods #migration
 	Cmd_AddCommand ("netfps_probe", Host_NetfpsProbe_f);
 	{
@@ -1177,7 +1188,13 @@ void Host_WriteConfigurationToFile (const char* name)
 		if (in_mlook.state & 1) fprintf (f, "+mlook\n");
 		//johnfitz
 
-		fclose (f);
+		qboolean failed = ferror(f) != 0;
+		if (fclose(f) || failed)
+		{
+			Con_Printf("Couldn't finish writing %s.\n", write_name);
+			return;
+		}
+		Cvar_MarkArchiveSaved();
 
 		Con_SafePrintf("Wrote ");
 		Con_LinkPrintf(fullpath, "%s", write_name);
@@ -2868,6 +2885,8 @@ void Host_Init (void)
 	if (Host_Setjmp (host_abortserver) )
 		return;			// don't do the above twice if the following Cbuf_Execute does bad things.
 
+	// Run the marker after the startup scripts, even if an exec uses wait.
+	host_startup_config_pending = true;
 	if (cls.state != ca_dedicated)
 	{
 		// enable scr_usekfont (for centerprint word wrapping) in case mg3 is
@@ -2885,7 +2904,7 @@ void Host_Init (void)
 		// note: two leading newlines because the command buffer swallows one of them.
 		Cbuf_AddText ("\n\nvid_unlock\n");
 		Cbuf_AddText("namebk\n"); // woods #smartafk lets run a backup name check for AFK leftovers (crash/force quit)
-		Cbuf_AddText("startup\n"); // woods #onload
+		Cbuf_AddText("__startupconfigdone\nstartup\n"); // woods #onload
 	}
 
 	if (cls.state == ca_dedicated)
@@ -2895,7 +2914,7 @@ void Host_Init (void)
 		Cbuf_AddText ("cl_warncmd 1\n");
 		Cbuf_AddText ("exec server.cfg\n");		//spike -- for people who want things explicit.
 		Cbuf_AddText ("exec autoexec.cfg\n");
-		Cbuf_AddText ("stuffcmds\n");
+		Cbuf_AddText ("stuffcmds\n__startupconfigdone\n");
 		Cbuf_Execute ();
 		if (!sv.active)
 			Cbuf_AddText ("startmap_dm\n");

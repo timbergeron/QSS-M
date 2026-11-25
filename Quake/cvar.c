@@ -24,6 +24,17 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 #include "quakedef.h"
 
 static cvar_t	*cvar_vars;
+static qboolean archive_dirty;
+
+qboolean Cvar_HasUnsavedArchive(void)
+{
+	return archive_dirty;
+}
+
+void Cvar_MarkArchiveSaved(void)
+{
+	archive_dirty = false;
+}
 static char	cvar_null_string[] = "";
 
 #define CVAR_HASH_SIZE 1024
@@ -340,6 +351,8 @@ void Cvar_Set_f (void)
 	}
 
 	Cvar_MapScoped_NoteUserChange (var, fl != 0);
+	if ((fl & CVAR_ARCHIVE) && !(var->flags & CVAR_ARCHIVE))
+		archive_dirty = true;
 	var->flags |= fl;
 	Cvar_SetQuick(var, varvalue);
 }
@@ -1258,6 +1271,8 @@ void Cvar_SetQuick (cvar_t *var, const char *value)
 
 		Cvar_MapScoped_NoteUserChange (var, false);
 		var->flags |= CVAR_CHANGED;
+		if (var->flags & CVAR_ARCHIVE)
+			archive_dirty = true;
 		len = Q_strlen (value);
 		if (len != Q_strlen(var->string))
 		{

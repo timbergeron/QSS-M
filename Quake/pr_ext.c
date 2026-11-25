@@ -26,6 +26,8 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 
 #include "quakedef.h"
 #include "q_ctype.h"
+#include "q_hash.h"
+#include "platform.h"
 #include "net_curl.h" // woods #uri
 #include <errno.h>
 #ifdef _WIN32
@@ -1750,6 +1752,57 @@ static void PF_strtolower(void)
 	G_INT(OFS_RETURN) = PR_SetEngineString(result);
 }
 #include <time.h>
+static void PF_calltimeofday(void)
+{
+	dfunction_t *fn = ED_FindFunction("timeofday");
+	time_t now = time(NULL);
+	struct tm *tm = localtime(&now);
+	char date[128];
+
+	if (!fn || fn->first_statement <= 0 || !tm)
+		return;
+	if (!strftime(date, sizeof(date), "%a %b %d, %H:%M:%S %Y", tm))
+		date[0] = 0;
+	G_FLOAT(OFS_PARM0) = tm->tm_sec;
+	G_FLOAT(OFS_PARM1) = tm->tm_min;
+	G_FLOAT(OFS_PARM2) = tm->tm_hour;
+	G_FLOAT(OFS_PARM3) = tm->tm_mday;
+	G_FLOAT(OFS_PARM4) = tm->tm_mon;
+	G_FLOAT(OFS_PARM5) = tm->tm_year + 1900;
+	G_INT(OFS_PARM6) = PR_MakeTempString(date);
+	qcvm->argc = 7;
+	PR_ExecuteProgram(fn - qcvm->functions);
+}
+
+static void PF_cl_clipboard_set(void)
+{
+	int type = G_INT(OFS_PARM0);
+	const char *s = G_STRING(OFS_PARM1);
+	if (!type)
+		Clipboard_SetText(s);
+	else if (type == 1)
+		SDL_SetPrimarySelectionText(s);
+}
+
+static void PF_argescape(void)
+{
+	const char *s = G_STRING(OFS_PARM0);
+	char result[STRINGTEMP_LENGTH];
+
+	// Quake's console has no escape syntax for literal quotes or line
+	// breaks. Return null instead of producing a second argument/command.
+	G_INT(OFS_RETURN) = 0;
+	if (strpbrk(s, "\"\n\r") || strlen(s) > sizeof(result) - 3)
+		return;
+	q_snprintf(result, sizeof(result), "\"%s\"", s);
+	G_INT(OFS_RETURN) = PR_MakeTempString(result);
+}
+
+static void PF_cvars_haveunsaved(void)
+{
+	G_FLOAT(OFS_RETURN) = Cvar_HasUnsavedArchive();
+}
+
 static void PF_cl_setpause(void)
 {
 	qcvm->implicitpause = !!G_FLOAT(OFS_PARM0);
@@ -5935,9 +5988,19 @@ static void PF_digest_hex(void)
 	const char *hashtype = G_STRING(OFS_PARM0);
 	const byte *data = (const byte*)PF_VarString(1);
 	size_t len = strlen((const char*)data);
-	static const char *hex = "0123456789ABCDEF";
+	const char *hex = "0123456789ABCDEF";
 	char *resultbuf;
-	byte hashdata[20];
+	byte hashdata[DIGEST_MAXSIZE];
+	static const struct {
+		const char *name;
+		const hashfunc_t *hash;
+	} algorithms[] = {
+		{"MD5", &hash_md5}, {"SHA1", &hash_sha1},
+		{"SHA224", &hash_sha2_224}, {"SHA2-224", &hash_sha2_224},
+		{"SHA256", &hash_sha2_256}, {"SHA2-256", &hash_sha2_256},
+		{"SHA384", &hash_sha2_384}, {"SHA2-384", &hash_sha2_384},
+		{"SHA512", &hash_sha2_512}, {"SHA2-512", &hash_sha2_512}
+	};
 
 	if (!strcmp(hashtype, "CRC16"))
 	{
@@ -5953,9 +6016,21 @@ static void PF_digest_hex(void)
 	}
 	else
 	{
-		Con_Printf("PF_digest_hex: Unsupported digest %s\n", hashtype);
-		G_INT(OFS_RETURN) = 0;
-		return;
+		size_t i;
+		for (i = 0; i < countof(algorithms); ++i)
+		{
+			if (!strcmp(hashtype, algorithms[i].name))
+				break;
+		}
+		if (i == countof(algorithms))
+		{
+			Con_Printf("PF_digest_hex: Unsupported digest %s\n", hashtype);
+			G_INT(OFS_RETURN) = 0;
+			return;
+		}
+		len = CalcHash(algorithms[i].hash, hashdata, sizeof(hashdata), data, len);
+		// Legacy CRC16/MD4 retain QSS's uppercase spelling.
+		hex = "0123456789abcdef";
 	}
 
 	resultbuf = PR_GetTempString();
@@ -7547,16 +7622,12 @@ static void PF_cl_getbindmaps(void)
 }
 static void PF_cl_setbindmaps(void)
 {
-	float *bm = G_VECTOR(OFS_PARM0);
-	key_bindmap[0] = bm[0];
-	key_bindmap[1] = bm[1];
+	const float *maps = G_VECTOR(OFS_PARM0);
+	size_t i;
 
-	if (key_bindmap[0] < 0 || key_bindmap[0] >= MAX_BINDMAPS)
-		key_bindmap[0] = 0;
-	if (key_bindmap[1] < 0 || key_bindmap[1] >= MAX_BINDMAPS)
-		key_bindmap[1] = 0;
-
-	G_FLOAT(OFS_RETURN) = false;
+	for (i = 0; i < countof(key_bindmap); i++)
+		key_bindmap[i] = maps[i] >= 0 && maps[i] < MAX_BINDMAPS ? (int)maps[i] : 0;
+	G_FLOAT(OFS_RETURN) = true;
 }
 static void PF_cl_findkeysforcommand(void)
 {
@@ -8177,6 +8248,33 @@ enum hostfield_e
 #include "net_defs.h"
 static size_t hostCacheSortCount;
 static size_t hostCacheSort[HOSTCACHESIZE];
+static size_t hostCacheSourceCount;
+static qboolean hostCacheViewActive, hostCacheViewDirty;
+
+enum hostcachetest_e
+{
+	SLIST_TEST_CONTAINS,
+	SLIST_TEST_NOTCONTAIN,
+	SLIST_TEST_LESSEQUAL,
+	SLIST_TEST_LESS,
+	SLIST_TEST_EQUAL,
+	SLIST_TEST_GREATER,
+	SLIST_TEST_GREATEREQUAL,
+	SLIST_TEST_NOTEQUAL,
+	SLIST_TEST_STARTSWITH,
+	SLIST_TEST_NOTSTARTSWITH
+};
+
+static struct hostcachemask_s
+{
+	enum hostfield_e field;
+	enum hostcachetest_e test;
+	qboolean combine_or;
+	int number;
+	char text[STRINGTEMP_LENGTH];
+} hostCacheMasks[32];
+static size_t hostCacheMaskCount;
+
 static enum hostfield_e serversort_field;
 static int serversort_descending;
 enum hostcacheprop_e {
@@ -8189,12 +8287,29 @@ enum hostcacheprop_e {
 		SLIST_SORTFIELD,
 		SLIST_SORTDESCENDING
 };
+static void HostCache_RebuildView(void);
+
+static void HostCache_UpdateView(void)
+{
+	if (hostCacheViewActive && (hostCacheViewDirty || hostCacheSourceCount != hostCacheCount))
+		HostCache_RebuildView();
+}
+
+static int HostCache_GetIndex(float index)
+{
+	HostCache_UpdateView();
+	if (!(index >= 0 && index < (hostCacheViewActive ? hostCacheSortCount : hostCacheCount)))
+		return -1;
+	return hostCacheViewActive ? (int)hostCacheSort[(size_t)index] : (int)index;
+}
+
 static void PF_gethostcachevalue(void)
 {
 	switch((enum hostcacheprop_e)G_FLOAT(OFS_PARM0))
 	{
 	case SLIST_HOSTCACHEVIEWCOUNT:
-		G_FLOAT(OFS_RETURN) = hostCacheSortCount?hostCacheSortCount:hostCacheCount;
+		HostCache_UpdateView();
+		G_FLOAT(OFS_RETURN) = hostCacheViewActive ? hostCacheSortCount : hostCacheCount;
 		break;
 	case SLIST_HOSTCACHETOTALCOUNT:
 		G_FLOAT(OFS_RETURN) = hostCacheCount;
@@ -8216,12 +8331,8 @@ static void PF_gethostcachevalue(void)
 static void PF_gethostcachestring(void)
 {
 	enum hostfield_e fld = G_FLOAT(OFS_PARM0);
-	int idx = G_FLOAT(OFS_PARM1);
+	int idx = HostCache_GetIndex(G_FLOAT(OFS_PARM1));
 	char *s;
-	if (idx >= 0 && idx < hostCacheSortCount)
-		idx = hostCacheSort[idx];
-	else if (hostCacheSortCount)
-		idx = -1;
 	if (idx < 0 || idx >= hostCacheCount)
 	{
 		G_INT(OFS_RETURN) = 0;
@@ -8261,11 +8372,7 @@ static void PF_gethostcachestring(void)
 static void PF_gethostcachenumber(void)
 {
 	enum hostfield_e fld = G_FLOAT(OFS_PARM0);
-	int idx = G_FLOAT(OFS_PARM1);
-	if (idx >= 0 && idx < hostCacheSortCount)
-		idx = hostCacheSort[idx];
-	else if (hostCacheSortCount)
-		idx = -1;
+	int idx = HostCache_GetIndex(G_FLOAT(OFS_PARM1));
 	if (idx < 0 || idx >= hostCacheCount)
 	{
 		G_FLOAT(OFS_RETURN) = 0;
@@ -8292,9 +8399,109 @@ static void PF_gethostcachenumber(void)
 	}
 }
 
-static void PF_resethostcachemasks(void){G_VECTORSET(OFS_RETURN, 0,0,0);}
-static void PF_sethostcachemaskstring(void){G_VECTORSET(OFS_RETURN, 0,0,0);}
-static void PF_sethostcachemasknumber(void){G_VECTORSET(OFS_RETURN, 0,0,0);}
+static void PF_resethostcachemasks(void)
+{
+	hostCacheMaskCount = 0;
+	hostCacheViewDirty = true;
+}
+
+static struct hostcachemask_s *HostCache_AddMask(void)
+{
+	float mask = G_FLOAT(OFS_PARM0);
+	float field = G_FLOAT(OFS_PARM1);
+	float test = G_FLOAT(OFS_PARM3);
+	struct hostcachemask_s *rule;
+
+	if (hostCacheMaskCount == countof(hostCacheMasks) ||
+		!((double)mask >= INT_MIN && (double)mask <= INT_MAX) ||
+		!(field >= SLKEY_NAME && field <= SLKEY_MAXPLAYERS) ||
+		!(test >= SLIST_TEST_CONTAINS && test <= SLIST_TEST_NOTSTARTSWITH))
+		return NULL;
+	rule = &hostCacheMasks[hostCacheMaskCount++];
+	rule->field = (enum hostfield_e)field;
+	rule->test = (enum hostcachetest_e)test;
+	rule->combine_or = ((int)mask & 512) != 0;
+	hostCacheViewActive = true;
+	hostCacheViewDirty = true;
+	return rule;
+}
+
+static void PF_sethostcachemaskstring(void)
+{
+	struct hostcachemask_s *rule = HostCache_AddMask();
+	const char *text = G_STRING(OFS_PARM2);
+	double number;
+
+	if (!rule)
+		return;
+	q_strlcpy(rule->text, text, sizeof(rule->text));
+	number = strtod(text, NULL);
+	rule->number = (number >= INT_MIN && number <= INT_MAX) ? (int)number : 0;
+}
+
+static void PF_sethostcachemasknumber(void)
+{
+	struct hostcachemask_s *rule;
+	float number = G_FLOAT(OFS_PARM2);
+
+	if (!((double)number >= INT_MIN && (double)number <= INT_MAX))
+		return;
+	rule = HostCache_AddMask();
+	if (!rule)
+		return;
+	rule->number = (int)number;
+	rule->text[0] = 0;
+}
+
+static qboolean HostCache_TestMask(const hostcache_t *host, const struct hostcachemask_s *rule)
+{
+	const char *text;
+	int number, order;
+
+	switch (rule->field)
+	{
+	case SLKEY_NUMPLAYERS:
+	case SLKEY_MAXPLAYERS:
+		number = rule->field == SLKEY_NUMPLAYERS ? host->users : host->maxusers;
+		if (rule->test == SLIST_TEST_CONTAINS)
+			return (number & rule->number) != 0;
+		if (rule->test == SLIST_TEST_NOTCONTAIN)
+			return (number & rule->number) == 0;
+		order = (number > rule->number) - (number < rule->number);
+		break;
+	default:
+		switch (rule->field)
+		{
+		case SLKEY_NAME: text = host->name; break;
+		case SLKEY_ADDRESS: text = host->cname; break;
+		case SLKEY_GAMEDIR: text = host->gamedir; break;
+		case SLKEY_MAP: text = host->map; break;
+		default: return false;
+		}
+		switch (rule->test)
+		{
+		case SLIST_TEST_CONTAINS: return !*rule->text || q_strcasestr(text, rule->text) != NULL;
+		case SLIST_TEST_NOTCONTAIN: return *rule->text && q_strcasestr(text, rule->text) == NULL;
+		case SLIST_TEST_STARTSWITH: return q_strncasecmp(text, rule->text, strlen(rule->text)) == 0;
+		case SLIST_TEST_NOTSTARTSWITH: return q_strncasecmp(text, rule->text, strlen(rule->text)) != 0;
+		default: order = q_strcasecmp(text, rule->text); break;
+		}
+		break;
+	}
+
+	switch (rule->test)
+	{
+	case SLIST_TEST_LESSEQUAL: return order <= 0;
+	case SLIST_TEST_LESS: return order < 0;
+	case SLIST_TEST_STARTSWITH:
+	case SLIST_TEST_EQUAL: return order == 0;
+	case SLIST_TEST_GREATER: return order > 0;
+	case SLIST_TEST_GREATEREQUAL: return order >= 0;
+	case SLIST_TEST_NOTSTARTSWITH:
+	case SLIST_TEST_NOTEQUAL: return order != 0;
+	default: return false;
+	}
+}
 
 static int CompareSortServers (const void *va, const void *vb)
 {
@@ -8331,22 +8538,44 @@ static int CompareSortServers (const void *va, const void *vb)
 		r = -r;
 	return r;
 }
+static void HostCache_RebuildView(void)
+{
+	size_t i, j;
+	hostCacheSortCount = 0;
+	for (i = 0; i < hostCacheCount; i++)
+	{
+		qboolean visible = true;
+		for (j = 0; j < hostCacheMaskCount; j++)
+		{
+			const struct hostcachemask_s *rule = &hostCacheMasks[j];
+			qboolean match = HostCache_TestMask(&hostcache[i], rule);
+			visible = rule->combine_or ? visible || match : visible && match;
+		}
+		if (visible)
+			hostCacheSort[hostCacheSortCount++] = i;
+	}
+	qsort(hostCacheSort, hostCacheSortCount, sizeof(hostCacheSort[0]), CompareSortServers);
+	hostCacheSourceCount = hostCacheCount;
+	hostCacheViewDirty = false;
+}
+
 static void PF_resorthostcache(void)
 {
-	size_t i;
-	for (hostCacheSortCount = 0, i = 0; i < hostCacheCount; i++)
-		hostCacheSort[hostCacheSortCount++] = i;
-	qsort(hostCacheSort, hostCacheSortCount, sizeof(hostCacheSort[0]), CompareSortServers);
+	hostCacheViewActive = true;
+	HostCache_RebuildView();
 }
 static void PF_sethostcachesort(void)
 {
-	serversort_field = G_FLOAT(OFS_PARM0);
-	serversort_descending = G_FLOAT(OFS_PARM1);
+	float field = G_FLOAT(OFS_PARM0);
+	if (field >= SLKEY_NAME && field <= SLKEY_MAXPLAYERS)
+		serversort_field = (enum hostfield_e)field;
+	serversort_descending = G_FLOAT(OFS_PARM1) != 0;
+	hostCacheViewDirty = true;
 }
 
 static void PF_refreshhostcache(void)
 {
-	hostCacheSortCount = 0;
+	hostCacheViewDirty = true;
 	slistSilent = true;
 	slistScope = SLIST_INTERNET;
 	NET_Slist_f();
@@ -8374,8 +8603,45 @@ static void PF_gethostcacheindexforkey(void)
 	G_FLOAT(OFS_RETURN) = r;
 }
 //static void PF_addwantedhostcachekey(void){G_VECTORSET(OFS_RETURN, 0,0,0);}
-//static void PF_getextresponse(void){G_VECTORSET(OFS_RETURN, 0,0,0);}
-//static void PF_netaddress_resolve(void){G_VECTORSET(OFS_RETURN, 0,0,0);}
+static void PF_getextresponse(void)
+{
+	// FTEQW also returns an empty string without an extResponse queue.
+	G_INT(OFS_RETURN) = 0;
+}
+
+static void PF_netaddress_resolve(void)
+{
+	const char *address = G_STRING(OFS_PARM0);
+	float port = qcvm->argc > 1 ? G_FLOAT(OFS_PARM1) : 0;
+	net_endpoint_t endpoint;
+	char result[MAX_SERVER_ADDRESS_LEN];
+
+	G_INT(OFS_RETURN) = 0;
+	if (!(port >= 0 && port <= 65535) ||
+		!NET_ParseEndpoint(address, port >= 1 ? (int)port : 1, &endpoint))
+		return;
+
+	if (endpoint.kind == NET_HOST_DNS)
+	{
+		struct addrinfo hints = {0}, *resolved;
+		int error;
+
+		hints.ai_family = AF_UNSPEC;
+		hints.ai_socktype = SOCK_DGRAM;
+		hints.ai_protocol = IPPROTO_UDP;
+		if (getaddrinfo(endpoint.host, NULL, &hints, &resolved))
+			return;
+		error = getnameinfo(resolved->ai_addr, resolved->ai_addrlen,
+			endpoint.host, sizeof(endpoint.host), NULL, 0, NI_NUMERICHOST);
+		endpoint.kind = resolved->ai_family == AF_INET6 ? NET_HOST_IPV6 : NET_HOST_IPV4;
+		freeaddrinfo(resolved);
+		if (error)
+			return;
+	}
+
+	if (NET_FormatEndpoint(&endpoint, endpoint.port_explicit || port >= 1, result, sizeof(result)))
+		G_INT(OFS_RETURN) = PR_MakeTempString(result);
+}
 
 // Async URI subsystem -- woods #uri
 
@@ -11343,7 +11609,7 @@ static struct
 	{"strcasecmp",		PF_strncasecmp,		PF_strncasecmp,		229,	PF_strncasecmp,229, D("float(string s1, string s2)",  "Compares the two strings without case sensitivity.\nReturns 0 if they are equal. The sign of the return value may be significant, but should not be depended upon.")},
 	{"strncasecmp",		PF_strncasecmp,		PF_strncasecmp,		230,	PF_strncasecmp,230, D("float(string s1, string s2, float len, optional float s1ofs, optional float s2ofs)", "Compares up to 'len' chars in the two strings without case sensitivity. s1ofs allows you to treat s2 as a substring to compare against, or should be 0.\nReturns 0 if they are equal. The sign of the return value may be significant, but should not be depended upon.")},
 	{"strtrim",			PF_strtrim,			PF_strtrim,			0,		PF_strtrim,0, D("string(string s)", "Trims the whitespace from the start+end of the string.")},
-//	{"calltimeofday",	PF_calltimeofday,	PF_calltimeofday,	231,	PF_NoMenu, D("void()", "Asks the engine to instantly call the qc's 'timeofday' function, before returning. For compatibility with mvdsv.\ntimeofday should have the prototype: void(float secs, float mins, float hour, float day, float mon, float year, string strvalue)\nThe strftime builtin is more versatile and less weird.")},
+	{"calltimeofday",	PF_calltimeofday,	PF_calltimeofday,	231,	PF_NoMenu, D("void()", "Asks the engine to instantly call the qc's 'timeofday' function, before returning. For compatibility with mvdsv.\ntimeofday should have the prototype: void(float secs, float mins, float hour, float day, float mon, float year, string strvalue)\nThe strftime builtin is more versatile and less weird.")},
 	{"clientstat",		PF_clientstat,		PF_NoCSQC,			232,	PF_NoMenu, D("void(float num, float type, .__variant fld)", "Specifies what data to use in order to send various stats, in a client-specific way.\n'num' should normally be between 32 and 127 for mod-defined stats. Named engine extension stats such as STAT_QSSM_WHEEL_WEAPONS may use their documented slots.\n'type' must be set to one of the EV_* constants, one of EV_FLOAT, EV_STRING, EV_INTEGER, EV_ENTITY.\nfld must be a reference to the field used, each player will be sent only their own copy of these fields.")},	//EXT_CSQC
 	{"globalstat",		PF_globalstat,		PF_NoCSQC,			233,	PF_NoMenu, D("void(float num, float type, string name)", "Specifies what data to use in order to send various stats, in a non-client-specific way. num and type are as in clientstat, name however, is the name of the global to read in the form of a string (pass \"foo\").")},	//EXT_CSQC_1 actually
 	{"pointerstat",		PF_pointerstat,		PF_NoCSQC,			0,		PF_NoMenu, D("void(float num, float type, __variant *address)", "Specifies what data to use in order to send various stats, in a non-client-specific way. num and type are as in clientstat, address however, is the address of the variable you would like to use (pass &foo).")},
@@ -11410,7 +11676,7 @@ static struct
 //	{"hash_getkey",		PF_hash_getkey,		PF_hash_getkey,		292,	PF_NoMenu, D("string(hashtable table, float idx)", "gets some random key name. add+delete can change return values of this, so don't blindly increment the key index if you're removing all.")},
 //	{"hash_getcb",		PF_hash_getcb,		PF_hash_getcb,		293,	PF_NoMenu, D("void(hashtable table, void(string keyname, __variant val) callback, optional string name)", "For each item in the table that matches the name, call the callback. if name is omitted, will enumerate ALL keys."), true},
 	{"checkcommand",	PF_checkcommand,	PF_checkcommand,	294,	PF_checkcommand,294, D("float(string name)", "Checks to see if the supplied name is a valid command, cvar, or alias. Returns 0 if it does not exist.")},
-//	{"argescape",		PF_argescape,		PF_argescape,		295,	PF_NoMenu, D("string(string s)", "Marks up a string so that it can be reliably tokenized as a single argument later.")},
+	{"argescape",		PF_argescape,		PF_argescape,		295,	PF_argescape,295, D("string(string s)", "Quotes one console argument. Returns null if it contains a quote or a line break, or exceeds the temp-string limit.")},
 //	{"clusterevent",	PF_clusterevent,	PF_NoCSQC,			0,		PF_NoMenu, D("void(string dest, string from, string cmd, string info)", "Only functions in mapcluster mode. Sends an event to whichever server the named player is on. The destination server can then dispatch the event to the client or handle it itself via the SV_ParseClusterEvent entrypoint. If dest is empty, the event is broadcast to ALL servers. If the named player can't be found, the event will be returned to this server with the cmd prefixed with 'error:'.")},
 //	{"clustertransfer",	PF_clustertransfer,	PF_NoCSQC,			0,		PF_NoMenu, D("string(entity player, optional string newnode)", "Only functions in mapcluster mode. Initiate transfer of the player to a different node. Can take some time. If dest is specified, returns null on error. Otherwise returns the current/new target node (or null if not transferring).")},
 	{"modelframecount", PF_NoSSQC, PF_cs_modelframecount, 0, PF_NoMenu, D("float(float modelindex)", "Returns the number of frames in the specified model.")},
@@ -11665,16 +11931,16 @@ static struct
 	{"parseentitydata",	PF_parseentitydata, PF_parseentitydata,			613,PF_parseentitydata,			613, D("float(entity e, string s, optional float offset)", "Reads a single entity's fields into an already-spawned entity. s should contain field pairs like in a saved game: {\"foo1\" \"bar\" \"foo2\" \"5\"}. Returns <=0 on failure, otherwise returns the offset in the string that was read to.")},
 	{"generateentitydata", PF_NoSSQC, PF_generateentitydata, 0, PF_NoMenu, D("string(entity ent)", "Serializes entity fields into a temporary string. Returns null if the entity exceeds the temporary-string limit.")},
 	{"resethostcachemasks",		PF_NoSSQC,	PF_resethostcachemasks,		615,PF_resethostcachemasks,		615, D("void()", "Resets server listing filters.")},
-	{"sethostcachemaskstring",	PF_NoSSQC,	PF_sethostcachemaskstring,	616,PF_sethostcachemaskstring,	616, D("void(float mask, float fld, string str, float op)", "stub. Changes a serverlist filter (string comparisons).")},
-	{"sethostcachemasknumber",	PF_NoSSQC,	PF_sethostcachemasknumber,	617,PF_sethostcachemasknumber,	617, D("void(float mask, float fld, float num, float op)", "stub. Changes a serverlist filter (numeric comparisons).")},
+	{"sethostcachemaskstring",	PF_NoSSQC,	PF_sethostcachemaskstring,	616,PF_sethostcachemaskstring,	616, D("void(float mask, float fld, string str, float op)", "Adds a server list filter using string comparisons. Mask bit 512 combines it with OR.")},
+	{"sethostcachemasknumber",	PF_NoSSQC,	PF_sethostcachemasknumber,	617,PF_sethostcachemasknumber,	617, D("void(float mask, float fld, float num, float op)", "Adds a server list filter using numeric comparisons. Mask bit 512 combines it with OR.")},
 	{"resorthostcache",			PF_NoSSQC,	PF_resorthostcache,			618,PF_resorthostcache,			618, D("void()", "Rebuild the visible server list according to filters and sort terms")},
 	{"sethostcachesort",		PF_NoSSQC,	PF_sethostcachesort,		619,PF_sethostcachesort,		619, D("void(float fld, float descending)", "Changes which field to sort by.")},
 	{"refreshhostcache",		PF_NoSSQC,	PF_refreshhostcache,		620,PF_refreshhostcache,		620, D("void(optional float dopurge)", "Refresh all sources, requery maps, etc.")},
 	{"gethostcachenumber",		PF_NoSSQC,	PF_gethostcachenumber,		621,PF_gethostcachenumber,		621, D("float(float fld, float hostnr)", "Alternative to gethostcachestring, avoiding tempstrings.")},
 	{"gethostcacheindexforkey",	PF_NoSSQC,	PF_gethostcacheindexforkey,	622,PF_gethostcacheindexforkey,	622, D("float(string key)", "Retrieves a field index for the provided name")},
 	{"addwantedhostcachekey",	PF_NoSSQC,	PF_gethostcacheindexforkey,	623,PF_gethostcacheindexforkey,	623, D("void(string key)", "stub.")},
-//	{"getextresponse",			PF_NoSSQC,	PF_NoCSQC,					634,PF_getextresponse,			624, D("string()", "stub. Reads from the 'extResponse' queue.")},
-//	{"netaddress_resolve",		PF_NoSSQC,	PF_NoCSQC,					635,PF_netaddress_resolve,		625, D("string(string dnsname)", "stub. Looks up a name in dns, returning the resulting ip address in string form.")},
+	{"getextresponse", PF_NoSSQC, PF_getextresponse, 624, PF_getextresponse, 624, D("string()", "Returns an empty string. No extResponse queue is available.")},
+	{"netaddress_resolve", PF_NoSSQC, PF_netaddress_resolve, 625, PF_netaddress_resolve, 625, D("string(string host, optional float defaultport)", "Resolves a host or numeric address and returns its numeric address. A port in the address overrides the optional default port.")},
 
 
 //	{"generateentitydata",PF_generateentitydata,NULL,				0,	PF_NoMenu, D("string(entity e)", "Dumps the entities fields into a string which can later be parsed with parseentitydata."}),
@@ -11683,14 +11949,16 @@ static struct
 	{"getsurfacenumtriangles",PF_getsurfacenumtriangles,PF_getsurfacenumtriangles,628,PF_NoMenu, "float(entity e, float s)"},
 	{"getsurfacetriangle",PF_getsurfacetriangle,PF_getsurfacetriangle,	629,	PF_NoMenu, "vector(entity e, float s, float n)"},
 	{"setkeybind",		PF_NoSSQC,			PF_cl_setkeybind,			630,	PF_cl_setkeybind,630, "float(float key, string bind, optional float bindmap, optional float modifier)", "Changes a key binding."},
-	{"getbindmaps",		PF_NoSSQC,			PF_cl_getbindmaps,			631,	PF_cl_getbindmaps,631, "vector()", "stub."},
-	{"setbindmaps",		PF_NoSSQC,			PF_cl_setbindmaps,			632,	PF_cl_setbindmaps,632, "float(vector bm)", "stub."},
+	{"getbindmaps",		PF_NoSSQC,			PF_cl_getbindmaps,			631,	PF_cl_getbindmaps,631, "vector()", "Returns the active primary and fallback bindmaps."},
+	{"setbindmaps",		PF_NoSSQC,			PF_cl_setbindmaps,			632,	PF_cl_setbindmaps,632, "float(vector bm)", "Changes the active bindmaps and returns 1. Invalid maps select map 0."},
 #ifndef _WIN32
 	{"fcopy", PF_fcopy, PF_fcopy, 650, PF_fcopy, 650, D("float(string source, string destination)", "Copies a game file into the writable data directory. Returns 0 on success.")},
 	{"frename", PF_frename, PF_frename, 651, PF_frename, 651, D("float(string source, string destination)", "Renames a file in the writable data directory. Returns 0 on success.")},
 	{"fremove", PF_fremove, PF_fremove, 652, PF_fremove, 652, D("float(string name)", "Removes a regular file from the writable data directory. Returns 0 on success.")},
 #endif
 	{"fexists", PF_fexists, PF_fexists, 653, PF_fexists, 653, D("float(string name)", "Checks for a loose file in the current writable game directory.")},
+	{"clipboard_set", PF_NoSSQC, PF_cl_clipboard_set, 0, PF_cl_clipboard_set, 0, "void(int cliptype, string text)"},
+	{"cvars_haveunsaved", PF_NoSSQC, PF_cvars_haveunsaved, 0, PF_cvars_haveunsaved, 0, "float()"},
 	{"setpause", PF_NoSSQC, PF_cl_setpause, 531, PF_NoMenu, D("void(float pause)", "Pauses local single-player simulation while CSQC requests it.")},
 	{"stopsound", PF_NoSSQC, PF_cs_stopsound, 0, PF_NoMenu, "void(entity ent, float channel)"},
 	{"soundupdate", PF_NoSSQC, PF_cs_soundupdate, 0, PF_NoMenu, D("float(entity ent, float channel, string sample, float volume, float attenuation, optional float pitch, optional float flags, optional float offset)", "Changes the current local entity sound. Only native pitch and zero flags are supported.")},
@@ -12904,6 +13172,16 @@ void PR_DumpPlatform_f(void)
 		fprintf(f, "const float PRECACHE_PIC_TEST = %i;", PICFLAG_BLOCK);
 
 		fprintf(f, "const float SLIST_HOSTCACHEVIEWCOUNT = %i;", SLIST_HOSTCACHEVIEWCOUNT);
+		fprintf(f, "const float SLIST_TEST_CONTAINS = %i;", SLIST_TEST_CONTAINS);
+		fprintf(f, "const float SLIST_TEST_NOTCONTAIN = %i;", SLIST_TEST_NOTCONTAIN);
+		fprintf(f, "const float SLIST_TEST_LESSEQUAL = %i;", SLIST_TEST_LESSEQUAL);
+		fprintf(f, "const float SLIST_TEST_LESS = %i;", SLIST_TEST_LESS);
+		fprintf(f, "const float SLIST_TEST_EQUAL = %i;", SLIST_TEST_EQUAL);
+		fprintf(f, "const float SLIST_TEST_GREATER = %i;", SLIST_TEST_GREATER);
+		fprintf(f, "const float SLIST_TEST_GREATEREQUAL = %i;", SLIST_TEST_GREATEREQUAL);
+		fprintf(f, "const float SLIST_TEST_NOTEQUAL = %i;", SLIST_TEST_NOTEQUAL);
+		fprintf(f, "const float SLIST_TEST_STARTSWITH = %i;", SLIST_TEST_STARTSWITH);
+		fprintf(f, "const float SLIST_TEST_NOTSTARTSWITH = %i;", SLIST_TEST_NOTSTARTSWITH);
 		fprintf(f, "const float SLIST_HOSTCACHETOTALCOUNT = %i;", SLIST_HOSTCACHETOTALCOUNT);
 		fprintf(f, "const float SLIST_SORTFIELD = %i;", SLIST_SORTFIELD);
 		fprintf(f, "const float SLIST_SORTDESCENDING = %i;", SLIST_SORTDESCENDING);

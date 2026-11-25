@@ -143,6 +143,8 @@ qboolean Cvar_Command (void);
 // was handled. (print or change)
 
 void	Cvar_WriteVariables (FILE *f);
+qboolean Cvar_HasUnsavedArchive(void);
+void Cvar_MarkArchiveSaved(void);
 // Writes lines containing "set variable value" for all variables
 // with the CVAR_ARCHIVE flag set
 
