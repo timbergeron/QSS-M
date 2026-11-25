@@ -25,8 +25,10 @@ import re
 import subprocess
 import struct
 import sys
+import tempfile
 import threading
 import time
+import zipfile
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 
@@ -356,6 +358,26 @@ def stage_fixtures(gamedir):
         with open(p, 'wb') as f:
             f.write(data)
         written.append(p)
+    package = os.path.join(gamedir, 'hq_files.pk3')
+    with zipfile.ZipFile(package, 'w', zipfile.ZIP_DEFLATED) as archive:
+        archive.writestr('data/hq_pkg.txt', 'compressed data entry\n')
+        archive.writestr('hq_pkg.txt', 'compressed root entry\n')
+        archive.writestr('hq_pkg.ent', '{ "classname" "hq_packed_entity" }\n')
+        if os.name != 'nt':
+            archive.writestr('hq_symlink_fixture.txt', 'present\n')
+    written.append(package)
+    if os.name != 'nt':
+        outside_dir = tempfile.mkdtemp(prefix='hq-outside-', dir=os.path.dirname(gamedir))
+        outside = os.path.join(outside_dir, 'hq_external.txt')
+        with open(outside, 'w', encoding='utf-8') as f:
+            f.write('outside the game directory\n')
+        data_dir = os.path.join(gamedir, 'data')
+        os.makedirs(data_dir, exist_ok=True)
+        alias = os.path.join(data_dir, 'hq_external.txt')
+        alias_dir = os.path.join(data_dir, 'hq_external_dir')
+        os.symlink(outside, alias)
+        os.symlink(outside_dir, alias_dir)
+        written.extend((alias, alias_dir, outside, outside_dir))
     return written
 
 
@@ -556,8 +578,11 @@ def main():
         with open(cs_path, 'wb') as f:
             f.write(hud_program)
 
-    for p in fixtures + [late, late_model]:
-        if os.path.exists(p):
+    for p in fixtures + [late, late_model, os.path.join(gamedir, 'data', 'hq_copy.txt'),
+                         os.path.join(gamedir, 'data', 'hq_append.txt')]:
+        if os.path.isdir(p) and not os.path.islink(p):
+            os.rmdir(p)
+        elif os.path.lexists(p):
             os.remove(p)
 
     # ---- 5. pixels

@@ -6,6 +6,104 @@ void(float seconds, float minutes, float hours, float day, float month, float ye
 	cq_timeofday_called = seconds >= 0 && seconds < 61 && year >= 2000 && strlen(text) > 0;
 };
 
+void() cq_followup_files =
+{
+	local searchhandle search;
+	local filestream file;
+	local strbuf buffer;
+	local entity item;
+
+	file = fopen("hq_pkg.txt", 0);
+	st_ok("filesystem/pk3-open", file >= 0);
+	if (file >= 0)
+	{
+		st_eqs("filesystem/pk3-data-priority", fgets(file), "compressed data entry");
+		st_eqs("filesystem/pk3-eof", fgets(file), "");
+		fclose(file);
+	}
+	search = search_begin("hq_pkg.txt", 0, 1, "hq_files.pk3");
+	st_eqf("filesystem/pk3-search", search_getsize(search), 1);
+	file = search_fopen(search, 0);
+	st_ok("filesystem/pk3-search-open", file >= 0);
+	if (file >= 0)
+	{
+		st_eqs("filesystem/pk3-search-exact", fgets(file), "compressed root entry");
+		fclose(file);
+	}
+	search_end(search);
+	search = search_begin("hq_pkg.txt", 2, 1);
+	st_eqs("filesystem/whichpack-virtual", strcat(whichpack("hq_pkg.txt"), "/hq_files.pk3"), search_getpackagename(search, 0));
+	search_end(search);
+	st_eqf("filesystem/pk3-loose-exists", fexists("hq_pkg.txt"), 0);
+	buffer = buf_create();
+	st_ok("filesystem/pk3-buf-open", buf_loadfile("hq_pkg.txt", buffer));
+	st_eqs("filesystem/pk3-buf-data", bufstr_get(buffer, 0), "compressed data entry");
+	st_eqf("filesystem/buf-outside-denied", buf_loadfile("hq_external.txt", buffer), 0);
+	buf_del(buffer);
+	st_eqf("filesystem/pk3-entities", loadfromfile("hq_pkg.ent"), 0);
+	item = find(world, classname, "hq_packed_entity");
+	st_ok("filesystem/pk3-entity-restored", item != world);
+	if (item != world)
+		removeinstant(item);
+	if (checkbuiltin(fcopy))
+	{
+		st_eqf("filesystem/pk3-copy", fcopy("hq_pkg.txt", "hq_copy.txt"), 0);
+		file = fopen("hq_copy.txt", 0);
+		if (file >= 0)
+		{
+			st_eqs("filesystem/pk3-copy-data", fgets(file), "compressed data entry");
+			fclose(file);
+		}
+		else
+			st_ok("filesystem/pk3-copy-data", 0);
+		if (checkbuiltin(fremove))
+			fremove("hq_copy.txt");
+	}
+	file = fopen("hq_append.txt", 2);
+	st_ok("filesystem/write", file >= 0);
+	if (file >= 0)
+	{
+		fputs(file, "first\n");
+		fclose(file);
+	}
+	file = fopen("hq_append.txt", 1);
+	st_ok("filesystem/append", file >= 0);
+	if (file >= 0)
+	{
+		fputs(file, "second\n");
+		fclose(file);
+	}
+	file = fopen("hq_append.txt", 0);
+	st_ok("filesystem/read-written", file >= 0);
+	if (file >= 0)
+	{
+		st_eqs("filesystem/append-first", fgets(file), "first");
+		st_eqs("filesystem/append-second", fgets(file), "second");
+		fclose(file);
+	}
+	file = fopen("hq_external.txt", 0);
+	st_eqf("filesystem/read-outside-denied", (float)file, -1);
+	if (file >= 0)
+		fclose(file);
+	search = search_begin("data/hq_external.txt", 0, 1);
+	st_eqf("filesystem/search-outside-file-denied", search_getsize(search), 0);
+	search_end(search);
+	search = search_begin("data/hq_external_dir/*.txt", 0, 1);
+	st_eqf("filesystem/search-outside-parent-denied", search_getsize(search), 0);
+	search_end(search);
+	if (whichpack("hq_symlink_fixture.txt") != "")
+	{
+		file = fopen("hq_external.txt", 2);
+		st_eqf("filesystem/write-outside-denied", (float)file, -1);
+		if (file >= 0)
+			fclose(file);
+		file = fopen("hq_external_dir/hq_external.txt", 2);
+		st_eqf("filesystem/write-outside-parent-denied", (float)file, -1);
+		if (file >= 0)
+			fclose(file);
+	}
+};
+
 void() cq_followup_resources =
 {
 	local entity item = spawn();
@@ -49,6 +147,7 @@ void() cq_followup_resources =
 	fclose(file);
 	search_end(search);
 	st_ok("filesystem/loose-exists", fexists("gfx/hq_grid.tga"));
+	cq_followup_files();
 	st_ok("utility/timeofday-registered", checkbuiltin(calltimeofday));
 	calltimeofday();
 	st_ok("utility/timeofday-called", cq_timeofday_called);
