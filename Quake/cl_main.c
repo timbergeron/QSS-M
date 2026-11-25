@@ -6435,7 +6435,7 @@ qboolean Sky_PeekSkyKeyFromBSP(const char* bspname,
 {
 	dheader_t  hdr;
 	lump_t* ent;
-	FILE* f = NULL;
+	fshandle_t f;
 	char* lump = NULL;
 	char entfilename[MAX_QPATH];
 	int filesize;
@@ -6450,11 +6450,11 @@ qboolean Sky_PeekSkyKeyFromBSP(const char* bspname,
 
 	/* ------------------ open BSP ---------------- */
 	filesize = COM_FOpenFile(bspname, &f, &bsp_path_id);
-	if (filesize < (int)sizeof(hdr) || !f)
+	if (filesize < (int)sizeof(hdr) || !FS_IsOpen(&f))
 		goto done;
 
 	/* read + validate header */
-	if (fread(&hdr, sizeof(hdr), 1, f) != 1)
+	if (FS_fread(&hdr, sizeof(hdr), 1, &f) != 1)
 		goto done;
 
 	hdr.version = LittleLong(hdr.version);
@@ -6474,22 +6474,19 @@ qboolean Sky_PeekSkyKeyFromBSP(const char* bspname,
 
 	if (ent->filelen > 0)
 	{
-		/* The stream is just past the BSP header, possibly inside an archive.
-		 * Seek relative to it so large archive offsets need no conversion/addition. */
-		if (fseek(f, (qofs_t)ent->fileofs - (qofs_t)sizeof(hdr), SEEK_CUR) != 0)
+		if (FS_fseek(&f, ent->fileofs, SEEK_SET) != 0)
 			goto done;
 
 		/* Large maps can exceed the entire zone. Use the heap and read the
 		 * full validated lump so CRC-specific overrides match Mod_LoadEntities. */
 		lump = (char*)malloc((size_t)ent->filelen + 1);
-		if (!lump || fread(lump, 1, ent->filelen, f) != (size_t)ent->filelen)
+		if (!lump || FS_fread(lump, 1, ent->filelen, &f) != (size_t)ent->filelen)
 			goto done; /* an unreadable lump must not turn into a CRC of zero */
 
 		lump[ent->filelen] = 0;
 		crc = CRC_Block((const byte*)lump, ent->filelen - 1);
 	}
-	fclose(f);
-	f = NULL;
+	FS_fclose(&f);
 
 	/* ---------------- external .ent wins -------------- */
 	if (Mod_FindExternalEntFile(bspname, crc, entfilename, sizeof(entfilename), &ent_path_id) &&
@@ -6509,8 +6506,8 @@ qboolean Sky_PeekSkyKeyFromBSP(const char* bspname,
 		ok = Sky_ScanWorldspawnSkyKeys(lump, outbuf, outsz);
 
 done:
-	if (f)
-		fclose(f);
+	if (FS_IsOpen(&f))
+		FS_fclose(&f);
 	free(lump);
 	return ok;
 }
@@ -7361,13 +7358,13 @@ void CL_Entdump_f(void)
 	}
 
 	// Open and read BSP file
-	FILE* f;
+	fshandle_t f;
 	unsigned path_id;
 	int length = COM_FOpenFile(bspfilename, &f, &path_id);
 	if (length <= 0)
 	{
-		if (f)
-			fclose(f);
+		if (FS_IsOpen(&f))
+			FS_fclose(&f);
 		Con_Printf("couldn't load %s\n", bspfilename);
 		return;
 	}
@@ -7375,19 +7372,19 @@ void CL_Entdump_f(void)
 	byte* buffer = malloc(length);
 	if (!buffer)
 	{
-		fclose(f);
+		FS_fclose(&f);
 		Con_Printf("out of memory for BSP file\n");
 		return;
 	}
 
-	if (fread(buffer, 1, length, f) != (size_t)length)
+	if (FS_fread(buffer, 1, length, &f) != (size_t)length)
 	{
 		free(buffer);
-		fclose(f);
+		FS_fclose(&f);
 		Con_Printf("error reading BSP file\n");
 		return;
 	}
-	fclose(f);
+	FS_fclose(&f);
 
 	dheader_t* header = (dheader_t*)buffer;
 	header->version = LittleLong(header->version);

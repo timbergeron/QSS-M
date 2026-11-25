@@ -11657,16 +11657,16 @@ static void M_Keys_AddDefaultBind (const defaultbind_t *defaultbind)
 
 static void M_Keys_LoadCustomBindList (bindname_t **custombinds, int *numcustombinds)
 {
-	FILE* file;
+	fshandle_t file;
 	char line[1024];
 
 	*custombinds = NULL;
 	*numcustombinds = 0;
 
-	if (COM_FOpenFile("bindlist.lst", &file, NULL) < 0 || !file)
+	if (COM_FOpenFile("bindlist.lst", &file, NULL) < 0)
 		return;
 
-	while (fgets(line, sizeof(line), file))
+	while (FS_fgets(line, sizeof(line), &file))
 	{
 		const char* cmd, * desc;
 		const defaultbind_t *defaultbind;
@@ -11686,7 +11686,7 @@ static void M_Keys_LoadCustomBindList (bindname_t **custombinds, int *numcustomb
 		(*numcustombinds)++;
 	}
 
-	fclose(file);
+	FS_fclose(&file);
 }
 
 static void M_Keys_FreeCustomBindList (bindname_t *custombinds, int numcustombinds)
@@ -33555,7 +33555,7 @@ qboolean HasBots(void) // woods -- check if deathmatch needs difficulty #botdete
 {
 	if (!progs_check_done)
 	{
-		FILE* file;
+		fshandle_t file;
 		byte* buffer;
 		long size;
 		unsigned short crc;
@@ -33566,32 +33566,30 @@ qboolean HasBots(void) // woods -- check if deathmatch needs difficulty #botdete
 		const char* custom_marker = "crx"; // custom progs without bots
 		size_t custom_marker_len = strlen(custom_marker);
 
-		if (COM_FOpenFile("progs.dat", &file, NULL) < 0 || !file)
+		if (COM_FOpenFile("progs.dat", &file, NULL) < 0)
 		{
 			progs_check_done = true;
 			return false;
 		}
 
-		fseek(file, 0, SEEK_END);
-		size = ftell(file);
-		fseek(file, 0, SEEK_SET);
+		size = FS_filelength(&file);
 
 		buffer = (byte*)malloc(size);
 		if (!buffer)
 		{
-			fclose(file);
+			FS_fclose(&file);
 			progs_check_done = true;
 			return false;
 		}
 
-		if (fread(buffer, 1, size, file) != (size_t)size)
+		if (FS_fread(buffer, 1, size, &file) != (size_t)size)
 		{
 			free(buffer);
-			fclose(file);
+			FS_fclose(&file);
 			progs_check_done = true;
 			return false;
 		}
-		fclose(file);
+		FS_fclose(&file);
 
 		crc = CRC_Block(buffer, size);
 

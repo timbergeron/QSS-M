@@ -58,7 +58,7 @@ cvar_t		sys_throttle = {"sys_throttle", "0.02", CVAR_ARCHIVE};
 cvar_t		sys_dedmouse_capture = {"sys_dedmouse_capture", "0", CVAR_ARCHIVE};
 
 static size_t	sys_handles_max;	/* spike -- removed limit, was 32 (johnfitz -- was 10) */
-static FILE		**sys_handles;
+static fshandle_t *sys_handles;
 
 typedef enum
 {
@@ -133,7 +133,7 @@ static int findhandle (void)
 
 	for (i = 1; i < sys_handles_max; i++)
 	{
-		if (!sys_handles[i])
+		if (!FS_IsOpen(&sys_handles[i]))
 			return i;
 	}
 	n = sys_handles_max+10;
@@ -141,7 +141,7 @@ static int findhandle (void)
 	if (!sys_handles)
 		Sys_Error ("out of handles");
 	while (sys_handles_max < n)
-		sys_handles[sys_handles_max++] = NULL;
+		memset(&sys_handles[sys_handles_max++], 0, sizeof(*sys_handles));
 	return i;
 }
 
@@ -704,7 +704,7 @@ qofs_t Sys_FileOpenRead (const char *path, int *hndl)
 	}
 	else
 	{
-		sys_handles[i] = f;
+		sys_handles[i].file = f;
 		*hndl = i;
 		retval = Sys_filelength(f);
 	}
@@ -723,37 +723,43 @@ int Sys_FileOpenWrite (const char *path)
 	if (!f)
 		Sys_Error ("Error opening %s: %s", path, strerror(errno));
 
-	sys_handles[i] = f;
+	sys_handles[i].file = f;
 	return i;
 }
 
-int Sys_FileOpenStdio (FILE *file)
+int Sys_FileOpenMemory(byte *memory, qofs_t length)
 {
-	int		i;
-	i = findhandle ();
-	sys_handles[i] = file;
+	int i = findhandle();
+	sys_handles[i].memory = memory;
+	sys_handles[i].length = length;
 	return i;
 }
 
 void Sys_FileClose (int handle)
 {
-	fclose (sys_handles[handle]);
-	sys_handles[handle] = NULL;
+	FS_fclose(&sys_handles[handle]);
 }
 
 void Sys_FileSeek (int handle, qofs_t position)
 {
-	fseek (sys_handles[handle], position, SEEK_SET);
+	if (sys_handles[handle].memory)
+		FS_fseek(&sys_handles[handle], position, SEEK_SET);
+	else
+		fseek(sys_handles[handle].file, position, SEEK_SET);
 }
 
 int Sys_FileRead (int handle, void *dest, int count)
 {
-	return fread (dest, 1, count, sys_handles[handle]);
+	if (count <= 0)
+		return 0;
+	if (sys_handles[handle].memory)
+		return FS_fread(dest, 1, count, &sys_handles[handle]);
+	return fread(dest, 1, count, sys_handles[handle].file);
 }
 
 int Sys_FileWrite (int handle, const void *data, int count)
 {
-	return fwrite (data, 1, count, sys_handles[handle]);
+	return fwrite(data, 1, count, sys_handles[handle].file);
 }
 
 int Sys_FileType (const char *path)

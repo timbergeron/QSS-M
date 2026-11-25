@@ -4120,17 +4120,13 @@ static void PF_cl_localsound(void)
 
 //file stuff
 
-// The filesystem opens a bounded game file. Stored PAK entries start at
-// their offset within the archive, while inflated PK3 entries start at zero.
 static struct qcfile_s
 {
 	qcvm_t *owningvm;
 	char cache[1024];
 	int cacheoffset, cachesize;
-	FILE *file;
-	int fileoffset;
-	int filesize;
-	int filebase;	//the offset of the file inside a pak
+	FILE *file; // writable stream
+	fshandle_t read;
 	int mode;
 } *qcfiles;
 static size_t qcfiles_max;
@@ -4157,15 +4153,9 @@ static void PF_fcopy(void)
 }
 #endif
 
-static float QC_RegisterFile(FILE *file, int fmode, int filesize)
+static float QC_RegisterFile(FILE *file, int fmode, const fshandle_t *read)
 {
 	size_t i;
-	long base = fmode ? 0 : ftell(file);
-	if (base < 0 || base > INT_MAX)
-	{
-		fclose(file);
-		return -1;
-	}
 
 	for (i = 0; ; i++)
 	{
@@ -4174,17 +4164,15 @@ static float QC_RegisterFile(FILE *file, int fmode, int filesize)
 			qcfiles_max++;
 			qcfiles = Z_Realloc(qcfiles, sizeof(*qcfiles)*qcfiles_max);
 		}
-		if (!qcfiles[i].file)
+		if (!qcfiles[i].owningvm)
 			break;
 	}
-	qcfiles[i].filebase = (int)base;
 	qcfiles[i].owningvm = qcvm;
 	qcfiles[i].file = file;
 	qcfiles[i].mode = fmode;
-	//reading needs size info
-	qcfiles[i].filesize = filesize;
+	qcfiles[i].read = read ? *read : (fshandle_t){0};
 	//clear the read cache.
-	qcfiles[i].fileoffset = qcfiles[i].cacheoffset = qcfiles[i].cachesize = 0;
+	qcfiles[i].cacheoffset = qcfiles[i].cachesize = 0;
 
 	return i + QC_FILE_BASE;
 }
@@ -4194,29 +4182,30 @@ static void PF_fopen(void)
 	const char *name = G_STRING(OFS_PARM0);
 	int mode = G_FLOAT(OFS_PARM1);
 	FILE *file;
-	size_t size = 0;
+	fshandle_t read;
+	size_t size;
 
 	G_FLOAT(OFS_RETURN) = -1;
 	switch (mode)
 	{
 	case 0: // read
-		if (COM_QCOpenRead(name, qcvm == &sv.qcvm, &file, &size) <= 0)
+		if (COM_QCOpenRead(name, qcvm == &sv.qcvm, &read, &size) <= 0)
 			return;
+		if (size > INT_MAX)
+			FS_fclose(&read);
+		else
+			G_FLOAT(OFS_RETURN) = QC_RegisterFile(NULL, 0, &read);
 		break;
 	case 1: // append
 	case 2: // write
 		file = COM_QCOpenWrite(name, mode == 1);
-		if (!file)
-			return;
+		if (file)
+			G_FLOAT(OFS_RETURN) = QC_RegisterFile(file, mode, NULL);
 		break;
 	default:
 		Con_Warning("PF_fopen: unsupported mode: %i\n", mode);
 		return;
 	}
-	if (size > INT_MAX)
-		fclose(file);
-	else
-		G_FLOAT(OFS_RETURN) = QC_RegisterFile(file, mode, (int)size);
 }
 static void PF_fgets(void)
 {
@@ -4224,7 +4213,7 @@ static void PF_fgets(void)
 	G_INT(OFS_RETURN) = 0;
 	if (fileid >= qcfiles_max)
 		Con_Warning("PF_fgets: invalid file handle\n");
-	else if (qcfiles[fileid].owningvm != qcvm || !qcfiles[fileid].file)
+	else if (qcfiles[fileid].owningvm != qcvm)
 		Con_Warning("PF_fgets: file not open\n");
 	else if (qcfiles[fileid].mode != 0)
 		Con_Warning("PF_fgets: file not open for reading\n");
@@ -4238,16 +4227,8 @@ static void PF_fgets(void)
 		{
 			if (f->cacheoffset == f->cachesize)
 			{
-				//figure out how much we can try to cache.
-				int sz = f->filesize - f->fileoffset;
-				if (sz < 0 || f->fileoffset < 0)	//... maybe we shouldn't have implemented seek support.
-					sz = 0;
-				else if ((size_t)sz > sizeof(f->cache))
-					sz = sizeof(f->cache);
-				//read a chunk
 				f->cacheoffset = 0;
-				f->cachesize = fread(f->cache, 1, sz, f->file);
-				f->fileoffset += f->cachesize;
+				f->cachesize = (int)FS_fread(f->cache, 1, sizeof(f->cache), &f->read);
 				if (!f->cachesize)
 				{
 					if (s == ret)
@@ -4278,103 +4259,67 @@ static void PF_fputs(void)
 	const char *str = PF_VarString(1);
 	if (fileid >= qcfiles_max)
 		Con_Warning("PF_fputs: invalid file handle\n");
-	else if (qcfiles[fileid].owningvm != qcvm || !qcfiles[fileid].file)
+	else if (qcfiles[fileid].owningvm != qcvm)
 		Con_Warning("PF_fputs: file not open\n");
 	else if (qcfiles[fileid].mode == 0)
-		Con_Warning("PF_fgets: file not open for writing\n");
+		Con_Warning("PF_fputs: file not open for writing\n");
 	else
 		fputs(str, qcfiles[fileid].file);
 }
+static void QC_CloseFile(struct qcfile_s *file)
+{
+	if (file->file)
+		fclose(file->file);
+	else
+		FS_fclose(&file->read);
+	file->file = NULL;
+	file->owningvm = NULL;
+}
+
 static void PF_fclose(void)
 {
 	size_t fileid = G_FLOAT(OFS_PARM0) - QC_FILE_BASE;
 	if (fileid >= qcfiles_max)
 		Con_Warning("PF_fclose: invalid file handle\n");
-	else if (qcfiles[fileid].owningvm != qcvm || !qcfiles[fileid].file)
+	else if (qcfiles[fileid].owningvm != qcvm)
 		Con_Warning("PF_fclose: file not open\n");
 	else
-	{
-		fclose(qcfiles[fileid].file);
-		qcfiles[fileid].file = NULL;
-		qcfiles[fileid].owningvm = NULL;
-	}
+		QC_CloseFile(&qcfiles[fileid]);
 }
+
 static void PF_frikfile_shutdown(void)
 {
 	size_t i;
 	for (i = 0; i < qcfiles_max; i++)
-	{
 		if (qcfiles[i].owningvm == qcvm)
-		{
-			fclose(qcfiles[i].file);
-			qcfiles[i].file = NULL;
-			qcfiles[i].owningvm = NULL;
-		}
-	}
+			QC_CloseFile(&qcfiles[i]);
 }
+
 static void PF_fseek(void)
-{	//returns current position. or changes that position.
+{
 	size_t fileid = G_FLOAT(OFS_PARM0) - QC_FILE_BASE;
+	struct qcfile_s *file;
+
 	G_INT(OFS_RETURN) = 0;
 	if (fileid >= qcfiles_max)
-		Con_Warning("PF_fread: invalid file handle\n");
-	else if (qcfiles[fileid].owningvm != qcvm || !qcfiles[fileid].file)
-		Con_Warning("PF_fread: file not open\n");
+		Con_Warning("PF_fseek: invalid file handle\n");
+	else if ((file = &qcfiles[fileid])->owningvm != qcvm)
+		Con_Warning("PF_fseek: file not open\n");
+	else if (file->mode)
+	{
+		G_INT(OFS_RETURN) = ftell(file->file);
+		if (qcvm->argc > 1 && G_INT(OFS_PARM1) >= 0)
+			fseek(file->file, G_INT(OFS_PARM1), SEEK_SET);
+	}
 	else
 	{
-		if (qcfiles[fileid].mode == 0)
-			G_INT(OFS_RETURN) = qcfiles[fileid].fileoffset - (qcfiles[fileid].cachesize - qcfiles[fileid].cacheoffset);
-		else
-			G_INT(OFS_RETURN) = ftell(qcfiles[fileid].file)-qcfiles[fileid].filebase;
-		if (qcvm->argc>1)
-		{
-			int offset = G_INT(OFS_PARM1);
-			if (offset < 0 || (!qcfiles[fileid].mode && offset > qcfiles[fileid].filesize) ||
-				offset > LONG_MAX - qcfiles[fileid].filebase ||
-				fseek(qcfiles[fileid].file, (long)qcfiles[fileid].filebase + offset, SEEK_SET))
-				return;
-			qcfiles[fileid].fileoffset = offset;
-			qcfiles[fileid].cachesize = qcfiles[fileid].cacheoffset = 0;
-		}
+		int offset = G_INT(OFS_PARM1);
+		G_INT(OFS_RETURN) = FS_ftell(&file->read) - (file->cachesize - file->cacheoffset);
+		if (qcvm->argc > 1 && offset >= 0 && offset <= FS_filelength(&file->read) &&
+			FS_fseek(&file->read, offset, SEEK_SET) == 0)
+			file->cachesize = file->cacheoffset = 0;
 	}
 }
-#if 0
-static void PF_fread(void)
-{
-	size_t fileid = G_FLOAT(OFS_PARM0) - QC_FILE_BASE;
-	int qcptr = G_INT(OFS_PARM1);
-	size_t size = G_INT(OFS_PARM2);
-
-	//FIXME: validate. make usable.
-	char *nativeptr = (char*)sv.edicts + qcptr;
-	
-	G_INT(OFS_RETURN) = 0;
-	if (fileid >= maxfiles)
-		Con_Warning("PF_fread: invalid file handle\n");
-	else if (qcfiles[fileid].owningvm != qcvm || !qcfiles[fileid].file)
-		Con_Warning("PF_fread: file not open\n");
-	else
-		G_INT(OFS_RETURN) = fread(nativeptr, 1, size, qcfiles[fileid].file);
-}
-static void PF_fwrite(void)
-{
-	size_t fileid = G_FLOAT(OFS_PARM0) - QC_FILE_BASE;
-	int qcptr = G_INT(OFS_PARM1);
-	size_t size = G_INT(OFS_PARM2);
-
-	//FIXME: validate. make usable.
-	const char *nativeptr = (const char*)sv.edicts + qcptr;
-	
-	G_INT(OFS_RETURN) = 0;
-	if (fileid >= maxfiles)
-		Con_Warning("PF_fwrite: invalid file handle\n");
-	else if (qcfiles[fileid].owningvm != qcvm || !qcfiles[fileid].file)
-		Con_Warning("PF_fwrite: file not open\n");
-	else
-		G_INT(OFS_RETURN) = fwrite(nativeptr, 1, size, qcfiles[fileid].file);
-}
-#endif
-
 static void PF_fsize(void)
 {
 	float handle = G_FLOAT(OFS_PARM0);
@@ -4385,10 +4330,10 @@ static void PF_fsize(void)
 	if (!(handle >= QC_FILE_BASE && handle - QC_FILE_BASE < qcfiles_max))
 		return;
 	f = &qcfiles[(size_t)(handle - QC_FILE_BASE)];
-	if (!f->file || f->owningvm != qcvm)
+	if (f->owningvm != qcvm)
 		return;
 	if (!f->mode)
-		G_INT(OFS_RETURN) = f->filesize;
+		G_INT(OFS_RETURN) = FS_filelength(&f->read);
 	else
 	{
 		pos = ftell(f->file);
@@ -4488,7 +4433,7 @@ static void PF_search_fopen(void)
 	float handle = G_FLOAT(OFS_PARM0), index = G_FLOAT(OFS_PARM1);
 	struct filesearch_s *search;
 	size_t entry, size;
-	FILE *file;
+	fshandle_t file;
 
 	G_FLOAT(OFS_RETURN) = -1;
 	if (!(handle >= 0 && handle < countof(searches)))
@@ -4501,9 +4446,9 @@ static void PF_search_fopen(void)
 		qcvm == &sv.qcvm, &file, &size) <= 0)
 		return;
 	if (size > INT_MAX)
-		fclose(file);
+		FS_fclose(&file);
 	else
-		G_FLOAT(OFS_RETURN) = QC_RegisterFile(file, 0, (int)size);
+		G_FLOAT(OFS_RETURN) = QC_RegisterFile(NULL, 0, &file);
 }
 static void PF_search_getsize(void)
 {
@@ -8927,12 +8872,11 @@ static void PF_uri_get(void) {
             /* File payload mode: read a game file beyond the QC string limit.
                Apply the QC file policy to both the requested and resolved paths. */
             const char *rel = postdata + 1;
-            FILE *f;
+            fshandle_t f;
             size_t flen;
             int open_rc = COM_QCOpenRead(rel, qcvm == &sv.qcvm, &f, &flen);
 
-            if (open_rc <= 0 || !f) {
-                if (f) fclose(f);
+            if (open_rc <= 0) {
                 SDL_LockMutex(uri_pending_mtx);
                 active_uri_requests--;
                 SDL_UnlockMutex(uri_pending_mtx);
@@ -8949,7 +8893,7 @@ static void PF_uri_get(void) {
             }
             req->postdata = (char *)malloc(flen + 1);
             if (!req->postdata) {
-                fclose(f);
+                FS_fclose(&f);
                 SDL_LockMutex(uri_pending_mtx);
                 active_uri_requests--;
                 SDL_UnlockMutex(uri_pending_mtx);
@@ -8957,8 +8901,8 @@ static void PF_uri_get(void) {
                 Con_Printf("PF_uri_get: out of memory for file POST body\n");
                 return;
             }
-            size_t rd = fread(req->postdata, 1, flen, f);
-            fclose(f);
+            size_t rd = FS_fread(req->postdata, 1, flen, &f);
+            FS_fclose(&f);
             req->postlen = rd;
             req->postdata[rd] = 0;
             Con_DPrintf("PF_uri_post(file:%s,%g) bytes=%d\n",

@@ -9,7 +9,7 @@ void(float seconds, float minutes, float hours, float day, float month, float ye
 void() cq_followup_files =
 {
 	local searchhandle search;
-	local filestream file;
+	local filestream file, other;
 	local strbuf buffer;
 	local entity item;
 
@@ -21,6 +21,36 @@ void() cq_followup_files =
 		st_eqs("filesystem/pk3-eof", fgets(file), "");
 		fclose(file);
 	}
+	file = fopen("hq_large.bin", 0);
+	other = fopen("hq_large.bin", 0);
+	st_ok("filesystem/pk3-independent-opens", file >= 0 && other >= 0);
+	if (file >= 0)
+	{
+		st_ok("filesystem/pk3-large-size", fsize(file) == 131077i);
+		fseek(file, 131072i);
+		st_eqs("filesystem/pk3-large-seek", fgets(file), "tail");
+		fclose(file);
+	}
+	if (other >= 0)
+	{
+		st_ok("filesystem/pk3-independent-position", fseek(other) == 0i);
+		fclose(other);
+	}
+	file = fopen("hq_empty.txt", 0);
+	st_ok("filesystem/pk3-deflated-empty", file >= 0 && fsize(file) == 0i);
+	if (file >= 0)
+		fclose(file);
+	file = fopen("hq_stored.txt", 0);
+	st_ok("filesystem/pk3-stored-open", file >= 0);
+	if (file >= 0)
+	{
+		st_eqs("filesystem/pk3-stored-bounds", fgets(file), "stored boundary");
+		fclose(file);
+	}
+	file = fopen("hq_corrupt.txt", 0);
+	st_eqf("filesystem/pk3-corrupt-denied", (float)file, -1);
+	if (file >= 0)
+		fclose(file);
 	search = search_begin("hq_pkg.txt", 0, 1, "hq_files.pk3");
 	st_eqf("filesystem/pk3-search", search_getsize(search), 1);
 	file = search_fopen(search, 0);

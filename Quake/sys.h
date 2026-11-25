@@ -34,7 +34,7 @@ void Sys_Init (void);
 // the file should be in BINARY mode for stupid OSs that care
 qofs_t Sys_FileOpenRead (const char *path, int *hndl);
 int Sys_FileOpenWrite (const char *path);
-int Sys_FileOpenStdio (FILE *file);
+int Sys_FileOpenMemory (byte *memory, qofs_t length);
 
 void Sys_FileClose (int handle);
 void Sys_FileSeek (int handle, qofs_t position);

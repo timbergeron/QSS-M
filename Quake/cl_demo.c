@@ -121,7 +121,7 @@ static struct
 
 #ifdef USE_ZLIB
 static void CL_DZipCleanupTempDemo(void);
-static qboolean CL_DZipOpenDemoArchive(const char *archive_path, FILE **out_demo, qofs_t *out_size, char *out_entry_name, size_t out_entry_name_size);
+static qboolean CL_DZipOpenDemoArchive(const char *archive_path, fshandle_t *out_demo, qofs_t *out_size, char *out_entry_name, size_t out_entry_name_size);
 static qboolean CL_DZipExtractDemoArchiveOSPathToFile(const char *archive_path, FILE *out, qofs_t *out_size, char *out_entry_name, size_t out_entry_name_size);
 static qboolean CL_DZipArchiveDemoFile(const char *src_dem_path, const char *archive_path, const char *entry_name);
 static byte *CL_DZipLoadDemoBuffer(const char *archive_path, int *length_out);
@@ -493,7 +493,7 @@ static qboolean CL_DemoSeekToPercent(float pct)
 	const int dynamic_threshold = CL_DemoSeekOffsetThreshold();
 	int target_offset;
 
-	if (!cls.demoplayback || !initialized || !cls.demofile || cls.demo_file_length <= 0)
+	if (!cls.demoplayback || !initialized || !FS_IsOpen(&cls.demo_read) || cls.demo_file_length <= 0)
 		return false;
 
 	pct = CLAMP(0.f, pct, 100.f);
@@ -903,41 +903,41 @@ static int CL_CountRemainingDemoFrames(void)
 	int end_offset;
 	int count = 0;
 
-	if (!cls.demofile || cls.demo_file_length <= 0)
+	if (!FS_IsOpen(&cls.demo_read) || cls.demo_file_length <= 0)
 		return 0;
 
-	saved_offset = ftell(cls.demofile);
+	saved_offset = FS_ftell(&cls.demo_read);
 	if (saved_offset < 0)
 		return 0;
 
 	end_offset = CL_GetDemoSeekEndOffset();
 	while (1)
 	{
-		long current_offset = ftell(cls.demofile);
+		long current_offset = FS_ftell(&cls.demo_read);
 		int cursize;
 
 		if (current_offset < 0 || current_offset >= end_offset)
 			break;
 		if (end_offset - current_offset < 16)
 			break;
-		if (fread(&cursize, 4, 1, cls.demofile) != 1)
+		if (FS_fread(&cursize, 4, 1, &cls.demo_read) != 1)
 			break;
 
 		cursize = LittleLong(cursize);
 		if (cursize <= 0 || cursize > MAX_MSGLEN)
 			break;
 
-		current_offset = ftell(cls.demofile);
+		current_offset = FS_ftell(&cls.demo_read);
 		if (current_offset < 0 || current_offset + 12L + cursize > end_offset)
 			break;
-		if (fseek(cls.demofile, 12L + cursize, SEEK_CUR) != 0)
+		if (FS_fseek(&cls.demo_read, 12L + cursize, SEEK_CUR) != 0)
 			break;
 
 		count++;
 	}
 
-	fseek(cls.demofile, saved_offset, SEEK_SET);
-	clearerr(cls.demofile);
+	FS_fseek(&cls.demo_read, saved_offset, SEEK_SET);
+	FS_clearerr(&cls.demo_read);
 
 	return count;
 }
@@ -1059,7 +1059,7 @@ static int CL_DemoSeekFastRewind(double deadline)
 		// Cbuf_Execute may have run a stuffcmd that disconnected us; if so,
 		// CL_GetMessage would now route to the network path with a NULL or
 		// stale netcon. Re-check before touching it.
-		if (!cls.demoplayback || cls.state != ca_connected || !cls.demofile)
+		if (!cls.demoplayback || cls.state != ca_connected || !FS_IsOpen(&cls.demo_read))
 			break;
 
 		// Force the rewind branch in CL_NextDemoFrame, and open the rewind
@@ -1101,8 +1101,8 @@ static int CL_DemoSeekFastRewind(double deadline)
 		// rewind batch. The backstop frame is special: CL_FinishDemoFrame
 		// intentionally leaves the first frame applied, so stdio's post-frame
 		// position already matches the client state.
-		if (!demo_rewind.backstop && cls.demofile)
-			fseek(cls.demofile, cls.demo_offset_current, SEEK_SET);
+		if (!demo_rewind.backstop && FS_IsOpen(&cls.demo_read))
+			FS_fseek(&cls.demo_read, cls.demo_offset_current, SEEK_SET);
 
 		if (demo_rewind.backstop ||
 			cls.demo_offset_current <= seek_start ||
@@ -1146,7 +1146,7 @@ static int CL_DemoSeekFastForward(double deadline)
 		// Cbuf_Execute may have run a stuffcmd that disconnected us; if so,
 		// CL_GetMessage would now route to the network path with a NULL or
 		// stale netcon. Re-check before touching it.
-		if (!cls.demoplayback || cls.state != ca_connected || !cls.demofile)
+		if (!cls.demoplayback || cls.state != ca_connected || !FS_IsOpen(&cls.demo_read))
 			break;
 
 		// Force positive demospeed so CL_GetDemoMessage's `!cls.demospeed`
@@ -1248,8 +1248,8 @@ static qboolean CL_DemoSeekRewindFromStart(int demo_seek_start, float seeking_sp
 		// loop overshoots the target (state pre-frame, stdio post-frame),
 		// the next forward read would skip a frame. Backstop and seek_start
 		// already have file/state aligned, so only fseek on target crossing.
-		if (!demo_rewind.backstop && cls.demo_offset_current > demo_seek_start && cls.demofile)
-			fseek(cls.demofile, cls.demo_offset_current, SEEK_SET);
+		if (!demo_rewind.backstop && cls.demo_offset_current > demo_seek_start && FS_IsOpen(&cls.demo_read))
+			FS_fseek(&cls.demo_read, cls.demo_offset_current, SEEK_SET);
 		demo_seek_from_start = false;
 		return false;
 	}
@@ -1579,7 +1579,7 @@ static qboolean CL_NextDemoFrame(void)
 			size_t snap_num_entities;
 
 			memset(&newframe, 0, sizeof(newframe));
-			newframe.fileofs = ftell(cls.demofile);
+			newframe.fileofs = FS_ftell(&cls.demo_read);
 			newframe.intermission = cl.intermission;
 			//	newframe.forceunderwater = cl.forceunderwater;
 			VEC_PUSH(demo_rewind.frames, newframe);
@@ -1610,7 +1610,7 @@ static qboolean CL_NextDemoFrame(void)
 		return false;
 
 	lastframe = &demo_rewind.frames[framecount - 1];
-	fseek(cls.demofile, lastframe->fileofs, SEEK_SET);
+	FS_fseek(&cls.demo_read, lastframe->fileofs, SEEK_SET);
 
 	if (framecount == 1)
 		demo_rewind.backstop = true;
@@ -2389,7 +2389,7 @@ void CL_StopPlayback (void)
 	Cvar_MapLock_RestoreAll ();
 	V_MapScoped_RestoreServerStuff ();
 
-	fclose (cls.demofile);
+	FS_fclose(&cls.demo_read);
 #ifdef USE_ZLIB
 	CL_DZipCleanupTempDemo();
 #endif
@@ -2397,7 +2397,6 @@ void CL_StopPlayback (void)
 	cls.demoreelplayback = false;
 	cls.demopaused = false;
 	cls.demospeed = 1.f; // woods (iw) #democontrols
-	cls.demofile = NULL;
 	cls.demofilesize = 0; // woods (iw) #democontrols
 	cls.demofilestart = 0; // woods (iw) #democontrols
 	cls.state = ca_disconnected;
@@ -2826,7 +2825,7 @@ static int CL_GetDemoMessage (void)
 	if (!CL_NextDemoFrame()) // woods (iw) #democontrols
 		return 0;
 
-	cls.demo_offset_current = ftell(cls.demofile); // woods #demopercent (Baker Fitzquake Mark V)
+	cls.demo_offset_current = FS_ftell(&cls.demo_read); // woods #demopercent (Baker Fitzquake Mark V)
 
 	// A demo stored in a pak shares the file with whatever follows it, so a
 	// demo that lacks a trailing svc_disconnect would read straight into the
@@ -2845,16 +2844,16 @@ static int CL_GetDemoMessage (void)
 	// read the length into a local and validate it before it ever reaches
 	// net_message.cursize, so a corrupt demo cannot leave a bogus size on the
 	// global buffer for anything else to act on
-	r = (int)fread (&msglen, 1, 4, cls.demofile);
+	r = (int)FS_fread(&msglen, 1, 4, &cls.demo_read);
 	if (r != 4) // woods
 	{
-		CL_EndDemoReadFailure(r == 0 && feof (cls.demofile) ?
+		CL_EndDemoReadFailure(r == 0 && FS_feof(&cls.demo_read) ?
 			"End of demo" : "Demo read failed: truncated message length");
 	}
 	VectorCopy (cl.mviewangles[0], cl.mviewangles[1]);
 	for (i = 0 ; i < 3 ; i++)
 	{
-		if (fread (&f, 4, 1, cls.demofile) != 1)
+		if (FS_fread(&f, 4, 1, &cls.demo_read) != 1)
 		{
 			CL_EndDemoReadFailure("Demo read failed: truncated view angles");
 		}
@@ -2871,13 +2870,13 @@ static int CL_GetDemoMessage (void)
 		Con_Printf ("Corrupt demo: message length %i out of range\n", msglen);
 		CL_EndDemoReadFailure("Demo read failed: invalid message length");
 	}
-	if (demo_entry_end >= 0 && msglen > demo_entry_end - ftell(cls.demofile))
+	if (demo_entry_end >= 0 && msglen > demo_entry_end - FS_ftell(&cls.demo_read))
 	{
 		CL_EndDemoReadFailure("Demo read failed: message extends past end of demo");
 	}
 	// only publish the size once the payload is actually in the buffer, so a
 	// short read never leaves cursize describing bytes we did not get
-	r = fread (net_message.data, msglen, 1, cls.demofile);
+	r = FS_fread(net_message.data, msglen, 1, &cls.demo_read);
 	if (r != 1)
 	{
 		CL_EndDemoReadFailure("Demo read failed: truncated message payload");
@@ -2996,12 +2995,12 @@ static qboolean CL_DemoPathHasUnsafeComponent(const char *name)
 	return false;
 }
 
-static qboolean CL_DemoTryOpenPath(const char *logical_name, const char *search_path, FILE **out_file, qofs_t *out_size, char *out_name, size_t out_name_size)
+static qboolean CL_DemoTryOpenPath(const char *logical_name, const char *search_path, fshandle_t *out_file, qofs_t *out_size, char *out_name, size_t out_name_size)
 {
 	const char *ext;
 	const char *open_path;
 
-	*out_file = NULL;
+	*out_file = (fshandle_t){0};
 	if (out_size)
 		*out_size = -1;
 
@@ -3022,7 +3021,7 @@ static qboolean CL_DemoTryOpenPath(const char *logical_name, const char *search_
 		return false;
 	}
 
-	if (COM_FOpenFile(open_path, out_file, NULL) >= 0 && *out_file)
+	if (COM_FOpenFile(open_path, out_file, NULL) >= 0)
 	{
 		if (out_size)
 			*out_size = com_filesize;
@@ -3178,7 +3177,7 @@ byte *CL_LoadDemoBufferFromFile(const char *path, int *length_out)
 	return data;
 }
 
-static qboolean CL_DemoResolvePlayback(const char *requested, FILE **out_file, qofs_t *out_size, char *out_name, size_t out_name_size)
+static qboolean CL_DemoResolvePlayback(const char *requested, fshandle_t *out_file, qofs_t *out_size, char *out_name, size_t out_name_size)
 {
 	char logical[MAX_OSPATH];
 	char path[MAX_OSPATH];
@@ -3224,29 +3223,31 @@ static qboolean CL_DemoResolvePlayback(const char *requested, FILE **out_file, q
 	return CL_DemoTryOpenPath(with_ext, with_ext, out_file, out_size, out_name, out_name_size);
 }
 
-static qboolean CL_StartDemoPlayback(FILE *demofile, qofs_t demo_size, const char *opened_name, qboolean restarting, qboolean demoreelplayback)
+static qboolean CL_StartDemoPlayback(const fshandle_t *demofile, qofs_t demo_size, const char *opened_name, qboolean restarting, qboolean demoreelplayback)
 {
-	cls.demofile = demofile;
+	char line[64], *end;
+	long track;
+
+	cls.demo_read = *demofile;
 	q_strlcpy(demoplaying, opened_name, sizeof(demoplaying)); // store the resolved demo name for window title
 	Con_Printf("%s demo from %s.\n", restarting ? "Restarting" : "Playing", opened_name);
 
 	// woods #demopercent (Baker Fitzquake Mark V)
 	com_filesize = demo_size;
 	q_strlcpy(cls.demoname, opened_name, sizeof(cls.demoname));
-	cls.demo_offset_start = ftell(cls.demofile);	// qfs_lastload.offset instead?
+	cls.demo_offset_start = FS_ftell(&cls.demo_read);	// qfs_lastload.offset instead?
 	cls.demo_file_length = demo_size;
 	cls.demo_hosttime_start = cls.demo_hosttime_elapsed = 0; // Fill this in ... host_time;
 	cls.demo_cltime_start = cls.demo_cltime_elapsed = 0; // Fill this in
 	// end #demopercent (Baker Fitzquake Mark V)
 
-// ZOID, fscanf is evil
-// O.S.: if a space character e.g. 0x20 (' ') follows '\n',
-// fscanf skips that byte too and screws up further reads.
-//	fscanf (cls.demofile, "%i\n", &cls.forcetrack);
-	if (fscanf (cls.demofile, "%i", &cls.forcetrack) != 1 || fgetc (cls.demofile) != '\n')
+	// Read exactly the track line, without consuming bytes from the first message.
+	if (!FS_fgets(line, sizeof(line), &cls.demo_read))
+		line[0] = 0;
+	track = strtol(line, &end, 0);
+	if (end == line || *end != '\n' || track < INT_MIN || track > INT_MAX)
 	{
-		fclose (cls.demofile);
-		cls.demofile = NULL;
+		FS_fclose(&cls.demo_read);
 #ifdef USE_ZLIB
 		CL_DZipCleanupTempDemo();
 #endif
@@ -3255,6 +3256,7 @@ static qboolean CL_StartDemoPlayback(FILE *demofile, qofs_t demo_size, const cha
 		return false;
 	}
 
+	cls.forcetrack = (int)track;
 	cls.demoplayback = true;
 	cls.demoreelplayback = demoreelplayback;
 	cls.demopaused = false;
@@ -3273,7 +3275,7 @@ static qboolean CL_StartDemoPlayback(FILE *demofile, qofs_t demo_size, const cha
 	cls.basedemospeed = 1.f; // woods (iw) #democontrols
 	q_strlcpy(cls.demofilename, opened_name, sizeof(cls.demofilename)); // woods (iw) #democontrols
 	cls.state = ca_connected;
-	cls.demofilestart = ftell(cls.demofile); // woods(iw) #democontrols
+	cls.demofilestart = FS_ftell(&cls.demo_read); // woods(iw) #democontrols
 	cls.demofilesize = demo_size; // woods (iw) #democontrols
 	q_strlcpy(last_demo, opened_name, sizeof(last_demo));
 	Log_Last_Demo_f();
@@ -3289,7 +3291,7 @@ static qboolean CL_DemoRestartPlayback(const char *requested)
 {
 	char requested_name[MAX_OSPATH];
 	char opened_name[MAX_OSPATH];
-	FILE *demofile = NULL;
+	fshandle_t demofile = {0};
 	qofs_t demo_size = -1;
 	const float saved_basedemospeed = cls.basedemospeed ? cls.basedemospeed : 1.f;
 	const qboolean saved_demoreelplayback = cls.demoreelplayback;
@@ -3312,7 +3314,7 @@ static qboolean CL_DemoRestartPlayback(const char *requested)
 		return false;
 	}
 
-	if (!CL_StartDemoPlayback(demofile, demo_size, opened_name, true, saved_demoreelplayback))
+	if (!CL_StartDemoPlayback(&demofile, demo_size, opened_name, true, saved_demoreelplayback))
 		return false;
 
 	cls.basedemospeed = saved_basedemospeed;
@@ -4760,7 +4762,7 @@ void CL_PlayDemo (const char *name, qboolean demoreelplayback)
 {
 	char	requested[MAX_OSPATH];
 	char	opened_name[MAX_OSPATH];
-	FILE	*demofile = NULL;
+	fshandle_t demofile = {0};
 	qofs_t	demo_size = -1;
 	qboolean use_last_demo;
 	qboolean allow_last_fallback;
@@ -4808,14 +4810,14 @@ void CL_PlayDemo (const char *name, qboolean demoreelplayback)
 			q_strlwr(requested);
 	}
 
-	if (!demofile && !CL_DemoResolvePlayback(requested, &demofile, &demo_size, opened_name, sizeof(opened_name)))
+	if (!FS_IsOpen(&demofile) && !CL_DemoResolvePlayback(requested, &demofile, &demo_size, opened_name, sizeof(opened_name)))
 	{
 		Con_Printf ("ERROR: couldn't open %s\n", requested); // woods #demosfolder
 		cls.demonum = -1;	// stop demo loop
 		return;
 	}
 
-	if (!CL_StartDemoPlayback(demofile, demo_size, opened_name, false, demoreelplayback))
+	if (!CL_StartDemoPlayback(&demofile, demo_size, opened_name, false, demoreelplayback))
 		return;
 }
 
@@ -4880,7 +4882,7 @@ void CL_TimeDemo_f (void)
 	}
 
 	CL_PlayDemo_f ();
-	if (!cls.demofile)
+	if (!FS_IsOpen(&cls.demo_read))
 		return;
 
 // cls.td_starttime will be grabbed at the second frame of the demo, so
@@ -5180,9 +5182,8 @@ static cl_dzip_direntry_t *cl_dzip_directory;
 static int cl_dzip_numfiles;
 static int cl_dzip_maj_ver, cl_dzip_min_ver;
 static unsigned int cl_dzip_directory_offset;
-static FILE *cl_dzip_archive_file;
+static fshandle_t *cl_dzip_archive_file;
 static FILE *cl_dzip_output_file;
-static long cl_dzip_archive_base;
 static qofs_t cl_dzip_archive_size;
 static z_stream cl_dzip_zs;
 static unsigned int cl_dzip_ztotal;
@@ -5290,7 +5291,7 @@ static qboolean CL_DZipArchiveRead(void *buf, unsigned int num)
 	if (!buf || !cl_dzip_archive_file)
 		return false;
 
-	return fread(buf, 1, num, cl_dzip_archive_file) == num;
+	return FS_fread(buf, 1, num, cl_dzip_archive_file) == num;
 }
 
 static qboolean CL_DZipArchiveSeek(unsigned int pos)
@@ -5298,7 +5299,7 @@ static qboolean CL_DZipArchiveSeek(unsigned int pos)
 	if (!cl_dzip_archive_file)
 		return false;
 
-	return fseek(cl_dzip_archive_file, cl_dzip_archive_base + (long)pos, SEEK_SET) == 0;
+	return FS_fseek(cl_dzip_archive_file, (long)pos, SEEK_SET) == 0;
 }
 
 static qboolean CL_DZipOutputWrite(const void *buf, unsigned int num)
@@ -6964,16 +6965,17 @@ static qboolean CL_DZipExtractLegacyEntry(const cl_dzip_direntry_t *target_de)
 	return extracted;
 }
 
-static qboolean CL_DZipExtractOpenedDemoArchiveToFile(const char *archive_path, FILE *archive, long archive_base, qofs_t archive_size, FILE *out, qofs_t *out_size, char *out_entry_name, size_t out_entry_name_size)
+static qboolean CL_DZipExtractOpenedDemoArchiveToFile(const char *archive_path, fshandle_t *archive, FILE *out, qofs_t *out_size, char *out_entry_name, size_t out_entry_name_size)
 {
 	cl_dzip_direntry_t *de;
+	qofs_t archive_size = FS_filelength(archive);
 	qboolean ok = false;
 
 	if (!archive)
 		return false;
 	if (!out)
 	{
-		fclose(archive);
+		FS_fclose(archive);
 		return false;
 	}
 
@@ -6982,11 +6984,10 @@ static qboolean CL_DZipExtractOpenedDemoArchiveToFile(const char *archive_path, 
 	if (out_entry_name && out_entry_name_size)
 		out_entry_name[0] = '\0';
 
-	if (archive_base < 0 || archive_size <= 0 || archive_size > UINT_MAX)
+	if (archive_size <= 0 || archive_size > UINT_MAX)
 		goto done;
 
 	cl_dzip_archive_file = archive;
-	cl_dzip_archive_base = archive_base;
 	cl_dzip_archive_size = archive_size;
 	cl_dzip_output_file = out;
 	cl_dzip_crc_enabled = true;
@@ -7059,10 +7060,9 @@ done:
 	CL_DZipFreeDirectory();
 	CL_DZipFreeDecodeBuffers();
 	if (archive)
-		fclose(archive);
+		FS_fclose(archive);
 	cl_dzip_archive_file = NULL;
 	cl_dzip_output_file = NULL;
-	cl_dzip_archive_base = 0;
 	cl_dzip_archive_size = 0;
 	cl_dzip_crc_enabled = false;
 	return ok;
@@ -7070,58 +7070,44 @@ done:
 
 static qboolean CL_DZipExtractDemoArchiveToFile(const char *archive_path, FILE *out, qofs_t *out_size, char *out_entry_name, size_t out_entry_name_size)
 {
-	FILE *archive = NULL;
-	long archive_base;
+	fshandle_t archive;
 
-	if (COM_FOpenFile(archive_path, &archive, NULL) < 0 || !archive)
+	if (COM_FOpenFile(archive_path, &archive, NULL) < 0)
 		return false;
-
-	archive_base = ftell(archive);
-	if (archive_base < 0)
-	{
-		fclose(archive);
-		return false;
-	}
-
-	return CL_DZipExtractOpenedDemoArchiveToFile(archive_path, archive, archive_base,
-		com_filesize, out, out_size, out_entry_name, out_entry_name_size);
+	return CL_DZipExtractOpenedDemoArchiveToFile(archive_path, &archive,
+		out, out_size, out_entry_name, out_entry_name_size);
 }
 
 static qboolean CL_DZipExtractDemoArchiveOSPathToFile(const char *archive_path, FILE *out, qofs_t *out_size, char *out_entry_name, size_t out_entry_name_size)
 {
-	FILE *archive;
-	long archive_size;
+	fshandle_t archive;
+	FILE *disk;
+	long size;
 
 	if (!archive_path || !archive_path[0])
 		return false;
-
-	archive = fopen(archive_path, "rb");
-	if (!archive)
+	disk = fopen(archive_path, "rb");
+	if (!disk)
 		return false;
-
-	if (fseek(archive, 0, SEEK_END) != 0)
+	if (fseek(disk, 0, SEEK_END) || (size = ftell(disk)) < 0 || fseek(disk, 0, SEEK_SET))
 	{
-		fclose(archive);
+		fclose(disk);
 		return false;
 	}
-	archive_size = ftell(archive);
-	if (archive_size < 0)
-	{
-		fclose(archive);
+	if (!FS_InitRead(&archive, disk, size))
 		return false;
-	}
-
-	return CL_DZipExtractOpenedDemoArchiveToFile(archive_path, archive, 0,
-		(qofs_t)archive_size, out, out_size, out_entry_name, out_entry_name_size);
+	return CL_DZipExtractOpenedDemoArchiveToFile(archive_path, &archive,
+		out, out_size, out_entry_name, out_entry_name_size);
 }
 
-static qboolean CL_DZipOpenDemoArchive(const char *archive_path, FILE **out_demo, qofs_t *out_size, char *out_entry_name, size_t out_entry_name_size)
+static qboolean CL_DZipOpenDemoArchive(const char *archive_path, fshandle_t *out_demo, qofs_t *out_size, char *out_entry_name, size_t out_entry_name_size)
 {
 	FILE *out = NULL;
 	char temp_path[MAX_OSPATH];
 	qboolean ok = false;
+	qofs_t size;
 
-	*out_demo = NULL;
+	*out_demo = (fshandle_t){0};
 	if (out_size)
 		*out_size = -1;
 	if (out_entry_name && out_entry_name_size)
@@ -7133,23 +7119,25 @@ static qboolean CL_DZipOpenDemoArchive(const char *archive_path, FILE **out_demo
 	if (!out)
 	{
 		Con_Printf("DZip: could not create temp demo %s\n", temp_path);
-		goto done;
+		return false;
 	}
 
-	if (CL_DZipExtractDemoArchiveToFile(archive_path, out, out_size, out_entry_name, out_entry_name_size))
+	if (CL_DZipExtractDemoArchiveToFile(archive_path, out, &size, out_entry_name, out_entry_name_size))
 	{
-		q_strlcpy(cl_dzip_playback_temp_path, temp_path, sizeof(cl_dzip_playback_temp_path));
-		*out_demo = out;
+		ok = FS_InitRead(out_demo, out, (long)size);
 		out = NULL;
-		ok = true;
+		if (ok)
+		{
+			q_strlcpy(cl_dzip_playback_temp_path, temp_path, sizeof(cl_dzip_playback_temp_path));
+			if (out_size)
+				*out_size = size;
+		}
 	}
 
-done:
 	if (out)
-	{
 		fclose(out);
+	if (!ok && temp_path[0])
 		remove(temp_path);
-	}
 	return ok;
 }
 

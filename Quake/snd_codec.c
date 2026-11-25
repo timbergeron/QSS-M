@@ -266,14 +266,10 @@ int S_CodecReadStream (snd_stream_t *stream, int bytes, void *buffer)
 snd_stream_t *S_CodecUtilOpen(const char *filename, snd_codec_t *codec, qboolean loop)
 {
 	snd_stream_t *stream;
-	FILE *handle;
-	qboolean pak;
-	long length;
+	fshandle_t handle;
 
 	/* Try to open the file */
-	length = (long) COM_FOpenFile(filename, &handle, NULL);
-	pak = file_from_pak;
-	if (length == -1)
+	if (COM_FOpenFile(filename, &handle, NULL) < 0)
 	{
 		Con_DPrintf("Couldn't open %s\n", filename);
 		return NULL;
@@ -283,11 +279,8 @@ snd_stream_t *S_CodecUtilOpen(const char *filename, snd_codec_t *codec, qboolean
 	stream = (snd_stream_t *) Z_Malloc(sizeof(snd_stream_t));
 	stream->codec = codec;
 	stream->loop = loop;
-	stream->fh.file = handle;
-	stream->fh.start = ftell(handle);
-	stream->fh.pos = 0;
-	stream->fh.length = length;
-	stream->fh.pak = stream->pak = pak;
+	stream->fh = handle;
+	stream->pak = file_from_pak;
 	q_strlcpy(stream->name, filename, MAX_QPATH);
 
 	return stream;
@@ -295,7 +288,7 @@ snd_stream_t *S_CodecUtilOpen(const char *filename, snd_codec_t *codec, qboolean
 
 void S_CodecUtilClose(snd_stream_t **stream)
 {
-	fclose((*stream)->fh.file);
+	FS_fclose(&(*stream)->fh);
 	Z_Free(*stream);
 	*stream = NULL;
 }

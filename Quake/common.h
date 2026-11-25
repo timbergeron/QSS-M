@@ -500,13 +500,47 @@ void COM_AddDownloadedPackage(const char *relative_path);
 void COM_RemoveDownloadedPackage(const char *relative_path);
 qboolean COM_IsPackageExtension(const char *extension);
 
+/* The following FS_*() stdio replacements are necessary if one is
+ * to perform non-sequential reads on files reopened on pak files
+ * because we need the bookkeeping about file start/end positions.
+ * A handle owns either its disk stream or an inflated archive entry. */
+
+typedef struct _fshandle_t
+{
+	FILE *file;
+	byte *memory;
+	long start;	/* file or data start position */
+	long length;	/* file or data size */
+	long pos;	/* current position relative to start */
+} fshandle_t;
+
+qboolean FS_InitRead(fshandle_t *fh, FILE *file, long length);
+static inline qboolean FS_IsOpen(const fshandle_t *fh)
+{
+	return fh->file || fh->memory;
+}
+size_t FS_fread(void *ptr, size_t size, size_t nmemb, fshandle_t *fh);
+int FS_fseek(fshandle_t *fh, long offset, int whence);
+long FS_ftell(fshandle_t *fh);
+void FS_rewind(fshandle_t *fh);
+int FS_feof(fshandle_t *fh);
+int FS_ferror(fshandle_t *fh);
+void FS_clearerr(fshandle_t *fh);
+int FS_fclose(fshandle_t *fh);
+int FS_fgetc(fshandle_t *fh);
+char *FS_fgets(char *s, int size, fshandle_t *fh);
+long FS_filelength (fshandle_t *fh);
+
+
 pack_t *FSZIP_LoadArchive (const char *packfile);
-FILE *FSZIP_Deflate(FILE *src, qofs_t srcsize, qofs_t outsize, const char *entryname);
+byte *FSZIP_Inflate(FILE *src, qofs_t srcsize, qofs_t outsize, const char *entryname);
+
+qboolean COM_OpenPackEntry(const pack_t *pack, const packfile_t *entry, fshandle_t *file);
 
 void COM_WriteFile (const char *filename, const void *data, int len);
 int COM_OpenFile (const char *filename, int *handle, unsigned int *path_id);
-int COM_FOpenFile (const char *filename, FILE **file, unsigned int *path_id);
-int COM_FOpenFileCandidates (const char *const *filenames, int count, FILE **file, unsigned int *path_id);
+int COM_FOpenFile (const char *filename, fshandle_t *file, unsigned int *path_id);
+int COM_FOpenFileCandidates (const char *const *filenames, int count, fshandle_t *file, unsigned int *path_id);
 void COM_BeginLoadCache (void);
 void COM_EndLoadCache (void);
 void COM_AbortLoadCache (void);
@@ -518,8 +552,8 @@ FILE *COM_OpenGameWrite(const char *name, qboolean append);
 
 // QuakeC accepts virtual names only. Read results are 1 (open), 0 (absent),
 // or -1 (rejected). The stream starts at the file's data and size bounds it.
-int COM_QCOpenRead(const char *name, qboolean server, FILE **file, size_t *size);
-int COM_QCOpenSearchFile(const searchpath_t *mount, const char *name, qboolean server, FILE **file, size_t *size);
+int COM_QCOpenRead(const char *name, qboolean server, fshandle_t *file, size_t *size);
+int COM_QCOpenSearchFile(const searchpath_t *mount, const char *name, qboolean server, fshandle_t *file, size_t *size);
 char *COM_QCLoadFile(const char *name, qboolean server, size_t limit);
 const char *COM_QCFileGameDir(const char *name, qboolean server);
 qboolean COM_QCLooseFileExists(const char *name, qboolean server);
@@ -568,31 +602,6 @@ const char *COM_ParseStringNewline(const char *buffer);
 #define	FS_ENT_FILE		(1 << 0)
 #define	FS_ENT_DIRECTORY	(1 << 1)
 
-/* The following FS_*() stdio replacements are necessary if one is
- * to perform non-sequential reads on files reopened on pak files
- * because we need the bookkeeping about file start/end positions.
- * Allocating and filling in the fshandle_t structure is the users'
- * responsibility when the file is initially opened. */
-
-typedef struct _fshandle_t
-{
-	FILE *file;
-	qboolean pak;	/* is the file read from a pak */
-	long start;	/* file or data start position */
-	long length;	/* file or data size */
-	long pos;	/* current position relative to start */
-} fshandle_t;
-
-size_t FS_fread(void *ptr, size_t size, size_t nmemb, fshandle_t *fh);
-int FS_fseek(fshandle_t *fh, long offset, int whence);
-long FS_ftell(fshandle_t *fh);
-void FS_rewind(fshandle_t *fh);
-int FS_feof(fshandle_t *fh);
-int FS_ferror(fshandle_t *fh);
-int FS_fclose(fshandle_t *fh);
-int FS_fgetc(fshandle_t *fh);
-char *FS_fgets(char *s, int size, fshandle_t *fh);
-long FS_filelength (fshandle_t *fh);
 
 
 extern struct cvar_s	registered;

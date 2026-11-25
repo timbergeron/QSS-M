@@ -4931,69 +4931,60 @@ typedef struct vispatch_s
 } vispatch_t;
 #define VISPATCH_HEADER_LEN 36
 
-static FILE *Mod_FindVisibilityExternal(int *entrylen)
+static qboolean Mod_FindVisibilityExternal(fshandle_t *f, int *entrylen)
 {
 	vispatch_t header;
 	char visfilename[MAX_QPATH];
 	char mapname[sizeof(header.mapname) + 1];
 	const char* shortname;
 	unsigned int path_id;
-	FILE *f;
-	long basepos;
 	int filesize;
 	size_t offset;
 
 	*entrylen = 0;
 
 	q_snprintf(visfilename, sizeof(visfilename), "maps/%s.vis", loadname);
-	filesize = COM_FOpenFile(visfilename, &f, &path_id);
+	filesize = COM_FOpenFile(visfilename, f, &path_id);
 	if (filesize < 0)
 	{
 		Con_DPrintf("%s not found, trying ", visfilename);
 		q_snprintf(visfilename, sizeof(visfilename), "%s.vis", COM_SkipPath(com_gamedir));
 		Con_DPrintf("%s\n", visfilename);
-		filesize = COM_FOpenFile(visfilename, &f, &path_id);
+		filesize = COM_FOpenFile(visfilename, f, &path_id);
 		if (filesize < 0)
 		{
 			Con_DPrintf("external vis not found\n");
-			return NULL;
+			return false;
 		}
 	}
 	if (path_id < loadmodel->path_id)
 	{
-		fclose(f);
+		FS_fclose(f);
 		Con_DPrintf("ignored %s from a gamedir with lower priority\n", visfilename);
-		return NULL;
+		return false;
 	}
 
 	Con_DPrintf("Found external VIS %s\n", visfilename);
 
 	shortname = COM_SkipPath(loadmodel->name);
-	basepos = ftell(f);
-	if (basepos < 0)
-	{
-		fclose(f);
-		Con_Warning("Ignoring external VIS %s: couldn't determine file position.\n", visfilename);
-		return NULL;
-	}
 
 	for (offset = 0; offset + VISPATCH_HEADER_LEN <= (size_t)filesize; )
 	{
-		if (fseek(f, basepos + (long)offset, SEEK_SET) != 0 ||
-			fread(&header, 1, VISPATCH_HEADER_LEN, f) != VISPATCH_HEADER_LEN)
+		if (FS_fseek(f, (long)offset, SEEK_SET) != 0 ||
+			FS_fread(&header, 1, VISPATCH_HEADER_LEN, f) != VISPATCH_HEADER_LEN)
 		{
-			fclose(f);
+			FS_fclose(f);
 			Con_Warning("Ignoring external VIS %s: couldn't read an entry header.\n", visfilename);
-			return NULL;
+			return false;
 		}
 
 		header.filelen = LittleLong(header.filelen);
 		if (header.filelen <= 0 ||
 			(size_t)header.filelen > (size_t)filesize - offset - VISPATCH_HEADER_LEN)
 		{	/* bad entry -- don't trust the rest. */
-			fclose(f);
+			FS_fclose(f);
 			Con_Warning("Ignoring external VIS %s: invalid entry length.\n", visfilename);
-			return NULL;
+			return false;
 		}
 
 		memcpy(mapname, header.mapname, sizeof(header.mapname));
@@ -5001,15 +4992,15 @@ static FILE *Mod_FindVisibilityExternal(int *entrylen)
 		if (!q_strcasecmp(mapname, shortname))
 		{
 			*entrylen = header.filelen;
-			return f;
+			return true;
 		}
 
 		offset += VISPATCH_HEADER_LEN + (size_t)header.filelen;
 	}
 
-	fclose(f);
+	FS_fclose(f);
 	Con_DPrintf("%s not found in %s\n", shortname, visfilename);
-	return NULL;
+	return false;
 }
 
 static qboolean Mod_ExternalLeafsMatchBSP(const dsleaf_t *leafs, int leaflen,
@@ -5070,7 +5061,7 @@ static qboolean Mod_ExternalLeafsMatchBSP(const dsleaf_t *leafs, int leaflen,
 	return true;
 }
 
-static qboolean Mod_LoadVisibilityExternal(FILE *f, int entrylen, lump_t *bspleaflump)
+static qboolean Mod_LoadVisibilityExternal(fshandle_t *f, int entrylen, lump_t *bspleaflump)
 {
 	byte *visdata, *hunkvisdata;
 	dsleaf_t *leafdata;
@@ -5082,7 +5073,7 @@ static qboolean Mod_LoadVisibilityExternal(FILE *f, int entrylen, lump_t *bsplea
 	diagnosed = false;
 	valid = false;
 	if (entrylen < 2 * (int)sizeof(int) ||
-		fread(&vislen, 1, sizeof(vislen), f) != sizeof(vislen))
+		FS_fread(&vislen, 1, sizeof(vislen), f) != sizeof(vislen))
 		goto done;
 	vislen = LittleLong(vislen);
 	if (vislen <= 0 || vislen > entrylen - 2 * (int)sizeof(int))
@@ -5090,9 +5081,9 @@ static qboolean Mod_LoadVisibilityExternal(FILE *f, int entrylen, lump_t *bsplea
 
 	Con_DPrintf("...%d bytes visibility data\n", vislen);
 	visdata = (byte *)malloc(vislen);
-	if (!visdata || fread(visdata, 1, vislen, f) != (size_t)vislen)
+	if (!visdata || FS_fread(visdata, 1, vislen, f) != (size_t)vislen)
 		goto done;
-	if (fread(&leaflen, 1, sizeof(leaflen), f) != sizeof(leaflen))
+	if (FS_fread(&leaflen, 1, sizeof(leaflen), f) != sizeof(leaflen))
 		goto done;
 	leaflen = LittleLong(leaflen);
 	if (leaflen <= 0 || leaflen != entrylen - 2 * (int)sizeof(int) - vislen)
@@ -5100,7 +5091,7 @@ static qboolean Mod_LoadVisibilityExternal(FILE *f, int entrylen, lump_t *bsplea
 
 	Con_DPrintf("...%d bytes leaf data\n", leaflen);
 	leafdata = (dsleaf_t *)malloc(leaflen);
-	if (!leafdata || fread(leafdata, 1, leaflen, f) != (size_t)leaflen)
+	if (!leafdata || FS_fread(leafdata, 1, leaflen, f) != (size_t)leaflen)
 		goto done;
 	if (!Mod_ExternalLeafsMatchBSP(leafdata, leaflen, bspleaflump, vislen))
 	{
@@ -5728,14 +5719,13 @@ static void Mod_LoadBrushModel (qmodel_t *mod, void *buffer)
 
 	if (mod->bspversion == BSPVERSION && external_vis.value/* && sv.modelname[0] && !q_strcasecmp(loadname, sv.name)*/) // woods allow vis load online
 	{
-		FILE* fvis;
+		fshandle_t fvis;
 		int entrylen;
 		Con_DPrintf("trying to open external vis file\n");
-		fvis = Mod_FindVisibilityExternal(&entrylen);
-		if (fvis) {
-			qboolean valid = Mod_LoadVisibilityExternal(fvis, entrylen,
+		if (Mod_FindVisibilityExternal(&fvis, &entrylen)) {
+			qboolean valid = Mod_LoadVisibilityExternal(&fvis, entrylen,
 				&header->lumps[LUMP_LEAFS]);
-			fclose(fvis);
+			FS_fclose(&fvis);
 			if (valid) {
 				Con_DPrintf("found valid external .vis file for map\n");
 				goto visdone;
@@ -5883,7 +5873,7 @@ qboolean Mod_LoadMapDescription(char* desc, size_t maxchars, const char* map)
 	char		buf[4 * 1024];
 	char		path[MAX_QPATH];
 	const char* data;
-	FILE* f;
+	fshandle_t f;
 	lump_t* entlump;
 	dheader_t	header;
 	int			i, j, k, filesize;
@@ -5901,13 +5891,13 @@ qboolean Mod_LoadMapDescription(char* desc, size_t maxchars, const char* map)
 	if (filesize <= (int)sizeof(header))
 	{
 		if (filesize != -1)
-			fclose(f);
+			FS_fclose(&f);
 		return false;
 	}
 
-	if (fread(&header, sizeof(header), 1, f) != 1)
+	if (FS_fread(&header, sizeof(header), 1, &f) != 1)
 	{
-		fclose(f);
+		FS_fclose(&f);
 		return false;
 	}
 
@@ -5921,7 +5911,7 @@ qboolean Mod_LoadMapDescription(char* desc, size_t maxchars, const char* map)
 	case BSPVERSION_QUAKE64:
 		break;
 	default:
-		fclose(f);
+		FS_fclose(&f);
 		return false;
 	}
 
@@ -5932,7 +5922,7 @@ qboolean Mod_LoadMapDescription(char* desc, size_t maxchars, const char* map)
 	if ((int)entlump->filelen < 0 || (int)entlump->filelen >= filesize ||
 		(int)entlump->fileofs < 0 || (int)entlump->fileofs + (int)entlump->filelen > filesize)
 	{
-		fclose(f);
+		FS_fclose(&f);
 		return false;
 	}
 
@@ -5944,9 +5934,9 @@ qboolean Mod_LoadMapDescription(char* desc, size_t maxchars, const char* map)
 		entlump->filelen = sizeof(buf) - 1;
 	}
 
-	fseek(f, entlump->fileofs - sizeof(header), SEEK_CUR);
-	i = fread(buf, 1, entlump->filelen, f);
-	fclose(f);
+	FS_fseek(&f, entlump->fileofs, SEEK_SET);
+	i = FS_fread(buf, 1, entlump->filelen, &f);
+	FS_fclose(&f);
 
 	if (i <= 0)
 		return false;

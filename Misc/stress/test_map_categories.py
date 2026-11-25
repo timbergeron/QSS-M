@@ -78,10 +78,13 @@ static int COM_FileTypeForSearch(const char *path) { return Sys_FileType(path); 
 qofs_t Sys_FileOpenRead(const char *path, int *handle) {
     (void)path; (void)handle; abort();
 }
-int Sys_FileOpenStdio(FILE *file) { (void)file; abort(); }
+int Sys_FileOpenMemory(byte *memory, qofs_t length) { (void)memory; (void)length; abort(); }
 void Sys_FileSeek(int handle, qofs_t pos) { (void)handle; (void)pos; abort(); }
-FILE *FSZIP_Deflate(FILE *file, qofs_t in, qofs_t out, const char *name) {
-    (void)file; (void)in; (void)out; (void)name; abort();
+qboolean COM_OpenPackEntry(const pack_t *pack, const packfile_t *entry, fshandle_t *file) {
+    (void)pack; (void)entry; (void)file; abort();
+}
+qboolean FS_InitRead(fshandle_t *fh, FILE *file, long length) {
+    (void)fh; (void)file; (void)length; abort();
 }
 // Archive decoding is separate from mount ownership and file lookup.
 pack_t *COM_LoadPackFile(const char *name) { (void)name; return loaded_pack; }

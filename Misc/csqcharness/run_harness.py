@@ -21,6 +21,7 @@ import argparse
 import hashlib
 import json
 import os
+import random
 import re
 import subprocess
 import struct
@@ -363,8 +364,23 @@ def stage_fixtures(gamedir):
         archive.writestr('data/hq_pkg.txt', 'compressed data entry\n')
         archive.writestr('hq_pkg.txt', 'compressed root entry\n')
         archive.writestr('hq_pkg.ent', '{ "classname" "hq_packed_entity" }\n')
+        archive.writestr('data/hq_large.bin', random.Random(0).randbytes(131072) + b'tail\n')
+        archive.writestr('data/hq_empty.txt', b'')
+        archive.writestr('data/hq_stored.txt', b'stored boundary', zipfile.ZIP_STORED)
+        archive.writestr('data/hq_corrupt.txt', b'invalid compressed entry')
+        corrupt = archive.getinfo('data/hq_corrupt.txt')
+        for name in ('gfx/hq_direct.tga', 'progs/hq_group.mdl'):
+            path = os.path.join(gamedir, name)
+            archive.write(path, name)
+            os.remove(path)
         if os.name != 'nt':
             archive.writestr('hq_symlink_fixture.txt', 'present\n')
+    # Keep the ZIP headers valid and damage only the member's DEFLATE stream.
+    with open(package, 'r+b') as f:
+        f.seek(corrupt.header_offset + 26)
+        name_size, extra_size = struct.unpack('<HH', f.read(4))
+        f.seek(name_size + extra_size, os.SEEK_CUR)
+        f.write(b'\x07')  # Last block with the reserved block type.
     written.append(package)
     if os.name != 'nt':
         outside_dir = tempfile.mkdtemp(prefix='hq-outside-', dir=os.path.dirname(gamedir))

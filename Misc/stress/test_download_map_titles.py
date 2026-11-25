@@ -7,6 +7,7 @@ from pathlib import Path
 import os
 import shlex
 import subprocess
+import sys
 import tempfile
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -27,6 +28,7 @@ source = r'''
 #include "q_ctype.h"
 #include "json.h"
 #include <assert.h>
+#include <errno.h>
 #include <time.h>
 #include <sys/stat.h>
 #undef strcasecmp
@@ -64,13 +66,13 @@ byte *COM_LoadMallocFile(const char *path, unsigned int *id) {
 byte *COM_LoadMallocFile_TextMode_OSPath(const char *path, long *length) {
     (void)path; (void)length; return cached ? (byte *)strdup(cached) : NULL;
 }
-int COM_FOpenFile(const char *path, FILE **out, unsigned int *id) {
+int COM_FOpenFile(const char *path, fshandle_t *out, unsigned int *id) {
     (void)path; (void)id; opens++;
-    if (!title_file && !too_large) { *out = NULL; return -1; }
-    *out = tmpfile(); assert(*out);
-    if (too_large) return 8 * 1024 * 1024 + 1;
-    size_t length = strlen(title_file);
-    assert(fwrite(title_file, 1, length, *out) == length); rewind(*out); return (int)length;
+    *out = (fshandle_t){0};
+    if (!title_file && !too_large) return -1;
+    out->memory = (byte *)strdup(too_large ? "" : title_file); assert(out->memory);
+    out->length = too_large ? 8 * 1024 * 1024 + 1 : strlen(title_file);
+    return (int)out->length;
 }
 '''
 start = console.index('#define QW_MAPTITLES_PATH')
@@ -78,6 +80,7 @@ source += console[start:console.index('typedef struct\n{\n\tchar *data;', start)
 for declaration in (
     "void Vec_Grow(", "void Vec_Clear(", "void Vec_Free(",
     "void COM_StripExtension (", "size_t UTF8_WriteCodePoint(",
+    "size_t FS_fread(", "int FS_fclose(",
 ):
     source += function(common, declaration)
 for declaration in (
@@ -214,7 +217,7 @@ with tempfile.TemporaryDirectory(prefix="qssm-download-titles-") as directory:
     sdl = shlex.split(subprocess.check_output(["pkg-config", "--cflags", "sdl3"], text=True))
     subprocess.run(shlex.split(os.environ.get("CC", "cc")) + [
         "-std=gnu11", "-Wall", "-Wextra", "-Werror", "-Wno-unused-function",
-        "-ffunction-sections", "-fdata-sections", "-Wl,--gc-sections",
+        "-ffunction-sections", "-fdata-sections", "-Wl,-dead_strip" if sys.platform == "darwin" else "-Wl,--gc-sections",
         "-fsanitize=undefined", "-fno-sanitize-recover=all", "-I", str(ROOT / "Quake"),
         *sdl, str(temp / "test.c"), str(ROOT / "Quake/json.c"), str(ROOT / "Quake/strlcpy.c"),
         "-o", str(temp / "test"),

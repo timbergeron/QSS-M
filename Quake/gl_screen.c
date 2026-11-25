@@ -1548,7 +1548,7 @@ void SCR_DrawDemoControls(void)
 	{
 		// Approximate the fraction of the demo that's already been played back
 		// based on the current file offset and total demo size.
-		frac = (ftell(cls.demofile) - cls.demofilestart) / (double)cls.demofilesize;
+		frac = (FS_ftell(&cls.demo_read) - cls.demofilestart) / (double)cls.demofilesize;
 		frac = CLAMP(0.f, frac, 1.f);
 	}
 

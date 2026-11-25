@@ -209,7 +209,8 @@ typedef struct
 	qboolean	timedemo;
 	int		forcetrack;		// -1 = use normal cd track
 	char		demofilename[MAX_OSPATH]; // woods (iw) #democontrols
-	FILE		*demofile;
+	FILE		*demofile; // recording
+	fshandle_t	demo_read;
 	long		demofilestart;	// for demos in pak files // woods (iw) #democontrols
 	long		demofilesize; // woods (iw) #democontrols
 	int		td_lastframe;		// to meter out one message a frame

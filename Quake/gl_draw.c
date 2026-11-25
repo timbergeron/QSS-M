@@ -619,23 +619,15 @@ static byte *Draw_LoadMallocPackFile (const char *path, const draw_packfile_ref_
 
 	if (ref->file->deflatedsize)
 	{
-		FILE *f;
+		fshandle_t stream;
 
-		f = fopen(ref->search->pack->filename, "rb");
-		if (!f)
+		if (!COM_OpenPackEntry(ref->search->pack, ref->file, &stream))
 		{
 			free(buf);
 			return NULL;
 		}
-		fseek(f, ref->file->filepos, SEEK_SET);
-		f = FSZIP_Deflate(f, ref->file->deflatedsize, ref->file->filelen, ref->file->name);
-		if (!f)
-		{
-			free(buf);
-			return NULL;
-		}
-		nread = (int)fread(buf, 1, len, f);
-		fclose(f);
+		nread = (int)FS_fread(buf, 1, len, &stream);
+		FS_fclose(&stream);
 	}
 	else
 	{
@@ -1521,22 +1513,22 @@ static qboolean Draw_ComputeConcharsCharColor(plcolour_t* result, int char_index
 
 		if (texture->source_file[0] && texture->source_offset)
 		{
-			FILE* f;
+			fshandle_t f;
 
-			if (COM_FOpenFile(texture->source_file, &f, NULL) == -1 || !f)
+			if (COM_FOpenFile(texture->source_file, &f, NULL) == -1)
 				return false;
 
 			data = (byte*)Q_malloc(expected_size + 8);
-			if (fseek(f, (long)texture->source_offset, SEEK_CUR) != 0)
+			if (FS_fseek(&f, (long)texture->source_offset, SEEK_CUR) != 0)
 			{
-				fclose(f);
+				FS_fclose(&f);
 				free(data);
 				return false;
 			}
 
-			bytes_read = fread(data, 1, expected_size + 8, f);
+			bytes_read = FS_fread(data, 1, expected_size + 8, &f);
 
-			fclose(f);
+			FS_fclose(&f);
 
 			if (bytes_read < expected_size)
 			{

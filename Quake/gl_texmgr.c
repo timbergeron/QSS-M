@@ -773,17 +773,17 @@ static byte *TexMgr_CopyLoadedIndexedSource (byte *data, int width, int height, 
 
 static byte *TexMgr_LoadIndexedLMPFile (const char *filename, gltexture_t *glt, size_t size)
 {
-	FILE		*f;
+	fshandle_t f;
 	byte		*data;
 	int		mark, width, height;
 	enum srcformat	fmt;
 
 	COM_FOpenFile (filename, &f, NULL);
-	if (!f)
+	if (!FS_IsOpen(&f))
 		return NULL;
 
 	mark = Hunk_LowMark ();
-	data = Image_LoadLMP (f, &width, &height, &fmt);
+	data = Image_LoadLMP (&f, &width, &height, &fmt);
 	return TexMgr_CopyLoadedIndexedSource (data, width, height, fmt, false, mark, glt, size);
 }
 
@@ -834,23 +834,23 @@ static byte *TexMgr_LoadIndexedSource (gltexture_t *glt)
 
 	if (glt->source_file[0] && glt->source_offset)
 	{	//lump inside file (typically gfx.wad)
-		FILE *f;
+		fshandle_t f;
 		COM_FOpenFile (glt->source_file, &f, NULL);
-		if (!f) return NULL;
-		if (fseek (f, glt->source_offset, SEEK_CUR))
+		if (!FS_IsOpen(&f)) return NULL;
+		if (FS_fseek(&f, glt->source_offset, SEEK_CUR))
 		{
-			fclose (f);
+			FS_fclose(&f);
 			return NULL;
 		}
 		out = (byte *) malloc (size);
-		if (!out) { fclose(f); return NULL; }
-		if (fread (out, 1, size, f) != size)
+		if (!out) { FS_fclose(&f); return NULL; }
+		if (FS_fread(out, 1, size, &f) != size)
 		{
 			free (out);
-			fclose (f);
+			FS_fclose(&f);
 			return NULL;
 		}
-		fclose (f);
+		FS_fclose(&f);
 		return out;
 	}
 	if (glt->source_file[0] && !glt->source_offset)
@@ -3680,24 +3680,24 @@ void TexMgr_ReloadImage (gltexture_t *glt, plcolour_t shirt, plcolour_t pants)
 
 	if (glt->source_file[0] && glt->source_offset)
 	{	//lump inside file
-		FILE *f;
+		fshandle_t f;
 		COM_FOpenFile(glt->source_file, &f, NULL);
-		if (!f) goto invalid_source;
-		fseek (f, glt->source_offset, SEEK_CUR);
+		if (!FS_IsOpen(&f)) goto invalid_source;
+		FS_fseek(&f, glt->source_offset, SEEK_CUR);
 
 		size = TexMgr_ImageSize(glt->source_width, glt->source_height, glt->source_format);
 		if (!size || size > INT_MAX)
 		{
-			fclose(f);
+			FS_fclose(&f);
 			goto invalid_source;
 		}
 		data = (byte *) Hunk_AllocNoFill ((int)size);
-		if (fread (data, 1, size, f) != size) // woods
+		if (FS_fread(data, 1, size, &f) != size) // woods
 		{
-			fclose(f);
+			FS_fclose(&f);
 			goto invalid_source;
 		}
-		fclose (f);
+		FS_fclose(&f);
 	}
 	else if (glt->source_file[0] && !glt->source_offset)
 	{

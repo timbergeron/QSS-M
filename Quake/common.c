@@ -3184,31 +3184,32 @@ static int COM_FindPackFileIndex (pack_t *pak, const char *filename)
 	return -1;
 }
 
-// Open the exact archive selected by an enumeration, including an inflated
-// standalone stream for compressed entries.
-static FILE *COM_OpenPackEntry(pack_t *pack, const char *name, int *size)
+// Open an independently seekable stream for one bounded archive member.
+qboolean COM_OpenPackEntry(const pack_t *pack, const packfile_t *entry, fshandle_t *file)
 {
-	int i = COM_FindPackFileIndex(pack, name);
-	const packfile_t *entry;
-	FILE *f;
-	if (i < 0)
-		return NULL;
-	entry = &pack->files[i];
+	FILE *source;
+
+	*file = (fshandle_t){0};
 	if (entry->filepos < 0 || entry->filelen < 0 || entry->filelen >= INT_MAX ||
 		entry->deflatedsize < 0)
-		return NULL;
-	f = fopen(pack->filename, "rb");
-	if (!f)
-		return NULL;
-	if (fseek(f, entry->filepos, SEEK_SET) != 0)
+		return false;
+	source = fopen(pack->filename, "rb");
+	if (!source)
+		return false;
+	if (fseek(source, entry->filepos, SEEK_SET) != 0)
 	{
-		fclose(f);
-		return NULL;
+		fclose(source);
+		return false;
 	}
-	*size = entry->filelen;
-	if (entry->deflatedsize)
-		f = FSZIP_Deflate(f, entry->deflatedsize, entry->filelen, entry->name);
-	return f;
+	if (!entry->deflatedsize)
+		return FS_InitRead(file, source, entry->filelen);
+
+	file->memory = FSZIP_Inflate(source, entry->deflatedsize, entry->filelen, entry->name);
+	fclose(source);
+	if (!file->memory)
+		return false;
+	file->length = entry->filelen;
+	return true;
 }
 
 /*
@@ -3328,10 +3329,10 @@ static int COM_FileTypeForSearch (const char *path)
 	return type;
 }
 
-static int COM_FindFile_impl (const char *filename, int *handle, FILE **file,
+static int COM_FindFile_impl (const char *filename, int *handle, fshandle_t *file,
 							unsigned int *path_id, const searchpath_t **source);
 
-static int COM_FindFile (const char *filename, int *handle, FILE **file,
+static int COM_FindFile (const char *filename, int *handle, fshandle_t *file,
 							unsigned int *path_id, const searchpath_t **source)
 {
 	double t;
@@ -3347,7 +3348,7 @@ static int COM_FindFile (const char *filename, int *handle, FILE **file,
 	return ret;
 }
 
-static int COM_FindFile_impl (const char *filename, int *handle, FILE **file,
+static int COM_FindFile_impl (const char *filename, int *handle, fshandle_t *file,
 							unsigned int *path_id, const searchpath_t **source)
 {
 	searchpath_t	*search;
@@ -3402,22 +3403,11 @@ static int COM_FindFile_impl (const char *filename, int *handle, FILE **file,
 				{
 					if (pak->files[i].deflatedsize)
 					{
-						FILE *f;
-						f = fopen (pak->filename, "rb");
-						if (f)
-						{
-							fseek (f, pak->files[i].filepos, SEEK_SET);
-							f = FSZIP_Deflate(f, pak->files[i].deflatedsize, pak->files[i].filelen, pak->files[i].name);
-							if (f)
-								*handle = Sys_FileOpenStdio(f);
-							else
-							{	//error!
-								com_filesize = -1;
-								*handle = -1;
-							}
-						}
+						fshandle_t stream;
+						if (COM_OpenPackEntry(pak, &pak->files[i], &stream))
+							*handle = Sys_FileOpenMemory(stream.memory, stream.length);
 						else
-						{	//error!
+						{
 							com_filesize = -1;
 							*handle = -1;
 						}
@@ -3430,14 +3420,9 @@ static int COM_FindFile_impl (const char *filename, int *handle, FILE **file,
 					return com_filesize;
 				}
 				else if (file)
-				{ /* open a new file on the pakfile */
-					*file = fopen (pak->filename, "rb");
-					if (*file)
-					{
-						fseek (*file, pak->files[i].filepos, SEEK_SET);
-						if (pak->files[i].deflatedsize)
-							*file = FSZIP_Deflate(*file, pak->files[i].deflatedsize, pak->files[i].filelen, pak->files[i].name);
-					}
+				{
+					if (!COM_OpenPackEntry(pak, &pak->files[i], file))
+						com_filesize = -1;
 					return com_filesize;
 				}
 				else /* for COM_FileExists() */
@@ -3472,8 +3457,9 @@ static int COM_FindFile_impl (const char *filename, int *handle, FILE **file,
 			}
 			else if (file)
 			{
-				*file = fopen (netpath, "rb");
-				com_filesize = (*file == NULL) ? -1 : COM_filelength (*file);
+				FILE *disk = fopen(netpath, "rb");
+				long length = disk ? COM_filelength(disk) : -1;
+				com_filesize = FS_InitRead(file, disk, length) ? length : -1;
 				return com_filesize;
 			}
 			else
@@ -3505,7 +3491,7 @@ static int COM_FindFile_impl (const char *filename, int *handle, FILE **file,
 	if (handle)
 		*handle = -1;
 	if (file)
-		*file = NULL;
+		*file = (fshandle_t){0};
 	com_filesize = -1;
 	return com_filesize;
 }
@@ -3646,25 +3632,24 @@ static int COM_OpenResolvedPath(int dirfd, char *relative)
 
 /* Open a QC file from its game mount. Return 0 only for a missing
    candidate so a rejected path never triggers a fallback read. */
-static int COM_QCOpenReadAt(const searchpath_t *source, const char *cand, qboolean server, FILE **out_file, size_t *out_size)
+static int COM_QCOpenReadAt(const searchpath_t *source, const char *cand, qboolean server, fshandle_t *out_file, size_t *out_size)
 {
 	char netpath[MAX_OSPATH];
 	char rel_norm[MAX_OSPATH];
 	FILE *f = NULL;
 
-	*out_file = NULL;
+	*out_file = (fshandle_t){0};
 	*out_size = 0;
 
 	if (!source)
 		return 0;
 
-	if (source->pack) {
-		int filesize;
-		f = COM_OpenPackEntry(source->pack, cand, &filesize);
-		if (!f)
+	if (source->pack)
+	{
+		int index = COM_FindPackFileIndex(source->pack, cand);
+		if (index < 0 || !COM_OpenPackEntry(source->pack, &source->pack->files[index], out_file))
 			return -1;
-		*out_file = f;
-		*out_size = (size_t)filesize;
+		*out_size = out_file->length;
 		return 1;
 	}
 
@@ -3727,8 +3712,9 @@ static int COM_QCOpenReadAt(const searchpath_t *source, const char *cand, qboole
 			_close(fd);
 			return -1;
 		}
-		*out_file = f;
-		*out_size = (size_t)q_min((uint64_t)fsize.QuadPart, (uint64_t)SIZE_MAX);
+		if (!FS_InitRead(out_file, f, (long)q_min((uint64_t)fsize.QuadPart, (uint64_t)LONG_MAX)))
+			return -1;
+		*out_size = out_file->length;
 		return 1;
 	}
 #else
@@ -3759,21 +3745,22 @@ static int COM_QCOpenReadAt(const searchpath_t *source, const char *cand, qboole
 			close(fd);
 			return -1;
 		}
-		*out_file = f;
-		*out_size = (size_t)q_min((uint64_t)st.st_size, (uint64_t)SIZE_MAX);
+		if (!FS_InitRead(out_file, f, (long)q_min((uint64_t)st.st_size, (uint64_t)LONG_MAX)))
+			return -1;
+		*out_size = out_file->length;
 		return 1;
 	}
 #endif
 }
 
 // QC names are virtual paths. Read data/ first, then the permitted game path.
-int COM_QCOpenRead(const char *name, qboolean server, FILE **file, size_t *size)
+int COM_QCOpenRead(const char *name, qboolean server, fshandle_t *file, size_t *size)
 {
 	char data[MAX_OSPATH];
 	qboolean fallback;
 	int status;
 
-	*file = NULL;
+	*file = (fshandle_t){0};
 	*size = 0;
 	if (!COM_QCFileName(name, server, data, &fallback))
 		return -1;
@@ -3783,12 +3770,12 @@ int COM_QCOpenRead(const char *name, qboolean server, FILE **file, size_t *size)
 	return status;
 }
 
-int COM_QCOpenSearchFile(const searchpath_t *mount, const char *name, qboolean server, FILE **file, size_t *size)
+int COM_QCOpenSearchFile(const searchpath_t *mount, const char *name, qboolean server, fshandle_t *file, size_t *size)
 {
 	const searchpath_t *sp;
 	qboolean allowed;
 
-	*file = NULL;
+	*file = (fshandle_t){0};
 	*size = 0;
 	if (!COM_QCFileName(name, server, NULL, &allowed) || !allowed)
 		return -1;
@@ -3802,7 +3789,7 @@ qboolean COM_QCLooseFileExists(const char *name, qboolean server)
 {
 	searchpath_t writable = {0};
 	qboolean allowed;
-	FILE *file;
+	fshandle_t file;
 	size_t size;
 
 	if (!com_gamedir[0] || !COM_QCFileName(name, server, NULL, &allowed) ||
@@ -3811,7 +3798,7 @@ qboolean COM_QCLooseFileExists(const char *name, qboolean server)
 	q_strlcpy(writable.filename, com_gamedir, sizeof(writable.filename));
 	if (COM_QCOpenReadAt(&writable, name, server, &file, &size) <= 0)
 		return false;
-	fclose(file);
+	FS_fclose(&file);
 	return true;
 }
 
@@ -3819,7 +3806,7 @@ const char *COM_QCFileGameDir(const char *name, qboolean server)
 {
 	const searchpath_t *sp;
 	qboolean allowed;
-	FILE *file;
+	fshandle_t file;
 	size_t size;
 
 	if (!COM_QCFileName(name, server, NULL, &allowed) || !allowed)
@@ -3831,14 +3818,14 @@ const char *COM_QCFileGameDir(const char *name, qboolean server)
 	{
 		if (COM_QCOpenReadAt(sp, name, server, &file, &size) <= 0)
 			return NULL;
-		fclose(file);
+		FS_fclose(&file);
 	}
 	return sp->gamedir;
 }
 
 char *COM_QCLoadFile(const char *name, qboolean server, size_t limit)
 {
-	FILE *file;
+	fshandle_t file;
 	char *buffer = NULL;
 	size_t size;
 
@@ -3846,7 +3833,7 @@ char *COM_QCLoadFile(const char *name, qboolean server, size_t limit)
 		return NULL;
 	if (size <= limit && size < SIZE_MAX && (buffer = malloc(size + 1)) != NULL)
 	{
-		if (fread(buffer, 1, size, file) == size)
+		if (FS_fread(buffer, 1, size, &file) == size)
 			buffer[size] = 0;
 		else
 		{
@@ -3854,7 +3841,7 @@ char *COM_QCLoadFile(const char *name, qboolean server, size_t limit)
 			buffer = NULL;
 		}
 	}
-	fclose(file);
+	FS_fclose(&file);
 	return buffer;
 }
 
@@ -4098,7 +4085,8 @@ int COM_QCCopyFile(const char *name, const char *newname, qboolean server)
 	char path[MAX_OSPATH], tmp[64], buffer[16384];
 	const char *dstname;
 	static unsigned int sequence;
-	FILE *input, *output;
+	fshandle_t input;
+	FILE *output;
 	int dir, fd = -1, attempts, result;
 	size_t size;
 	qboolean copied = true;
@@ -4108,7 +4096,7 @@ int COM_QCCopyFile(const char *name, const char *newname, qboolean server)
 	dir = COM_QCOpenDataParent(newname, true, path, &dstname);
 	if (dir < 0)
 	{
-		fclose(input);
+		FS_fclose(&input);
 		return -2;
 	}
 
@@ -4137,7 +4125,7 @@ int COM_QCCopyFile(const char *name, const char *newname, qboolean server)
 		while (size > 0)
 		{
 			size_t chunk = q_min(size, sizeof(buffer));
-			if (fread(buffer, 1, chunk, input) != chunk || fwrite(buffer, 1, chunk, output) != chunk)
+			if (FS_fread(buffer, 1, chunk, &input) != chunk || fwrite(buffer, 1, chunk, output) != chunk)
 			{
 				copied = false;
 				break;
@@ -4156,7 +4144,7 @@ int COM_QCCopyFile(const char *name, const char *newname, qboolean server)
 	}
 done:
 	close(dir);
-	fclose(input);
+	FS_fclose(&input);
 	return result;
 }
 #endif
@@ -4254,31 +4242,30 @@ int COM_OpenFile (const char *filename, int *handle, unsigned int *path_id)
 ===========
 COM_FOpenFile
 
-If the requested file is inside a packfile, a new FILE * will be opened
-into the file.
+Opens an independent read stream bounded by the virtual file size.
 ===========
 */
-int COM_FOpenFile (const char *filename, FILE **file, unsigned int *path_id)
+int COM_FOpenFile (const char *filename, fshandle_t *file, unsigned int *path_id)
 {
 	return COM_FindFile (filename, NULL, file, path_id, NULL);
 }
 
 // Return the first candidate index with an open file, preserving filename-first
 // precedence.
-int COM_FOpenFileCandidates (const char *const *filenames, int count, FILE **file, unsigned int *path_id)
+int COM_FOpenFileCandidates (const char *const *filenames, int count, fshandle_t *file, unsigned int *path_id)
 {
 	int i;
 
-	*file = NULL;
+	*file = (fshandle_t){0};
 	COM_BeginLoadCache ();
 	for (i = 0; i < count; i++)
 	{
 		COM_FindFile (filenames[i], NULL, file, path_id, NULL);
-		if (*file)
+		if (FS_IsOpen(file))
 			break;
 	}
 	COM_EndLoadCache ();
-	return *file ? i : -1;
+	return FS_IsOpen(file) ? i : -1;
 }
 
 /*
@@ -8259,169 +8246,177 @@ void COM_InitFilesystem (void) //johnfitz -- modified based on topaz's tutorial
 }
 
 
-/* The following FS_*() stdio replacements are necessary if one is
- * to perform non-sequential reads on files reopened on pak files
- * because we need the bookkeeping about file start/end positions.
- * Allocating and filling in the fshandle_t structure is the users'
- * responsibility when the file is initially opened. */
+qboolean FS_InitRead(fshandle_t *fh, FILE *file, long length)
+{
+	long start = file ? ftell(file) : -1;
+
+	*fh = (fshandle_t){0};
+	if (start < 0 || length < 0 || length > LONG_MAX - start)
+	{
+		if (file)
+			fclose(file);
+		return false;
+	}
+
+	fh->file = file;
+	fh->start = start;
+	fh->length = length;
+	return true;
+}
 
 size_t FS_fread(void *ptr, size_t size, size_t nmemb, fshandle_t *fh)
 {
-	long byte_size;
-	long bytes_read;
-	size_t nmemb_read;
+	size_t bytes, remaining;
 
-	if (!fh) {
+	if (!fh || !FS_IsOpen(fh))
+	{
 		errno = EBADF;
 		return 0;
 	}
-	if (!ptr) {
+	if (!ptr)
+	{
 		errno = EFAULT;
 		return 0;
 	}
-	if (!size || !nmemb) {	/* no error, just zero bytes wanted */
-		errno = 0;
+	if (!size || !nmemb || fh->pos >= fh->length)
 		return 0;
-	}
 
-	byte_size = nmemb * size;
-	if (byte_size > fh->length - fh->pos)	/* just read to end */
-		byte_size = fh->length - fh->pos;
-	bytes_read = fread(ptr, 1, byte_size, fh->file);
-	fh->pos += bytes_read;
-
-	/* fread() must return the number of elements read,
-	 * not the total number of bytes. */
-	nmemb_read = bytes_read / size;
-	/* even if the last member is only read partially
-	 * it is counted as a whole in the return value. */
-	if (bytes_read % size)
-		nmemb_read++;
-
-	return nmemb_read;
+	remaining = fh->length - fh->pos;
+	bytes = nmemb > remaining / size ? remaining : nmemb * size;
+	if (fh->memory)
+		memcpy(ptr, fh->memory + fh->start + fh->pos, bytes);
+	else
+		bytes = fread(ptr, 1, bytes, fh->file);
+	fh->pos += bytes;
+	return bytes / size;
 }
 
 int FS_fseek(fshandle_t *fh, long offset, int whence)
 {
-/* I don't care about 64 bit off_t or fseeko() here.
- * the quake/hexen2 file system is 32 bits, anyway. */
-	int ret;
+	long base;
 
-	if (!fh) {
+	if (!fh || !FS_IsOpen(fh))
+	{
 		errno = EBADF;
 		return -1;
 	}
-
-	/* the relative file position shouldn't be smaller
-	 * than zero or bigger than the filesize. */
 	switch (whence)
 	{
-	case SEEK_SET:
-		break;
-	case SEEK_CUR:
-		offset += fh->pos;
-		break;
-	case SEEK_END:
-		offset = fh->length + offset;
-		break;
+	case SEEK_SET: base = 0; break;
+	case SEEK_CUR: base = fh->pos; break;
+	case SEEK_END: base = fh->length; break;
 	default:
 		errno = EINVAL;
 		return -1;
 	}
-
-	if (offset < 0) {
+	if (offset < -base)
+	{
 		errno = EINVAL;
 		return -1;
 	}
-
-	if (offset > fh->length)	/* just seek to end */
-		offset = fh->length;
-
-	ret = fseek(fh->file, fh->start + offset, SEEK_SET);
-	if (ret < 0)
-		return ret;
-
+	offset = offset > fh->length - base ? fh->length : base + offset;
+	if (fh->file && fseek(fh->file, fh->start + offset, SEEK_SET) != 0)
+		return -1;
 	fh->pos = offset;
 	return 0;
 }
 
 int FS_fclose(fshandle_t *fh)
 {
-	if (!fh) {
+	int result = 0;
+
+	if (!fh)
+	{
 		errno = EBADF;
 		return -1;
 	}
-	return fclose(fh->file);
+	if (fh->file)
+		result = fclose(fh->file);
+	free(fh->memory);
+	*fh = (fshandle_t){0};
+	return result;
 }
 
 long FS_ftell(fshandle_t *fh)
 {
-	if (!fh) {
+	if (!fh || !FS_IsOpen(fh))
+	{
 		errno = EBADF;
 		return -1;
 	}
 	return fh->pos;
 }
 
+void FS_clearerr(fshandle_t *fh)
+{
+	if (fh && fh->file)
+		clearerr(fh->file);
+}
+
 void FS_rewind(fshandle_t *fh)
 {
-	if (!fh) return;
-	clearerr(fh->file);
-	fseek(fh->file, fh->start, SEEK_SET);
-	fh->pos = 0;
+	FS_clearerr(fh);
+	FS_fseek(fh, 0, SEEK_SET);
 }
 
 int FS_feof(fshandle_t *fh)
 {
-	if (!fh) {
+	if (!fh || !FS_IsOpen(fh))
+	{
 		errno = EBADF;
 		return -1;
 	}
-	if (fh->pos >= fh->length)
-		return -1;
-	return 0;
+	return fh->pos >= fh->length || (fh->file && feof(fh->file));
 }
 
 int FS_ferror(fshandle_t *fh)
 {
-	if (!fh) {
+	if (!fh || !FS_IsOpen(fh))
+	{
 		errno = EBADF;
 		return -1;
 	}
-	return ferror(fh->file);
+	return fh->file ? ferror(fh->file) : 0;
 }
 
 int FS_fgetc(fshandle_t *fh)
 {
-	if (!fh) {
-		errno = EBADF;
-		return EOF;
-	}
-	if (fh->pos >= fh->length)
-		return EOF;
-	fh->pos += 1;
-	return fgetc(fh->file);
+	byte value;
+	return FS_fread(&value, 1, 1, fh) == 1 ? value : EOF;
 }
 
 char *FS_fgets(char *s, int size, fshandle_t *fh)
 {
-	char *ret;
-
-	if (FS_feof(fh))
+	if (size <= 0 || FS_feof(fh))
 		return NULL;
-
-	if (size > (fh->length - fh->pos) + 1)
-		size = (fh->length - fh->pos) + 1;
-
-	ret = fgets(s, size, fh->file);
-	fh->pos = ftell(fh->file) - fh->start;
-
-	return ret;
+	if (fh->memory)
+	{
+		const byte *start = fh->memory + fh->start + fh->pos;
+		size_t length = q_min((long)size - 1, fh->length - fh->pos);
+		const byte *newline = memchr(start, '\n', length);
+		if (newline)
+			length = newline - start + 1;
+		memcpy(s, start, length);
+		s[length] = 0;
+		fh->pos += length;
+	}
+	else
+	{
+		char *ret;
+		if ((long)size - 1 > fh->length - fh->pos)
+			size = fh->length - fh->pos + 1;
+		ret = fgets(s, size, fh->file);
+		if (!ret)
+			return NULL;
+		fh->pos = ftell(fh->file) - fh->start;
+	}
+	return s;
 }
 
-long FS_filelength (fshandle_t *fh)
+long FS_filelength(fshandle_t *fh)
 {
-	if (!fh) {
+	if (!fh || !FS_IsOpen(fh))
+	{
 		errno = EBADF;
 		return -1;
 	}
@@ -8619,21 +8614,20 @@ Returns malloc'd, NUL-terminated text, or NULL if this searchpath lacks it.
 static char *LOC_LoadFromSearchPath (searchpath_t *sp, const char *file)
 {
 	char *buf;
-	FILE *f;
+	fshandle_t f;
 	qofs_t len;
 	size_t nread;
 
 	if (sp->pack)
 	{
-		int size;
-		f = COM_OpenPackEntry(sp->pack, file, &size);
-		if (!f)
+		int index = COM_FindPackFileIndex(sp->pack, file);
+		if (index < 0 || !COM_OpenPackEntry(sp->pack, &sp->pack->files[index], &f))
 			return NULL;
-		len = size;
 	}
 	else
 	{
 		char netpath[MAX_OSPATH];
+		FILE *disk;
 
 		// Keep the shareware restrictions applied by COM_FindFile.
 		if (!registered.value &&
@@ -8642,31 +8636,27 @@ static char *LOC_LoadFromSearchPath (searchpath_t *sp, const char *file)
 			return NULL;
 
 		q_snprintf(netpath, sizeof(netpath), "%s/%s", sp->filename, file);
-		f = fopen(netpath, "rb");
-		if (!f)
+		disk = fopen(netpath, "rb");
+		if (!disk || !FS_InitRead(&f, disk, COM_filelength(disk)))
 			return NULL;
-		if (fseek(f, 0, SEEK_END) != 0 || (len = ftell(f)) < 0 || fseek(f, 0, SEEK_SET) != 0)
-		{
-			fclose(f);
-			return NULL;
-		}
 	}
 
+	len = FS_filelength(&f);
 	if (len < 0 || len >= INT_MAX)
 	{
-		fclose(f);
+		FS_fclose(&f);
 		Sys_Error("LOC_LoadFromSearchPath: invalid size for %s", file);
 	}
 
 	buf = (char *) malloc((size_t)len + 1);
 	if (!buf)
 	{
-		fclose(f);
+		FS_fclose(&f);
 		Sys_Error("LOC_LoadFromSearchPath: not enough space for %s", file);
 	}
 
-	nread = fread(buf, 1, (size_t)len, f);
-	fclose(f);
+	nread = FS_fread(buf, 1, (size_t)len, &f);
+	FS_fclose(&f);
 	if (nread != (size_t)len)
 	{
 		free(buf);

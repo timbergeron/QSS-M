@@ -12705,26 +12705,27 @@ static void Host_Download_f(void)
 		}
 		else
 		{
-			fsize = COM_FOpenFile(fname, &host_client->download.file, NULL);
-			if (!host_client->download.file)
+			const searchpath_t *source = COM_FileSearchPath(fname);
+			fshandle_t file;
+
+			if (source && source->pack)
+			{
+				SV_ClientPrintf("refusing download of %s from inside pak\n", fname);
+				refusal_error = DLERR_PERMISSIONS;
+			}
+			else if ((fsize = COM_FOpenFile(fname, &file, NULL)) < 0)
 			{
 				SV_ClientPrintf("server does not have file %s\n", fname);
 				refusal_error = DLERR_FILENOTFOUND;
 			}
-			else if (file_from_pak)
-			{
-				SV_ClientPrintf("refusing download of %s from inside pak\n", fname);
-				fclose(host_client->download.file);
-				host_client->download.file = NULL;
-				refusal_error = DLERR_PERMISSIONS;
-			}
-			else if (fsize < 0 || fsize > 50*1024*1024)
+			else if (fsize > 50*1024*1024)
 			{
 				SV_ClientPrintf("refusing download of large file %s\n", fname);
-				fclose(host_client->download.file);
-				host_client->download.file = NULL;
+				FS_fclose(&file);
 				refusal_error = DLERR_PERMISSIONS;
 			}
+			else
+				host_client->download.file = file.file;
 		}
 
 		if (host_client->download.file)

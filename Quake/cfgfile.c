@@ -209,25 +209,17 @@ void CFG_CloseConfig (void)
 
 int CFG_OpenConfig (const char *cfg_name)
 {
-	FILE	*f;
-	long		length;
-	qboolean	pak;
+	fshandle_t file;
 	char		effective_name[MAX_QPATH];
 
 	CFG_CloseConfig ();
 
 	COM_ConfigFileEffectivePath(cfg_name, effective_name, sizeof(effective_name));
-	length = (long) COM_FOpenFile (effective_name, &f, NULL);
-	pak = file_from_pak;
-	if (length == -1)
+	if (COM_FOpenFile(effective_name, &file, NULL) < 0)
 		return -1;
 
 	cfg_file = (fshandle_t *) Z_Malloc(sizeof(fshandle_t));
-	cfg_file->file = f;
-	cfg_file->start = ftell(f);
-	cfg_file->pos = 0;
-	cfg_file->length = length;
-	cfg_file->pak = pak;
+	*cfg_file = file;
 
 	return 0;
 }

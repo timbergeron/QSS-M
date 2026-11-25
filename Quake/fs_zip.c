@@ -762,82 +762,63 @@ pack_t *FSZIP_LoadArchive (const char *packfile)
 	return pack;
 }
 
-FILE *FSZIP_Deflate(FILE *src, qofs_t srcsize, qofs_t outsize, const char *entryname)
+byte *FSZIP_Inflate(FILE *src, qofs_t srcsize, qofs_t outsize, const char *entryname)
 {
 #ifdef USE_ZLIB
-	byte inbuffer[65536];
-	byte outbuffer[65536];
-	z_stream strm;
-	int ret;
+	byte input[65536], overflow;
+	byte *output;
+	z_stream stream = {0};
+	int result;
 
-	FILE *of;
-#ifdef _WIN32
-	/*warning: annother app might manage to open the file before we can. if the file is not opened exclusively then we can end up with issues
-	on windows, fopen is typically exclusive anyway, but not on unix. but on unix, tmpfile is actually usable, so special-case the windows code and hope that its never an issue
-	tmpfile isn't usable in windows. it creates the file in the root dir and requires admin rights, which is stupid.
-	*/
-	char *fname = _tempnam(NULL, "ftemp");
-	of = fopen(fname, "w+bD");
+	if (srcsize <= 0 || outsize < 0 || outsize >= INT_MAX)
+		return NULL;
+	output = malloc((size_t)outsize + 1);
+	if (!output)
+		return NULL;
+	if (inflateInit2(&stream, -MAX_WBITS) != Z_OK)
+	{
+		free(output);
+		return NULL;
+	}
+	stream.next_out = output;
+	stream.avail_out = (uInt)outsize;
+	do
+	{
+		if (stream.avail_in == 0 && srcsize)
+		{
+			size_t count = (size_t)q_min(srcsize, (qofs_t)sizeof(input));
+			if (fread(input, 1, count, src) != count)
+				break;
+			srcsize -= count;
+			stream.next_in = input;
+			stream.avail_in = (uInt)count;
+		}
+		if (stream.avail_out == 0)
+		{
+			// Allow the end marker when the advertised output is exactly full.
+			stream.next_out = &overflow;
+			stream.avail_out = 1;
+		}
+		result = inflate(&stream, Z_NO_FLUSH);
+		if (stream.total_out > (uLong)outsize)
+			break;
+		if (result == Z_STREAM_END && stream.total_out == (uLong)outsize &&
+			srcsize == 0 && stream.avail_in == 0)
+		{
+			inflateEnd(&stream);
+			output[outsize] = 0;
+			return output;
+		}
+	} while (result == Z_OK);
+
+	inflateEnd(&stream);
+	free(output);
+	Con_Printf("Couldn't decompress file \"%s\", corrupt?\n", entryname);
 #else
-	of = tmpfile();
+	(void)src;
+	(void)srcsize;
+	(void)outsize;
+	(void)entryname;
 #endif
-
-	if (!of)
-	{
-		Con_Printf("FSZIP_Deflate: tmpfile failed, out of handles?\n");
-		fclose(src);
-		return NULL;
-	}
-
-	memset(&strm, 0, sizeof(strm));
-	strm.data_type = Z_UNKNOWN;
-	strm.next_out = outbuffer;
-	inflateInit2(&strm, -MAX_WBITS);
-	while ((ret=inflate(&strm, Z_SYNC_FLUSH)) != Z_STREAM_END)
-	{
-		if (strm.avail_in == 0 || strm.avail_out == 0)
-		{
-			if (strm.avail_in == 0)
-			{
-				strm.avail_in = fread(inbuffer, 1, sizeof(inbuffer), src);
-				strm.next_in = inbuffer;
-				if (!strm.avail_in)
-					break;
-			}
-			if (strm.avail_out == 0)
-			{
-				fwrite(outbuffer, 1, strm.next_out - outbuffer, of);
-				strm.next_out = outbuffer;
-				strm.avail_out = sizeof(outbuffer);
-			}
-			continue;
-		}
-
-		//doh, it terminated for no reason
-		if (ret != Z_STREAM_END)
-		{
-			inflateEnd(&strm);
-			fclose(src);
-			fclose(of);
-			Con_Printf("Couldn't decompress file \"%s\", corrupt?\n", entryname);
-			return NULL;
-		}
-	}
-	fwrite(outbuffer, 1, strm.next_out - outbuffer, of);
-	inflateEnd(&strm);
-	fclose(src);
-
-	if (strm.total_out != outsize)
-	{
-		Con_Printf("%s: Decompressed %u bytes, expected %u\n", entryname, (unsigned int)strm.total_out, (unsigned int)outsize);
-		fclose(of);
-		return NULL;
-	}
-
-	fseek(of, SEEK_SET, 0);
-	return of;
-#else
-	fclose(src);
 	return NULL;
-#endif
 }

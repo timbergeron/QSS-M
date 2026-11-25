@@ -278,9 +278,10 @@ R_ReadPointFile_f
 */
 void R_ReadPointFile_f (void)
 {
-	FILE	*f;
+	byte *data;
+	char *text, *next;
 	vec3_t	org;
-	int		r;
+	int		i;
 	int		c;
 	particle_t	*p;
 	char	name[MAX_QPATH];
@@ -290,20 +291,27 @@ void R_ReadPointFile_f (void)
 
 	q_snprintf (name, sizeof(name), "maps/%s.pts", cl.mapname);
 
-	COM_FOpenFile (name, &f, NULL);
-	if (!f)
+	data = COM_LoadMallocFile(name, NULL);
+	if (!data)
 	{
 		Con_Printf ("couldn't open %s\n", name);
 		return;
 	}
 
 	Con_Printf ("Reading %s...\n", name);
+	text = (char *)data;
 	c = 0;
 	org[0] = org[1] = org[2] = 0; // silence pesky compiler warnings
 	for ( ;; )
 	{
-		r = fscanf (f,"%f %f %f\n", &org[0], &org[1], &org[2]);
-		if (r != 3)
+		for (i = 0; i < 3; i++)
+		{
+			org[i] = strtof(text, &next);
+			if (next == text)
+				break;
+			text = next;
+		}
+		if (i != 3)
 			break;
 		c++;
 
@@ -320,7 +328,7 @@ void R_ReadPointFile_f (void)
 		VectorCopy (org, p->org);
 	}
 
-	fclose (f);
+	free(data);
 	Con_Printf ("%i points read\n", c);
 }
 

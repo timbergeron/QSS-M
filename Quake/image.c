@@ -45,13 +45,13 @@ static char loadfilename[MAX_OSPATH]; //file scope so that error messages can us
 extern cvar_t gl_load24bit_skins; // woods #loadskins
 
 typedef struct stdio_buffer_s {
-	FILE *f;
+	fshandle_t *f;
 	unsigned char buffer[1024];
 	int size;
 	int pos;
 } stdio_buffer_t;
 
-static stdio_buffer_t *Buf_Alloc(FILE *f)
+static stdio_buffer_t *Buf_Alloc(fshandle_t *f)
 {
 	stdio_buffer_t *buf = (stdio_buffer_t *) calloc(1, sizeof(stdio_buffer_t));
 
@@ -71,7 +71,7 @@ static inline int Buf_GetC(stdio_buffer_t *buf)
 {
 	if (buf->pos >= buf->size)
 	{
-		buf->size = (int)fread(buf->buffer, 1, sizeof(buf->buffer), buf->f);
+		buf->size = (int)FS_fread(buf->buffer, 1, sizeof(buf->buffer), buf->f);
 		buf->pos = 0;
 		
 		if (buf->size == 0)
@@ -81,9 +81,9 @@ static inline int Buf_GetC(stdio_buffer_t *buf)
 	return buf->buffer[buf->pos++];
 }
 
-static qboolean File_ReadByte(FILE *f, byte *out)
+static qboolean File_ReadByte(fshandle_t *f, byte *out)
 {
-	int c = fgetc(f);
+	int c = FS_fgetc(f);
 
 	if (c == EOF)
 		return false;
@@ -92,7 +92,7 @@ static qboolean File_ReadByte(FILE *f, byte *out)
 	return true;
 }
 
-static qboolean File_ReadLittleShort(FILE *f, unsigned short *out)
+static qboolean File_ReadLittleShort(fshandle_t *f, unsigned short *out)
 {
 	byte b1, b2;
 
@@ -125,11 +125,27 @@ static qboolean Buf_ReadByte(stdio_buffer_t *buf, byte *out)
 	#define STBI_ONLY_PNG
 #endif
 #include "stb_image.h"
-static byte *Image_LoadSTBI(FILE *f, int *width, int *height, qboolean *malloced)
+static int Image_STBIRead(void *context, char *buffer, int bytes)
+{
+	return (int)FS_fread(buffer, 1, bytes, context);
+}
+
+static void Image_STBISkip(void *context, int bytes)
+{
+	FS_fseek(context, bytes, SEEK_CUR);
+}
+
+static int Image_STBIEof(void *context)
+{
+	return FS_feof(context);
+}
+
+static byte *Image_LoadSTBI(fshandle_t *f, int *width, int *height, qboolean *malloced)
 {
 	int bytesPerPixel;
-	byte *heap = stbi_load_from_file(f, width, height, &bytesPerPixel, 4);
-	fclose(f);
+	static const stbi_io_callbacks callbacks = { Image_STBIRead, Image_STBISkip, Image_STBIEof };
+	byte *heap = stbi_load_from_callbacks(&callbacks, f, width, height, &bytesPerPixel, 4);
+	FS_fclose(f);
 	if (heap)
 	{
 		if (*width <= 0 || *height <= 0 || (size_t)*width > (size_t)INT_MAX / (size_t)*height / 4)
@@ -146,7 +162,7 @@ static byte *Image_LoadSTBI(FILE *f, int *width, int *height, qboolean *malloced
 	return heap;
 }
 
-byte *Image_LoadPNG(FILE *f, int *width, int *height, qboolean *malloced)
+byte *Image_LoadPNG(fshandle_t *f, int *width, int *height, qboolean *malloced)
 {
 #ifdef LODEPNG_NO_COMPILE_DECODER
 	return Image_LoadSTBI (f, width, height, malloced);
@@ -158,16 +174,16 @@ byte *Image_LoadPNG(FILE *f, int *width, int *height, qboolean *malloced)
 	in = malloc(com_filesize);
 	if (!in)
 	{
-		fclose(f);
+		FS_fclose(f);
 		return NULL;
 	}
-	if (com_filesize == fread(in, 1, com_filesize, f))
+	if (com_filesize == FS_fread(in, 1, com_filesize, f))
 	{
 		*malloced = true;
 		lodepng_decode32(&out, &w, &h, in, insize);
 	}
 	free(in);
-	fclose(f);
+	FS_fclose(f);
 	return out;
 #endif
 }
@@ -187,7 +203,7 @@ leaves the output allocation to us, and a corrupt header can claim up to
 #define WEBP_MAX_FILE_BYTES	(16 * 1024 * 1024)
 #define WEBP_MAX_DIMENSION	4096
 
-static byte *Image_LoadWebP (FILE *f, int *width, int *height, qboolean *malloced)
+static byte *Image_LoadWebP (fshandle_t *f, int *width, int *height, qboolean *malloced)
 {
 	simplewebp	*webp = NULL;
 	byte		*raw, *out = NULL;
@@ -195,17 +211,17 @@ static byte *Image_LoadWebP (FILE *f, int *width, int *height, qboolean *malloce
 
 	if (com_filesize <= 0 || com_filesize > WEBP_MAX_FILE_BYTES)
 	{
-		fclose (f);
+		FS_fclose(f);
 		return NULL;
 	}
 	raw = (byte *) malloc (com_filesize);
-	if (!raw || fread (raw, 1, com_filesize, f) != (size_t)com_filesize)
+	if (!raw || FS_fread(raw, 1, com_filesize, f) != (size_t)com_filesize)
 	{
 		free (raw);
-		fclose (f);
+		FS_fclose(f);
 		return NULL;
 	}
-	fclose (f);
+	FS_fclose(f);
 
 	if (simplewebp_load_from_memory (raw, com_filesize, NULL, &webp) == SIMPLEWEBP_NO_ERROR)
 	{
@@ -277,7 +293,7 @@ typedef struct {
 	unsigned int miscflags2;
 } dds10header_t;
 
-static byte *Image_LoadDDS(FILE *f, int *width, int *height, enum srcformat *fmt)
+static byte *Image_LoadDDS(fshandle_t *f, int *width, int *height, enum srcformat *fmt)
 {
 	const char *fname = loadfilename;	//parameters as globals is a shitty practise, but I'm too lazy to fix up the other loaders too.
 	int nummips;
@@ -290,7 +306,7 @@ static byte *Image_LoadDDS(FILE *f, int *width, int *height, enum srcformat *fmt
 	ddsheader_t fmtheader;
 	dds10header_t fmt10header;
 
-	if (fread(&fmtheader, 1, sizeof(fmtheader), f) != sizeof(fmtheader)) // woods
+	if (FS_fread(&fmtheader, 1, sizeof(fmtheader), f) != sizeof(fmtheader)) // woods
 		goto fail;
 
 	if (fmtheader.magic != (('D'<<0)|('D'<<8)|('S'<<16)|(' '<<24)))
@@ -394,7 +410,7 @@ static byte *Image_LoadDDS(FILE *f, int *width, int *height, enum srcformat *fmt
 	else if (*(int*)&fmtheader.ddpfPixelFormat.dwFourCC == (('D'<<0)|('X'<<8)|('1'<<16)|('0'<<24)))
 	{
 		//this has some weird extra header with dxgi format types.
-		if (fread(&fmt10header, 1, sizeof(fmt10header), f) != sizeof(fmt10header)) // woods
+		if (FS_fread(&fmt10header, 1, sizeof(fmt10header), f) != sizeof(fmt10header)) // woods
 			goto fail;
 		switch(fmt10header.dxgiformat)
 		{
@@ -622,13 +638,13 @@ static byte *Image_LoadDDS(FILE *f, int *width, int *height, enum srcformat *fmt
 	//note that layers and mips are awkward, but we don't support layers here so its just a densely packed pyramid.
 	mark = Hunk_LowMark ();
 	ret = (byte *) Hunk_AllocNoFill ((int)datasize);
-	if (fread(ret, 1, datasize, f) != datasize) // woods
+	if (FS_fread(ret, 1, datasize, f) != datasize) // woods
 	{
 		Hunk_FreeToLowMark (mark);
 		goto fail;
 	}
 
-	fclose(f);
+	FS_fclose(f);
 
 	*width = (int)fmtheader.dwWidth;
 	*height = (int)fmtheader.dwHeight;
@@ -636,7 +652,7 @@ static byte *Image_LoadDDS(FILE *f, int *width, int *height, enum srcformat *fmt
 	return ret;
 
 fail:
-	fclose(f);
+	FS_fclose(f);
 	return NULL;
 }
 /*spike -- end of dds loader*/
@@ -683,7 +699,7 @@ Finds the first image file Image_LoadImage would load for this name and
 returns its format with the file open.  loadfilename is left set to the hit.
 ============
 */
-static enum imgkind Image_Locate (const char *name, FILE **out)
+static enum imgkind Image_Locate (const char *name, fshandle_t *out)
 {
 	static const char *const prefixes[] = {"", "textures/", "textures/"};
 	static const char *const extensions[] = {"dds", "tga", "png", "jpeg", "jpg", "pcx"};
@@ -737,7 +753,7 @@ static qboolean Image_PreloadTake (const char *name, byte **data, int *width, in
 
 static byte *Image_LoadImage_impl (const char *name, int *width, int *height, enum srcformat *fmt, qboolean *malloced)
 {
-	FILE	*f;
+	fshandle_t f;
 	byte	*prefetched;
 
 	*malloced = false;
@@ -750,13 +766,13 @@ static byte *Image_LoadImage_impl (const char *name, int *width, int *height, en
 
 	switch (Image_Locate (name, &f))
 	{
-	case IMG_DDS:	return Image_LoadDDS (f, width, height, fmt);
-	case IMG_TGA:	return Image_LoadTGA (f, width, height);
-	case IMG_PNG:	return Image_LoadPNG (f, width, height, malloced);
-	case IMG_JPEG:	return Image_LoadSTBI (f, width, height, malloced);
-	case IMG_PCX:	return Image_LoadPCX (f, width, height);
-	case IMG_WEBP:	return Image_LoadWebP (f, width, height, malloced);
-	case IMG_LMP:	return Image_LoadLMP (f, width, height, fmt);
+	case IMG_DDS:	return Image_LoadDDS (&f, width, height, fmt);
+	case IMG_TGA:	return Image_LoadTGA (&f, width, height);
+	case IMG_PNG:	return Image_LoadPNG (&f, width, height, malloced);
+	case IMG_JPEG:	return Image_LoadSTBI (&f, width, height, malloced);
+	case IMG_PCX:	return Image_LoadPCX (&f, width, height);
+	case IMG_WEBP:	return Image_LoadWebP (&f, width, height, malloced);
+	case IMG_LMP:	return Image_LoadLMP (&f, width, height, fmt);
 	default:	return NULL;
 	}
 }
@@ -883,7 +899,7 @@ static qboolean Image_PrefetchLocate (const char *name)
 {
 	imgpf_entry_t *e = Image_PrefetchNewEntry (name);
 	enum imgkind kind;
-	FILE *f;
+	fshandle_t f;
 
 	kind = Image_Locate (name, &f);
 	if (kind == IMG_NONE)
@@ -895,7 +911,7 @@ static qboolean Image_PrefetchLocate (const char *name)
 	{
 		byte *raw = (byte *) malloc (com_filesize);
 
-		if (raw && fread (raw, 1, com_filesize, f) == (size_t)com_filesize)
+		if (raw && FS_fread(raw, 1, com_filesize, &f) == (size_t)com_filesize)
 		{
 			e->raw = raw;
 			e->rawsize = com_filesize;
@@ -903,7 +919,7 @@ static qboolean Image_PrefetchLocate (const char *name)
 		else
 			free (raw);
 	}
-	fclose (f);	// anything else is left to the ordinary loader
+	FS_fclose(&f);	// anything else is left to the ordinary loader
 	return true;
 }
 
@@ -1133,7 +1149,7 @@ void Image_PreloadStart (const char **names, int count)
 	{
 		imgpl_entry_t *e = &imgpl.entries[imgpl.count];
 		enum imgkind kind;
-		FILE *f;
+		fshandle_t f;
 
 		kind = Image_Locate (names[i], &f);
 		if (kind == IMG_NONE)
@@ -1143,7 +1159,7 @@ void Image_PreloadStart (const char **names, int count)
 		{
 			memset (e, 0, sizeof(*e));
 			e->raw = (byte *) malloc (com_filesize);
-			if (e->raw && fread (e->raw, 1, com_filesize, f) == (size_t)com_filesize)
+			if (e->raw && FS_fread(e->raw, 1, com_filesize, &f) == (size_t)com_filesize)
 			{
 				int w, h, comp;
 				size_t decoded;
@@ -1156,7 +1172,7 @@ void Image_PreloadStart (const char **names, int count)
 				{
 					free (e->raw);
 					e->raw = NULL;
-					fclose (f);
+					FS_fclose(&f);
 					continue;
 				}
 				q_strlcpy (e->name, names[i], sizeof(e->name));
@@ -1173,7 +1189,7 @@ void Image_PreloadStart (const char **names, int count)
 				e->raw = NULL;
 			}
 		}
-		fclose (f);	// anything else is left to the ordinary loader
+		FS_fclose(&f);	// anything else is left to the ordinary loader
 	}
 
 	imgpl.untaken = imgpl.count;
@@ -1206,7 +1222,7 @@ static qboolean Image_PreloadTake (const char *name, byte **data, int *width, in
 	imgpl_entry_t *e = NULL;
 	enum imgkind kind;
 	qboolean same;
-	FILE *f;
+	fshandle_t f;
 	int i;
 
 	if (!imgpl.untaken)
@@ -1227,8 +1243,8 @@ static qboolean Image_PreloadTake (const char *name, byte **data, int *width, in
 	kind = Image_Locate (name, &f);
 	same = (kind == IMG_PNG || kind == IMG_JPEG) && com_filesize == e->filesize &&
 		file_from_pak == e->from_pak && !strcmp (loadfilename, e->file);
-	if (f)
-		fclose (f);
+	if (FS_IsOpen(&f))
+		FS_fclose(&f);
 
 	Image_PreloadWait ();
 	if (same && e->pixels)
@@ -1332,7 +1348,7 @@ qboolean Image_WriteTGA_OSPath (const char *path, byte *data, int width, int hei
 Image_LoadTGA
 =============
 */
-byte *Image_LoadTGA (FILE *fin, int *width, int *height)
+byte *Image_LoadTGA (fshandle_t *fin, int *width, int *height)
 {
 	int				columns, rows;
 	byte			*pixbuf;
@@ -1407,7 +1423,7 @@ byte *Image_LoadTGA (FILE *fin, int *width, int *height)
 	targa_rgba = (byte *) Hunk_AllocNoFill ((int)dataSize);
 
 	if (targa_header.id_length != 0)
-		fseek(fin, targa_header.id_length, SEEK_CUR);  // skip TARGA image comment
+		FS_fseek(fin, targa_header.id_length, SEEK_CUR);  // skip TARGA image comment
 
 	buf = Buf_Alloc(fin);
 	if (!buf)
@@ -1593,7 +1609,7 @@ byte *Image_LoadTGA (FILE *fin, int *width, int *height)
 	}
 
 	Buf_Free(buf);
-	fclose(fin);
+	FS_fclose(fin);
 
 	*width = (int)(targa_header.width);
 	*height = (int)(targa_header.height);
@@ -1605,7 +1621,7 @@ truncated:
 invalid:
 	if (buf)
 		Buf_Free(buf);
-	fclose(fin);
+	FS_fclose(fin);
 	Hunk_FreeToLowMark (hunkmark);
 	return NULL;
 }
@@ -1637,7 +1653,7 @@ typedef struct
 Image_LoadPCX
 ============
 */
-byte *Image_LoadPCX (FILE *f, int *width, int *height)
+byte *Image_LoadPCX (fshandle_t *f, int *width, int *height)
 {
 	pcxheader_t	pcx;
 	int			x, y, w, h, readbyte, runlength;
@@ -1647,9 +1663,9 @@ byte *Image_LoadPCX (FILE *f, int *width, int *height)
 	stdio_buffer_t  *buf;
 	size_t		pixels;
 
-	start = ftell (f); //save start of file (since we might be inside a pak file, SEEK_SET might not be the start of the pcx)
+	start = FS_ftell(f); //save start of file (since we might be inside a pak file, SEEK_SET might not be the start of the pcx)
 
-	if (fread(&pcx, sizeof(pcx), 1, f) != 1) // woods
+	if (FS_fread(&pcx, sizeof(pcx), 1, f) != 1) // woods
 		Sys_Error("Failed to read PCX header from '%s'", loadfilename);
 	pcx.xmin = (unsigned short)LittleShort (pcx.xmin);
 	pcx.ymin = (unsigned short)LittleShort (pcx.ymin);
@@ -1679,12 +1695,12 @@ byte *Image_LoadPCX (FILE *f, int *width, int *height)
 	data = (byte *) Hunk_AllocNoFill((int)(pixels * 4));
 
 	//load palette
-	fseek (f, start + com_filesize - 768, SEEK_SET);
-	if (fread(palette, 1, 768, f) != 768) // woods
+	FS_fseek(f, start + com_filesize - 768, SEEK_SET);
+	if (FS_fread(palette, 1, 768, f) != 768) // woods
 		Sys_Error("Failed to read PCX palette from '%s'", loadfilename);
 
 	//back to start of image data
-	fseek (f, start + sizeof(pcx), SEEK_SET);
+	FS_fseek(f, start + sizeof(pcx), SEEK_SET);
 
 	buf = Buf_Alloc(f);
 	if (!buf)
@@ -1726,7 +1742,7 @@ byte *Image_LoadPCX (FILE *f, int *width, int *height)
 	}
 
 	Buf_Free(buf);
-	fclose(f);
+	FS_fclose(f);
 
 	*width = w;
 	*height = h;
@@ -1749,16 +1765,16 @@ typedef struct
 Image_LoadLMP
 ============
 */
-byte *Image_LoadLMP (FILE *f, int *width, int *height, enum srcformat *fmt)
+byte *Image_LoadLMP (fshandle_t *f, int *width, int *height, enum srcformat *fmt)
 {
 	lmpheader_t	qpic;
 	size_t		pix;
 	int			mark;
 	void		*data;
 
-	if (fread(&qpic, sizeof(qpic), 1, f) != 1) // woods
+	if (FS_fread(&qpic, sizeof(qpic), 1, f) != 1) // woods
 	{
-		fclose(f);
+		FS_fclose(f);
 		return NULL;
 	}
 	qpic.width = LittleLong (qpic.width);
@@ -1766,13 +1782,13 @@ byte *Image_LoadLMP (FILE *f, int *width, int *height, enum srcformat *fmt)
 
 	if (!qpic.width || !qpic.height || qpic.width > INT_MAX || qpic.height > INT_MAX)
 	{
-		fclose (f);
+		FS_fclose(f);
 		return NULL;
 	}
 
 	if ((size_t)qpic.width > (size_t)INT_MAX / (size_t)qpic.height)
 	{
-		fclose (f);
+		FS_fclose(f);
 		return NULL;
 	}
 
@@ -1780,19 +1796,19 @@ byte *Image_LoadLMP (FILE *f, int *width, int *height, enum srcformat *fmt)
 
 	if (com_filesize != (qofs_t)(sizeof (qpic) + pix))
 	{
-		fclose (f);
+		FS_fclose(f);
 		return NULL;
 	}
 
 	mark = Hunk_LowMark ();
 	data = (byte *) Hunk_AllocNoFill((int)pix);
-	if (fread(data, 1, pix, f) != pix) // woods
+	if (FS_fread(data, 1, pix, f) != pix) // woods
 	{
 		Hunk_FreeToLowMark (mark);
-		fclose(f);
+		FS_fclose(f);
 		return NULL;
 	}
-	fclose(f);
+	FS_fclose(f);
 
 	*width = qpic.width;
 	*height = qpic.height;

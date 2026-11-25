@@ -4902,7 +4902,7 @@ fail:
 
 void QWMapTitles_LoadOnce(void)
 {
-	FILE *file = NULL;
+	fshandle_t file;
 	int length;
 	char *text;
 	qboolean valid = false;
@@ -4911,24 +4911,24 @@ void QWMapTitles_LoadOnce(void)
 		return;
 	qw_maptitles_attempted = true;
 	length = COM_FOpenFile(QW_MAPTITLES_PATH, &file, NULL);
-	if (length < 0 || !file)
+	if (length < 0)
 		return;
 	if (length <= 0 || length > QW_MAPTITLES_MAX_BYTES)
 	{
-		fclose(file);
+		FS_fclose(&file);
 		goto failed;
 	}
 	text = (char *)malloc((size_t)length + 1);
 	if (text)
 	{
-		if (fread(text, 1, length, file) == (size_t)length && !memchr(text, 0, length))
+		if (FS_fread(text, 1, length, &file) == (size_t)length && !memchr(text, 0, length))
 		{
 			text[length] = 0;
 			valid = QWMapTitles_Parse(text);
 		}
 		free(text);
 	}
-	fclose(file);
+	FS_fclose(&file);
 failed:
 	if (!valid)
 		Con_Warning("qwmaplist: ignoring invalid " QW_MAPTITLES_PATH "\n");
