@@ -35,14 +35,16 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 DUMP_EXPECT = {
     'qscsextensions.qc':   {'getmodelindex': 200, 'getentitytoken': 355,
                             'bufstr_find': 537, 'drawline': 315,
-                            'drawfill': 323, 'drawpic': 322, 'drawsubpic': 328},
+                            'drawfill': 323, 'drawpic': 322, 'drawsubpic': 328,
+                            'uri_get': 513},
     'qsmenuextensions.qc': {'bufstr_find': 537, 'drawline': 466,
                             'drawfill': 457, 'drawpic': 456, 'drawsubpic': 469,
                             'gettime': 67, 'registercvar': 42, 'findflags': 87,
                             'tokenize': 58, 'buf_del': 441,
                             'serverkey': 354, 'serverkeyfloat': 0,
                             'getmodelindex': 200, 'frameforname': 276,
-                            'frameduration': 277, 'frametoname': 0},
+                            'frameduration': 277, 'frametoname': 0,
+                            'uri_get': 513},
 }
 
 # compatibility aliases: bound at load, but must never be advertised
@@ -198,6 +200,8 @@ def check_headers(srcdir, results):
                     'float keynum, optional float bindmap) getkeybind' in mn))
     results.append(('dump/getresolution-forfullscreen-optional',
                     'float mode, optional float forfullscreen) getresolution' in mn))
+    results.append(('dump/uri-get-callback-signature',
+                    'void(float reqid, float responsecode, string resourcebody, int resourcebytes) URI_Get_Callback' in cs))
     for ge_name in ('GE_MODELINDEX', 'GE_EFFECTS', 'GE_FRAME', 'GE_ANGLES',
                     'GE_TAGENTITY', 'GE_TAGINDEX', 'GE_TRAILEFFECTNUM'):
         results.append(('dump/csqc-%s' % ge_name,
@@ -211,6 +215,9 @@ def check_headers(srcdir, results):
                     '//FTE_CSQC_WINDOWCAPTION\n' in mn))
     results.append(('dump/menu-ext-FTE_QC_CHECKPVS-absent',
                     '//FTE_QC_CHECKPVS\n' not in mn))
+    for ext_name in ('DP_QC_URI_GET', 'DP_QC_URI_POST'):
+        results.append(('dump/ext-%s-absent' % ext_name,
+                        ('//%s\n' % ext_name) not in cs))
 
     # The constant blocks are emitted without newlines, so one trailing //
     # comment silently comments out every constant after it on that line.

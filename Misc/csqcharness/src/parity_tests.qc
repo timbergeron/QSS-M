@@ -130,6 +130,15 @@ void() cq_parity_extensions =
 	st_eqf("ext/fte-qc-fs-search-sizemtime", checkextension("FTE_QC_FS_SEARCH_SIZEMTIME"), 1);
 	st_eqf("ext/fte-qc-checkpvs", checkextension("FTE_QC_CHECKPVS"), 1);
 	st_eqf("ext/fte-csqc-windowcaption", checkextension("FTE_CSQC_WINDOWCAPTION"), 1);
+	st_eqf("ext/dp-qc-uri-get-not-advertised", checkextension("DP_QC_URI_GET"), 0);
+	st_eqf("ext/dp-qc-uri-post-not-advertised", checkextension("DP_QC_URI_POST"), 0);
+	st_ok("uri_get/checkbuiltin", checkbuiltin(uri_get));
+	st_poisonf();
+	st_eqf("uri_get/reject-abs-path", uri_get("http://127.0.0.1:1/x", 1, "text/plain", "@/hq_abs_rejected.txt"), 0);
+	st_poisonf();
+	st_eqf("uri_get/reject-dotdot-path", uri_get("http://127.0.0.1:1/x", 2, "text/plain", "@../hq_dotdot_rejected.txt"), 0);
+	st_poisonf();
+	st_eqf("uri_get/reject-configs-path", uri_get("http://127.0.0.1:1/x", 3, "text/plain", "@configs/config.cfg"), 0);
 };
 
 void() cq_parity_viewprops =

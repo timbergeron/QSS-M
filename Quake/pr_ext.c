@@ -27,6 +27,15 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 #include "quakedef.h"
 #include "q_ctype.h"
 #include "net_curl.h" // woods #uri
+#ifdef _WIN32
+#include <windows.h>
+#include <io.h>
+#include <fcntl.h>
+#else
+#include <fcntl.h>
+#include <sys/stat.h>
+#include <unistd.h>
+#endif
 
 static float g_menu_vm_scale_override = 0.0f; // woods #spinnymodel
 static float PR_GetVMScale(void)
@@ -7728,6 +7737,179 @@ void URI_Frame(void) {
     }
 }
 
+static qboolean URI_PathWithinRoot(const char *root, const char *path,
+    char sep, const char **rel_out)
+{
+    size_t root_len = strlen(root);
+    while (root_len > 1 && root[root_len - 1] == sep)
+        root_len--;
+    if (strncmp(path, root, root_len))
+        return false;
+    if (root[root_len - 1] == sep)
+        *rel_out = path + root_len;
+    else if (path[root_len] == sep)
+        *rel_out = path + root_len + 1;
+    else
+        return false;
+    return **rel_out != '\0';
+}
+
+static qboolean URI_AllowResolvedPath(const char *candidate, const char *relative)
+{
+    const char *prefixed, *fallback;
+
+    if (!QC_FixFileName(relative, &prefixed, &fallback))
+        return false;
+    if (!q_strncasecmp(relative, "data/", 5))
+        return true;
+    return q_strncasecmp(candidate, "data/", 5) && fallback;
+}
+
+#ifndef _WIN32
+/* Open the validated relative path from the game directory descriptor.
+   Reject symlinks introduced after resolution, including in parent directories. */
+static int URI_OpenResolvedPath(int dirfd, char *relative)
+{
+    char *sep;
+    int fd;
+
+    while ((sep = strchr(relative, '/')) != NULL) {
+        *sep = 0;
+        fd = openat(dirfd, relative, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
+        close(dirfd);
+        if (fd < 0)
+            return -1;
+        dirfd = fd;
+        relative = sep + 1;
+    }
+    fd = openat(dirfd, relative, O_RDONLY | O_NOFOLLOW | O_CLOEXEC | O_NONBLOCK);
+    close(dirfd);
+    return fd;
+}
+#endif
+
+/* Open a QC payload from its game mount. Return 0 only for a missing
+   candidate so a rejected path never triggers a fallback read. */
+static int URI_OpenConfinedFile(const char *cand, FILE **out_file, size_t *out_size)
+{
+    const searchpath_t *source = COM_FileSearchPath(cand);
+    char netpath[MAX_OSPATH];
+    char rel_norm[MAX_OSPATH];
+    FILE *f = NULL;
+
+    *out_file = NULL;
+    *out_size = 0;
+
+    if (!source)
+        return 0;
+
+    if (source->pack) {
+        int filesize = COM_FOpenFile(cand, &f, NULL);
+        if (!f || filesize < 0 || !file_from_pak) {
+            if (f) fclose(f);
+            return -1;
+        }
+        *out_file = f;
+        *out_size = (size_t)filesize;
+        return 1;
+    }
+
+    if ((size_t)q_snprintf(netpath, sizeof(netpath), "%s/%s", source->filename, cand) >= sizeof(netpath))
+        return -1;
+
+#ifdef _WIN32
+    {
+        char real_root[MAX_OSPATH * 4];
+        char real_file[MAX_OSPATH * 4];
+        const char *rel_tail = NULL;
+        HANDLE hroot, hfile;
+        DWORD rlen, flen_path;
+        LARGE_INTEGER fsize;
+        int fd;
+        char *p;
+
+        hroot = CreateFileA(source->filename, 0, FILE_SHARE_READ | FILE_SHARE_WRITE,
+            NULL, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, NULL);
+        if (hroot == INVALID_HANDLE_VALUE)
+            return -1;
+
+        hfile = CreateFileA(netpath, GENERIC_READ, FILE_SHARE_READ,
+            NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+        rlen = GetFinalPathNameByHandleA(hroot, real_root, (DWORD)sizeof(real_root), FILE_NAME_NORMALIZED);
+        CloseHandle(hroot);
+        if (hfile == INVALID_HANDLE_VALUE)
+            return -1;
+        if (rlen == 0 || rlen >= sizeof(real_root) || GetFileType(hfile) != FILE_TYPE_DISK) {
+            CloseHandle(hfile);
+            return -1;
+        }
+        flen_path = GetFinalPathNameByHandleA(hfile, real_file, (DWORD)sizeof(real_file), FILE_NAME_NORMALIZED);
+        if (flen_path == 0 || flen_path >= sizeof(real_file) ||
+            !URI_PathWithinRoot(real_root, real_file, '\\', &rel_tail) ||
+            q_strlcpy(rel_norm, rel_tail, sizeof(rel_norm)) >= sizeof(rel_norm)) {
+            CloseHandle(hfile);
+            return -1;
+        }
+        for (p = rel_norm; *p; p++)
+            if (*p == '\\')
+                *p = '/';
+        if (!URI_AllowResolvedPath(cand, rel_norm)) {
+            CloseHandle(hfile);
+            return -1;
+        }
+        if (!GetFileSizeEx(hfile, &fsize) || fsize.QuadPart < 0) {
+            CloseHandle(hfile);
+            return -1;
+        }
+        fd = _open_osfhandle((intptr_t)hfile, _O_RDONLY | _O_BINARY);
+        if (fd < 0) {
+            CloseHandle(hfile);
+            return -1;
+        }
+        f = _fdopen(fd, "rb");
+        if (!f) {
+            _close(fd);
+            return -1;
+        }
+        *out_file = f;
+        *out_size = (size_t)q_min((uint64_t)fsize.QuadPart, (uint64_t)SIZE_MAX);
+        return 1;
+    }
+#else
+    {
+        char real_root[PATH_MAX];
+        char real_file[PATH_MAX];
+        const char *rel_tail = NULL;
+        struct stat st;
+        int dirfd, fd;
+
+        if (!realpath(source->filename, real_root) || !realpath(netpath, real_file) ||
+            !URI_PathWithinRoot(real_root, real_file, '/', &rel_tail) ||
+            q_strlcpy(rel_norm, rel_tail, sizeof(rel_norm)) >= sizeof(rel_norm) ||
+            !URI_AllowResolvedPath(cand, rel_norm))
+            return -1;
+        dirfd = open(real_root, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
+        if (dirfd < 0)
+            return -1;
+        fd = URI_OpenResolvedPath(dirfd, rel_norm);
+        if (fd < 0)
+            return -1;
+        if (fstat(fd, &st) != 0 || !S_ISREG(st.st_mode) || st.st_size < 0) {
+            close(fd);
+            return -1;
+        }
+        f = fdopen(fd, "rb");
+        if (!f) {
+            close(fd);
+            return -1;
+        }
+        *out_file = f;
+        *out_size = (size_t)q_min((uint64_t)st.st_size, (uint64_t)SIZE_MAX);
+        return 1;
+    }
+#endif
+}
+
 static void PF_uri_get(void) {
     const char *url      = G_STRING(OFS_PARM0);
     float id             = G_FLOAT(OFS_PARM1);
@@ -7770,49 +7952,48 @@ static void PF_uri_get(void) {
     req->strbuf_id = strbufid;
     if (req->mimetype[0] && postdata && postdata[0]) {
         if (postdata[0] == '@') {
-            /* File payload mode: read body from disk to bypass QC string cap.
-               Resolve relative to game dir so QC paths like "json/..." or "data/json/..."
-               work regardless of OS current working directory. */
+            /* File payload mode: read a game file beyond the QC string limit.
+               Apply the QC file policy to both the requested and resolved paths. */
             const char *rel = postdata + 1; /* after '@' */
-            char cand[MAX_OSPATH];
+            const char *fname = NULL;
+            const char *fallback = NULL;
+            char resolved[MAX_OSPATH];
             FILE *f = NULL;
+            size_t flen = 0;
+            int open_rc;
 
-            /* Try as-is first (absolute or cwd-relative) */
-            f = fopen(rel, "rb");
-
-            /* Try <com_gamedir>/<rel> */
-            if (!f && com_gamedir[0]) {
-                q_snprintf(cand, sizeof(cand), "%s/%s", com_gamedir, rel);
-                f = fopen(cand, "rb");
-            }
-
-            /* Try <com_gamedir>/data/<rel> (QC often writes to data/) */
-            if (!f && com_gamedir[0]) {
-                q_snprintf(cand, sizeof(cand), "%s/data/%s", com_gamedir, rel);
-                f = fopen(cand, "rb");
-            }
-
-            /* Try id1/<rel> and id1/data/<rel> as last resorts (classic layout) */
-            if (!f) { q_snprintf(cand, sizeof(cand), "id1/%s", rel); f = fopen(cand, "rb"); }
-            if (!f) { q_snprintf(cand, sizeof(cand), "id1/data/%s", rel); f = fopen(cand, "rb"); }
-
-            if (!f) {
+            if (!QC_FixFileName(rel, &fname, &fallback)) {
                 SDL_LockMutex(uri_pending_mtx);
                 active_uri_requests--;
                 SDL_UnlockMutex(uri_pending_mtx);
                 free(req);
-                Con_Printf("PF_uri_get: cannot open payload file \"%s\" (tried game-relative paths)\n", rel);
+                Con_Printf("PF_uri_get: Access denied for payload file \"%s\"\n", rel);
                 return;
             }
-            if (fseek(f, 0, SEEK_END) != 0) { /* ignore */ }
-            long flen = ftell(f);
-            if (flen < 0) flen = 0;
-            rewind(f);
-            if ((size_t)flen > (size_t)URIGET_MAX_BYTES) {
+            q_strlcpy(resolved, fname, sizeof(resolved));
+            open_rc = URI_OpenConfinedFile(resolved, &f, &flen);
+            if (open_rc == 0 && fallback) {
+                q_strlcpy(resolved, fallback, sizeof(resolved));
+                open_rc = URI_OpenConfinedFile(resolved, &f, &flen);
+            }
+
+            if (open_rc <= 0 || !f) {
+                if (f) fclose(f);
+                SDL_LockMutex(uri_pending_mtx);
+                active_uri_requests--;
+                SDL_UnlockMutex(uri_pending_mtx);
+                free(req);
+                if (open_rc < 0)
+                    Con_Printf("PF_uri_get: Access denied for payload file \"%s\"\n", rel);
+                else
+                    Con_Printf("PF_uri_get: cannot open payload file \"%s\"\n", rel);
+                return;
+            }
+            if (flen > (size_t)URIGET_MAX_BYTES) {
                 Con_Printf("PF_uri_get: file payload exceeds URIGET_MAX_BYTES, truncating\n");
                 flen = URIGET_MAX_BYTES;
             }
-            req->postdata = (char *)malloc((size_t)flen + 1);
+            req->postdata = (char *)malloc(flen + 1);
             if (!req->postdata) {
                 fclose(f);
                 SDL_LockMutex(uri_pending_mtx);
@@ -7822,13 +8003,12 @@ static void PF_uri_get(void) {
                 Con_Printf("PF_uri_get: out of memory for file POST body\n");
                 return;
             }
-            size_t rd = fread(req->postdata, 1, (size_t)flen, f);
+            size_t rd = fread(req->postdata, 1, flen, f);
             fclose(f);
             req->postlen = rd;
             req->postdata[rd] = 0;
-            /* Log whichever path actually succeeded (cand holds last attempt if not as-is) */
             Con_DPrintf("PF_uri_post(file:%s,%g) bytes=%d\n",
-                        (cand[0] ? cand : rel), req->id, (int)rd);
+                        resolved, req->id, (int)rd);
         } else {
             /* Normal string payload from QC */
             size_t len = strlen(postdata);
@@ -10299,7 +10479,7 @@ static struct
 	{"uri_escape",		PF_uri_escape,		PF_uri_escape,		510,	PF_uri_escape,510, "string(string in)"},//DP_QC_URI_ESCAPE
 	{"uri_unescape",	PF_uri_unescape,	PF_uri_unescape,	511,	PF_uri_unescape,511, "string(string in)"},//DP_QC_URI_ESCAPE
 	{"num_for_edict",	PF_num_for_edict,	PF_num_for_edict,	512,	PF_num_for_edict,512, "float(entity ent)"},//DP_QC_NUM_FOR_EDICT
-	{"uri_get",			PF_uri_get,			PF_uri_get,			513,	PF_uri_get,513, "float(string uril, float id, optional string postmimetype, optional string postdata)", "stub."},//DP_QC_URI_GET
+	{"uri_get",			PF_uri_get,			PF_uri_get,			513,	PF_uri_get,513, "float(string uril, float id, optional string postmimetype, optional string postdata)", "Starts an HTTP GET (or POST when postmimetype is set; a postdata of \"@path\" uploads that file as the body). The result arrives later via URI_Get_Callback(id, responsecode, body, bytes); responsecode is the HTTP status, or negative on transport failure."},//DP_QC_URI_GET
 	{"tokenize_console",PF_tokenize_console,PF_tokenize_console,514,	PF_tokenize_console,514, D("float(string str)", "Tokenize a string exactly as the console's tokenizer would do so. The regular tokenize builtin became bastardized for convienient string parsing, which resulted in a large disparity that can be exploited to bypass checks implemented in a naive SV_ParseClientCommand function, therefore you can use this builtin to make sure it exactly matches.")},
 	{"argv_start_index",PF_argv_start_index,PF_argv_start_index,515,	PF_argv_start_index,515, D("float(float idx)", "Returns the character index that the tokenized arg started at.")},
 	{"argv_end_index",	PF_argv_end_index,	PF_argv_end_index,	516,	PF_argv_end_index,516, D("float(float idx)", "Returns the character index that the tokenized arg stopped at.")},
@@ -10492,6 +10672,8 @@ static const qcextension_t qcextensions[] =
 	{"DP_QC_TRACETOSS"},
 	{"DP_QC_TRACE_MOVETYPES"},
 	{"DP_QC_URI_ESCAPE"},
+//	{"DP_QC_URI_GET"},	//URI_Get_Callback passes raw HTTP status (200) instead of DP/FTE's 0-for-200 convention
+//	{"DP_QC_URI_POST"},
 	{"DP_QC_VECTOANGLES_WITH_ROLL"},
 	{"DP_QC_VECTORVECTORS"},
 	{"DP_QC_WHICHPACK"},
