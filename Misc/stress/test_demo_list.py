@@ -25,12 +25,22 @@ SOURCE = r'''
 #include "q_ctype.h"
 #include <assert.h>
 #include <dirent.h>
+#include <fcntl.h>
 #include <fnmatch.h>
 #include <sys/stat.h>
 #include <time.h>
+#include <unistd.h>
 #define vsnprintf_func vsnprintf
 
 void Sys_Error(const char *fmt, ...) { (void)fmt; abort(); }
+// Demo discovery uses the engine's listing mode, with no QuakeC path checks.
+static qboolean COM_GamePathIsCanonical(const char *name) { (void)name; abort(); }
+static qboolean COM_QCFileName(const char *name, qboolean server, char *data, qboolean *fallback) {
+    (void)name; (void)server; (void)data; (void)fallback; abort();
+}
+static int COM_OpenGameParent(const char *root, char *path, qboolean create, const char **leaf) {
+    (void)root; (void)path; (void)create; (void)leaf; abort();
+}
 static double now(void) {
     return SDL_GetPerformanceCounter() / (double)SDL_GetPerformanceFrequency();
 }
@@ -213,7 +223,7 @@ int main(int argc, char **argv) {
         searchpath_t spath = {0};
         q_strlcpy(spath.filename, argv[1], sizeof(spath.filename));
         COM_ListFiles(&spath, &spath, argv[2], listed_file,
-                      !strcmp(argv[3], "files") ? COM_LIST_NODIRS : 0);
+                      !strcmp(argv[3], "files") ? COM_LIST_NODIRS : 0, NULL);
         return 0;
     }
     q_strlcpy(sources[0].filename, "mod", sizeof(sources[0].filename));

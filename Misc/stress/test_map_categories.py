@@ -95,7 +95,8 @@ for declaration in (
 ):
     source += function(common, declaration)
 start = common.index("static int COM_FindFile_impl (")
-source += common[start:common.index("static qboolean COM_ConfigDirPath (", start)]
+end = common.index("const searchpath_t *COM_FileSearchPath (", start)
+source += common[start:end] + function(common, "const searchpath_t *COM_FileSearchPath (")
 for declaration in (
     "qboolean COM_IsPackageExtension(",
     "static qboolean COM_PackageDirNameToPackageName(const char *pakdir, char *pakfile, size_t pakfile_size)\n{",
