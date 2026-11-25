@@ -538,10 +538,24 @@ void PR_ExecuteProgram (func_t fnum)
 	case OP_STOREP_FLD:	// integers
 	case OP_STOREP_S:
 	case OP_STOREP_FNC:	// pointers
+		if (qcvm == &cl.qcvm && OPB->_int >= 0 &&
+			(size_t)OPB->_int / qcvm->edict_size < qcvm->num_edicts &&
+			EDICT_NUM((size_t)OPB->_int / qcvm->edict_size)->qcreadonly)
+		{
+			qcvm->xstatement = st - qcvm->statements;
+			PR_RunError("assignment to protected entity");
+		}
 		ptr = (eval_t *)((byte *)qcvm->edicts + OPB->_int);
 		ptr->_int = OPA->_int;
 		break;
 	case OP_STOREP_V:
+		if (qcvm == &cl.qcvm && OPB->_int >= 0 &&
+			(size_t)OPB->_int / qcvm->edict_size < qcvm->num_edicts &&
+			EDICT_NUM((size_t)OPB->_int / qcvm->edict_size)->qcreadonly)
+		{
+			qcvm->xstatement = st - qcvm->statements;
+			PR_RunError("assignment to protected entity");
+		}
 		ptr = (eval_t *)((byte *)qcvm->edicts + OPB->_int);
 		ptr->vector[0] = OPA->vector[0];
 		ptr->vector[1] = OPA->vector[1];
@@ -553,10 +567,10 @@ void PR_ExecuteProgram (func_t fnum)
 #ifdef PARANOID
 		NUM_FOR_EDICT(ed);	// Make sure it's in range
 #endif
-		if (ed == (edict_t *)qcvm->edicts && qcvm->worldlocked)
+		if ((ed == (edict_t *)qcvm->edicts && qcvm->worldlocked) || ed->qcreadonly)
 		{
 			qcvm->xstatement = st - qcvm->statements;
-			PR_RunError("assignment to world entity");
+			PR_RunError(ed == qcvm->edicts ? "assignment to world entity" : "assignment to protected entity");
 		}
 		OPC->_int = (byte *)((int *)&ed->v + OPB->_int) - (byte *)qcvm->edicts;
 		break;

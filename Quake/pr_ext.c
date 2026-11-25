@@ -27,6 +27,7 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 #include "quakedef.h"
 #include "q_ctype.h"
 #include "net_curl.h" // woods #uri
+#include <errno.h>
 #ifdef _WIN32
 #include <windows.h>
 #include <io.h>
@@ -3509,13 +3510,224 @@ static struct qcfile_s
 } *qcfiles;
 static size_t qcfiles_max;
 #define QC_FILE_BASE 1
+static int QC_OpenReadAt(const searchpath_t *source, const char *cand, FILE **out_file, size_t *out_size);
+
+// Return -1 on rejection, 0 on missing file, and 1 on success. A rejected
+// data/ candidate must not fall through to a second location.
+static int QC_OpenRead(const char *name, FILE **file, size_t *size)
+{
+	const char *prefixed, *fallback;
+	int status;
+	*file = NULL;
+	*size = 0;
+	if (strlen(name) >= MAX_QPATH || !QC_FixFileName(name, &prefixed, &fallback))
+		return -1;
+	status = QC_OpenReadAt(COM_FileSearchPath(prefixed), prefixed, file, size);
+	if (!status && fallback)
+		status = QC_OpenReadAt(COM_FileSearchPath(fallback), fallback, file, size);
+	return status;
+}
+
+static void PF_fexists(void)
+{
+	const char *name = G_STRING(OFS_PARM0), *prefixed, *fallback;
+	searchpath_t writable = {0};
+	FILE *file;
+	size_t size;
+
+	G_FLOAT(OFS_RETURN) = false;
+	if (!com_gamedir[0] || strlen(name) >= MAX_QPATH ||
+		!QC_FixFileName(name, &prefixed, &fallback) ||
+		(!fallback && q_strncasecmp(name, "data/", 5)))
+		return;
+	q_strlcpy(writable.filename, com_gamedir, sizeof(writable.filename));
+	if (QC_OpenReadAt(&writable, name, &file, &size) > 0)
+	{
+		fclose(file);
+		G_FLOAT(OFS_RETURN) = true;
+	}
+}
+
+#ifndef _WIN32
+static int QC_OpenDataParent(const char *name, qboolean create, char *path, const char **leaf)
+{
+	const char *prefixed, *fallback;
+	char *segment, *slash;
+	int dir, next;
+
+	if (!com_gamedir[0] || strlen(name) >= MAX_QPATH ||
+		!QC_FixFileName(name, &prefixed, &fallback))
+		return -1;
+	q_strlcpy(path, prefixed, MAX_QPATH + 5);
+	dir = open(com_gamedir, O_RDONLY | O_DIRECTORY | O_CLOEXEC);
+	if (dir < 0)
+		return -1;
+
+	for (segment = path; (slash = strchr(segment, '/')) != NULL; segment = slash + 1)
+	{
+		*slash = 0;
+		if (create && mkdirat(dir, segment, 0755) && errno != EEXIST)
+		{
+			close(dir);
+			return -1;
+		}
+		next = openat(dir, segment, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
+		close(dir);
+		if (next < 0)
+			return -1;
+		dir = next;
+	}
+	*leaf = segment;
+	return dir;
+}
+
+static qboolean QC_IsRegularFile(int dir, const char *name)
+{
+	struct stat st;
+	return fstatat(dir, name, &st, AT_SYMLINK_NOFOLLOW) == 0 && S_ISREG(st.st_mode);
+}
+
+static void PF_fremove(void)
+{
+	char path[MAX_QPATH + 5];
+	const char *leaf;
+	int dir = QC_OpenDataParent(G_STRING(OFS_PARM0), false, path, &leaf);
+
+	G_FLOAT(OFS_RETURN) = -1;
+	if (dir >= 0)
+	{
+		G_FLOAT(OFS_RETURN) = QC_IsRegularFile(dir, leaf) && unlinkat(dir, leaf, 0) == 0 ? 0 : -5;
+		close(dir);
+	}
+}
+
+static void PF_frename(void)
+{
+	char srcpath[MAX_QPATH + 5], dstpath[MAX_QPATH + 5];
+	const char *srcname, *dstname;
+	int src, dst;
+
+	G_FLOAT(OFS_RETURN) = -1;
+	src = QC_OpenDataParent(G_STRING(OFS_PARM0), false, srcpath, &srcname);
+	if (src < 0)
+		return;
+	dst = QC_OpenDataParent(G_STRING(OFS_PARM1), false, dstpath, &dstname);
+	if (dst >= 0)
+	{
+		G_FLOAT(OFS_RETURN) = QC_IsRegularFile(src, srcname) &&
+			renameat(src, srcname, dst, dstname) == 0 ? 0 : -5;
+		close(dst);
+	}
+	close(src);
+}
+
+static void PF_fcopy(void)
+{
+	char path[MAX_QPATH + 5], tmp[64], buffer[16384];
+	const char *dstname;
+	static unsigned int sequence;
+	FILE *input, *output;
+	int dir, fd = -1, attempts;
+	size_t size;
+	qboolean copied = true;
+
+	G_FLOAT(OFS_RETURN) = -1;
+	if (QC_OpenRead(G_STRING(OFS_PARM0), &input, &size) <= 0)
+		return;
+	dir = QC_OpenDataParent(G_STRING(OFS_PARM1), true, path, &dstname);
+	if (dir < 0)
+	{
+		fclose(input);
+		G_FLOAT(OFS_RETURN) = -2;
+		return;
+	}
+
+	// Publish only a complete copy and leave any old destination on a write failure.
+	for (attempts = 0; attempts < 16; attempts++)
+	{
+		q_snprintf(tmp, sizeof(tmp), ".qccopy-%ld-%u", (long)getpid(), sequence++);
+		fd = openat(dir, tmp, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0600);
+		if (fd >= 0 || errno != EEXIST)
+			break;
+	}
+	if (fd < 0)
+	{
+		G_FLOAT(OFS_RETURN) = -2;
+		goto done;
+	}
+
+	output = fdopen(fd, "wb");
+	if (!output)
+	{
+		close(fd);
+		copied = false;
+	}
+	else
+	{
+		while (size > 0)
+		{
+			size_t chunk = q_min(size, sizeof(buffer));
+			if (fread(buffer, 1, chunk, input) != chunk || fwrite(buffer, 1, chunk, output) != chunk)
+			{
+				copied = false;
+				break;
+			}
+			size -= chunk;
+		}
+		if (fclose(output))
+			copied = false;
+	}
+	if (copied && renameat(dir, tmp, dir, dstname) == 0)
+		G_FLOAT(OFS_RETURN) = 0;
+	else
+	{
+		unlinkat(dir, tmp, 0);
+		G_FLOAT(OFS_RETURN) = -3;
+	}
+done:
+	close(dir);
+	fclose(input);
+}
+#endif
+
+static float QC_RegisterFile(FILE *file, int fmode, int filesize)
+{
+	size_t i;
+	long base = ftell(file);
+	if (base < 0 || base > INT_MAX)
+	{
+		fclose(file);
+		return -1;
+	}
+
+	for (i = 0; ; i++)
+	{
+		if (i == qcfiles_max)
+		{
+			qcfiles_max++;
+			qcfiles = Z_Realloc(qcfiles, sizeof(*qcfiles)*qcfiles_max);
+		}
+		if (!qcfiles[i].file)
+			break;
+	}
+	qcfiles[i].filebase = base;
+	qcfiles[i].owningvm = qcvm;
+	qcfiles[i].file = file;
+	qcfiles[i].mode = fmode;
+	//reading needs size info
+	qcfiles[i].filesize = filesize;
+	//clear the read cache.
+	qcfiles[i].fileoffset = qcfiles[i].cacheoffset = qcfiles[i].cachesize = 0;
+
+	return i + QC_FILE_BASE;
+}
+
 static void PF_fopen(void)
 {
 	const char *fname = G_STRING(OFS_PARM0);
 	int fmode = G_FLOAT(OFS_PARM1);
 	const char *fallback;
 	FILE *file;
-	size_t i;
 	char name[MAX_OSPATH], *sl;
 	int filesize = 0;
 
@@ -3566,26 +3778,7 @@ static void PF_fopen(void)
 	if (!file)
 		return;
 
-	for (i = 0; ; i++)
-	{
-		if (i == qcfiles_max)
-		{
-			qcfiles_max++;
-			qcfiles = Z_Realloc(qcfiles, sizeof(*qcfiles)*qcfiles_max);
-		}
-		if (!qcfiles[i].file)
-			break;
-	}
-	qcfiles[i].filebase = ftell(file);
-	qcfiles[i].owningvm = qcvm;
-	qcfiles[i].file = file;
-	qcfiles[i].mode = fmode;
-	//reading needs size info
-	qcfiles[i].filesize = filesize;
-	//clear the read cache.
-	qcfiles[i].fileoffset = qcfiles[i].cacheoffset = qcfiles[i].cachesize = 0;
-
-	G_FLOAT(OFS_RETURN) = i+QC_FILE_BASE;
+	G_FLOAT(OFS_RETURN) = QC_RegisterFile(file, fmode, filesize);
 }
 static void PF_fgets(void)
 {
@@ -3593,7 +3786,7 @@ static void PF_fgets(void)
 	G_INT(OFS_RETURN) = 0;
 	if (fileid >= qcfiles_max)
 		Con_Warning("PF_fgets: invalid file handle\n");
-	else if (!qcfiles[fileid].file)
+	else if (qcfiles[fileid].owningvm != qcvm || !qcfiles[fileid].file)
 		Con_Warning("PF_fgets: file not open\n");
 	else if (qcfiles[fileid].mode != 0)
 		Con_Warning("PF_fgets: file not open for reading\n");
@@ -3647,7 +3840,7 @@ static void PF_fputs(void)
 	const char *str = PF_VarString(1);
 	if (fileid >= qcfiles_max)
 		Con_Warning("PF_fputs: invalid file handle\n");
-	else if (!qcfiles[fileid].file)
+	else if (qcfiles[fileid].owningvm != qcvm || !qcfiles[fileid].file)
 		Con_Warning("PF_fputs: file not open\n");
 	else if (qcfiles[fileid].mode == 0)
 		Con_Warning("PF_fgets: file not open for writing\n");
@@ -3659,7 +3852,7 @@ static void PF_fclose(void)
 	size_t fileid = G_FLOAT(OFS_PARM0) - QC_FILE_BASE;
 	if (fileid >= qcfiles_max)
 		Con_Warning("PF_fclose: invalid file handle\n");
-	else if (!qcfiles[fileid].file)
+	else if (qcfiles[fileid].owningvm != qcvm || !qcfiles[fileid].file)
 		Con_Warning("PF_fclose: file not open\n");
 	else
 	{
@@ -3687,18 +3880,22 @@ static void PF_fseek(void)
 	G_INT(OFS_RETURN) = 0;
 	if (fileid >= qcfiles_max)
 		Con_Warning("PF_fread: invalid file handle\n");
-	else if (!qcfiles[fileid].file)
+	else if (qcfiles[fileid].owningvm != qcvm || !qcfiles[fileid].file)
 		Con_Warning("PF_fread: file not open\n");
 	else
 	{
 		if (qcfiles[fileid].mode == 0)
-			G_INT(OFS_RETURN) = qcfiles[fileid].fileoffset;	//when we're reading, use the cached read offset
+			G_INT(OFS_RETURN) = qcfiles[fileid].fileoffset - (qcfiles[fileid].cachesize - qcfiles[fileid].cacheoffset);
 		else
 			G_INT(OFS_RETURN) = ftell(qcfiles[fileid].file)-qcfiles[fileid].filebase;
 		if (qcvm->argc>1)
 		{
-			qcfiles[fileid].fileoffset = G_INT(OFS_PARM1);
-			fseek(qcfiles[fileid].file, qcfiles[fileid].filebase+qcfiles[fileid].fileoffset, SEEK_SET);
+			int offset = G_INT(OFS_PARM1);
+			if (offset < 0 || (!qcfiles[fileid].mode && offset > qcfiles[fileid].filesize) ||
+				offset > LONG_MAX - qcfiles[fileid].filebase ||
+				fseek(qcfiles[fileid].file, (long)qcfiles[fileid].filebase + offset, SEEK_SET))
+				return;
+			qcfiles[fileid].fileoffset = offset;
 			qcfiles[fileid].cachesize = qcfiles[fileid].cacheoffset = 0;
 		}
 	}
@@ -3716,7 +3913,7 @@ static void PF_fread(void)
 	G_INT(OFS_RETURN) = 0;
 	if (fileid >= maxfiles)
 		Con_Warning("PF_fread: invalid file handle\n");
-	else if (!qcfiles[fileid].file)
+	else if (qcfiles[fileid].owningvm != qcvm || !qcfiles[fileid].file)
 		Con_Warning("PF_fread: file not open\n");
 	else
 		G_INT(OFS_RETURN) = fread(nativeptr, 1, size, qcfiles[fileid].file);
@@ -3733,48 +3930,39 @@ static void PF_fwrite(void)
 	G_INT(OFS_RETURN) = 0;
 	if (fileid >= maxfiles)
 		Con_Warning("PF_fwrite: invalid file handle\n");
-	else if (!qcfiles[fileid].file)
+	else if (qcfiles[fileid].owningvm != qcvm || !qcfiles[fileid].file)
 		Con_Warning("PF_fwrite: file not open\n");
 	else
 		G_INT(OFS_RETURN) = fwrite(nativeptr, 1, size, qcfiles[fileid].file);
 }
-#ifdef _WIN32
-#include <io.h>
-#else
-#include <unistd.h>
 #endif
+
 static void PF_fsize(void)
 {
-	size_t fileid = G_FLOAT(OFS_PARM0) - QC_FILE_BASE;
-	G_INT(OFS_RETURN) = 0;
-	if (fileid >= maxfiles)
-		Con_Warning("PF_fread: invalid file handle\n");
-	else if (!qcfiles[fileid].file)
-		Con_Warning("PF_fread: file not open\n");
-	else if (qcfiles[fileid].mode == 0)
-	{
-		G_INT(OFS_RETURN) = qcfiles[fileid].filesize;
-		//can't truncate if we're reading.
-	}
+	float handle = G_FLOAT(OFS_PARM0);
+	struct qcfile_s *f;
+	long end, pos;
+
+	G_INT(OFS_RETURN) = -1;
+	if (!(handle >= QC_FILE_BASE && handle - QC_FILE_BASE < qcfiles_max))
+		return;
+	f = &qcfiles[(size_t)(handle - QC_FILE_BASE)];
+	if (!f->file || f->owningvm != qcvm)
+		return;
+	if (!f->mode)
+		G_INT(OFS_RETURN) = f->filesize;
 	else
 	{
-		long curpos = ftell(qcfiles[fileid].file);
-		fseek(qcfiles[fileid].file, 0, SEEK_END);
-		G_INT(OFS_RETURN) = ftell(qcfiles[fileid].file);
-		fseek(qcfiles[fileid].file, curpos, SEEK_SET);
-
-		if (pr_argc>1)
-		{
-			//specifically resize. or maybe extend.
-#ifdef _WIN32
-			_chsize(fileno(qcfiles[fileid].file), G_INT(OFS_PARM1));
-#else
-			ftruncate(fileno(qcfiles[fileid].file), G_INT(OFS_PARM1));
-#endif
-		}
+		pos = ftell(f->file);
+		if (pos < 0 || fseek(f->file, 0, SEEK_END))
+			return;
+		end = ftell(f->file);
+		if (!fseek(f->file, pos, SEEK_SET) && end >= 0 && end <= INT_MAX)
+			G_INT(OFS_RETURN) = end;
 	}
+	if (qcvm->argc > 1 && G_INT(OFS_PARM1) >= 0)
+		Con_Warning("fsize: resizing stream handles is unsupported\n");
 }
-#endif
 
 static struct filesearch_s
 {
@@ -3793,6 +3981,8 @@ static struct filesearch_s
 static qboolean PR_Search_AddFile(void *ctx, const char *fname, time_t mtime, size_t fsize, searchpath_t *spath)
 {
 	struct filesearch_s *c = ctx;
+	if (strlen(fname) >= MAX_QPATH)
+		return true;
 	if (c->numfiles == c->maxfiles)
 	{
 		c->maxfiles = c->maxfiles*2+2;
@@ -3847,7 +4037,7 @@ static void PF_search_begin(void)
 static void PF_search_end(void)
 {
 	int handle = G_FLOAT(OFS_PARM0);
-	if (handle < 0 || handle >= countof(searches))
+	if (handle < 0 || handle >= countof(searches) || searches[handle].owner != qcvm)
 		return; //erk
 	searches[handle].owner = NULL;
 	searches[handle].numfiles = 0;
@@ -3855,10 +4045,38 @@ static void PF_search_end(void)
 	free(searches[handle].file);
 	searches[handle].file = NULL;
 }
+static void PF_search_fopen(void)
+{
+	float handle = G_FLOAT(OFS_PARM0), index = G_FLOAT(OFS_PARM1);
+	struct filesearch_s *search;
+	const char *name, *prefixed, *fallback;
+	searchpath_t *sp;
+	size_t size;
+	FILE *file;
+
+	G_FLOAT(OFS_RETURN) = -1;
+	if (!(handle >= 0 && handle < countof(searches)))
+		return;
+	search = &searches[(size_t)handle];
+	if (search->owner != qcvm || !(index >= 0 && index < search->numfiles))
+		return;
+	name = search->file[(size_t)index].name;
+	if (!QC_FixFileName(name, &prefixed, &fallback) || !fallback)
+		return;
+	for (sp = com_searchpaths; sp; sp = sp->next)
+		if (sp == search->file[(size_t)index].spath)
+			break;
+	if (QC_OpenReadAt(sp, name, &file, &size) <= 0)
+		return;
+	if (size > INT_MAX)
+		fclose(file);
+	else
+		G_FLOAT(OFS_RETURN) = QC_RegisterFile(file, 0, size);
+}
 static void PF_search_getsize(void)
 {
 	size_t handle = G_FLOAT(OFS_PARM0);
-	if (handle < 0 || handle >= countof(searches))
+	if (handle >= countof(searches) || searches[handle].owner != qcvm)
 	{
 		G_FLOAT(OFS_RETURN) = 0;
 		return; //erk
@@ -3870,7 +4088,7 @@ static void PF_search_getfilename(void)
 	size_t handle = G_FLOAT(OFS_PARM0);
 	size_t index = G_FLOAT(OFS_PARM1);
 	G_INT(OFS_RETURN) = 0;
-	if (handle < 0 || handle >= countof(searches))
+	if (handle >= countof(searches) || searches[handle].owner != qcvm)
 		return; //erk
 	if (index < 0 || index >= searches[handle].numfiles)
 		return; //erk
@@ -3881,7 +4099,7 @@ static void PF_search_getfilesize(void)
 	size_t handle = G_FLOAT(OFS_PARM0);
 	size_t index = G_FLOAT(OFS_PARM1);
 	G_FLOAT(OFS_RETURN) = 0;
-	if (handle < 0 || handle >= countof(searches))
+	if (handle >= countof(searches) || searches[handle].owner != qcvm)
 		return; //erk
 	if (index < 0 || index >= searches[handle].numfiles)
 		return; //erk
@@ -3893,7 +4111,7 @@ static void PF_search_getfilemtime(void)
 	size_t handle = G_FLOAT(OFS_PARM0);
 	size_t index = G_FLOAT(OFS_PARM1);
 	G_INT(OFS_RETURN) = 0;
-	if (handle < 0 || handle >= countof(searches))
+	if (handle >= countof(searches) || searches[handle].owner != qcvm)
 		return; //erk
 	if (index < 0 || index >= searches[handle].numfiles)
 		return; //erk
@@ -3909,7 +4127,7 @@ static void PF_search_getpackagename(void)
 	size_t handle = G_FLOAT(OFS_PARM0);
 	size_t index = G_FLOAT(OFS_PARM1);
 	G_INT(OFS_RETURN) = 0;
-	if (handle < 0 || handle >= countof(searches))
+	if (handle >= countof(searches) || searches[handle].owner != qcvm)
 		return; //erk
 	if (index < 0 || index >= searches[handle].numfiles)
 		return; //erk
@@ -4497,7 +4715,7 @@ static void PF_buf_writefile(void)
 
 	if (fnum >= qcfiles_max)
 		return;
-	if (!qcfiles[fnum].file)
+	if (qcfiles[fnum].owningvm != qcvm || !qcfiles[fnum].file || !qcfiles[fnum].mode)
 		return;
 
 	if (qcvm->argc >= 3)
@@ -4785,14 +5003,79 @@ static void PF_putentfldstr(void)
 	else
 		G_FLOAT(OFS_RETURN) = false;
 }
-//static void PF_loadfromdata(void)
-//{
-//fixme;
-//}
-//static void PF_loadfromfile(void)
-//{
-//fixme;
-//}
+static qboolean PR_LoadClientEntities(const char *data)
+{
+	const char *end;
+	edict_t *ent;
+	int *created;
+	size_t count = 0;
+	qboolean ok = false;
+
+	if (!*data || qcvm->num_edicts >= qcvm->max_edicts)
+		return false;
+	created = malloc((qcvm->max_edicts - qcvm->reserved_edicts) * sizeof(*created));
+	if (!created)
+		return false;
+	while ((end = COM_Parse(data)) != NULL)
+	{
+		if (strcmp(com_token, "{") || qcvm->num_edicts >= qcvm->max_edicts ||
+			count >= (size_t)qcvm->max_edicts - qcvm->reserved_edicts)
+			goto done;
+		ent = ED_Alloc();
+		created[count++] = NUM_FOR_EDICT(ent);
+		if (!(data = ED_ParseEdictSafe(end, ent)))
+			goto done;
+		// Do not call spawn functions: this is save-data restoration.
+	}
+	ok = true;
+done:
+	if (!ok)
+		while (count > 0)
+			ED_Free(EDICT_NUM(created[--count]));
+	free(created);
+	return ok;
+}
+
+static void PF_loadfromdata(void)
+{
+	G_FLOAT(OFS_RETURN) = PR_LoadClientEntities(G_STRING(OFS_PARM0)) ? 0 : -1;
+}
+
+static void PF_loadfromfile(void)
+{
+	FILE *file;
+	char *data;
+	size_t size;
+	G_FLOAT(OFS_RETURN) = -1;
+	if (QC_OpenRead(G_STRING(OFS_PARM0), &file, &size) <= 0)
+		return;
+	if (size <= 1024 * 1024 && (data = malloc(size + 1)) != NULL)
+	{
+		if (fread(data, 1, size, file) == size)
+		{
+			data[size] = 0;
+			G_FLOAT(OFS_RETURN) = PR_LoadClientEntities(data) ? 0 : -1;
+		}
+		free(data);
+	}
+	fclose(file);
+}
+
+static void PF_cs_entityprotection(void)
+{
+	edict_t *ent = G_EDICT(OFS_PARM0);
+	float state = G_FLOAT(OFS_PARM1);
+	G_FLOAT(OFS_RETURN) = ent == qcvm->edicts ? qcvm->worldlocked : ent->qcreadonly;
+	if (ent->free || (state != 0 && state != 1))
+		return;
+	if (ent == qcvm->edicts)
+	{
+		if (!qcvm->nogameaccess)
+			qcvm->worldlocked = state != 0;
+	}
+	else
+		ent->qcreadonly = state != 0;
+}
 static void PF_writetofile(void)
 {
 	size_t fileid = G_FLOAT(OFS_PARM0) - QC_FILE_BASE;
@@ -4801,10 +5084,11 @@ static void PF_writetofile(void)
 	G_INT(OFS_RETURN) = 0;
 	if (fileid >= qcfiles_max)
 		Con_Warning("PF_fwrite: invalid file handle\n");
-	else if (!qcfiles[fileid].file)
+	else if (qcfiles[fileid].owningvm != qcvm || !qcfiles[fileid].file)
 		Con_Warning("PF_fwrite: file not open\n");
 	else
-		ED_Write(qcfiles[fileid].file, ent);
+		if (qcfiles[fileid].mode)
+			ED_Write(qcfiles[fileid].file, ent);
 }
 
 static void PF_parseentitydata(void)
@@ -4832,20 +5116,13 @@ static void PF_parseentitydata(void)
 			G_FLOAT(OFS_RETURN) = 0;	//doesn't look like an ent to me.
 	}
 }
-/*static void PF_generateentitydata(void)
+static void PF_generateentitydata(void)
 {
-	unsigned int fldidx = G_FLOAT(OFS_PARM0);
-	edict_t *ent = G_EDICT(OFS_PARM1);
-	if (fldidx < (unsigned int)qcvm->progs->numfielddefs)
-	{
-		char *ret = PR_GetTempString();
-		const char *val = PR_UglyValueString (qcvm->fielddefs[fldidx].type, (eval_t*)((float*)&ent->v + qcvm->fielddefs[fldidx].ofs));
-		q_strlcpy(ret, val, STRINGTEMP_LENGTH);
-		G_INT(OFS_RETURN) = PR_SetEngineString(ret);
-	}
-	else
-		G_INT(OFS_RETURN) = 0;
-}*/
+	edict_t *ent = G_EDICT(OFS_PARM0);
+	char *buffer = PR_GetTempString();
+	G_INT(OFS_RETURN) = ED_WriteToBuffer(buffer, STRINGTEMP_LENGTH, ent) ?
+		PR_SetEngineString(buffer) : 0;
+}
 static void PF_callfunction(void)
 {
 	dfunction_t *fnc;
@@ -7790,9 +8067,8 @@ static int URI_OpenResolvedPath(int dirfd, char *relative)
 
 /* Open a QC payload from its game mount. Return 0 only for a missing
    candidate so a rejected path never triggers a fallback read. */
-static int URI_OpenConfinedFile(const char *cand, FILE **out_file, size_t *out_size)
+static int QC_OpenReadAt(const searchpath_t *source, const char *cand, FILE **out_file, size_t *out_size)
 {
-    const searchpath_t *source = COM_FileSearchPath(cand);
     char netpath[MAX_OSPATH];
     char rel_norm[MAX_OSPATH];
     FILE *f = NULL;
@@ -7804,16 +8080,17 @@ static int URI_OpenConfinedFile(const char *cand, FILE **out_file, size_t *out_s
         return 0;
 
     if (source->pack) {
-        int filesize = COM_FOpenFile(cand, &f, NULL);
-        if (!f || filesize < 0 || !file_from_pak) {
-            if (f) fclose(f);
+        int filesize;
+        f = COM_OpenPackEntry(source->pack, cand, &filesize);
+        if (!f)
             return -1;
-        }
         *out_file = f;
         *out_size = (size_t)filesize;
         return 1;
     }
 
+    if (!registered.value && (strchr(cand, '/') || !q_strcasecmp(COM_FileGetExtension(cand), "dat")))
+        return -1;
     if ((size_t)q_snprintf(netpath, sizeof(netpath), "%s/%s", source->filename, cand) >= sizeof(netpath))
         return -1;
 
@@ -7971,10 +8248,10 @@ static void PF_uri_get(void) {
                 return;
             }
             q_strlcpy(resolved, fname, sizeof(resolved));
-            open_rc = URI_OpenConfinedFile(resolved, &f, &flen);
+            open_rc = QC_OpenReadAt(COM_FileSearchPath(resolved), resolved, &f, &flen);
             if (open_rc == 0 && fallback) {
                 q_strlcpy(resolved, fallback, sizeof(resolved));
-                open_rc = URI_OpenConfinedFile(resolved, &f, &flen);
+                open_rc = QC_OpenReadAt(COM_FileSearchPath(resolved), resolved, &f, &flen);
             }
 
             if (open_rc <= 0 || !f) {
@@ -8243,6 +8520,9 @@ static void PR_addentity_internal(edict_t *ed)	//adds a csqc entity into the sce
 			unsigned int rf = renderflags && isfinite(renderflags->_float) && renderflags->_float > 0.0f &&
 				(double)renderflags->_float <= UINT_MAX ? (unsigned int)renderflags->_float : 0;
 			unsigned int unsupported_rf;
+			eval_t *netnum = GetEdictFieldValue(ed, qcvm->extfields.entnum);
+			e->csqc_scene_key = netnum && netnum->_float >= 1 && netnum->_float < MAX_EDICTS ?
+				(int)netnum->_float : -NUM_FOR_EDICT(ed);
 
 			VectorCopy(ed->v.origin, e->origin);
 			VectorCopy(ed->v.angles, e->angles);
@@ -8296,6 +8576,58 @@ static void PR_addentity_internal(edict_t *ed)	//adds a csqc entity into the sce
 		}
 	}
 }
+static void PF_cs_removeentity(void)
+{
+	edict_t *ed = G_EDICT(OFS_PARM0);
+	eval_t *netnum = GetEdictFieldValue(ed, qcvm->extfields.entnum);
+	int i, keep = 0, key;
+	if (ed == qcvm->edicts || ed->free || qcvm->nogameaccess)
+		return;
+	key = netnum && netnum->_float >= 1 && netnum->_float < MAX_EDICTS ?
+		(int)netnum->_float : -NUM_FOR_EDICT(ed);
+	for (i = 0; i < cl_numvisedicts; i++)
+	{
+		entity_t *vis = cl_visedicts[i];
+		if (vis->csqc_scene_key == key ||
+			(key > 0 && key < cl.num_entities && vis == &cl.entities[key]))
+			continue;
+		cl_visedicts[keep++] = vis;
+	}
+	cl_numvisedicts = keep;
+}
+
+static void PF_cs_pushmove(void)
+{
+	edict_t *ed = G_EDICT(OFS_PARM0);
+	vec3_t move, amove;
+	int savedself = pr_global_struct->self, savedother = pr_global_struct->other;
+	qboolean moved = false;
+	// Touch and blocked callbacks may overwrite the VM parameter registers.
+	VectorCopy(G_VECTOR(OFS_PARM1), move);
+	VectorCopy(G_VECTOR(OFS_PARM2), amove);
+	if (!qcvm->nogameaccess && qcvm->worldmodel && ed != qcvm->edicts && !ed->free &&
+		isfinite(move[0]) && isfinite(move[1]) && isfinite(move[2]) &&
+		isfinite(amove[0]) && isfinite(amove[1]) && isfinite(amove[2]))
+		moved = SV_PushDisplacement(ed, move, amove);
+	pr_global_struct->self = savedself;
+	pr_global_struct->other = savedother;
+	G_FLOAT(OFS_RETURN) = moved;
+}
+
+static void PF_cs_removeinstant(void)
+{
+	edict_t *ed = G_EDICT(OFS_PARM0);
+	size_t i;
+	if (ed->free || ed == qcvm->edicts)
+		return;
+	// A subsequent network update must allocate a new edict if QC reuses this slot.
+	for (i = 0; i < cl.ssqc_to_csqc_max; i++)
+		if (cl.ssqc_to_csqc[i] == ed)
+			cl.ssqc_to_csqc[i] = NULL;
+	ED_Free(ed);
+	ed->freetime = 0;
+}
+
 static void PF_cs_addentity(void)
 {
 	PR_addentity_internal(G_EDICT(OFS_PARM0));
@@ -10121,6 +10453,7 @@ static struct
 	{"sin",				PF_Sin,				PF_Sin,				60,	PF_Sin,38, "float(float angle)"},	//60
 	{"cos",				PF_Cos,				PF_Cos,				61,	PF_Cos,39, "float(float angle)"},	//61
 	{"sqrt",			PF_Sqrt,			PF_Sqrt,			62,	PF_Sqrt,40, "float(float value)"},	//62
+	{"removeinstant", PF_NoSSQC, PF_cs_removeinstant, 0, PF_NoMenu, D("void(entity ent)", "Removes a client edict and allows immediate reuse of its slot.")},
 	{"tracetoss",		PF_TraceToss,		PF_TraceToss,		64,	PF_NoMenu, "void(entity ent, entity ignore)"},
 	{"etos",			PF_etos,			PF_etos,			65,	PF_etos,20, "string(entity ent)"},
 
@@ -10152,7 +10485,7 @@ static struct
 //		{"fread",			PF_fread,			PF_fread,				0,	 PF_fread,0, D("int(filestream fhandle, void *ptr, int size)", "Reads binary data out of the file. Returns truncated lengths if the read exceeds the length of the file.")},
 //		{"fwrite",			PF_fwrite,			PF_fwrite,				0,	 PF_fwrite,0, D("int(filestream fhandle, void *ptr, int size)", "Writes binary data out of the file.")},
 		{"fseek",			PF_fseek,			PF_fseek,				0,	 PF_fseek,0, D("#define ftell fseek //c-compat\nint(filestream fhandle, optional int newoffset)", "Changes the current position of the file, if specified. Returns prior position, in bytes.")},
-//		{"fsize",			PF_fsize,			PF_fsize,				0,	 PF_fsize,0, D("int(filestream fhandle, optional int newsize)", "Reports the total size of the file, in bytes. Can also be used to truncate/extend the file")},
+		{"fsize",			PF_fsize,			PF_fsize,				0,	 PF_fsize,0, D("int(filestream fhandle, optional int newsize)", "Returns the length of a stream in bytes. This engine does not resize streams.")},
 	{"strlen",			PF_strlen,			PF_strlen,			114, PF_strlen,52, "float(string s)"},	// (FRIK_FILE)
 	{"strcat",			PF_strcat,			PF_strcat,			115, PF_strcat,53, "string(string s1, optional string s2, optional string s3, optional string s4, optional string s5, optional string s6, optional string s7, optional string s8)"},	// (FRIK_FILE)
 	{"substring",		PF_substring,		PF_substring,		116, PF_substring,54, "string(string s, float start, float length)"},	// (FRIK_FILE)
@@ -10235,7 +10568,7 @@ static struct
 //	{"skel_copybones",	PF_skel_copybones,	PF_skel_copybones,	274,	PF_NoMenu, D("void(float skeldst, float skelsrc, float startbone, float entbone)", "Copy bone data from one skeleton directly into another.")}, // (FTE_CSQC_SKELETONOBJECTS)
 //	{"skel_delete",		PF_skel_delete,		PF_skel_delete,		275,	PF_NoMenu, D("void(float skel)", "Deletes a skeletal object. The actual delete is delayed, allowing the skeletal object to be deleted in an entity's predraw function yet still be valid by the time the addentity+renderscene builtins need it. Also uninstanciates any ragdoll currently in effect on the skeletal object.")}, // (FTE_CSQC_SKELETONOBJECTS)
 	{"crossproduct",	PF_crossproduct,	PF_crossproduct,	0,		PF_crossproduct,0, D("#ifndef dotproduct\n#define dotproduct(v1,v2) ((vector)(v1)*(vector)(v2))\n#endif\nvector(vector v1, vector v2)", "Small helper function to calculate the crossproduct of two vectors.")},
-//	{"pushmove", 		PF_pushmove, 		PF_pushmove,	 	0, 		PF_NoMenu, "float(entity pusher, vector move, vector amove)"},
+	{"pushmove", PF_NoSSQC, PF_cs_pushmove, 0, PF_NoMenu, D("float(entity pusher, vector move, vector amove)", "Attempts an explicit pusher displacement and rotation, returning success.")},
 	{"frameforname",	PF_frameforname,	PF_frameforname,	276,	PF_frameforname,276, D("float(float modidx, string framename)", "Looks up a framegroup from a model by name, avoiding the need for hardcoding. Returns -1 on error.")},// (FTE_CSQC_SKELETONOBJECTS)
 	{"frameduration",	PF_frameduration,	PF_frameduration,	277,	PF_frameduration,277, D("float(float modidx, float framenum)", "Retrieves the duration (in seconds) of the specified framegroup.")},// (FTE_CSQC_SKELETONOBJECTS)
 //	{"processmodelevents",PF_processmodelevents,PF_processmodelevents,0,PF_NoMenu, D("void(float modidx, float framenum, __inout float basetime, float targettime, void(float timestamp, int code, string data) callback)", "Calls a callback for each event that has been reached. Basetime is set to targettime.")},
@@ -10270,7 +10603,7 @@ static struct
 	{"clearscene",		PF_NoSSQC,			PF_cl_clearscene,	300,	PF_cl_clearscene,300, D("void()", "Forgets all rentities, polygons, and temporary dlights. Resets all view properties to their default values.")},// (EXT_CSQC)
 	{"addentities",		PF_NoSSQC,			PF_cs_addentities,	301,	PF_NoMenu, D("void(float mask)", "Walks through all entities effectively doing this:\n if (ent.drawmask&mask){ if (!ent.predaw()) addentity(ent); }\nIf mask&MASK_DELTA, non-csqc entities, particles, and related effects will also be added to the rentity list.\n If mask&MASK_STDVIEWMODEL then the default view model will also be added.")},// (EXT_CSQC)
 	{"addentity",		PF_NoSSQC,			PF_cs_addentity,	302,	PF_m_addentity,302, D("void(entity ent)", "Copies the entity fields into a new rentity for later rendering via addscene.")},// (EXT_CSQC)
-//	{"removeentity",	PF_NoSSQC,			PF_FullCSQCOnly,	0,		PF_NoMenu, D("void(entity ent)", "Undoes all addentities added to the scene from the given entity, without removing ALL entities (useful for splitscreen/etc, readd modified versions as desired).")},// (EXT_CSQC)
+	{"removeentity", PF_NoSSQC, PF_cs_removeentity, 0, PF_NoMenu, D("void(entity ent)", "Removes every instance of this edict from the current scene.")},
 //	{"addtrisoup_simple",PF_NoSSQC,			PF_FullCSQCOnly,	0,		PF_NoMenu, D("typedef float vec2[2];\ntypedef float vec3[3];\ntypedef float vec4[4];\ntypedef struct trisoup_simple_vert_s {vec3 xyz;vec2 st;vec4 rgba;} trisoup_simple_vert_t;\nvoid(string texturename, int flags, struct trisoup_simple_vert_s *verts, int *indexes, int numindexes)", "Adds the specified trisoup into the scene as additional geometry. This permits caching geometry to reduce builtin spam. Indexes are a triangle list (so eg quads will need 6 indicies to form two triangles). NOTE: this is not going to be a speedup over polygons if you're still generating lots of new data every frame.")},
 	{"setproperty",		PF_NoSSQC,			PF_cl_setproperty,	303,	PF_cl_setproperty,303, D("#define setviewprop setproperty\nfloat(float property, ...)", "Allows you to override default view properties like viewport, fov, and whether the engine hud will be drawn. Different VF_ values have slightly different arguments, some are vectors, some floats.")},// (EXT_CSQC)
 	{"renderscene",		PF_NoSSQC,			PF_cl_renderscene,	304,	PF_cl_renderscene,304, D("void()", "Draws all entities, polygons, and particles on the rentity list (which were added via addentities or addentity), using the various view properties set via setproperty. There is no ordering dependancy.\nThe scene must generally be cleared again before more entities are added, as entities will persist even over to the next frame.\nYou may call this builtin multiple times per frame, but should only be called from CSQC_UpdateView.")},// (EXT_CSQC)
@@ -10373,7 +10706,7 @@ static struct
 //	{"con_input",		PF_NoSSQC,			PF_FullCSQCOnly,	394,	PF_NoMenu, D("float(string conname, float inevtype, float parama, float paramb, float paramc)", "Forwards input events to the named console. Mouse updates should be absolute only.")},
 	{"setwindowcaption",PF_NoSSQC,			PF_cl_setwindowcaption,0,	PF_cl_setwindowcaption,0, D("void(string newcaption)", "Replaces the title of the game window, as seen when task switching or just running in windowed mode.")},
 //	{"cvars_haveunsaved",PF_NoSSQC,			PF_FullCSQCOnly,	0,		PF_NoMenu, D("float()", "Returns true if any archived cvar has an unsaved value.")},
-//	{"entityprotection",NULL,				NULL,				0,		PF_NoMenu, D("float(entity e, float nowreadonly)", "Changes the protection on the specified entity to protect it from further edits from QC. The return value is the previous setting. Note that this can be used to unprotect the world, but doing so long term is not advised as you will no longer be able to detect invalid entity references. Also, world is not networked, so results might not be seen by clients (or in other words, world.avelocity_y=64 is a bad idea).")},
+	{"entityprotection", PF_NoSSQC, PF_cs_entityprotection, 0, PF_NoMenu, D("float(entity ent, float readonly)", "Sets QC field assignment protection and returns the previous state. Use -1 to query.")},
 
 
 	{"copyentity",		PF_copyentity,		PF_copyentity,		400,	PF_copyentity,47, D("entity(entity from, optional entity to)", "Copies all fields from one entity to another.")},// (DP_QC_COPYENTITY)
@@ -10425,6 +10758,7 @@ static struct
 	{"search_end",		PF_search_end,		PF_search_end,		445,	PF_search_end,75, "void(searchhandle handle)", ""},
 	{"search_getsize",	PF_search_getsize,	PF_search_getsize,	446,	PF_search_getsize,76, "float(searchhandle handle)", " Retrieves the number of files that were found."},
 	{"search_getfilename",PF_search_getfilename,PF_search_getfilename,447,PF_search_getfilename,77, "string(searchhandle handle, float num)", "Retrieves name of one of the files that was found by the initial search."},
+	{"search_fopen", PF_search_fopen, PF_search_fopen, 0, PF_search_fopen, 0, "filestream(searchhandle handle, float num)"},
 	{"search_getfilesize",PF_search_getfilesize,PF_search_getfilesize,0,PF_search_getfilesize,0, "float(searchhandle handle, float num)", "Retrieves the size of one of the files that was found by the initial search."},
 	{"search_getfilemtime",PF_search_getfilemtime,PF_search_getfilemtime,0,PF_search_getfilemtime,0, "string(searchhandle handle, float num)", "Retrieves modification time of one of the files in %Y-%m-%d %H:%M:%S format."},
 	{"search_getpackagename",PF_search_getpackagename,PF_search_getpackagename,0,PF_search_getpackagename,0, "string(searchhandle handle, float num)", "Retrieves the name of the package the file was found inside."},
@@ -10490,8 +10824,8 @@ static struct
 	{"gettimed",		PF_gettimed,		PF_gettimed,		0,		PF_gettimed,0, "__double(optional int timetype)"},
 	{"findkeysforcommand",PF_NoSSQC,		PF_cl_findkeysforcommand,521,PF_cl_findkeysforcommand,610, D("string(string command, optional float bindmap)", "Returns a list of keycodes that perform the given console command in a format that can only be parsed via tokenize (NOT tokenize_console). This always returns at least two values - if only one key is actually bound, -1 will be returned. The bindmap argument is listed for compatibility with dp-specific defs, but is ignored in FTE.")},
 	{"findkeysforcommandex",PF_NoSSQC,		PF_cl_findkeysforcommandex,0,PF_cl_findkeysforcommandex,0, D("string(string command, optional float bindmap)", "Returns a list of key bindings in keyname format instead of keynums. Use tokenize to parse. This list may contain modifiers. May return large numbers of keys.")},
-//	{"loadfromdata",	PF_loadfromdata,	PF_loadfromdata,	529,	PF_NoMenu, D("void(string s)", "Reads a set of entities from the given string. This string should have the same format as a .ent file or a saved game. Entities will be spawned as required. If you need to see the entities that were created, you should use parseentitydata instead.")},
-//	{"loadfromfile",	PF_loadfromfile,	PF_loadfromfile,	530,	PF_NoMenu, D("void(string s)", "Reads a set of entities from the named file. This file should have the same format as a .ent file or a saved game. Entities will be spawned as required. If you need to see the entities that were created, you should use parseentitydata instead.")},
+	{"loadfromdata", PF_NoSSQC, PF_loadfromdata, 529, PF_NoMenu, D("float(string data)", "Restores saved fields into newly allocated client entities and returns 0 on success.")},
+	{"loadfromfile", PF_NoSSQC, PF_loadfromfile, 530, PF_NoMenu, D("float(string name)", "Restores client entities from a game file and returns 0 on success.")},
 	{"log",				PF_Logarithm,		PF_Logarithm,		532,	PF_Logarithm,532, D("float(float v, optional float base)", "Determines the logarithm of the input value according to the specified base. This can be used to calculate how much something was shifted by.")},
 	{"soundlength",		PF_NoSSQC,			PF_cl_soundlength,	534,	PF_cl_soundlength,534, D("float(string sample)", "Provides a way to query the duration of a sound sample, allowing you to set up a timer to chain samples.")},
 	{"buf_loadfile",	PF_buf_loadfile,	PF_buf_loadfile,	535,	PF_buf_loadfile,535, D("float(string filename, strbuf bufhandle)", "Appends the named file into a string buffer (which must have been created in advance). The return value merely says whether the file was readable.")},
@@ -10510,7 +10844,7 @@ static struct
 	{"gethostcachevalue",		PF_NoSSQC,	PF_gethostcachevalue,		611,PF_gethostcachevalue,		611, D("float(float type)", "Returns number of servers known")},
 	{"gethostcachestring",		PF_NoSSQC,	PF_gethostcachestring,		612,PF_gethostcachestring,		612, D("string(float type, float hostnr)", "Retrieves some specific type of info about the specified server.")},
 	{"parseentitydata",	PF_parseentitydata, PF_parseentitydata,			613,PF_parseentitydata,			613, D("float(entity e, string s, optional float offset)", "Reads a single entity's fields into an already-spawned entity. s should contain field pairs like in a saved game: {\"foo1\" \"bar\" \"foo2\" \"5\"}. Returns <=0 on failure, otherwise returns the offset in the string that was read to.")},
-//	{"generateentitydata",PF_generateentitydata,PF_generateentitydata,	0,	PF_generateentitydata,		0,	 D("string(entity e)", "Dumps the entities fields into a string which can later be parsed with parseentitydata.")},
+	{"generateentitydata", PF_NoSSQC, PF_generateentitydata, 0, PF_NoMenu, D("string(entity ent)", "Serializes entity fields into a temporary string. Returns null if the entity exceeds the temporary-string limit.")},
 	{"resethostcachemasks",		PF_NoSSQC,	PF_resethostcachemasks,		615,PF_resethostcachemasks,		615, D("void()", "Resets server listing filters.")},
 	{"sethostcachemaskstring",	PF_NoSSQC,	PF_sethostcachemaskstring,	616,PF_sethostcachemaskstring,	616, D("void(float mask, float fld, string str, float op)", "stub. Changes a serverlist filter (string comparisons).")},
 	{"sethostcachemasknumber",	PF_NoSSQC,	PF_sethostcachemasknumber,	617,PF_sethostcachemasknumber,	617, D("void(float mask, float fld, float num, float op)", "stub. Changes a serverlist filter (numeric comparisons).")},
@@ -10532,6 +10866,12 @@ static struct
 	{"setkeybind",		PF_NoSSQC,			PF_cl_setkeybind,			630,	PF_cl_setkeybind,630, "float(float key, string bind, optional float bindmap, optional float modifier)", "Changes a key binding."},
 	{"getbindmaps",		PF_NoSSQC,			PF_cl_getbindmaps,			631,	PF_cl_getbindmaps,631, "vector()", "stub."},
 	{"setbindmaps",		PF_NoSSQC,			PF_cl_setbindmaps,			632,	PF_cl_setbindmaps,632, "float(vector bm)", "stub."},
+#ifndef _WIN32
+	{"fcopy", PF_fcopy, PF_fcopy, 650, PF_fcopy, 650, D("float(string source, string destination)", "Copies a game file into the writable data directory. Returns 0 on success.")},
+	{"frename", PF_frename, PF_frename, 651, PF_frename, 651, D("float(string source, string destination)", "Renames a file in the writable data directory. Returns 0 on success.")},
+	{"fremove", PF_fremove, PF_fremove, 652, PF_fremove, 652, D("float(string name)", "Removes a regular file from the writable data directory. Returns 0 on success.")},
+#endif
+	{"fexists", PF_fexists, PF_fexists, 653, PF_fexists, 653, D("float(string name)", "Checks for a loose file in the current writable game directory.")},
 	{"digest_hex",		PF_digest_hex,		PF_digest_hex,				639,	PF_digest_hex, 639, "string(string digest, string data, ...)"},
 };
 

@@ -3182,6 +3182,33 @@ static int COM_FindPackFileIndex (pack_t *pak, const char *filename)
 	return -1;
 }
 
+// Open the exact archive selected by an enumeration, including an inflated
+// standalone stream for compressed entries.
+FILE *COM_OpenPackEntry(pack_t *pack, const char *name, int *size)
+{
+	int i = COM_FindPackFileIndex(pack, name);
+	const packfile_t *entry;
+	FILE *f;
+	if (i < 0)
+		return NULL;
+	entry = &pack->files[i];
+	if (entry->filepos < 0 || entry->filelen < 0 || entry->filelen >= INT_MAX ||
+		entry->deflatedsize < 0)
+		return NULL;
+	f = fopen(pack->filename, "rb");
+	if (!f)
+		return NULL;
+	if (fseek(f, entry->filepos, SEEK_SET) != 0)
+	{
+		fclose(f);
+		return NULL;
+	}
+	*size = entry->filelen;
+	if (entry->deflatedsize)
+		f = FSZIP_Deflate(f, entry->deflatedsize, entry->filelen, entry->name);
+	return f;
+}
+
 /*
 While a level loads, remember which loose-file parent directories exist, so a
 missing replacement texture or model costs one stat per directory rather than
@@ -7886,38 +7913,18 @@ Returns malloc'd, NUL-terminated text, or NULL if this searchpath lacks it.
 */
 static char *LOC_LoadFromSearchPath (searchpath_t *sp, const char *file)
 {
-	char		*buf;
-	FILE		*f;
-	qofs_t		len;
-	size_t		nread;
+	char *buf;
+	FILE *f;
+	qofs_t len;
+	size_t nread;
 
 	if (sp->pack)
 	{
-		packfile_t *packfile;
-		int index = COM_FindPackFileIndex(sp->pack, file);
-
-		if (index < 0)
-			return NULL;
-		packfile = &sp->pack->files[index];
-		if (packfile->filepos < 0 || packfile->filelen < 0 ||
-			packfile->filelen >= INT_MAX || packfile->deflatedsize < 0)
-			Sys_Error("LOC_LoadFromSearchPath: invalid archive metadata for %s", file);
-		len = packfile->filelen;
-
-		f = fopen(sp->pack->filename, "rb");
+		int size;
+		f = COM_OpenPackEntry(sp->pack, file, &size);
 		if (!f)
 			return NULL;
-		if (fseek(f, packfile->filepos, SEEK_SET) != 0)
-		{
-			fclose(f);
-			return NULL;
-		}
-		if (packfile->deflatedsize)
-		{
-			f = FSZIP_Deflate(f, packfile->deflatedsize, packfile->filelen, packfile->name);
-			if (!f)
-				return NULL;
-		}
+		len = size;
 	}
 	else
 	{

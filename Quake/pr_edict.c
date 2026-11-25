@@ -68,6 +68,7 @@ void ED_ClearEdict (edict_t *e)
 	memset (&e->v, 0, qcvm->progs->entityfields * 4);
 	e->swimmonster_start_counted = false;
 	e->free = false;
+	e->qcreadonly = false;
 	qcvm->pushcache_valid = false;	//a reused/new slot may now be a pusher candidate
 }
 
@@ -837,19 +838,36 @@ ED_Write
 For savegames
 =============
 */
-void ED_Write (FILE *f, edict_t *ed)
+static qboolean ED_WriteLine(FILE *file, char **buffer, size_t *size, const char *fmt, ...) FUNC_PRINTF(4, 5);
+static qboolean ED_WriteLine(FILE *file, char **buffer, size_t *size, const char *fmt, ...)
+{
+	int length;
+	va_list ap;
+	va_start(ap, fmt);
+	length = file ? vfprintf(file, fmt, ap) : q_vsnprintf(*buffer, *size, fmt, ap);
+	va_end(ap);
+	if (file)
+		return length >= 0;
+	if (length < 0 || (size_t)length >= *size)
+		return false;
+	*buffer += length;
+	*size -= length;
+	return true;
+}
+
+static qboolean ED_EmitEntity(FILE *f, char *buffer, size_t size, edict_t *ed)
 {
 	ddef_t	*d;
 	int		*v;
 	int		i;
 	const char	*name;
 
-	fprintf (f, "{\n");
+	if (!ED_WriteLine(f, &buffer, &size, "{\n"))
+		return false;
 
 	if (ed->free)
 	{
-		fprintf (f, "}\n");
-		return;
+		return ED_WriteLine(f, &buffer, &size, "}\n");
 	}
 
 	for (i = 1; i < qcvm->progs->numfielddefs; i++)
@@ -860,16 +878,28 @@ void ED_Write (FILE *f, edict_t *ed)
 
 		name = PR_GetString(d->s_name);
 		v = (int *)((char *)&ed->v + d->ofs*4);
-		fprintf (f, "\"%s\" ", name);
-		fprintf (f, "\"%s\"\n", PR_UglyValueString(d->type, (eval_t *)v));
+		if (!ED_WriteLine(f, &buffer, &size, "\"%s\" \"%s\"\n",
+			name, PR_UglyValueString(d->type, (eval_t *)v)))
+			return false;
 	}
 
 	//johnfitz -- save entity alpha manually when progs.dat doesn't know about alpha
-	if (qcvm->extfields.alpha<0 && ed->alpha != ENTALPHA_DEFAULT)
-		fprintf (f, "\"alpha\" \"%f\"\n", ENTALPHA_TOSAVE(ed->alpha));
+	if (qcvm->extfields.alpha < 0 && ed->alpha != ENTALPHA_DEFAULT &&
+		!ED_WriteLine(f, &buffer, &size, "\"alpha\" \"%f\"\n", ENTALPHA_TOSAVE(ed->alpha)))
+		return false;
 	//johnfitz
 
-	fprintf (f, "}\n");
+	return ED_WriteLine(f, &buffer, &size, "}\n");
+}
+
+void ED_Write(FILE *f, edict_t *ent)
+{
+	ED_EmitEntity(f, NULL, 0, ent);
+}
+
+qboolean ED_WriteToBuffer(char *buffer, size_t size, edict_t *ent)
+{
+	return size && ED_EmitEntity(NULL, buffer, size, ent);
 }
 
 /*
@@ -1325,7 +1355,7 @@ ed should be a properly initialized empty edict.
 Used for initial level load and for savegames.
 ====================
 */
-const char *ED_ParseEdict (const char *data, edict_t *ent)
+static const char *ED_ParseEdictInternal(const char *data, edict_t *ent, qboolean strict)
 {
 	ddef_t		*key;
 	char		keyname[256];
@@ -1347,7 +1377,11 @@ const char *ED_ParseEdict (const char *data, edict_t *ent)
 		if (com_token[0] == '}')
 			break;
 		if (!data)
-			Host_Error ("ED_ParseEntity: EOF without closing brace");
+		{
+			if (strict)
+				Host_Error ("ED_ParseEntity: EOF without closing brace");
+			return NULL;
+		}
 
 		// anglehack is to allow QuakeEd to write single scalar angles
 		// and allow them to be turned into vectors. (FIXME...)
@@ -1379,10 +1413,18 @@ const char *ED_ParseEdict (const char *data, edict_t *ent)
 		// could cause a parse error
 		data = COM_ParseEx (data, !strcmp (keyname, "wad") ? CPE_ALLOWTRUNC : CPE_NOTRUNC);
 		if (!data)
-			Host_Error ("ED_ParseEntity: EOF without closing brace");
+		{
+			if (strict)
+				Host_Error ("ED_ParseEntity: EOF without closing brace");
+			return NULL;
+		}
 
 		if (com_token[0] == '}')
-			Host_Error ("ED_ParseEntity: closing brace without data");
+		{
+			if (strict)
+				Host_Error ("ED_ParseEntity: closing brace without data");
+			return NULL;
+		}
 
 		init = true;
 
@@ -1455,8 +1497,23 @@ const char *ED_ParseEdict (const char *data, edict_t *ent)
 			q_snprintf (com_token, sizeof(com_token), "0 %s 0", temp);
 		}
 
+		if (!strict && (key->type & ~DEF_SAVEGLOBAL) == ev_entity)
+		{
+			const char *value = com_token;
+			char *end;
+			long num;
+			if (!strncmp(value, "entity ", 7))
+				value += 7;
+			num = strtol(value, &end, 10);
+			if (end == value || *end || num < 0 || num >= qcvm->num_edicts)
+				return NULL;
+		}
 		if (!ED_ParseEpair ((void *)&ent->v, key, com_token, qcvm != &sv.qcvm))
-			Host_Error ("ED_ParseEdict: parse error");
+		{
+			if (strict)
+				Host_Error ("ED_ParseEdict: parse error");
+			return NULL;
+		}
 	}
 
 	if (!init)
@@ -1465,6 +1522,16 @@ const char *ED_ParseEdict (const char *data, edict_t *ent)
 	return data;
 }
 
+
+const char *ED_ParseEdict (const char *data, edict_t *ent)
+{
+	return ED_ParseEdictInternal(data, ent, true);
+}
+
+const char *ED_ParseEdictSafe(const char *data, edict_t *ent)
+{
+	return ED_ParseEdictInternal(data, ent, false);
+}
 
 /*
 ================

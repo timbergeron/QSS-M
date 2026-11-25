@@ -852,7 +852,7 @@ static void SV_PushScratch_Release (void *p)
 		free (p);
 }
 
-static qboolean SV_PushMoveAngles (edict_t *pusher, float movetime, const vec3_t amove)
+static qboolean SV_PushMoveAngles (edict_t *pusher, vec3_t move, const vec3_t amove)
 {
 	int			i, e;
 	edict_t		*check, *block;
@@ -860,19 +860,11 @@ static qboolean SV_PushMoveAngles (edict_t *pusher, float movetime, const vec3_t
 	vec3_t		mins, maxs;
 	//float oldsolid;
 	vec3_t		org, org2, move2, forward, right, up;
-	vec3_t		move;
 	struct {
 		edict_t *ent;
 		vec3_t origin;
 		vec3_t angles;
 	} *pushed, *pushed_p, *p;
-
-	for (i=0 ; i<3 ; i++)
-	{
-		move[i] = pusher->v.velocity[i] * movetime;
-		mins[i] = pusher->v.absmin[i] + move[i];
-		maxs[i] = pusher->v.absmax[i] + move[i];
-	}
 
 	//using johnfitz's dynamic alloc strategy, consistent with SV_PushMove
 	//sized for max_edicts: touch callbacks during the scan can spawn edicts, and the
@@ -1059,62 +1051,20 @@ static qboolean SV_PushMoveAngles (edict_t *pusher, float movetime, const vec3_t
 	return true;
 }
 
-void SV_PushMove (edict_t *pusher, float movetime)
+static qboolean SV_PushMoveLinear (edict_t *pusher, vec3_t move, float movetime)
 {
 	int			i, e;
 	edict_t		*check, *block;
 	pushiter_t	iter;
-	vec3_t		mins, maxs, move;
+	vec3_t		mins, maxs;
 	vec3_t		entorig, pushorig;
 	int			num_moved;
 	edict_t		**moved_edict; //johnfitz -- dynamically allocate
 	vec3_t		*moved_from; //johnfitz -- dynamically allocate
 	float	solid_backup;
 
-	if ((pusher->v.avelocity[0] || pusher->v.avelocity[1] || pusher->v.avelocity[2]))
-	{
-		switch (qcvm->rotatingbmodelmode)
-		{
-		case ROTATINGBMODEL_ENGINE_PUSH:
-			{	//spike -- added this block for proper rotations
-				vec3_t amove;
-
-				VectorScale (pusher->v.avelocity, movetime, amove);
-				if (SV_PushMoveAngles (pusher, movetime, amove))
-					pusher->v.ltime += movetime;
-				return;
-			}
-
-		case ROTATINGBMODEL_EXTERNAL_ANGLES:
-			//External QC or server state already supplied the angle; only refresh collision here.
-			if (!pusher->v.velocity[0] && !pusher->v.velocity[1] && !pusher->v.velocity[2])
-			{
-				SV_LinkEdict (pusher, false);
-				pusher->v.ltime += movetime;
-				return;
-			}
-			break;
-
-		case ROTATINGBMODEL_DISABLED:
-		default:
-			if (!qcvm->warned_rotatingbmodel)
-			{
-				Con_Warning("MOVETYPE_PUSH(\"%s\") has avelocity, but DP_SV_ROTATINGBMODEL is not enabled\n", PR_GetString(pusher->v.classname));
-				qcvm->warned_rotatingbmodel = true;
-			}
-			break;
-		}
-	}
-
-	if (!pusher->v.velocity[0] && !pusher->v.velocity[1] && !pusher->v.velocity[2])
-	{
-		pusher->v.ltime += movetime;
-		return;
-	}
-
 	for (i=0 ; i<3 ; i++)
 	{
-		move[i] = pusher->v.velocity[i] * movetime;
 		mins[i] = pusher->v.absmin[i] + move[i];
 		maxs[i] = pusher->v.absmax[i] + move[i];
 	}
@@ -1257,12 +1207,69 @@ void SV_PushMove (edict_t *pusher, float movetime)
 				SV_LinkEdict (moved_edict[i], false);
 			}
 			SV_PushScratch_Release (moved_edict); //johnfitz
-			return;
+			return false;
 		}
 	}
 
 	SV_PushScratch_Release (moved_edict); //johnfitz
+	return true;
+}
 
+qboolean SV_PushDisplacement (edict_t *pusher, vec3_t move, vec3_t amove)
+{
+	if (amove[0] || amove[1] || amove[2])
+		return SV_PushMoveAngles(pusher, move, amove);
+	return SV_PushMoveLinear(pusher, move, 0);
+}
+
+void SV_PushMove (edict_t *pusher, float movetime)
+{
+	vec3_t move;
+
+	if ((pusher->v.avelocity[0] || pusher->v.avelocity[1] || pusher->v.avelocity[2]))
+	{
+		switch (qcvm->rotatingbmodelmode)
+		{
+		case ROTATINGBMODEL_ENGINE_PUSH:
+			{	//spike -- added this block for proper rotations
+				vec3_t amove;
+
+				VectorScale (pusher->v.avelocity, movetime, amove);
+				VectorScale (pusher->v.velocity, movetime, move);
+				if (SV_PushMoveAngles (pusher, move, amove))
+					pusher->v.ltime += movetime;
+				return;
+			}
+
+		case ROTATINGBMODEL_EXTERNAL_ANGLES:
+			//External QC or server state already supplied the angle; only refresh collision here.
+			if (!pusher->v.velocity[0] && !pusher->v.velocity[1] && !pusher->v.velocity[2])
+			{
+				SV_LinkEdict (pusher, false);
+				pusher->v.ltime += movetime;
+				return;
+			}
+			break;
+
+		case ROTATINGBMODEL_DISABLED:
+		default:
+			if (!qcvm->warned_rotatingbmodel)
+			{
+				Con_Warning("MOVETYPE_PUSH(\"%s\") has avelocity, but DP_SV_ROTATINGBMODEL is not enabled\n", PR_GetString(pusher->v.classname));
+				qcvm->warned_rotatingbmodel = true;
+			}
+			break;
+		}
+	}
+
+	if (!pusher->v.velocity[0] && !pusher->v.velocity[1] && !pusher->v.velocity[2])
+	{
+		pusher->v.ltime += movetime;
+		return;
+	}
+
+	VectorScale(pusher->v.velocity, movetime, move);
+	SV_PushMoveLinear(pusher, move, movetime);
 }
 
 /*

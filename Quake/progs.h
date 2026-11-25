@@ -44,6 +44,7 @@ typedef union eval_s
 typedef struct edict_s
 {
 	qboolean	free;
+	qboolean	qcreadonly;
 	link_t		area;			/* linked to a division node or leaf */
 
 	unsigned int		num_leafs;
@@ -115,6 +116,8 @@ const char *ED_FieldValueString (edict_t *ed, ddef_t *d);
 void ED_Print (edict_t *ed);
 void ED_Write (FILE *f, edict_t *ed);
 const char *ED_ParseEdict (const char *data, edict_t *ent);
+const char *ED_ParseEdictSafe(const char *data, edict_t *ent);
+qboolean ED_WriteToBuffer(char *buffer, size_t size, edict_t *ent);
 
 const char *ED_ParseGlobals (const char *data, qboolean quiet_unknowns);
 

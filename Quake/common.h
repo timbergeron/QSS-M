@@ -404,6 +404,7 @@ typedef struct pack_s
 } pack_t;
 
 void COM_BuildPackHash (pack_t *pack);
+FILE *COM_OpenPackEntry(pack_t *pack, const char *name, int *size);
 
 typedef struct searchpath_s
 {

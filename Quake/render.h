@@ -83,6 +83,7 @@ typedef struct entity_s
 	qboolean				forcelink;		// model changed
 
 	int						update_type;
+	int						csqc_scene_key; // addentity identity for removeentity
 
 	entity_state_t			baseline;		// to fill in defaults in updates
 	entity_state_t			netstate;		// the latest network state

@@ -451,6 +451,7 @@ void SV_AddClientToServer (struct qsocket_s	*ret);
 void SV_ClientPrintf (const char *fmt, ...) FUNC_PRINTF(1,2);
 void SV_BroadcastPrintf (const char *fmt, ...) FUNC_PRINTF(1,2);
 
+qboolean SV_PushDisplacement(edict_t *pusher, vec3_t move, vec3_t amove);
 void SV_Physics (double frametime);
 
 qboolean SV_CheckBottom (edict_t *ent);
