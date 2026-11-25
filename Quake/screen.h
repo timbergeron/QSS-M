@@ -156,6 +156,17 @@ qboolean SCR_GetDemoBarRect(scr_demobar_rect_t *out);
 qboolean SCR_GetCRMod7CountupTime(int *elapsed_time); // woods #varmatchclock
 
 extern	cvar_t		scr_menuscale;
+extern	cvar_t		scr_menubgstyle; // woods #menubgstyle (iw)
+
+typedef enum // woods #menubgstyle (iw)
+{
+	MENUBG_GLQUAKE,
+	MENUBG_WINQUAKE,
+	MENUBG_WINQUAKE_SCALED,
+	MENUBG_DOSQUAKE,
+
+	MENUBG_NUMTYPES,
+} menubgstyle_t;
 extern	cvar_t		scr_sbarscale;
 extern	cvar_t		scr_conwidth;
 extern	cvar_t		scr_conscale;

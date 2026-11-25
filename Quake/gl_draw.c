@@ -1053,6 +1053,29 @@ qboolean Draw_ReloadTextures(qboolean force)
 
 /*
 ===============
+Draw_CreateWinQuakeMenuBgTex -- woods #menubgstyle (iw)
+
+4x2 tile reproducing WinQuake's menu fade: one in four pixels kept (white,
+transparent), the rest black.
+===============
+*/
+static gltexture_t *winquakemenubg;
+
+static void Draw_CreateWinQuakeMenuBgTex (void)
+{
+	static unsigned winquakemenubg_pixels[4*2] =
+	{
+		0x00ffffffu, 0xff000000u, 0xff000000u, 0xff000000u,
+		0xff000000u, 0xff000000u, 0x00ffffffu, 0xff000000u,
+	};
+
+	winquakemenubg = TexMgr_LoadImage (NULL, "winquakemenubg", 4, 2, SRC_RGBA,
+		(byte *)winquakemenubg_pixels, "", (src_offset_t)winquakemenubg_pixels,
+		TEXPREF_ALPHA | TEXPREF_NEAREST | TEXPREF_PERSIST | TEXPREF_NOPICMIP);
+}
+
+/*
+===============
 Draw_Init -- johnfitz -- rewritten
 ===============
 */
@@ -1070,6 +1093,7 @@ void Draw_Init (void)
 	pic_ins = Draw_MakePic ("ins", 8, 9, &pic_ins_data[0][0]);
 	pic_ovr = Draw_MakePic ("ovr", 8, 8, &pic_ovr_data[0][0]);
 	pic_nul = Draw_MakePic ("nul", 8, 8, &pic_nul_data[0][0]);
+	Draw_CreateWinQuakeMenuBgTex (); // woods #menubgstyle (iw)
 
 	// load game pics
 	Draw_LoadPics ();
@@ -3343,7 +3367,7 @@ Draw_FadeScreen -- johnfitz -- revised
 */
 void Draw_FadeScreen (void)
 {
-	Draw_FadeScreen_Alpha (0.5f);
+	Draw_FadeScreen_Rect_Alpha (0.f, 0.f, (float)glwidth, (float)glheight, 0.5f);
 }
 
 void Draw_FadeScreen_Alpha (float alpha)
@@ -3374,30 +3398,127 @@ void Draw_FadeScreen_Alpha (float alpha)
 	Sbar_Changed();
 }
 
+/*
+================
+Draw_GetMenuBgStyle -- woods #menubgstyle (iw)
+================
+*/
+static int Draw_GetMenuBgStyle (void)
+{
+	int softemu;
+
+	if (scr_menubgstyle.value >= 0.f)
+		return CLAMP (0, (int)scr_menubgstyle.value, MENUBG_NUMTYPES - 1);
+
+	softemu = CLAMP (0, (int)r_softemu.value, 3);
+	if (softemu >= 3)
+		return MENUBG_DOSQUAKE;
+	if (softemu == 2)
+		return MENUBG_WINQUAKE_SCALED;
+	if (softemu == 1)
+		return MENUBG_WINQUAKE;
+	return MENUBG_GLQUAKE;
+}
+
+static void Draw_FadeQuad (float x0, float y0, float x1, float y1, float smax, float tmax)
+{
+	glBegin (GL_QUADS);
+	glTexCoord2f (x0 * smax, y0 * tmax);
+	glVertex2f (x0, y0);
+	glTexCoord2f (x1 * smax, y0 * tmax);
+	glVertex2f (x1, y0);
+	glTexCoord2f (x1 * smax, y1 * tmax);
+	glVertex2f (x1, y1);
+	glTexCoord2f (x0 * smax, y1 * tmax);
+	glVertex2f (x0, y1);
+	glEnd ();
+}
+
+/*
+================
+Draw_FadeScreen_Rect_Alpha -- woods #menubgstyle (iw): menu fade honouring scr_menubgstyle
+
+Coordinates are default-canvas pixels.
+================
+*/
 void Draw_FadeScreen_Rect_Alpha (float x0, float y0, float x1, float y1, float alpha)
 {
+	int type;
+	float s;
+
 	if (alpha <= 0.f)
 		return;
+
+	type = Draw_GetMenuBgStyle ();
+	if ((type == MENUBG_WINQUAKE || type == MENUBG_WINQUAKE_SCALED) && !winquakemenubg)
+		type = MENUBG_GLQUAKE;
 
 	GL_SetCanvas (CANVAS_DEFAULT);
 
 	glEnable (GL_BLEND);
-	glBlendFunc (GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
 	glDisable (GL_ALPHA_TEST);
-	glDisable (GL_TEXTURE_2D);
-	glColor4f (0, 0, 0, alpha);
-	glBegin (GL_QUADS);
 
-	glVertex2f (x0, y0);
-	glVertex2f (x1, y0);
-	glVertex2f (x1, y1);
-	glVertex2f (x0, y1);
+	if (type == MENUBG_DOSQUAKE)
+	{
+		glDisable (GL_TEXTURE_2D);
 
-	glEnd ();
+		// first pass: palette-style warm tint (multiply)
+		glBlendFunc (GL_ZERO, GL_SRC_COLOR);
+		s = 1.f - CLAMP (0.f, alpha, 0.5f) * 2.f;
+		glColor4f (LERP (0.56f, 1.f, s), LERP (0.43f, 1.f, s), LERP (0.13f, 1.f, s), 1.f);
+		Draw_FadeQuad (x0, y0, x1, y1, 0.f, 0.f);
+
+		// second pass: dark brown overlay
+		glBlendFunc (GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+		s = CLAMP (0.f, alpha, 1.f);
+		s = (sqrtf (s) + s) * 0.5f; // ~0.6 at the default 0.5 menu fade
+		glColor4f (0.095f, 0.08f, 0.045f, s);
+		Draw_FadeQuad (x0, y0, x1, y1, 0.f, 0.f);
+
+		glEnable (GL_TEXTURE_2D);
+	}
+	else if (type == MENUBG_WINQUAKE || type == MENUBG_WINQUAKE_SCALED)
+	{
+		float scale = 1.f;
+
+		if (type == MENUBG_WINQUAKE_SCALED)
+		{
+			scale = q_min ((float)glwidth / 320.0f, (float)glheight / 200.0f);
+			scale = CLAMP (1.0f, scr_menuscale.value, scale);
+			scale = floorf (scale);
+		}
+
+		GL_Bind (winquakemenubg);
+		if (alpha >= 0.5f)
+		{
+			glBlendFunc (GL_ZERO, GL_SRC_COLOR);
+			s = 2.f - q_min (1.f, alpha) * 2.f;
+			glColor4f (s, s, s, 1.f);
+		}
+		else
+		{
+			glBlendFunc (GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+			glColor4f (0.f, 0.f, 0.f, alpha * 2.f);
+		}
+		// one texel per (scaled) screen pixel, anchored to the screen origin
+		Draw_FadeQuad (x0, y0, x1, y1,
+			1.f / (winquakemenubg->width * scale), 1.f / (winquakemenubg->height * scale));
+	}
+	else // MENUBG_GLQUAKE
+	{
+		glBlendFunc (GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+		glDisable (GL_TEXTURE_2D);
+		glColor4f (0.f, 0.f, 0.f, alpha);
+		Draw_FadeQuad (x0, y0, x1, y1, 0.f, 0.f);
+		glEnable (GL_TEXTURE_2D);
+	}
+
+	glBlendFunc (GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
 	glColor4f (1,1,1,1);
-	glEnable (GL_TEXTURE_2D);
 	glEnable (GL_ALPHA_TEST);
 	glDisable (GL_BLEND);
+
+	Sbar_Changed();
 }
 
 /*

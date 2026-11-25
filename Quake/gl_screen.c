@@ -114,6 +114,7 @@ qboolean Sbar_ShouldSortByTeam(void); // woods #teamscoreboard
 
 //johnfitz -- new cvars
 cvar_t		scr_menuscale = {"scr_menuscale", "1", CVAR_ARCHIVE};
+cvar_t		scr_menubgstyle = {"scr_menubgstyle", "-1", CVAR_ARCHIVE}; // woods #menubgstyle (iw): -1 auto (follows r_softemu), 0 glquake, 1 winquake, 2 winquake scaled, 3 dosquake
 cvar_t		scr_centerprintbg = {"scr_centerprintbg", "0", CVAR_ARCHIVE}; // 0 = off; 1 = text box; 2 = menu box; 3 = menu strip -- woods #centerprintbg (iw)
 cvar_t		scr_sbarscale = {"scr_sbarscale", "1", CVAR_ARCHIVE};
 cvar_t		scr_sbaralpha = {"scr_sbaralpha", "0.75", CVAR_ARCHIVE}; // woods #sbarstyles
@@ -1049,6 +1050,22 @@ static void CenterPrintBg_Completion_f(cvar_t* cvar, const char* partial)
 
 /*
 ===============
+MenuBgStyle_Completion_f -- woods #menubgstyle (iw)
+===============
+*/
+static void MenuBgStyle_Completion_f(cvar_t* cvar, const char* partial)
+{
+	(void)cvar;
+
+	Con_AddToTabList("-1", partial, "auto (r_softemu)", NULL);
+	Con_AddToTabList("0", partial, "glquake", NULL);
+	Con_AddToTabList("1", partial, "winquake", NULL);
+	Con_AddToTabList("2", partial, "winquake scaled", NULL);
+	Con_AddToTabList("3", partial, "dosquake", NULL);
+}
+
+/*
+===============
 Sbar_Completion_f -- woods #iwtabcomplete
 ===============
 */
@@ -1183,6 +1200,8 @@ void SCR_Init (void)
 {
 	//johnfitz -- new cvars
 	Cvar_RegisterVariable (&scr_menuscale);
+	Cvar_RegisterVariable (&scr_menubgstyle); // woods #menubgstyle (iw)
+	Cvar_SetCompletion (&scr_menubgstyle, &MenuBgStyle_Completion_f);
 	Cvar_RegisterVariable (&scr_centerprintbg); // woods #centerprintbg (iw)
 	Cvar_SetCompletion (&scr_centerprintbg, &CenterPrintBg_Completion_f); // woods #iwtabcomplete
 	Cvar_RegisterVariable (&scr_sbarscale);
