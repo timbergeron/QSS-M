@@ -3,4 +3,5 @@ qsmenuextensions.qc
 selftest.qc
 rotpic_tests.qc
 parity_tests.qc
+builtin_followups.qc
 menu.qc

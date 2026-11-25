@@ -16,10 +16,10 @@ float(string builtinname) builtin_find = #0;
 
 void() cq_builtin_find =
 {
-	// ssqc-only: clientstat is PF_NoCSQC, te_lightningblood has a NULL csqcfunc
+	// ssqc-only: clientstat is PF_NoCSQC
 	st_poisonf();
 	st_eqf("builtin_find/ssqc-only-clientstat", builtin_find("clientstat"), 0);
-	st_eqf("builtin_find/ssqc-only-te_lightningblood", builtin_find("te_lightningblood"), 0);
+	st_eqf("builtin_find/csqc-te_lightningblood", builtin_find("te_lightningblood"), 219);
 	// present in csqc, so the number still comes back
 	st_ok("builtin_find/csqc-drawpic", builtin_find("drawpic") != 0);
 	st_poisonf();

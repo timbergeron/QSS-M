@@ -443,6 +443,8 @@ def main():
     shot = newest_tga(shots)
 
     strip_test_cvars(args.basedir, args.game)
+    with open(os.path.join(gamedir, 'config.cfg'), 'ab') as f:
+        f.write(b'\nseta hq_startup_archive "37"\n')
     r = engine(['+scr_menuscale', '1', '+con_notifytime', '0',
                 '+cl_demoreel', '0', '+hq_menu_selftest', '1', '+togglemenu', '1'],
                'menu-disconnected.log')

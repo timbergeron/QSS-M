@@ -221,6 +221,13 @@ void() mq_bounds =
 
 void() mq_selftest =
 {
+	if (!autocvar_hq_expect_connected)
+	{
+		st_eqs("cvar/startup-archive-loaded", cvar_string("hq_startup_archive"), "37");
+		st_eqf("cvar/startup-archive-clean", cvars_haveunsaved(), 0);
+		cvar_set("hq_startup_archive", "38");
+		st_eqf("cvar/runtime-archive-dirty", cvars_haveunsaved(), 1);
+	}
 	st_roundedrect();
 	st_bufstr_find();
 	mq_models();
@@ -241,6 +248,7 @@ void() mq_selftest =
 	st_eqf("ext/menu-fte-qc-fs-search-sizemtime", checkextension("FTE_QC_FS_SEARCH_SIZEMTIME"), 1);
 	st_eqf("ext/menu-fte-csqc-windowcaption", checkextension("FTE_CSQC_WINDOWCAPTION"), 1);
 	st_eqf("ext/menu-fte-qc-checkpvs-false", checkextension("FTE_QC_CHECKPVS"), 0);
+	st_followup_client_builtins();
 	st_report("menuqc");
 	localcmd("quit\n");
 };
