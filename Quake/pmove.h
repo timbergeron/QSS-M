@@ -165,6 +165,8 @@ void SV_Impact (edict_t *e1, edict_t *e2);
 void World_AddEntsToPmove(edict_t *ignore, vec3_t boxminmax[2]);
 void PMCL_ServerinfoUpdated(void);
 void PMCL_SetMoveVars(void);
+void PMCL_PlayerBounds(unsigned int solid, vec3_t mins, vec3_t maxs);
+void PMCL_SetLegacyGlobals(const entity_t *ent, qboolean predicted);
 void PMSV_SetMoveStats(edict_t *plent, float *fstat, int *istat);	//so client has the right movevars as stats.
 void PMSV_UpdateMovevars(void);
 void PF_sv_pmove(void);

@@ -1492,7 +1492,7 @@ float	CL_LerpPoint (void)
 	return frac;
 }
 
-static qboolean CL_LerpEntity(entity_t *ent, vec3_t org, vec3_t ang, float frac)
+static qboolean CL_LerpEntity(entity_t *ent, vec3_t org, vec3_t ang, float frac, qboolean *predicted)
 {
 	float f, d;
 	int j;
@@ -1520,18 +1520,7 @@ static qboolean CL_LerpEntity(entity_t *ent, vec3_t org, vec3_t ang, float frac)
 #endif
 		PMCL_SetMoveVars();
 
-		if (ent->netstate.solidsize)
-		{
-			pmove.player_maxs[0] = pmove.player_maxs[1] = ent->netstate.solidsize & 255;
-			pmove.player_mins[0] = pmove.player_mins[1] = -pmove.player_maxs[0];
-			pmove.player_mins[2] = -(int)((ent->netstate.solidsize >>8) & 255);
-			pmove.player_maxs[2] = (int)((ent->netstate.solidsize>>16) & 65535) - 32768;
-		}
-		else
-		{
-			VectorClear(pmove.player_mins);
-			VectorClear(pmove.player_maxs);
-		}
+		PMCL_PlayerBounds(ent->netstate.solidsize, pmove.player_mins, pmove.player_maxs);
 		pmove.safeorigin_known = false;
 		VectorCopy(ent->msg_origins[0], pmove.origin);
 		for (j = 0; j < 3; j++)
@@ -1603,6 +1592,8 @@ static qboolean CL_LerpEntity(entity_t *ent, vec3_t org, vec3_t ang, float frac)
 		// Stair smoothing is applied after relinking so temp entities share cl.crouch.
 		//FIXME: add error correction
 
+		if (predicted)
+			*predicted = true;
 		return true;	//if we're predicting, don't let its old position linger as interpolation. should be less laggy that way, or something.
 	}
 
@@ -1678,7 +1669,7 @@ static qboolean CL_AttachEntity(entity_t *ent, float frac)
 		else
 		{
 			tagent = parent->netstate.tagentity;
-			CL_LerpEntity(parent, porg, pang, frac);
+			CL_LerpEntity(parent, porg, pang, frac, NULL);
 		}
 
 		//FIXME: this code needs to know the exact lerp info of the underlaying model.
@@ -2543,8 +2534,13 @@ void CL_RelinkEntities (void)
 		CL_DemoEyesMaybeAnimate(ent, i); // woods #demoeyes
 		CL_CTFPugSwapEntityModel(ent); // woods #ctfpubmodels
 
-		if (CL_LerpEntity(ent, ent->origin, ent->angles, frac))
-			ent->lerpflags |= LERP_RESETMOVE;
+		{
+			qboolean predicted = false;
+			if (CL_LerpEntity(ent, ent->origin, ent->angles, frac, &predicted))
+				ent->lerpflags |= LERP_RESETMOVE;
+			if (i == cl.viewentity)
+				PMCL_SetLegacyGlobals(ent, predicted);
+		}
 
 		if (ent->netstate.tagentity)
 		if (!CL_AttachEntity(ent, frac))

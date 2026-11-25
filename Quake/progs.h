@@ -295,6 +295,23 @@ struct pr_extglobals_s
 #define QCEXTGLOBALS_GAME \
 	QCEXTGLOBALS_INPUTS	\
 	QCEXTGLOBAL_FLOAT(physics_mode)\
+	QCEXTGLOBAL_VECTOR(global_gravitydir)\
+	//end
+#define QCEXTGLOBALS_TRACE \
+	QCEXTGLOBAL_INT(trace_surfaceflagsi)\
+	QCEXTGLOBAL_FLOAT(trace_surfaceflagsf)\
+	QCEXTGLOBAL_STRING(trace_surfacename)\
+	QCEXTGLOBAL_INT(trace_endcontentsi)\
+	QCEXTGLOBAL_FLOAT(trace_endcontentsf)\
+	QCEXTGLOBAL_INT(trace_surface_id)\
+	QCEXTGLOBAL_INT(trace_brush_id)\
+	QCEXTGLOBAL_INT(trace_brush_faceid)\
+	QCEXTGLOBAL_INT(trace_triangle_id)\
+	QCEXTGLOBAL_INT(trace_bone_id)\
+	QCEXTGLOBAL_STRING(trace_dphittexturename)\
+	QCEXTGLOBAL_FLOAT(trace_dphitcontents)\
+	QCEXTGLOBAL_FLOAT(trace_dpstartcontents)\
+	QCEXTGLOBAL_FLOAT(trace_dphitq3surfaceflags)\
 	//end
 #define QCEXTGLOBALS_CSQC \
 	QCEXTGLOBAL_FLOAT(cltime)\
@@ -308,6 +325,14 @@ struct pr_extglobals_s
 	QCEXTGLOBAL_FLOAT(drawfont)\
 	QCEXTGLOBAL_FLOAT(clientcommandframe)\
 	QCEXTGLOBAL_FLOAT(servercommandframe)\
+	QCEXTGLOBAL_FLOAT(trace_networkentity)\
+	QCEXTGLOBAL_VECTOR(pmove_org)\
+	QCEXTGLOBAL_VECTOR(pmove_vel)\
+	QCEXTGLOBAL_VECTOR(pmove_mins)\
+	QCEXTGLOBAL_VECTOR(pmove_maxs)\
+	QCEXTGLOBAL_FLOAT(pmove_jump_held)\
+	QCEXTGLOBAL_FLOAT(pmove_waterjumptime)\
+	QCEXTGLOBAL_FLOAT(pmove_onground)\
 	//end
 #define QCEXTGLOBALS_CLIENT_UI \
 	QCEXTGLOBAL_FLOAT(autocvar_vid_conwidth)\
@@ -318,13 +343,16 @@ struct pr_extglobals_s
 #define QCEXTGLOBAL_FLOAT(n) float *n;
 #define QCEXTGLOBAL_INT(n) int *n;
 #define QCEXTGLOBAL_VECTOR(n) float *n;
+#define QCEXTGLOBAL_STRING(n) string_t *n;
 	QCEXTGLOBALS_COMMON
 	QCEXTGLOBALS_GAME
+	QCEXTGLOBALS_TRACE
 	QCEXTGLOBALS_CSQC
 	QCEXTGLOBALS_CLIENT_UI
 #undef QCEXTGLOBAL_FLOAT
 #undef QCEXTGLOBAL_INT
 #undef QCEXTGLOBAL_VECTOR
+#undef QCEXTGLOBAL_STRING
 };
 
 struct pr_extfields_s
@@ -347,6 +375,11 @@ struct pr_extfields_s
 	/*stuff used by csqc+ssqc, but not menu*/	\
 	QCEXTFIELD(customphysics,			".void()")/*function*/	\
 	QCEXTFIELD(gravity,					".float")			/*float*/	\
+	QCEXTFIELD(gravitydir, ".vector") /* used by runstandardplayerphysics */ \
+	QCEXTFIELD(movechain, ".entity") \
+	QCEXTFIELD(chainmoved, ".void()") \
+	QCEXTFIELD(contentstransition, ".void(float oldcontents, float newcontents)") \
+	QCEXTFIELD(hitcontentsmaski, ".int") \
 	QCEXTFIELD(pmove_flags,				".float")			/*float, mostly to hold jump_held*/	\
 	//end of list
 #define QCEXTFIELDS_CL	\

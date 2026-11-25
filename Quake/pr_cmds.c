@@ -786,21 +786,9 @@ static void PF_traceline (void)
 	if (IS_NAN(v2[0]) || IS_NAN(v2[1]) || IS_NAN(v2[2]))
 		v2[0] = v2[1] = v2[2] = 0;
 
-	trace = SV_MoveWithLagOwner(v1, vec3_origin, vec3_origin, v2,
+	trace = PR_TraceMove(v1, vec3_origin, vec3_origin, v2,
 		nomonsters, ent, lagowner);
-
-	pr_global_struct->trace_allsolid = trace.allsolid;
-	pr_global_struct->trace_startsolid = trace.startsolid;
-	pr_global_struct->trace_fraction = trace.fraction;
-	pr_global_struct->trace_inwater = trace.inwater;
-	pr_global_struct->trace_inopen = trace.inopen;
-	VectorCopy (trace.endpos, pr_global_struct->trace_endpos);
-	VectorCopy (trace.plane.normal, pr_global_struct->trace_plane_normal);
-	pr_global_struct->trace_plane_dist =  trace.plane.dist;
-	if (trace.ent)
-		pr_global_struct->trace_ent = EDICT_TO_PROG(trace.ent);
-	else
-		pr_global_struct->trace_ent = EDICT_TO_PROG(qcvm->edicts);
+	PR_SetTraceGlobals(&trace, VectorCompare(v1, v2));
 }
 
 /*

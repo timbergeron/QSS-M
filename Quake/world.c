@@ -42,6 +42,8 @@ typedef struct
 	trace_t		trace;
 	int			type;
 	unsigned int	hitcontents;	//content types to impact upon... (1<<-CONTENTS_FOO) bitmask
+	unsigned int	ftehitcontents;	// explicit QuakeC contents mask, zero selects native defaults
+	qboolean	wantsurface;
 	edict_t		*passedict;
 	edict_t		*lagowner;
 	client_t	*laggedclient;
@@ -137,7 +139,7 @@ testing object's origin to get a point to use with the returned hull.
 ================
 */
 static hull_t *SV_HullForEntityAtOrigin (edict_t *ent, vec3_t mins, vec3_t maxs,
-	vec3_t entorigin, vec3_t entmins, vec3_t entmaxs, vec3_t offset)
+	vec3_t entorigin, vec3_t entmins, vec3_t entmaxs, vec3_t offset, qmodel_t **brushmodel)
 {
 	qmodel_t	*model;
 	vec3_t		size;
@@ -168,6 +170,7 @@ static hull_t *SV_HullForEntityAtOrigin (edict_t *ent, vec3_t mins, vec3_t maxs,
 			hull = &model->hulls[1];
 		else
 			hull = &model->hulls[2];
+		*brushmodel = model;
 
 // calculate an offset value to center the origin
 		VectorSubtract (hull->clip_mins, mins, offset);
@@ -939,6 +942,7 @@ reenter:
 
 	midf = CLAMP(0, midf, 1);
 	trace->fraction = midf;
+	trace->impact_node = num + 1;
 	VectorCopy (mid, trace->endpos);
 	VectorInterpolate(ctx->start, midf, ctx->end, trace->endpos);
 
@@ -1045,6 +1049,7 @@ qboolean SV_SlowRecursiveHullCheck (hull_t *hull, int num, float p1f, float p2f,
 //==================
 // the other side of the node is solid, this is the impact point
 //==================
+	trace->impact_node = num + 1;
 	if (!side)
 	{
 		VectorCopy (plane->normal, trace->plane.normal);
@@ -1119,6 +1124,88 @@ qboolean SV_RecursiveHullCheck (hull_t *hull, vec3_t p1, vec3_t p2, trace_t *tra
 	}
 }
 
+static qboolean SV_PointOnTraceSurface (const qmodel_t *model, const msurface_t *surface, const vec3_t point)
+{
+	qboolean positive = false, negative = false;
+	int i;
+
+	for (i = 0; i < surface->numedges; i++)
+	{
+		int idx = model->surfedges[surface->firstedge + i];
+		const medge_t *edge = &model->edges[idx < 0 ? -idx : idx];
+		const mvertex_t *a = &model->vertexes[edge->v[idx < 0]];
+		const mvertex_t *b = &model->vertexes[edge->v[idx >= 0]];
+		vec3_t dir, delta, cross;
+		float side;
+
+		VectorSubtract(b->position, a->position, dir);
+		VectorSubtract(point, a->position, delta);
+		CrossProduct(dir, delta, cross);
+		side = DotProduct(cross, surface->plane->normal);
+		// Accept tiny roundoff near shared edges.
+		if (side * side > DotProduct(dir, dir) * 0.000001f)
+		{
+			positive |= side > 0;
+			negative |= side < 0;
+			if (positive && negative)
+				return false;
+		}
+	}
+	return surface->numedges >= 3;
+}
+
+static void SV_TraceBrushSurface (const qmodel_t *model, const hull_t *hull,
+	const vec3_t start, const vec3_t end, trace_t *trace)
+{
+	const mnode_t *node;
+	vec3_t point;
+	double from, to;
+	float fraction;
+	unsigned int i, first, last;
+	qboolean back;
+
+	// The point hull is a copy of the draw BSP. The other collision hulls
+	// have expanded planes and do not carry draw face references.
+	if (!model || hull != &model->hulls[0] || !trace->impact_node ||
+		trace->impact_node > model->numnodes)
+		return;
+	node = &model->nodes[trace->impact_node - 1];
+	if (!node->numsurfaces)
+		return;
+
+	// Use the actual intersection before the collision epsilon backs it up.
+	from = DoublePrecisionDotProduct(node->plane->normal, start) - node->plane->dist;
+	to = DoublePrecisionDotProduct(node->plane->normal, end) - node->plane->dist;
+	if (from == to)
+		return;
+	fraction = from / (from - to);
+	if (!(fraction >= 0 && fraction <= 1))
+		return;
+	VectorInterpolate(start, fraction, end, point);
+	back = DotProduct(trace->plane.normal, node->plane->normal) < 0;
+	first = q_max(node->firstsurface, (unsigned int)model->firstmodelsurface);
+	last = q_min(node->firstsurface + node->numsurfaces,
+		(unsigned int)(model->firstmodelsurface + model->nummodelsurfaces));
+	for (i = first; i < last; ++i)
+	{
+		const msurface_t *surface = &model->surfaces[i];
+		if (surface->plane != node->plane || !!(surface->flags & SURF_PLANEBACK) != back ||
+			!SV_PointOnTraceSurface(model, surface, point))
+			continue;
+		trace->surface_id = i - model->firstmodelsurface + 1;
+		trace->surface_name = surface->texinfo->texture->name;
+		return;
+	}
+}
+
+static void SV_TraceHull (hull_t *hull, vec3_t start, vec3_t end, trace_t *trace,
+	unsigned int hitcontents, const qmodel_t *surfacemodel)
+{
+	SV_RecursiveHullCheck(hull, start, end, trace, hitcontents);
+	if (surfacemodel)
+		SV_TraceBrushSurface(surfacemodel, hull, start, end, trace);
+}
+
 /*
 ==================
 SV_ClipMoveToEntity
@@ -1129,12 +1216,13 @@ eventually rotation) of the end points
 */
 static trace_t SV_ClipMoveToEntityAt (edict_t *ent, vec3_t entorigin,
 	vec3_t entangles, vec3_t entmins, vec3_t entmaxs, vec3_t start,
-	vec3_t mins, vec3_t maxs, vec3_t end, unsigned int hitcontents)
+	vec3_t mins, vec3_t maxs, vec3_t end, unsigned int hitcontents, qboolean wantsurface)
 {
 	trace_t		trace;
 	vec3_t		offset;
 	vec3_t		start_l, end_l;
 	hull_t		*hull;
+	qmodel_t	*brushmodel = NULL;
 
 // fill in a default trace
 	memset (&trace, 0, sizeof(trace_t));
@@ -1144,7 +1232,9 @@ static trace_t SV_ClipMoveToEntityAt (edict_t *ent, vec3_t entorigin,
 
 // get the clipping hull
 	hull = SV_HullForEntityAtOrigin (ent, mins, maxs, entorigin,
-		entmins, entmaxs, offset);
+		entmins, entmaxs, offset, &brushmodel);
+	if (!wantsurface)
+		brushmodel = NULL;
 
 	VectorSubtract (start, offset, start_l);
 	VectorSubtract (end, offset, end_l);
@@ -1164,7 +1254,7 @@ static trace_t SV_ClipMoveToEntityAt (edict_t *ent, vec3_t entorigin,
 			end_r[0] = DotProduct(end_l, axis[0]);
 			end_r[1] = DotProduct(end_l, axis[1]);
 			end_r[2] = DotProduct(end_l, axis[2]);
-			SV_RecursiveHullCheck (hull, start_r, end_r, &trace, hitcontents);
+			SV_TraceHull(hull, start_r, end_r, &trace, hitcontents, brushmodel);
 			VectorCopy(trace.endpos, tmp);
 			trace.endpos[0] = DotProductTranspose(tmp,axis,0);
 			trace.endpos[1] = DotProductTranspose(tmp,axis,1);
@@ -1181,11 +1271,11 @@ static trace_t SV_ClipMoveToEntityAt (edict_t *ent, vec3_t entorigin,
 				Con_Warning("%s(\"%s\") has angles set, but DP_SV_ROTATINGBMODEL is not enabled\n", (ent->v.solid == SOLID_EXT_BSPTRIGGER)?"SOLID_BSPTRIGGER":"SOLID_BSP", PR_GetString(ent->v.classname));
 				qcvm->warned_rotatingbmodel = true;
 			}
-			SV_RecursiveHullCheck (hull, start_l, end_l, &trace, hitcontents);
+			SV_TraceHull(hull, start_l, end_l, &trace, hitcontents, brushmodel);
 		}
 	}
 	else
-		SV_RecursiveHullCheck (hull, start_l, end_l, &trace, hitcontents);
+		SV_TraceHull(hull, start_l, end_l, &trace, hitcontents, brushmodel);
 
 // fix trace up by the offset
 	if (trace.fraction != 1)
@@ -1193,7 +1283,10 @@ static trace_t SV_ClipMoveToEntityAt (edict_t *ent, vec3_t entorigin,
 
 // did we clip the move?
 	if (trace.fraction < 1 || trace.startsolid  )
+	{
 		trace.ent = ent;
+		trace.hitbox = hull == &box_hull;
+	}
 
 	return trace;
 }
@@ -1202,7 +1295,7 @@ trace_t SV_ClipMoveToEntity (edict_t *ent, vec3_t start, vec3_t mins, vec3_t max
 	vec3_t end, unsigned int hitcontents)
 {
 	return SV_ClipMoveToEntityAt(ent, ent->v.origin, ent->v.angles,
-		ent->v.mins, ent->v.maxs, start, mins, maxs, end, hitcontents);
+		ent->v.mins, ent->v.maxs, start, mins, maxs, end, hitcontents, false);
 }
 
 //===========================================================================
@@ -1267,6 +1360,43 @@ static const laggedentinfo_t *SV_LaggedPlayerState(const moveclip_t *clip,
 	return best;
 }
 
+unsigned int SV_FTEContents(int contents)
+{
+	switch (contents)
+	{
+	case CONTENTS_SOLID:
+	case CONTENTS_ORIGIN: return 1;
+	case CONTENTS_LAVA: return 0x8;
+	case CONTENTS_SLIME: return 0x10;
+	case CONTENTS_WATER: return 0x20;
+	case CONTENTS_LADDER: return 0x4000;
+	case CONTENTS_CLIP: return FTE_CONTENTS_PLAYERCLIP;
+	case CONTENTS_CURRENT_0:
+	case CONTENTS_CURRENT_90:
+	case CONTENTS_CURRENT_180:
+	case CONTENTS_CURRENT_270:
+	case CONTENTS_CURRENT_UP:
+	case CONTENTS_CURRENT_DOWN:
+		return 0x40000u << (CONTENTS_CURRENT_0 - contents);
+	case CONTENTS_SKY: return 0x80000000u;
+	default: return 0;
+	}
+}
+
+static unsigned int SV_EntityHitContents(const moveclip_t *clip, qboolean brush, qboolean corpse, float skin)
+{
+	if (skin < 0)
+	{
+		if (skin < CONTENTS_LADDER || !(clip->hitcontents & CONTENTMASK_FROMQ1((int)skin)))
+			return 0;
+		return ~CONTENTMASK_FROMQ1(CONTENTS_EMPTY);
+	}
+	if (clip->ftehitcontents && !brush)
+		return clip->ftehitcontents & (corpse ? FTE_CONTENTS_CORPSE : FTE_CONTENTS_BODY) ?
+			CONTENTMASK_FROMQ1(CONTENTS_SOLID) : 0;
+	return clip->hitcontents;
+}
+
 /*
 ====================
 SV_ClipToLinks
@@ -1283,6 +1413,9 @@ static void SV_ClipToLinks ( areanode_t *node, moveclip_t *clip )
 // touch linked edicts
 	for (l = node->solid_edicts.next ; l != &node->solid_edicts ; l = next)
 	{
+		float *mins, *maxs;
+		unsigned int hitcontents;
+
 		next = l->next;
 		touch = EDICT_FROM_AREA(l);
 		if (touch->v.solid == SOLID_NOT)
@@ -1316,7 +1449,7 @@ static void SV_ClipToLinks ( areanode_t *node, moveclip_t *clip )
 		if (clip->passedict && clip->passedict->v.size[0] && !touch->v.size[0])
 			continue;	// points never interact
 
-		if (pr_checkextension.value && clip->passedict)
+		if (!clip->ftehitcontents && pr_checkextension.value && clip->passedict)
 		{
 			//corpses are nonsolid to slidebox
 			if (clip->passedict->v.solid == SOLID_SLIDEBOX && touch->v.solid == SOLID_EXT_CORPSE)
@@ -1337,24 +1470,17 @@ static void SV_ClipToLinks ( areanode_t *node, moveclip_t *clip )
 				continue;	// don't clip against owner
 		}
 
-		if (touch->v.skin < 0)
-		{
-			if (!(clip->hitcontents & (1<<-(int)touch->v.skin)))
-				continue;	//not solid, don't bother trying to clip.
-			if ((int)touch->v.flags & FL_MONSTER)
-				trace = SV_ClipMoveToEntity (touch, clip->start, clip->mins2, clip->maxs2, clip->end, ~(1<<-CONTENTS_EMPTY));
-			else
-				trace = SV_ClipMoveToEntity (touch, clip->start, clip->mins, clip->maxs, clip->end, ~(1<<-CONTENTS_EMPTY));
-			if (trace.contents != CONTENTS_EMPTY)
-				trace.contents = touch->v.skin;
-		}
-		else
-		{
-			if ((int)touch->v.flags & FL_MONSTER)
-				trace = SV_ClipMoveToEntity (touch, clip->start, clip->mins2, clip->maxs2, clip->end, clip->hitcontents);
-			else
-				trace = SV_ClipMoveToEntity (touch, clip->start, clip->mins, clip->maxs, clip->end, clip->hitcontents);
-		}
+		hitcontents = SV_EntityHitContents(clip, touch->v.solid == SOLID_BSP,
+			touch->v.solid == SOLID_EXT_CORPSE, touch->v.skin);
+		if (!hitcontents)
+			continue;
+		mins = ((int)touch->v.flags & FL_MONSTER) ? clip->mins2 : clip->mins;
+		maxs = ((int)touch->v.flags & FL_MONSTER) ? clip->maxs2 : clip->maxs;
+		trace = SV_ClipMoveToEntityAt(touch, touch->v.origin, touch->v.angles,
+			touch->v.mins, touch->v.maxs, clip->start, mins, maxs, clip->end,
+			hitcontents, clip->wantsurface);
+		if (touch->v.skin < 0 && trace.contents != CONTENTS_EMPTY)
+			trace.contents = touch->v.skin;
 
 		if (trace.allsolid || trace.startsolid ||
 		trace.fraction < clip->trace.fraction)
@@ -1394,12 +1520,14 @@ static void SV_ClipToLaggedPlayers(moveclip_t *clip)
 	edict_t *touch;
 	trace_t trace;
 	vec3_t origin, angles, entmins, entmaxs;
-	float *entangles;
+	float *entangles, *mins, *maxs;
 	size_t i;
 	int j;
 
 	for (i = 0; i < clip->numlaggedents; i++)
 	{
+		unsigned int hitcontents;
+
 		if (clip->trace.allsolid)
 			return;
 
@@ -1438,7 +1566,7 @@ static void SV_ClipToLaggedPlayers(moveclip_t *clip)
 		if (clip->passedict && clip->passedict->v.size[0] && !touch->v.size[0])
 			continue;
 
-		if (pr_checkextension.value && clip->passedict)
+		if (!clip->ftehitcontents && pr_checkextension.value && clip->passedict)
 		{
 			if (clip->passedict->v.solid == SOLID_SLIDEBOX && touch->v.solid == SOLID_EXT_CORPSE)
 				continue;
@@ -1455,29 +1583,16 @@ static void SV_ClipToLaggedPlayers(moveclip_t *clip)
 				continue;
 		}
 
-		if (touch->v.skin < 0)
-		{
-			if (!(clip->hitcontents & (1<<-(int)touch->v.skin)))
-				continue;
-			if ((int)touch->v.flags & FL_MONSTER)
-				trace = SV_ClipMoveToEntityAt(touch, origin, entangles, entmins,
-					entmaxs, clip->start, clip->mins2, clip->maxs2, clip->end,
-					~(1<<-CONTENTS_EMPTY));
-			else
-				trace = SV_ClipMoveToEntityAt(touch, origin, entangles, entmins,
-					entmaxs, clip->start, clip->mins, clip->maxs, clip->end,
-					~(1<<-CONTENTS_EMPTY));
-			if (trace.contents != CONTENTS_EMPTY)
-				trace.contents = touch->v.skin;
-		}
-		else if ((int)touch->v.flags & FL_MONSTER)
-			trace = SV_ClipMoveToEntityAt(touch, origin, entangles, entmins,
-				entmaxs, clip->start, clip->mins2, clip->maxs2, clip->end,
-				clip->hitcontents);
-		else
-			trace = SV_ClipMoveToEntityAt(touch, origin, entangles, entmins,
-				entmaxs, clip->start, clip->mins, clip->maxs, clip->end,
-				clip->hitcontents);
+		hitcontents = SV_EntityHitContents(clip, touch->v.solid == SOLID_BSP,
+			touch->v.solid == SOLID_EXT_CORPSE, touch->v.skin);
+		if (!hitcontents)
+			continue;
+		mins = ((int)touch->v.flags & FL_MONSTER) ? clip->mins2 : clip->mins;
+		maxs = ((int)touch->v.flags & FL_MONSTER) ? clip->maxs2 : clip->maxs;
+		trace = SV_ClipMoveToEntityAt(touch, origin, entangles, entmins,
+			entmaxs, clip->start, mins, maxs, clip->end, hitcontents, clip->wantsurface);
+		if (touch->v.skin < 0 && trace.contents != CONTENTS_EMPTY)
+			trace.contents = touch->v.skin;
 
 		if (trace.allsolid || trace.startsolid || trace.fraction < clip->trace.fraction)
 		{
@@ -1503,6 +1618,7 @@ static void World_ClipToNetwork ( moveclip_t *clip )
 
 	for (i=1,touch=cl.entities+1 ; i<cl.num_entities ; i++,touch++)
 	{
+		unsigned int hitcontents = clip->hitcontents;
 		if (!touch->model)
 			continue;
 
@@ -1513,6 +1629,14 @@ static void World_ClipToNetwork ( moveclip_t *clip )
 
 		if (clip->type == MOVE_NOMONSTERS && touch->netstate.solidsize != ES_SOLID_BSP)
 			continue;
+		if (clip->ftehitcontents)
+		{
+			hitcontents = SV_EntityHitContents(clip,
+				touch->netstate.solidsize == ES_SOLID_BSP && touch->model->type == mod_brush,
+				false, touch->skinnum);
+			if (!hitcontents)
+				continue;
+		}
 
 /*		if (clip->boxmins[0] > touch->v.absmax[0]
 		|| clip->boxmins[1] > touch->v.absmax[1]
@@ -1540,6 +1664,7 @@ static void World_ClipToNetwork ( moveclip_t *clip )
 			vec3_t		offset;
 			vec3_t		start_l, end_l;
 			hull_t		*hull;
+			const qmodel_t *surfacemodel = NULL;
 
 		// fill in a default trace
 			memset (&trace, 0, sizeof(trace_t));
@@ -1560,6 +1685,8 @@ static void World_ClipToNetwork ( moveclip_t *clip )
 						hull = &touch->model->hulls[1];
 					else
 						hull = &touch->model->hulls[2];
+					if (clip->wantsurface)
+						surfacemodel = touch->model;
 
 			// calculate an offset value to center the origin
 					VectorSubtract (hull->clip_mins, clip->mins, offset);
@@ -1599,7 +1726,7 @@ static void World_ClipToNetwork ( moveclip_t *clip )
 				end_r[0] = DotProduct(end_l, axis[0]);
 				end_r[1] = DotProduct(end_l, axis[1]);
 				end_r[2] = DotProduct(end_l, axis[2]);
-				SV_RecursiveHullCheck (hull, start_r, end_r, &trace, clip->hitcontents);
+					SV_TraceHull(hull, start_r, end_r, &trace, hitcontents, surfacemodel);
 				VectorCopy(trace.endpos, tmp);
 				trace.endpos[0] = DotProductTranspose(tmp,axis,0);
 				trace.endpos[1] = DotProductTranspose(tmp,axis,1);
@@ -1610,7 +1737,7 @@ static void World_ClipToNetwork ( moveclip_t *clip )
 				trace.plane.normal[2] = DotProductTranspose(tmp,axis,2);
 			}
 			else
-				SV_RecursiveHullCheck (hull, start_l, end_l, &trace, clip->hitcontents);
+					SV_TraceHull(hull, start_l, end_l, &trace, hitcontents, surfacemodel);
 
 		// fix trace up by the offset
 			if (trace.fraction != 1)
@@ -1618,19 +1745,21 @@ static void World_ClipToNetwork ( moveclip_t *clip )
 
 		// did we clip the move?
 			if (trace.fraction < 1 || trace.startsolid)
-				trace.ent = qcvm->edicts;
+				trace.hitbox = hull == &box_hull;
 
 		}
 
 		if (trace.contents == CONTENTS_SOLID && touch->skinnum < 0)
 			trace.contents = touch->skinnum;
-		if (!((1<<(-trace.contents)) & clip->hitcontents))
+		if (trace.contents < CONTENTS_LADDER || trace.contents > 0 ||
+			(!(CONTENTMASK_FROMQ1(trace.contents) & hitcontents) && !clip->ftehitcontents))
 			continue;
 
 		if (trace.allsolid || trace.startsolid ||
 		trace.fraction < clip->trace.fraction)
 		{
-			trace.ent = qcvm->edicts;	//no real way to return entity number.
+			trace.ent = qcvm->edicts;	// engine-networked entities have no QC edict
+			trace.entnum = i;
 			if (clip->trace.startsolid)
 			{
 				clip->trace = trace;
@@ -1682,30 +1811,45 @@ SV_Move
 trace_t SV_Move (vec3_t start, vec3_t mins, vec3_t maxs, vec3_t end, int type,
 	edict_t *passedict)
 {
-	return SV_MoveWithLagOwner(start, mins, maxs, end, type, passedict, passedict);
+	return SV_MoveWithLagOwner(start, mins, maxs, end, type, passedict, passedict, false);
 }
 
 trace_t SV_MoveWithLagOwner (vec3_t start, vec3_t mins, vec3_t maxs, vec3_t end,
-	int type, edict_t *passedict, edict_t *lagowner)
+	int type, edict_t *passedict, edict_t *lagowner, qboolean wantsurface)
 {
 	moveclip_t	clip;
+	edict_t		*world = qcvm->edicts;
+	const eval_t *mask = (!qcvm->nogameaccess && passedict) ?
+		GetEdictFieldValue(passedict, qcvm->extfields.hitcontentsmaski) : NULL;
 	int			i;
 
 	memset ( &clip, 0, sizeof ( moveclip_t ) );
 
 	if (type & MOVE_HITALLCONTENTS)
 		clip.hitcontents = ~CONTENTMASK_FROMQ1(CONTENTS_EMPTY);
+	else if (mask && mask->_int)
+	{
+		clip.ftehitcontents = (unsigned int)mask->_int;
+		for (i = CONTENTS_LADDER; i <= CONTENTS_SOLID; i++)
+			if (clip.ftehitcontents & SV_FTEContents(i))
+				clip.hitcontents |= CONTENTMASK_FROMQ1(i);
+		// Quake BSP uses one clip type for both players and monsters.
+		if (clip.ftehitcontents & FTE_CONTENTS_MONSTERCLIP)
+			clip.hitcontents |= CONTENTMASK_FROMQ1(CONTENTS_CLIP);
+	}
 	else
 		clip.hitcontents = CONTENTMASK_ANYSOLID;
 
 // clip to world
-	clip.trace = SV_ClipMoveToEntity ( qcvm->edicts, start, mins, maxs, end, clip.hitcontents );
+	clip.trace = SV_ClipMoveToEntityAt(world, world->v.origin, world->v.angles,
+		world->v.mins, world->v.maxs, start, mins, maxs, end, clip.hitcontents, wantsurface);
 
 	clip.start = start;
 	clip.end = end;
 	clip.mins = mins;
 	clip.maxs = maxs;
 	clip.type = type&3;
+	clip.wantsurface = wantsurface;
 	clip.passedict = passedict;
 	clip.lagowner = (type & MOVE_LAGGED) ? lagowner : passedict;
 	if ((type & MOVE_LAGGED) && sv_antilag.value > 0 && qcvm == &sv.qcvm && lagowner)

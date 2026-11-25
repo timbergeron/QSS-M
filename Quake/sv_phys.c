@@ -1778,7 +1778,10 @@ SV_CheckWaterTransition
 void SV_CheckWaterTransition (edict_t *ent)
 {
 	int		cont;
+	const eval_t *event;
 
+	if (ent->free)
+		return;
 	cont = SV_PointContents (ent->v.origin);
 
 	if (!ent->v.watertype)
@@ -1786,6 +1789,31 @@ void SV_CheckWaterTransition (edict_t *ent)
 		ent->v.watertype = cont;
 		ent->v.waterlevel = 1;
 		return;
+	}
+
+	event = GetEdictFieldValue(ent, qcvm->extfields.contentstransition);
+	if (event && event->function)
+	{
+		int newcontents = (cont == CONTENTS_WATER || cont == CONTENTS_SLIME || cont == CONTENTS_LAVA) ? cont : CONTENTS_EMPTY;
+		if (ent->v.watertype != newcontents)
+		{
+			int savedself = pr_global_struct->self, savedother = pr_global_struct->other;
+			float savedtime = pr_global_struct->time;
+			pr_global_struct->self = EDICT_TO_PROG(ent);
+			pr_global_struct->time = qcvm->time;
+			G_FLOAT(OFS_PARM0) = ent->v.watertype;
+			G_FLOAT(OFS_PARM1) = newcontents;
+			PR_ExecuteProgram(event->function);
+			pr_global_struct->self = savedself;
+			pr_global_struct->other = savedother;
+			pr_global_struct->time = savedtime;
+			if (!ent->free)
+			{
+				ent->v.watertype = newcontents;
+				ent->v.waterlevel = 1;
+			}
+			return;
+		}
 	}
 
 	if (cont <= CONTENTS_WATER)
@@ -1977,6 +2005,64 @@ void SV_Physics_Step (edict_t *ent)
 
 //============================================================================
 
+static void SV_MoveChain (edict_t *parent, int link, const vec3_t oldorigin, const vec3_t oldangles)
+{
+	int visited[16], count, i;
+	int savedself = pr_global_struct->self, savedother = pr_global_struct->other;
+	float savedtime = pr_global_struct->time;
+	vec3_t move, turn;
+	qboolean moved;
+
+	VectorSubtract(parent->v.origin, oldorigin, move);
+	VectorSubtract(parent->v.angles, oldangles, turn);
+	moved = !VectorCompare(move, vec3_origin);
+	if (!moved && VectorCompare(turn, vec3_origin))
+		return;
+
+	for (count = 0; count < (int)countof(visited); count++)
+	{
+		edict_t *child;
+		const eval_t *field;
+
+		if (link <= 0 || link % qcvm->edict_size || link / qcvm->edict_size >= qcvm->num_edicts)
+			break;
+		child = PROG_TO_EDICT(link);
+		if (child == parent || child->free)
+			break;
+		for (i = 0; i < count && visited[i] != link; i++)
+			;
+		if (i < count)
+			break;
+		visited[count] = link;
+
+		if (((int)child->v.flags & FL_MOVECHAIN_ANGLE) && !VectorCompare(turn, vec3_origin))
+		{
+			VectorAdd(child->v.angles, turn, child->v.angles);
+			if (!moved)
+				SV_LinkEdict(child, false);
+		}
+		if (moved)
+		{
+			VectorAdd(child->v.origin, move, child->v.origin);
+			SV_LinkEdict(child, false);
+			field = GetEdictFieldValue(child, qcvm->extfields.chainmoved);
+			if (field && field->function)
+			{
+				pr_global_struct->self = link;
+				pr_global_struct->other = EDICT_TO_PROG(parent);
+				pr_global_struct->time = qcvm->time;
+				PR_ExecuteProgram(field->function);
+			}
+		}
+		if (child->free || parent->free)
+			break;
+		link = GetEdictFieldValue(child, qcvm->extfields.movechain)->edict;
+	}
+	pr_global_struct->self = savedself;
+	pr_global_struct->other = savedother;
+	pr_global_struct->time = savedtime;
+}
+
 /*
 ================
 SV_Physics
@@ -2047,12 +2133,22 @@ void SV_Physics (double frametime)
 	//for (i=0 ; i<sv.num_edicts ; i++, ent = NEXT_EDICT(ent))
 	for (i=0 ; i<entity_cap ; i++, ent = NEXT_EDICT(ent))
 	{
+		vec3_t oldorigin, oldangles;
+		int movechain;
 		if (ent->free)
 			continue;
 
 		if (pr_global_struct->force_retouch)
 		{
 			SV_LinkEdict (ent, true);	// force retouch even for stationary
+		}
+
+		val = GetEdictFieldValue(ent, qcvm->extfields.movechain);
+		movechain = val ? val->edict : 0;
+		if (movechain)
+		{
+			VectorCopy(ent->v.origin, oldorigin);
+			VectorCopy(ent->v.angles, oldangles);
 		}
 
 		if (i > 0 && i <= svs.maxclients && qcvm == &sv.qcvm)
@@ -2091,6 +2187,9 @@ void SV_Physics (double frametime)
 		}
 		else
 			Host_EndGame ("SV_Physics: bad movetype %i", (int)ent->v.movetype);
+
+		if (movechain && !ent->free)
+			SV_MoveChain(ent, movechain, oldorigin, oldangles);
 
 	//johnfitz -- PROTOCOL_FITZQUAKE
 	//capture interval to nextthink here and send it to client for better

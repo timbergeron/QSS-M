@@ -41,6 +41,11 @@ typedef struct trace_s
 
 	int		contents;		// spike -- the content type(s) that we found.
 	int		entnum;			// pmove prefers numbers not pointers.
+	int		impact_node;	// 1-based clipnode, zero when no plane was hit
+	int		surface_id;		// 1-based draw surface within a brush model
+	const char *surface_name;
+	int		startcontents;
+	qboolean	hitbox;
 } trace_t;
 
 
@@ -76,10 +81,18 @@ edict_t	*SV_TestEntityPosition (edict_t *ent);
 
 #define CONTENTMASK_FROMQ1(c) (1u<<(-(c)))
 #define CONTENTMASK_ANYSOLID (CONTENTMASK_FROMQ1(CONTENTS_SOLID) | CONTENTMASK_FROMQ1(CONTENTS_CLIP))
+#define FTE_CONTENTS_PLAYERCLIP 0x00010000u
+#define FTE_CONTENTS_MONSTERCLIP 0x00020000u
+#define FTE_CONTENTS_BODY 0x02000000u
+#define FTE_CONTENTS_CORPSE 0x04000000u
+unsigned int SV_FTEContents(int contents);
 trace_t SV_ClipMoveToEntity (edict_t *ent, vec3_t start, vec3_t mins, vec3_t maxs, vec3_t end, unsigned int hitcontents);
 trace_t SV_Move (vec3_t start, vec3_t mins, vec3_t maxs, vec3_t end, int type, edict_t *passedict);
 trace_t SV_MoveWithLagOwner (vec3_t start, vec3_t mins, vec3_t maxs, vec3_t end,
+	int type, edict_t *passedict, edict_t *lagowner, qboolean wantsurface);
+trace_t PR_TraceMove (vec3_t start, vec3_t mins, vec3_t maxs, vec3_t end,
 	int type, edict_t *passedict, edict_t *lagowner);
+void PR_SetTraceGlobals (const trace_t *trace, qboolean pointtrace);
 // mins and maxs are reletive
 
 // if the entire move stays in a solid volume, trace.allsolid will be set

@@ -1916,6 +1916,98 @@ static void PF_utof(void)
 }
 
 //collision stuff
+trace_t PR_TraceMove (vec3_t start, vec3_t mins, vec3_t maxs, vec3_t end,
+	int type, edict_t *passedict, edict_t *lagowner)
+{
+	const struct pr_extglobals_s *g = &qcvm->extglobals;
+	qboolean wantsurface = !qcvm->nogameaccess &&
+		(g->trace_surface_id || g->trace_surfacename || g->trace_dphittexturename);
+	trace_t trace = SV_MoveWithLagOwner(start, mins, maxs, end, type, passedict, lagowner, wantsurface);
+
+	if (g->trace_dpstartcontents && !qcvm->nogameaccess)
+		trace.startcontents = SV_PointContentsAllBsps(start, passedict);
+	return trace;
+}
+
+static int PR_TraceContents (int contents, qboolean dp, qboolean hitbox, qboolean corpse)
+{
+	if (!dp)
+	{
+		if (hitbox && (contents == CONTENTS_SOLID || contents == CONTENTS_ORIGIN))
+			return corpse ? FTE_CONTENTS_CORPSE : FTE_CONTENTS_BODY;
+		return (int)SV_FTEContents(contents);
+	}
+
+	switch (contents)
+	{
+	case CONTENTS_SOLID:
+	case CONTENTS_ORIGIN: return hitbox ? (corpse ? 64 : 32) : 1;
+	case CONTENTS_WATER:
+	case CONTENTS_CURRENT_0:
+	case CONTENTS_CURRENT_90:
+	case CONTENTS_CURRENT_180:
+	case CONTENTS_CURRENT_270:
+	case CONTENTS_CURRENT_UP:
+	case CONTENTS_CURRENT_DOWN: return 2;
+	case CONTENTS_SLIME: return 4;
+	case CONTENTS_LAVA: return 8;
+	case CONTENTS_SKY: return 16;
+	case CONTENTS_CLIP: return 256;
+	default: return 0;
+	}
+}
+
+void PR_SetTraceGlobals (const trace_t *trace, qboolean pointtrace)
+{
+	const struct pr_extglobals_s *g = &qcvm->extglobals;
+	qboolean visible = !qcvm->nogameaccess;
+	qboolean corpse = trace->ent && trace->ent != qcvm->edicts && trace->ent->v.solid == SOLID_EXT_CORPSE;
+	int contents = visible && (pointtrace || trace->fraction < 1 || trace->startsolid) ? trace->contents : 0;
+
+	pr_global_struct->trace_allsolid = trace->allsolid;
+	pr_global_struct->trace_startsolid = trace->startsolid;
+	pr_global_struct->trace_fraction = trace->fraction;
+	pr_global_struct->trace_inwater = trace->inwater;
+	pr_global_struct->trace_inopen = trace->inopen;
+	VectorCopy(trace->endpos, pr_global_struct->trace_endpos);
+	VectorCopy(trace->plane.normal, pr_global_struct->trace_plane_normal);
+	pr_global_struct->trace_plane_dist = trace->plane.dist;
+	pr_global_struct->trace_ent = trace->ent ? EDICT_TO_PROG(trace->ent) : 0;
+
+	if (g->trace_endcontentsi)
+		*g->trace_endcontentsi = PR_TraceContents(contents, false, trace->hitbox, corpse);
+	if (g->trace_endcontentsf)
+		*g->trace_endcontentsf = (unsigned int)PR_TraceContents(contents, false, trace->hitbox, corpse);
+	if (g->trace_dphitcontents)
+		*g->trace_dphitcontents = PR_TraceContents(contents, true, trace->hitbox, corpse);
+	if (g->trace_dpstartcontents)
+		*g->trace_dpstartcontents = PR_TraceContents(trace->startcontents, true, false, false);
+	if (g->trace_networkentity)
+		*g->trace_networkentity = visible ? trace->entnum : 0;
+	if (g->trace_surface_id)
+		*g->trace_surface_id = trace->surface_id;
+	if (g->trace_surfacename)
+		*g->trace_surfacename = PR_SetEngineString(trace->surface_name);
+	if (g->trace_dphittexturename)
+		*g->trace_dphittexturename = PR_SetEngineString(trace->surface_name);
+
+	// Quake BSP collision has no Q3 surface flags or brush/mesh IDs.
+	if (g->trace_surfaceflagsi)
+		*g->trace_surfaceflagsi = 0;
+	if (g->trace_surfaceflagsf)
+		*g->trace_surfaceflagsf = 0;
+	if (g->trace_dphitq3surfaceflags)
+		*g->trace_dphitq3surfaceflags = 0;
+	if (g->trace_brush_id)
+		*g->trace_brush_id = 0;
+	if (g->trace_brush_faceid)
+		*g->trace_brush_faceid = 0;
+	if (g->trace_triangle_id)
+		*g->trace_triangle_id = 0;
+	if (g->trace_bone_id)
+		*g->trace_bone_id = 0;
+}
+
 static void PF_tracebox(void)
 {	//alternative version of traceline that just passes on two extra args. trivial really.
 	float	*v1, *mins, *maxs, *v2;
@@ -1944,20 +2036,8 @@ static void PF_tracebox(void)
 	if (IS_NAN(v2[0]) || IS_NAN(v2[1]) || IS_NAN(v2[2]))
 		v2[0] = v2[1] = v2[2] = 0;
 
-	trace = SV_Move (v1, mins, maxs, v2, nomonsters, ent);
-
-	pr_global_struct->trace_allsolid = trace.allsolid;
-	pr_global_struct->trace_startsolid = trace.startsolid;
-	pr_global_struct->trace_fraction = trace.fraction;
-	pr_global_struct->trace_inwater = trace.inwater;
-	pr_global_struct->trace_inopen = trace.inopen;
-	VectorCopy (trace.endpos, pr_global_struct->trace_endpos);
-	VectorCopy (trace.plane.normal, pr_global_struct->trace_plane_normal);
-	pr_global_struct->trace_plane_dist =  trace.plane.dist;
-	if (trace.ent)
-		pr_global_struct->trace_ent = EDICT_TO_PROG(trace.ent);
-	else
-		pr_global_struct->trace_ent = EDICT_TO_PROG(qcvm->edicts);
+	trace = PR_TraceMove(v1, mins, maxs, v2, nomonsters, ent, ent);
+	PR_SetTraceGlobals(&trace, VectorCompare(v1, v2));
 }
 static void PF_TraceToss(void)
 {
@@ -1993,7 +2073,7 @@ static void PF_TraceToss(void)
 		velocity[2] -= gravity;
 		VectorScale (velocity, 0.05, move);
 		VectorAdd (origin, move, end);
-		trace = SV_Move (origin, tossent->v.mins, tossent->v.maxs, end, MOVE_NORMAL, tossent);
+		trace = PR_TraceMove(origin, tossent->v.mins, tossent->v.maxs, end, MOVE_NORMAL, tossent, tossent);
 		VectorCopy (trace.endpos, origin);
 
 		if (trace.fraction < 1 && trace.ent && trace.ent != ignore)
@@ -2006,21 +2086,8 @@ static void PF_TraceToss(void)
 		}
 	}
 
-	trace.fraction = 0; // not relevant
-	
-	//and return those as globals.
-	pr_global_struct->trace_allsolid = trace.allsolid;
-	pr_global_struct->trace_startsolid = trace.startsolid;
-	pr_global_struct->trace_fraction = trace.fraction;
-	pr_global_struct->trace_inwater = trace.inwater;
-	pr_global_struct->trace_inopen = trace.inopen;
-	VectorCopy (trace.endpos, pr_global_struct->trace_endpos);
-	VectorCopy (trace.plane.normal, pr_global_struct->trace_plane_normal);
-	pr_global_struct->trace_plane_dist =  trace.plane.dist;
-	if (trace.ent)
-		pr_global_struct->trace_ent = EDICT_TO_PROG(trace.ent);
-	else
-		pr_global_struct->trace_ent = EDICT_TO_PROG(qcvm->edicts);
+	PR_SetTraceGlobals(&trace, false);
+	pr_global_struct->trace_fraction = 0; // not relevant
 }
 
 #include "pmove.h"
@@ -2091,6 +2158,23 @@ void PR_GetSetInputs(usercmd_t *cmd, qboolean set)
 			cmd->cursor_entitynumber = *qcvm->extglobals.input_cursor_entitynumber;
 	}
 }
+static void PR_SetPmoveGravity(edict_t *ent)
+{
+	const eval_t *field = ent ? GetEdictFieldValue(ent, qcvm->extfields.gravitydir) : NULL;
+	const float *dir = qcvm->extglobals.global_gravitydir;
+
+	if (field && !VectorCompare(field->vector, vec3_origin) &&
+		isfinite(field->vector[0]) && isfinite(field->vector[1]) && isfinite(field->vector[2]))
+		dir = field->vector;
+	if (dir && !qcvm->nogameaccess && isfinite(dir[0]) && isfinite(dir[1]) && isfinite(dir[2]))
+	{
+		VectorCopy(dir, pmove.gravitydir);
+		VectorNormalize(pmove.gravitydir);
+	}
+	else
+		VectorClear(pmove.gravitydir);
+}
+
 static void PF_both_pmove(edict_t *e)
 {
 	static vec3_t extents = {256, 256, 256};
@@ -2108,7 +2192,7 @@ static void PF_both_pmove(edict_t *e)
 	VectorCopy(e->v.origin, pmove.origin);
 	VectorCopy(e->v.velocity, pmove.velocity);
 //	VectorCopy(e->v.angles, pmove.angles);
-	VectorClear(pmove.gravitydir);
+	PR_SetPmoveGravity(e);
 
 	pmove.waterjumptime = (e->v.teleport_time>qcvm->time)?e->v.teleport_time - qcvm->time:0;
 	pmove.jump_held = !!(fl&PMF_JUMP_HELD);
@@ -2381,11 +2465,129 @@ void PMCL_SetMoveVars(void)
 		movevars.maxairspeed = fstat[STAT_MOVEVARS_MAXAIRSPEED];
 	}
 }
+void PMCL_PlayerBounds(unsigned int solid, vec3_t mins, vec3_t maxs)
+{
+	if (solid)
+	{
+		maxs[0] = maxs[1] = solid & 255;
+		mins[0] = mins[1] = -maxs[0];
+		mins[2] = -(int)((solid >> 8) & 255);
+		maxs[2] = (int)((solid >> 16) & 65535) - 32768;
+	}
+	else
+	{
+		VectorClear(mins);
+		VectorClear(maxs);
+	}
+}
+
+static void PR_SetPmoveGlobals(const vec3_t org, const vec3_t vel, const vec3_t mins,
+	const vec3_t maxs, qboolean jump_held, float waterjumptime, qboolean onground)
+{
+	const struct pr_extglobals_s *g = &qcvm->extglobals;
+
+	if (g->pmove_org)
+		VectorCopy(org, g->pmove_org);
+	if (g->pmove_vel)
+		VectorCopy(vel, g->pmove_vel);
+	if (g->pmove_mins)
+		VectorCopy(mins, g->pmove_mins);
+	if (g->pmove_maxs)
+		VectorCopy(maxs, g->pmove_maxs);
+	if (g->pmove_jump_held)
+		*g->pmove_jump_held = jump_held;
+	if (g->pmove_waterjumptime)
+		*g->pmove_waterjumptime = waterjumptime;
+	if (g->pmove_onground)
+		*g->pmove_onground = onground;
+}
+
+void PMCL_SetLegacyGlobals(const entity_t *ent, qboolean predicted)
+{
+	const struct pr_extglobals_s *g = &qcvm->extglobals;
+	vec3_t mins, maxs;
+
+	if (qcvm->nogameaccess ||
+		(!g->pmove_org && !g->pmove_vel && !g->pmove_mins && !g->pmove_maxs &&
+		 !g->pmove_jump_held && !g->pmove_waterjumptime && !g->pmove_onground))
+		return;
+
+	if (predicted)
+		PR_SetPmoveGlobals(pmove.origin, pmove.velocity, pmove.player_mins, pmove.player_maxs,
+			pmove.jump_held, pmove.waterjumptime, pmove.onground);
+	else
+	{
+		PMCL_PlayerBounds(ent->netstate.solidsize, mins, maxs);
+		PR_SetPmoveGlobals(ent->origin, cl.velocity, mins, maxs,
+			(ent->netstate.pmovetype & 0x40) != 0, 0, cl.onground);
+	}
+}
+
+static void PF_cs_legacy_pmove(void)
+{
+	const struct pr_extglobals_s *g = &qcvm->extglobals;
+	vec3_t bounds[2];
+	usercmd_t cmd = {0};
+	float buttons, waterjumptime;
+	int i;
+
+	if (qcvm->nogameaccess || !qcvm->worldmodel ||
+		!g->pmove_org || !g->pmove_vel || !g->pmove_mins || !g->pmove_maxs)
+		return;
+
+	cmd.seconds = *g->input_timelength;
+	buttons = *g->input_buttons;
+	waterjumptime = g->pmove_waterjumptime ? *g->pmove_waterjumptime : 0;
+	if (!(cmd.seconds >= 0 && cmd.seconds <= 1) ||
+		!((double)buttons >= 0 && (double)buttons <= UINT_MAX) ||
+		!isfinite(waterjumptime) || waterjumptime < 0)
+		return;
+
+	for (i = 0; i < 3; i++)
+	{
+		if (!(fabsf(g->pmove_org[i]) <= 8388608 && fabsf(g->pmove_vel[i]) <= 8388608 &&
+			  fabsf(g->pmove_mins[i]) <= 8388608 && fabsf(g->pmove_maxs[i]) <= 8388608 &&
+			  g->pmove_mins[i] <= g->pmove_maxs[i] &&
+			  fabsf(g->input_movevalues[i]) <= 8388608 && isfinite(g->input_angles[i])))
+			return;
+		bounds[0][i] = g->pmove_org[i] + g->pmove_mins[i] - 256;
+		bounds[1][i] = g->pmove_org[i] + g->pmove_maxs[i] + 256;
+	}
+
+	cmd.buttons = (unsigned int)buttons;
+	VectorCopy(g->input_angles, cmd.viewangles);
+	cmd.forwardmove = g->input_movevalues[0];
+	cmd.sidemove = g->input_movevalues[1];
+	cmd.upmove = g->input_movevalues[2];
+	VectorCopy(g->pmove_org, pmove.origin);
+	VectorCopy(g->pmove_vel, pmove.velocity);
+	VectorCopy(g->pmove_mins, pmove.player_mins);
+	VectorCopy(g->pmove_maxs, pmove.player_maxs);
+	pmove.jump_held = g->pmove_jump_held && *g->pmove_jump_held;
+	pmove.waterjumptime = waterjumptime;
+	pmove.onground = g->pmove_onground && *g->pmove_onground;
+	pmove.pm_type = PM_NORMAL;
+	pmove.jump_secs = 0;
+	pmove.onladder = false;
+	pmove.safeorigin_known = false;
+	pmove.skipent = -cl.viewentity;
+	PR_SetPmoveGravity(NULL);
+
+	World_AddEntsToPmove(NULL, bounds);
+	pmove.cmd = cmd;
+	PM_PlayerMove(1);
+
+	PR_SetPmoveGlobals(pmove.origin, pmove.velocity, pmove.player_mins, pmove.player_maxs,
+		pmove.jump_held, pmove.waterjumptime, pmove.onground);
+}
+
 static void PF_cs_pmove(void)
 {
-	edict_t	*e			= G_EDICT(OFS_PARM0);
 	PMCL_SetMoveVars();
-	PF_both_pmove(e);
+	if (qcvm->argc > 0)
+		PF_both_pmove(G_EDICT(OFS_PARM0));
+	else
+		PF_cs_legacy_pmove();
 }
 
 //model stuff
@@ -11765,7 +11967,7 @@ static struct
 	{"getmousepos",		PF_NoSSQC,			PF_cs_getmousepos,	344,	PF_m_getmousepos,66, D("vector()", "Nasty convoluted DP extension. Typically returns deltas instead of positions. Use CSQC_InputEvent for such things in csqc mods.")},	// #344 This is a DP extension
 	{"getinputstate",	PF_NoSSQC,			PF_cs_getinputstate,345,	PF_NoMenu, D("float(float inputsequencenum)", "Looks up an input frame from the log, setting the input_* globals accordingly.\nThe sequence number range used for prediction should normally be servercommandframe < sequence <= clientcommandframe.\nThe sequence equal to clientcommandframe will change between input frames.")},// (EXT_CSQC)
 	{"setsensitivityscaler",PF_NoSSQC,		PF_cl_setsensitivity,346,	PF_NoMenu, D("void(float sens)", "Temporarily scales the player's mouse sensitivity based upon something like zoom, avoiding potential cvar saving and thus corruption.")},// (EXT_CSQC)
-	{"runstandardplayerphysics",PF_sv_pmove,PF_cs_pmove,		347,	PF_NoMenu, D("void(entity ent)", "Perform the engine's standard player movement prediction upon the given entity using the input_* globals to describe movement.")},
+	{"runstandardplayerphysics",PF_sv_pmove,PF_cs_pmove,		347,	PF_NoMenu, D("void(entity ent)", "Runs standard player movement using the input_* globals. CSQC may omit the entity to use the legacy pmove_* globals. An entity's gravitydir overrides global_gravitydir for this movement.")},
 	{"getplayerkeyvalue",NULL,				PF_cl_playerkey_s,	348,	PF_NoMenu, D("string(float playernum, string keyname)", "Look up a player's userinfo, to discover things like their name, topcolor, bottomcolor, skin, team, *ver.\nAlso includes scoreboard info like frags, ping, pl, userid, entertime, as well as voipspeaking and voiploudness.")},// (EXT_CSQC)
 	{"getplayerkeyfloat",NULL,				PF_cl_playerkey_f,	0,		PF_NoMenu, D("float(float playernum, string keyname, optional float assumevalue)", "Cheaper version of getplayerkeyvalue that avoids the need for so many tempstrings.")},
 	{"isdemo",			PF_NoSSQC,			PF_cl_isdemo,		349,	PF_cl_isdemo,349, D("float()", "Returns if the client is currently playing a demo or not")},// (EXT_CSQC)
@@ -12629,9 +12831,30 @@ void PR_EnableExtensions(ddef_t *pr_globaldefs)
 #define QCEXTGLOBAL_FLOAT(n) qcvm->extglobals.n = PR_FindExtGlobal(ev_float, #n);
 #define QCEXTGLOBAL_INT(n) qcvm->extglobals.n = PR_FindExtGlobal(ev_ext_integer, #n);
 #define QCEXTGLOBAL_VECTOR(n) qcvm->extglobals.n = PR_FindExtGlobal(ev_vector, #n);
+#define QCEXTGLOBAL_STRING(n) qcvm->extglobals.n = PR_FindExtGlobal(ev_string, #n);
 	QCEXTGLOBALS_COMMON
 	QCEXTGLOBALS_GAME
-	QCEXTGLOBALS_CSQC
+	if (!menuqc)
+	{
+		QCEXTGLOBALS_TRACE
+		if (!qcvm->extglobals.trace_surfaceflagsi && !qcvm->extglobals.trace_surfaceflagsf)
+		{
+			qcvm->extglobals.trace_surfaceflagsi = PR_FindExtGlobal(ev_ext_integer, "trace_surfaceflags");
+			qcvm->extglobals.trace_surfaceflagsf = PR_FindExtGlobal(ev_float, "trace_surfaceflags");
+		}
+		if (!qcvm->extglobals.trace_endcontentsi && !qcvm->extglobals.trace_endcontentsf)
+		{
+			qcvm->extglobals.trace_endcontentsi = PR_FindExtGlobal(ev_ext_integer, "trace_endcontents");
+			qcvm->extglobals.trace_endcontentsf = PR_FindExtGlobal(ev_float, "trace_endcontents");
+		}
+		if (qcvm->extglobals.global_gravitydir &&
+			VectorCompare(qcvm->extglobals.global_gravitydir, vec3_origin))
+			qcvm->extglobals.global_gravitydir[2] = -1;
+	}
+	if (qcvm == &cl.qcvm)
+	{
+		QCEXTGLOBALS_CSQC
+	}
 	if (qcvm == &cl.qcvm || menuqc)
 	{
 		QCEXTGLOBALS_CLIENT_UI
@@ -12639,6 +12862,7 @@ void PR_EnableExtensions(ddef_t *pr_globaldefs)
 #undef QCEXTGLOBAL_FLOAT
 #undef QCEXTGLOBAL_INT
 #undef QCEXTGLOBAL_VECTOR
+#undef QCEXTGLOBAL_STRING
 
 //some need guarentees they exist (inputs get copied into globals and then back out)
 #define QCEXTGLOBAL_FLOAT(n)	if (!qcvm->extglobals.n) qcvm->extglobals.n = &qcvm->fallback_##n;
@@ -12956,10 +13180,27 @@ void PR_DumpPlatform_f(void)
 #define QCEXTGLOBAL_INT(n) fprintf(f, "int " #n ";\n");
 #define QCEXTGLOBAL_FLOAT(n) fprintf(f, "float " #n ";\n");
 #define QCEXTGLOBAL_VECTOR(n) fprintf(f, "vector " #n ";\n");
+#define QCEXTGLOBAL_STRING(n) fprintf(f, "string " #n ";\n");
 	QCEXTGLOBALS_COMMON
 	if (targs & (CS|SS))
 	{
 		QCEXTGLOBALS_GAME
+		QCEXTGLOBALS_TRACE
+		fprintf(f, "float cycle_wrapped;\n");
+		fprintf(f, "const int CONTENTBIT_NONE = 0i;\n");
+		fprintf(f, "const int CONTENTBIT_SOLID = 0x%xi;\n", SV_FTEContents(CONTENTS_SOLID));
+		fprintf(f, "const int CONTENTBIT_LAVA = 0x%xi;\n", SV_FTEContents(CONTENTS_LAVA));
+		fprintf(f, "const int CONTENTBIT_SLIME = 0x%xi;\n", SV_FTEContents(CONTENTS_SLIME));
+		fprintf(f, "const int CONTENTBIT_WATER = 0x%xi;\n", SV_FTEContents(CONTENTS_WATER));
+		fprintf(f, "const int CONTENTBIT_FTELADDER = 0x%xi;\n", SV_FTEContents(CONTENTS_LADDER));
+		fprintf(f, "const int CONTENTBIT_PLAYERCLIP = 0x%xi;\n", FTE_CONTENTS_PLAYERCLIP);
+		fprintf(f, "const int CONTENTBIT_MONSTERCLIP = 0x%xi;\n", FTE_CONTENTS_MONSTERCLIP);
+		fprintf(f, "const int CONTENTBIT_BODY = 0x%xi;\n", FTE_CONTENTS_BODY);
+		fprintf(f, "const int CONTENTBIT_CORPSE = 0x%xi;\n", FTE_CONTENTS_CORPSE);
+		fprintf(f, "const int CONTENTBIT_SKY = 0x%xi;\n", SV_FTEContents(CONTENTS_SKY));
+		fprintf(f, "const int CONTENTBITS_POINTSOLID = CONTENTBIT_SOLID | CONTENTBIT_BODY | 2i;\n");
+		fprintf(f, "const int CONTENTBITS_BOXSOLID = CONTENTBITS_POINTSOLID | CONTENTBIT_PLAYERCLIP;\n");
+		fprintf(f, "const int CONTENTBITS_FLUID = CONTENTBIT_WATER | CONTENTBIT_SLIME | CONTENTBIT_LAVA | CONTENTBIT_SKY;\n");
 	}
 	if (targs & CS)
 	{
@@ -12968,6 +13209,7 @@ void PR_DumpPlatform_f(void)
 #undef QCEXTGLOBAL_INT
 #undef QCEXTGLOBAL_FLOAT
 #undef QCEXTGLOBAL_VECTOR
+#undef QCEXTGLOBAL_STRING
 
 	if (targs & (CS|MN))
 	{
@@ -12976,6 +13218,8 @@ void PR_DumpPlatform_f(void)
 		fprintf(f, "#define rawfontscale drawfontscale\n");
 	}
 
+	if (targs & (CS|SS))
+		fprintf(f, "const float FL_MOVECHAIN_ANGLE = %i;\n", FL_MOVECHAIN_ANGLE);
 
 	fprintf(f, "const float FALSE		= 0;\n");
 	fprintf(f, "const float TRUE		= 1;\n");
@@ -13441,7 +13685,10 @@ void PR_DumpPlatform_f(void)
 				continue;
 			if (extensionbuiltins[i].desc && !strncmp(extensionbuiltins[i].desc, "alias.", 6))
 				continue;	//still bound at load, but authors should use the canonical name
-			fprintf(f, "%s %s = #%i;", extensionbuiltins[i].typestr, extensionbuiltins[i].name, (targs & MN)?extensionbuiltins[i].documentednumber_menuqc:extensionbuiltins[i].documentednumber);
+			const char *typestr = extensionbuiltins[i].typestr;
+			if ((targs & CS) && extensionbuiltins[i].csqcfunc == PF_cs_pmove)
+				typestr = "void(optional entity ent)";
+			fprintf(f, "%s %s = #%i;", typestr, extensionbuiltins[i].name, (targs & MN)?extensionbuiltins[i].documentednumber_menuqc:extensionbuiltins[i].documentednumber);
 			if (extensionbuiltins[i].desc && !j)
 			{
 				const char *line = extensionbuiltins[i].desc;
