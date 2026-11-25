@@ -8862,6 +8862,7 @@ void SCR_UpdateScreen (void)
 		if (FXAA_Enabled ()) // woods #fxaa
 			FXAA_BeginFrame();
 		R_SetSceneFBOCleared (false); // CSQC may draw 2D before calling renderscene
+		PR_CSQC_BeginRenderFrame ();
 
 		if (cls.signon == SIGNONS||!cl.qcvm.extfuncs.CSQC_UpdateViewLoading)
 			PR_ExecuteProgram(cl.qcvm.extfuncs.CSQC_UpdateView);

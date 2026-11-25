@@ -228,11 +228,13 @@ void R_DrawSpriteModel (entity_t *e)
 
 	// the viewmodel sits on top of the camera, where the frustum planes all meet,
 	// so culling it is meaningless. R_DrawAliasModel skips it for the same reason.
-	if (e != &cl.viewent && R_CullModelForEntity (e)) // woods #spriteharden
+	psprite = (msprite_t *) e->model->cache.data;
+	if (e != &cl.viewent &&
+		(!(e->csqc_renderflags & CSQC_RENDER_AXIS) || psprite->type == SPR_ORIENTED) &&
+		R_CullModelForEntity (e)) // woods #spriteharden
 		return;
 
 	frame = R_GetSpriteFrame (e);
-	psprite = (msprite_t *) e->model->cache.data;
 
 	switch(psprite->type)
 	{
@@ -263,12 +265,25 @@ void R_DrawSpriteModel (entity_t *e)
 		s_right = vright;
 		break;
 	case SPR_ORIENTED: //pitch yaw roll are independent of camera
-		AngleVectors (e->angles, v_forward, v_right, v_up);
+		if (e->csqc_renderflags & CSQC_RENDER_AXIS)
+		{
+			VectorScale(e->csqc_axis[1], -1, v_right);
+			VectorCopy(e->csqc_axis[2], v_up);
+		}
+		else
+			AngleVectors (e->angles, v_forward, v_right, v_up);
 		s_up = v_up;
 		s_right = v_right;
 		break;
 	case SPR_VP_PARALLEL_ORIENTED: //faces view plane, but obeys roll value
-		angle = e->angles[ROLL] * M_PI_DIV_180;
+		if (e->csqc_renderflags & CSQC_RENDER_AXIS)
+		{
+			vec3_t angles;
+			VectorAngles(e->csqc_axis[0], e->csqc_axis[2], angles);
+			angle = angles[ROLL] * M_PI_DIV_180;
+		}
+		else
+			angle = e->angles[ROLL] * M_PI_DIV_180;
 		sr = sin(angle);
 		cr = cos(angle);
 		v_right[0] = vright[0] * cr + vup[0] * sr;

@@ -1177,7 +1177,7 @@ void R_TeleportPrepare (void)
 			mat4_t matrix;
 			qboolean have_matrix = false;
 			if (!e->model || e->model->type != mod_brush ||
-				!e->model->hastelesurfaces || (e->eflags & EFLAGS_EXTERIORMODEL) || R_CullModelForEntity(e))
+				!e->model->hastelesurfaces || R_HideExteriorEntity(e) || R_CullModelForEntity(e))
 				continue;
 			for (j = 0; j < e->model->nummodelsurfaces; j++)
 			{

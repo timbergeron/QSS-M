@@ -225,6 +225,9 @@ void Mod_ClipDecal(qmodel_t *mod, vec3_t center, vec3_t normal, vec3_t tangent1,
 #endif
 void R_SetupGL (void);
 void R_SetFrustum (float fovx, float fovy);
+void R_BuildViewProjection (const view_projection_t *projection, float fovx, float fovy, float skew, mat4_t matrix);
+qboolean R_HideExteriorEntity (const entity_t *ent);
+qboolean R_HideFirstPersonEntity (const entity_t *ent);
 extern	cvar_t	r_slimealpha;
 extern	cvar_t	r_dynamic;
 extern	cvar_t	r_novis;
@@ -579,6 +582,8 @@ void R_GetEntityBounds (const entity_t *e, vec3_t mins, vec3_t maxs);
 qboolean R_CullModelForEntity (entity_t *e);
 qboolean R_CullModelForEntityTransform (entity_t *e, const vec3_t origin, const vec3_t angles);
 void R_RotateForEntity (vec3_t origin, vec3_t angles, entity_t *e);
+void R_ApplyEntityRotation (const vec3_t angles, const entity_t *e);
+void R_EntityAxisToLocal (const entity_t *e, vec3_t point);
 void R_MarkLights (dlight_t *light, vec3_t lightorg, int framecount, int num, mnode_t *node);
 
 void R_InitParticles (void);

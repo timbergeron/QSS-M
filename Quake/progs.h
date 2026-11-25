@@ -580,6 +580,7 @@ void PR_SwitchQCVM(qcvm_t *nvm);
 #endif
 
 void PR_GetSetInputs(usercmd_t *cmd, qboolean set);
+void PR_CSQC_BeginRenderFrame(void);
 
 extern const builtin_t pr_ssqcbuiltins[];
 extern const int pr_ssqcnumbuiltins;

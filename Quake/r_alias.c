@@ -1749,6 +1749,7 @@ void R_DrawAliasModelOutline(aliasglsl_t* glsl, aliashdr_t* paliashdr, lerpdata_
 	// or viewmodel depth range, so it would cull or misplace them.
 	if (r_alias_outline_collecting && entalpha >= 1.0f &&
 		!(e->eflags & EFLAGS_VIEWMODEL) &&
+		!(e->csqc_renderflags & (CSQC_RENDER_DEPTHHACK | CSQC_RENDER_MIRRORED)) &&
 		r_alias_outline_phase == ALIAS_OUTLINE_PHASE_NORMAL && gl_stencilbits &&
 		R_QueueDeferredAliasOutline(e))
 	{
@@ -1818,7 +1819,8 @@ void R_DrawAliasModelOutline(aliasglsl_t* glsl, aliashdr_t* paliashdr, lerpdata_
 	// Reset depth mask and stencil mask
 	glDepthMask(GL_TRUE);
 	glStencilMask(0xFF);
-	glDepthRange(0, 1);
+	if (!(e->csqc_renderflags & CSQC_RENDER_DEPTHHACK))
+		glDepthRange(0, 1);
 
 	glDisable(GL_BLEND);
 }
@@ -2635,6 +2637,7 @@ static void GL_DrawAliasFrame_GLSL (aliasglsl_t *glsl, aliashdr_t *paliashdr, le
 			if (r_outline.value > 0.0f && gl_stencilbits &&
 				(!r_alias_outline_collecting || entalpha < 1.0f ||
 				(e->eflags & EFLAGS_VIEWMODEL) ||
+				(e->csqc_renderflags & (CSQC_RENDER_DEPTHHACK | CSQC_RENDER_MIRRORED)) ||
 				r_num_deferred_alias_outlines >= (int)countof(r_deferred_alias_outlines)))
 			{
 				need_stencil = true;
@@ -4281,7 +4284,8 @@ static void R_DrawAliasModelPrepared (entity_t *e, const lerpdata_t *prepared, q
 		ENTALPHA_DECODE(e->alpha) > 0 &&
 		R_IsAliasOutlineXray(e, NULL, NULL, NULL, NULL))
 	{
-		if (r_alias_outline_collecting && R_AliasXrayStencilBit())
+		if (r_alias_outline_collecting && R_AliasXrayStencilBit() &&
+			!(e->csqc_renderflags & (CSQC_RENDER_DEPTHHACK | CSQC_RENDER_MIRRORED)))
 		{
 			if (r_num_deferred_xrays < countof(r_deferred_xrays))
 				r_deferred_xrays[r_num_deferred_xrays++] = e;
@@ -5569,9 +5573,7 @@ static void GL_DrawAliasShadowPrepared (alias_shadow_rec_t *rec)
 	glTranslatef (0,0,-rec->lheight);
 	glMultMatrixf (r_alias_shadowmatrix);
 	glTranslatef (0,0,rec->lheight);
-	glRotatef (rec->lerp.angles[1],  0, 0, 1);
-	glRotatef (-rec->lerp.angles[0],  0, 1, 0);
-	glRotatef (rec->lerp.angles[2],  1, 0, 0);
+	R_ApplyEntityRotation (rec->lerp.angles, rec->ent);
 	glTranslatef (paliashdr->scale_origin[0], paliashdr->scale_origin[1], paliashdr->scale_origin[2]);
 	glScalef (paliashdr->scale[0], paliashdr->scale[1], paliashdr->scale[2]);
 

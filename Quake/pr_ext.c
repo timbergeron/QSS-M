@@ -9674,6 +9674,7 @@ enum
 	RF_USEAXIS			= 1u<<4,	//explicit matrix defined in v_forward/v_right/v_up/.origin instead of calculating from angles (yay skew+scale)
 	RF_NOSHADOW			= 1u<<5,	//disable shadows, because .effects was meant to be handled by the csqc.
 	RF_WEIRDFRAMETIMES	= 1u<<6,	//change frame*time fields to need to be translated as realframeNtime='time-frameNtime' to determine which pose to use.
+	RF_FIRSTPERSON		= 1u<<10,
 						//CONSULT OTHER ENGINES BEFORE ADDING NEW FLAGS.
 };
 static byte PR_CSQCApplyColormod(byte base, float scale)
@@ -9686,7 +9687,6 @@ static byte PR_CSQCApplyColormod(byte base, float scale)
 }
 static void PR_addentity_internal(edict_t *ed)	//adds a csqc entity into the scene.
 {
-	static unsigned int warned_renderflags;
 	qmodel_t *model = PR_GetVMModel(ed->v.modelindex);
 
 	if (model)
@@ -9707,7 +9707,6 @@ static void PR_addentity_internal(edict_t *ed)	//adds a csqc entity into the sce
 			eval_t *renderflags = GetEdictFieldValue(ed, qcvm->extfields.renderflags);
 			unsigned int rf = renderflags && isfinite(renderflags->_float) && renderflags->_float > 0.0f &&
 				(double)renderflags->_float <= UINT_MAX ? (unsigned int)renderflags->_float : 0;
-			unsigned int unsupported_rf;
 			eval_t *netnum = GetEdictFieldValue(ed, qcvm->extfields.entnum);
 			e->csqc_scene_key = netnum && netnum->_float >= 1 && netnum->_float < MAX_EDICTS ?
 				(int)netnum->_float : -NUM_FOR_EDICT(ed);
@@ -9760,16 +9759,30 @@ static void PR_addentity_internal(edict_t *ed)	//adds a csqc entity into the sce
 				e->lerp.snap.time[1] = qcvm->time - e->lerp.snap.time[1];
 			}
 
-			//RF_VIEWMODEL already includes QSS-M's viewmodel depth range. A standalone
-			//RF_DEPTHHACK and RF_USEAXIS need renderer support that entity_t cannot express.
-			unsupported_rf = rf & RF_USEAXIS;
-			if ((rf & RF_DEPTHHACK) && !(rf & RF_VIEWMODEL))
-				unsupported_rf |= RF_DEPTHHACK;
-			unsupported_rf &= ~warned_renderflags;
-			if (unsupported_rf)
+			if (rf & RF_DEPTHHACK)
+				e->csqc_renderflags |= CSQC_RENDER_DEPTHHACK;
+			if (rf & RF_FIRSTPERSON)
+				e->csqc_renderflags |= CSQC_RENDER_FIRSTPERSON;
+			if (rf & RF_USEAXIS)
 			{
-				Con_DPrintf("CSQC addentity: unsupported renderflags %#x ignored\n", unsupported_rf);
-				warned_renderflags |= unsupported_rf;
+				float *forward = pr_global_struct->v_forward;
+				float *right = pr_global_struct->v_right;
+				float *up = pr_global_struct->v_up;
+				vec3_t cross;
+				float determinant;
+
+				CrossProduct(right, up, cross);
+				determinant = DotProduct(forward, cross);
+				if (isfinite(determinant) && determinant != 0.0f)
+				{
+					e->csqc_renderflags |= CSQC_RENDER_AXIS;
+					if (determinant > 0.0f)
+						e->csqc_renderflags |= CSQC_RENDER_MIRRORED;
+					VectorCopy(forward, e->csqc_axis[0]);
+					VectorNegate(right, e->csqc_axis[1]);
+					VectorCopy(up, e->csqc_axis[2]);
+					e->netstate.scale = ENTSCALE_DEFAULT;
+				}
 			}
 		}
 	}
@@ -9895,9 +9908,6 @@ static void PF_cs_addentities(void)
 		for (i=1,ent=cl.entities+1 ; i<cl.num_entities ; i++,ent++)
 		{
 			if (!ent->model)
-				continue;
-
-			if (i == cl.viewentity && !chase_active.value)
 				continue;
 
 			// woods #demoeyecam - hide chased player model when rendering demo eyecam
@@ -10137,7 +10147,15 @@ static struct
 
 	qboolean drawsbar;
 	qboolean drawcrosshair;
+	csqc_render_view_t scene;
 } viewprops;
+
+static qboolean csqc_mainview;
+
+void PR_CSQC_BeginRenderFrame(void)
+{
+	csqc_mainview = true;
+}
 
 void V_CalcRefdef (void);
 static void PF_cs_calcrefdef(void)
@@ -10262,15 +10280,15 @@ enum
 	VF_CL_VIEWANGLES_Z		= 36,
 
 //the FTE range.
-	//VF_PERSPECTIVE		= 200,
-	//VF_DP_CLEARSCREEN		= 201,
+	VF_PERSPECTIVE = 200,
+	VF_DP_CLEARSCREEN = 201,
 	VF_ACTIVESEAT			= 202,
 	VF_AFOV					= 203,
 	VF_SCREENVSIZE			= 204,
 	VF_SCREENPSIZE			= 205,
-	//VF_VIEWENTITY			= 206,
-	//VF_STATSENTITY		= 207,	//the player number for the stats.
-	//VF_SCREENVOFFSET		= 208,
+	VF_VIEWENTITY = 206,
+	VF_STATSENTITY = 207,
+	VF_SCREENVOFFSET = 208,
 	//VF_RT_SOURCECOLOUR	= 209,
 	//VF_RT_DEPTH			= 210,
 	//VF_RT_RIPPLE			= 211,	/**/
@@ -10284,12 +10302,12 @@ enum
 	//VF_RT_DESTCOLOUR7		= 219,
 	//VF_ENVMAP				= 220,	//cubemap image for reflectcube
 	//VF_USERDATA			= 221,	//data for glsl
-	//VF_SKYROOM_CAMERA		= 222,	//vec origin
-	//VF_PIXELPSCALE		= 223,	//[dpi_x, dpi_y, dpi_y/dpi_x]
-	//VF_PROJECTIONOFFSET	= 224,	//allows for off-axis projections.
+	VF_SKYROOM_CAMERA = 222,
+	VF_PIXELPSCALE = 223,
+	VF_PROJECTIONOFFSET = 224,
 
 //DP's range
-	//VF_DP_MAINVIEW		= 400, // defective. should be a viewid instead, allowing for per-view motionblur instead of disabling it outright
+	VF_DP_MAINVIEW = 400,
 	//VF_DP_MINFPS_QUALITY	= 401, //multiplier for lod and culling to try to reduce costs.
 };
 static void PF_cl_getproperty(void)
@@ -10366,10 +10384,10 @@ static void PF_cl_getproperty(void)
 		G_FLOAT(OFS_RETURN+0) = viewprops.drawcrosshair;
 		break;
 	case VF_MINDIST:
-		G_FLOAT(OFS_RETURN+0) = NEARCLIP;
+		G_FLOAT(OFS_RETURN+0) = viewprops.scene.projection.nearclip_set ? viewprops.scene.projection.nearclip : NEARCLIP;
 		break;
 	case VF_MAXDIST: //maxdist
-		G_FLOAT(OFS_RETURN+0) = gl_farclip.value;
+		G_FLOAT(OFS_RETURN+0) = viewprops.scene.projection.farclip_set ? viewprops.scene.projection.farclip : gl_farclip.value;
 		break;
 
 	case VF_CL_VIEWANGLES:	//viewangles hack
@@ -10386,8 +10404,6 @@ static void PF_cl_getproperty(void)
 		break;
 
 	//fte's range
-//	case VF_PERSPECTIVE:	//useperspective (0 for isometric)
-//	case VF_DP_CLEARSCREEN:
 	case VF_ACTIVESEAT:		//active seat
 		G_FLOAT(OFS_RETURN+0) = 0;
 		break;
@@ -10403,9 +10419,6 @@ static void PF_cl_getproperty(void)
 		G_FLOAT(OFS_RETURN+0) = glwidth;
 		G_FLOAT(OFS_RETURN+1) = glheight;
 		break;
-//	case VF_VIEWENTITY:	//viewentity
-//	case VF_STATSENTITY:	//stats entity
-//	case VF_SCREENVOFFSET:
 //	case VF_RT_SOURCECOLOUR:	//sourcecolour
 //	case VF_RT_DEPTH:	//depth
 //	case VF_RT_RIPPLE:	//ripplemap
@@ -10419,13 +10432,47 @@ static void PF_cl_getproperty(void)
 //	case VF_RT_DESTCOLOUR7:	//destcolour7
 //	case VF_ENVMAP:	//envmap
 //	case VF_USERDATA:	//userdata (glsl uniform vec4 array)
-//	case VF_SKYROOM_CAMERA:	//skyroom camera
-//	case VF_PIXELPSCALE:	//dots-per-inch x,y
-//	case VF_PROJECTIONOFFSET:	//projection offset
 
 	//dp's range
-//	case VF_DP_MAINVIEW: //mainview
 //	case VF_DP_MINFPS_QUALITY: //lodquality
+	case VF_PERSPECTIVE:
+		G_FLOAT(OFS_RETURN+0) = !viewprops.scene.projection.orthographic;
+		break;
+	case VF_DP_CLEARSCREEN:
+		G_FLOAT(OFS_RETURN+0) = viewprops.scene.clearcolor > 0;
+		break;
+	case VF_VIEWENTITY:
+		if (qcvm != &cl.qcvm || qcvm->nogameaccess)
+			goto accessblocked;
+		G_FLOAT(OFS_RETURN+0) = viewprops.scene.viewentity_override ? viewprops.scene.viewentity : cl.viewentity;
+		break;
+	case VF_STATSENTITY:
+		if (qcvm != &cl.qcvm || qcvm->nogameaccess)
+			goto accessblocked;
+		if (cl.viewentity > 0 && cl.viewentity <= cl.maxclients)
+			G_FLOAT(OFS_RETURN+0) = cl.viewentity;
+		break;
+	case VF_SCREENVOFFSET:
+		break; // The sole view starts at the virtual screen origin.
+	case VF_SKYROOM_CAMERA:
+		if (qcvm != &cl.qcvm || qcvm->nogameaccess)
+			goto accessblocked;
+		if (viewprops.scene.skyroom_override)
+			VectorCopy(viewprops.scene.skyroom_origin, G_VECTOR(OFS_RETURN));
+		else if (skyroom_enabled)
+			VectorMA(skyroom_origin, skyroom_origin[3], viewprops.origin, G_VECTOR(OFS_RETURN));
+		break;
+	case VF_PIXELPSCALE:
+		G_FLOAT(OFS_RETURN+0) = G_FLOAT(OFS_RETURN+1) = 96 * VID_GetCurrentDisplayScale();
+		G_FLOAT(OFS_RETURN+2) = 1;
+		break;
+	case VF_PROJECTIONOFFSET:
+		G_FLOAT(OFS_RETURN+0) = viewprops.scene.projection.offset[0];
+		G_FLOAT(OFS_RETURN+1) = viewprops.scene.projection.offset[1];
+		break;
+	case VF_DP_MAINVIEW:
+		G_FLOAT(OFS_RETURN+0) = qcvm == &cl.qcvm && csqc_mainview;
+		break;
 	default:
 		Con_Printf("PF_getproperty(%i): unsupported property\n", prop);
 		break;
@@ -10436,6 +10483,7 @@ static void PF_cl_getproperty(void)
 }
 static void PF_cl_setproperty(void)
 {
+	float value = G_FLOAT(OFS_PARM1);
 	int prop = G_FLOAT(OFS_PARM0);
 	G_FLOAT(OFS_RETURN) = true;	//FTE returns whether the property was accepted
 	switch(prop)
@@ -10504,8 +10552,6 @@ static void PF_cl_setproperty(void)
 	case VF_DRAWCROSSHAIR: //crosshair
 		viewprops.drawcrosshair = G_FLOAT(OFS_PARM1);
 		break;
-//	case VF_MINDIST: //mindist
-//	case VF_MAXDIST: //maxdist
 
 	case VF_CL_VIEWANGLES:	//viewangles hack
 		VectorCopy(G_VECTOR(OFS_PARM1), cl.viewangles);
@@ -10517,8 +10563,6 @@ static void PF_cl_setproperty(void)
 		break;
 
 	//fte's range
-//	case VF_PERSPECTIVE:	//useperspective (0 for isometric)
-//	case VF_DP_CLEARSCREEN:	//active seat
 	case VF_ACTIVESEAT:		//active seat
 		if (G_FLOAT(OFS_PARM1))
 		{
@@ -10533,9 +10577,6 @@ static void PF_cl_setproperty(void)
 		break;
 //	case VF_SCREENVSIZE:	//virtual size (readonly)
 //	case VF_SCREENPSIZE:	//physical size (readonly)
-//	case VF_VIEWENTITY:	//viewentity
-//	case VF_STATSENTITY:	//stats entity
-//	case VF_SCREENVOFFSET:
 //	case VF_RT_SOURCECOLOUR:	//sourcecolour
 //	case VF_RT_DEPTH:	//depth
 //	case VF_RT_RIPPLE:	//ripplemap
@@ -10549,15 +10590,79 @@ static void PF_cl_setproperty(void)
 //	case VF_RT_DESTCOLOUR7:	//destcolour7
 //	case VF_ENVMAP:	//envmap
 //	case VF_USERDATA:	//userdata (glsl uniform vec4 array)
-//	case VF_SKYROOM_CAMERA:	//skyroom camera
-//	case VF_PIXELPSCALE:	//dots-per-inch x,y
-//	case VF_PROJECTIONOFFSET:	//projection offset
 
 	//dp's range
-//	case VF_DP_MAINVIEW: //mainview
 //	case VF_DP_MINFPS_QUALITY: //lodquality
+	case VF_MINDIST:
+		if (!isfinite(value) || (!viewprops.scene.projection.orthographic && value <= 0))
+			goto rejected;
+		viewprops.scene.projection.nearclip_set = true;
+		viewprops.scene.projection.nearclip = value;
+		break;
+	case VF_MAXDIST:
+		if (!isfinite(value) || (!viewprops.scene.projection.orthographic && value < 0))
+			goto rejected;
+		viewprops.scene.projection.farclip_set = true;
+		viewprops.scene.projection.farclip = value;
+		break;
+	case VF_PERSPECTIVE:
+		if (!isfinite(value))
+			goto rejected;
+		viewprops.scene.projection.orthographic = !value;
+		break;
+	case VF_DP_CLEARSCREEN:
+		if (!isfinite(value))
+			goto rejected;
+		viewprops.scene.clearcolor = value ? 1 : -1;
+		break;
+	case VF_VIEWENTITY:
+	{
+		int read, keep = 0;
+		if (qcvm != &cl.qcvm || qcvm->nogameaccess ||
+			!PR_IndexFromFloat(value, MAX_EDICTS, &viewprops.scene.viewentity))
+			goto rejected;
+		viewprops.scene.viewentity_override = true;
+		// Viewmodels belong to the previous camera. addentities can add fresh ones.
+		for (read = 0; read < cl_numvisedicts; read++)
+			if (cl_visedicts[read] != &cl.viewent && !(cl_visedicts[read]->eflags & EFLAGS_VIEWMODEL))
+				cl_visedicts[keep++] = cl_visedicts[read];
+		cl_numvisedicts = keep;
+		break;
+	}
+	case VF_SKYROOM_CAMERA:
+	{
+		const float *origin = G_VECTOR(OFS_PARM1);
+		const float *spin = G_VECTOR(OFS_PARM2);
+		float speed = G_FLOAT(OFS_PARM3);
+		if (qcvm != &cl.qcvm || qcvm->nogameaccess ||
+			!isfinite(origin[0]) || !isfinite(origin[1]) || !isfinite(origin[2]) ||
+			(qcvm->argc >= 4 && (!isfinite(spin[0]) || !isfinite(spin[1]) || !isfinite(spin[2]) || !isfinite(speed))))
+			goto rejected;
+		viewprops.scene.skyroom_override = true;
+		VectorCopy(origin, viewprops.scene.skyroom_origin);
+		if (qcvm->argc >= 4)
+		{
+			VectorCopy(spin, viewprops.scene.skyroom_spin);
+			viewprops.scene.skyroom_spin[3] = speed;
+		}
+		else
+			memset(viewprops.scene.skyroom_spin, 0, sizeof(viewprops.scene.skyroom_spin));
+		break;
+	}
+	case VF_PROJECTIONOFFSET:
+		if (!isfinite(value) || !isfinite(G_FLOAT(OFS_PARM1+1)))
+			goto rejected;
+		viewprops.scene.projection.offset[0] = value;
+		viewprops.scene.projection.offset[1] = G_FLOAT(OFS_PARM1+1);
+		break;
+	case VF_DP_MAINVIEW:
+		if (qcvm != &cl.qcvm || !isfinite(value))
+			goto rejected;
+		csqc_mainview = !!value;
+		break;
 	default:
 		Con_Printf("PF_m_setproperty: unsupported property %i\n", prop);
+	rejected:
 		G_FLOAT(OFS_RETURN) = false;
 		break;
 	}
@@ -10585,7 +10690,17 @@ static qboolean PF_cl_computerefdef(void)
 	if (r_refdef.vrect.width < 1 || r_refdef.vrect.height < 1)
 		return false;
 
-	if ((isfinite(viewprops.fov_x) && viewprops.fov_x > 0) ||
+	if (viewprops.scene.projection.orthographic)
+	{
+		float fx = (isfinite(viewprops.fov_x) && viewprops.fov_x > 0) ? viewprops.fov_x : 0;
+		float fy = (isfinite(viewprops.fov_y) && viewprops.fov_y > 0) ? viewprops.fov_y : 0;
+		float aspect = (float)r_refdef.vrect.width / r_refdef.vrect.height;
+		if (!fx && !fy)
+			fx = isfinite(viewprops.afov) && viewprops.afov > 0 ? viewprops.afov : 90;
+		r_refdef.fov_x = CLAMP(0.001f, fx ? fx : fy * aspect, 1e9f);
+		r_refdef.fov_y = CLAMP(0.001f, fy ? fy : fx / aspect, 1e9f);
+	}
+	else if ((isfinite(viewprops.fov_x) && viewprops.fov_x > 0) ||
 		(isfinite(viewprops.fov_y) && viewprops.fov_y > 0))
 	{	//Preserve an explicit FOV and derive its missing axis from the viewport aspect.
 		float fx = (isfinite(viewprops.fov_x) && viewprops.fov_x > 0) ? CLAMP(1.0f, viewprops.fov_x, 179.0f) : 0;
@@ -10623,7 +10738,15 @@ static void PF_cl_renderscene(void)
 	if (!PF_cl_computerefdef())
 		return;	//can't draw nuffin...
 
+	r_refdef.csqc = viewprops.scene;
+	if (qcvm == &cl.qcvm)
+	{
+		r_refdef.csqc.hide_default_viewentity = !chase_active.value;
+		r_refdef.csqc.skip_motionblur = !csqc_mainview;
+		csqc_mainview = false;
+	}
 	R_RenderView();
+	memset(&r_refdef.csqc, 0, sizeof(r_refdef.csqc));
 	if (qcvm == &cl.qcvm && r_refdef.drawworld)
 	{
 		SCR_SetupAutoID();
@@ -11212,10 +11335,9 @@ static void PF_cl_genProjectMatricies(mat4_t viewproj)
 {
 	mat4_t view;
 	mat4_t proj;
-	extern cvar_t gl_farclip;
 
-	//note: we ignore r_waterwarp here (we don't really know if we're underwater or not here), and you're unlikely to want such warping for mouse clicks.
-	Matrix4_ProjectionMatrix(r_refdef.fov_x, r_refdef.fov_y, NEARCLIP, gl_farclip.value, false, 0, 0, proj);
+	// Project against the unwarped view for input coordinates.
+	R_BuildViewProjection(&viewprops.scene.projection, r_refdef.fov_x, r_refdef.fov_y, 0, proj);
 	Matrix4_ViewMatrix(r_refdef.viewangles, r_refdef.vieworg, view);
 
 	//combine
@@ -13520,8 +13642,8 @@ void PR_DumpPlatform_f(void)
 		fprintf(f, "const float VF_DRAWWORLD = %i;", VF_DRAWWORLD);
 		fprintf(f, "const float VF_DRAWENGINESBAR = %i;", VF_DRAWENGINESBAR);
 		fprintf(f, "const float VF_DRAWCROSSHAIR = %i;", VF_DRAWCROSSHAIR);
-		fprintf(f, "QSSDEP(\"Query only\") const float VF_MINDIST = %i;", VF_MINDIST);
-		fprintf(f, "QSSDEP(\"Query only\") const float VF_MAXDIST = %i;", VF_MAXDIST);
+		fprintf(f, "const float VF_MINDIST = %i;", VF_MINDIST);
+		fprintf(f, "const float VF_MAXDIST = %i;", VF_MAXDIST);
 		fprintf(f, "const float VF_CL_VIEWANGLES = %i;", VF_CL_VIEWANGLES);
 		fprintf(f, "const float VF_CL_VIEWANGLES_X = %i;", VF_CL_VIEWANGLES_X);
 		fprintf(f, "const float VF_CL_VIEWANGLES_Y = %i;", VF_CL_VIEWANGLES_Y);
@@ -13532,6 +13654,20 @@ void PR_DumpPlatform_f(void)
 		fprintf(f, "const float VF_AFOV = %i;", VF_AFOV);
 		fprintf(f, "const float VF_SCREENVSIZE = %i;", VF_SCREENVSIZE);
 		fprintf(f, "const float VF_SCREENPSIZE = %i;", VF_SCREENPSIZE);
+		fprintf(f, "const float VF_PERSPECTIVE = %i;", VF_PERSPECTIVE);
+		fprintf(f, "const float VF_DP_CLEARSCREEN = %i;\n", VF_DP_CLEARSCREEN);
+		fprintf(f, "#define VF_CLEARSCREEN VF_DP_CLEARSCREEN\n");
+		fprintf(f, "const float VF_SCREENVOFFSET = %i; // read only\n", VF_SCREENVOFFSET);
+		fprintf(f, "const float VF_PIXELPSCALE = %i; // read only\n", VF_PIXELPSCALE);
+		fprintf(f, "const float VF_PROJECTIONOFFSET = %i;\n", VF_PROJECTIONOFFSET);
+		if (targs & CS)
+		{
+		fprintf(f, "const float VF_VIEWENTITY = %i;\n", VF_VIEWENTITY);
+		fprintf(f, "const float VF_STATSENTITY = %i; // read only\n", VF_STATSENTITY);
+		fprintf(f, "const float VF_SKYROOM_CAMERA = %i;\n", VF_SKYROOM_CAMERA);
+		fprintf(f, "const float VF_DP_MAINVIEW = %i;\n", VF_DP_MAINVIEW);
+		fprintf(f, "#define VF_MAINVIEW VF_DP_MAINVIEW\n");
+		}
 
 		fprintf(f, "const float RESTYPE_MODEL = %i;", RESTYPE_MODEL);
 		fprintf(f, "const float RESTYPE_SOUND = %i;", RESTYPE_SOUND);
@@ -13561,6 +13697,8 @@ void PR_DumpPlatform_f(void)
 		fprintf(f, "const float RF_USEAXIS = %i;", RF_USEAXIS);
 		fprintf(f, "const float RF_NOSHADOW = %i;", RF_NOSHADOW);
 		fprintf(f, "const float RF_WEIRDFRAMETIMES = %i;", RF_WEIRDFRAMETIMES);
+		if (targs & CS)
+			fprintf(f, "const float RF_FIRSTPERSON = %i;", RF_FIRSTPERSON);
 
 		fprintf(f, "const float PRECACHE_PIC_FROMWAD = %i;", PICFLAG_WAD);
 		fprintf(f, "const float PRECACHE_PIC_WRAP = %i;", PICFLAG_WRAP);

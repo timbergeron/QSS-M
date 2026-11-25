@@ -215,6 +215,22 @@ drawn; otherwise modelorg is set, and R_BeginBrushModel has also pushed the
 entity matrix (R_PushBrushModelMatrix).
 =================
 */
+void R_EntityAxisToLocal (const entity_t *e, vec3_t point)
+{
+	const vec3_t *axis = e->csqc_axis;
+	vec3_t inverse[3], local;
+	float invdet;
+
+	CrossProduct(axis[1], axis[2], inverse[0]);
+	CrossProduct(axis[2], axis[0], inverse[1]);
+	CrossProduct(axis[0], axis[1], inverse[2]);
+	invdet = 1.0f / DotProduct(axis[0], inverse[0]);
+	local[0] = DotProduct(inverse[0], point) * invdet;
+	local[1] = DotProduct(inverse[1], point) * invdet;
+	local[2] = DotProduct(inverse[2], point) * invdet;
+	VectorCopy(local, point);
+}
+
 static qboolean R_SetupBrushModel (entity_t *e)
 {
 	int			k;
@@ -222,7 +238,7 @@ static qboolean R_SetupBrushModel (entity_t *e)
 	vec3_t		lightorg;
 	extern byte *skipsubmodels;
 
-	if (e->model->submodelof == cl.worldmodel &&
+	if (!e->csqc_renderflags && e->model->submodelof == cl.worldmodel &&
 		skipsubmodels &&
 		skipsubmodels[e->model->submodelidx>>3]&(1u<<(e->model->submodelidx&7)))
 		return false;	//its in the scenecache that we're drawing. don't draw it twice (and certainly not the slow way).
@@ -236,9 +252,14 @@ static qboolean R_SetupBrushModel (entity_t *e)
 	vec3_t		forward, right, up;
 	qboolean	rotated;
 
-	VectorSubtract (r_refdef.vieworg, e->origin, modelorg);
+	if (r_refdef.csqc.projection.orthographic)
+		VectorScale (vpn, -1, modelorg);
+	else
+		VectorSubtract (r_refdef.vieworg, e->origin, modelorg);
 	rotated = (e->angles[0] || e->angles[1] || e->angles[2]);
-	if (rotated)
+	if (e->csqc_renderflags & CSQC_RENDER_AXIS)
+		R_EntityAxisToLocal(e, modelorg);
+	else if (rotated)
 	{
 		vec3_t	temp;
 
@@ -286,7 +307,9 @@ static qboolean R_SetupBrushModel (entity_t *e)
 				continue;
 
 			VectorSubtract(cl_dlights[k].origin, e->origin, lightorg);
-			if (rotated)
+			if (e->csqc_renderflags & CSQC_RENDER_AXIS)
+				R_EntityAxisToLocal(e, lightorg);
+			else if (rotated)
 			{
 				vec3_t temp;
 				VectorCopy (lightorg, temp);
@@ -367,7 +390,9 @@ static qboolean R_ChainVisibleSurfaces (qmodel_t *clmodel, qboolean lightmapchai
 	for (i=0 ; i<clmodel->nummodelsurfaces ; i++, psurf++)
 	{
 		pplane = psurf->plane;
-		dot = DotProduct (modelorg, pplane->normal) - pplane->dist;
+		dot = DotProduct (modelorg, pplane->normal);
+		if (!r_refdef.csqc.projection.orthographic)
+			dot -= pplane->dist;
 		if (((psurf->flags & SURF_PLANEBACK) && (dot < -BACKFACE_EPSILON)) ||
 			(!(psurf->flags & SURF_PLANEBACK) && (dot > BACKFACE_EPSILON)))
 		{
@@ -664,8 +689,13 @@ void R_DrawBrushModel_ShowTris (entity_t *e)
 	currententity = e;
 	clmodel = e->model;
 
-	VectorSubtract (r_refdef.vieworg, e->origin, modelorg);
-	if (e->angles[0] || e->angles[1] || e->angles[2])
+	if (r_refdef.csqc.projection.orthographic)
+		VectorScale (vpn, -1, modelorg);
+	else
+		VectorSubtract (r_refdef.vieworg, e->origin, modelorg);
+	if (e->csqc_renderflags & CSQC_RENDER_AXIS)
+		R_EntityAxisToLocal(e, modelorg);
+	else if (e->angles[0] || e->angles[1] || e->angles[2])
 	{
 		vec3_t	temp;
 		vec3_t	forward, right, up;
@@ -690,7 +720,9 @@ void R_DrawBrushModel_ShowTris (entity_t *e)
 	for (i=0 ; i<clmodel->nummodelsurfaces ; i++, psurf++)
 	{
 		pplane = psurf->plane;
-		dot = DotProduct (modelorg, pplane->normal) - pplane->dist;
+		dot = DotProduct (modelorg, pplane->normal);
+		if (!r_refdef.csqc.projection.orthographic)
+			dot -= pplane->dist;
 		if (((psurf->flags & SURF_PLANEBACK) && (dot < -BACKFACE_EPSILON)) ||
 			(!(psurf->flags & SURF_PLANEBACK) && (dot > BACKFACE_EPSILON)))
 		{

@@ -78,12 +78,20 @@ typedef struct aliaslight_cache_s
     qboolean                raised_valid;
 } aliaslight_cache_t;
 
+// Scene-only flags set by CSQC addentity.
+#define CSQC_RENDER_DEPTHHACK   (1u << 0)
+#define CSQC_RENDER_AXIS        (1u << 1)
+#define CSQC_RENDER_FIRSTPERSON (1u << 2)
+#define CSQC_RENDER_MIRRORED    (1u << 3)
+
 typedef struct entity_s
 {
 	qboolean				forcelink;		// model changed
 
 	int						update_type;
 	int						csqc_scene_key; // addentity identity for removeentity
+	byte                    csqc_renderflags;
+	vec3_t                  csqc_axis[3]; // forward, left, up
 
 	entity_state_t			baseline;		// to fill in defaults in updates
 	entity_state_t			netstate;		// the latest network state
@@ -172,6 +180,26 @@ typedef struct entity_s
 	struct mleaf_s			*contentsleaf;
 } entity_t;
 
+typedef struct
+{
+	qboolean orthographic;
+	qboolean nearclip_set, farclip_set;
+	float nearclip, farclip;
+	float offset[2];
+} view_projection_t;
+
+typedef struct
+{
+	view_projection_t projection;
+	qboolean hide_default_viewentity, viewentity_override;
+	int viewentity;
+	qboolean skyroom_override;
+	vec3_t skyroom_origin;
+	vec4_t skyroom_spin;
+	int clearcolor; // 0: engine default, -1: preserve color, 1: clear viewport color
+	qboolean skip_motionblur;
+} csqc_render_view_t;
+
 // !!! if this is changed, it must be changed in asm_draw.h too !!!
 typedef struct
 {
@@ -204,6 +232,7 @@ typedef struct
 
 	int			ambientlight;
 	qboolean	drawworld;
+	csqc_render_view_t csqc;
 } refdef_t;
 
 

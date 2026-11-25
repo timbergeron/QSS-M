@@ -1458,6 +1458,23 @@ static void R_GetEntityBoundsForTransform (const entity_t *e, const vec3_t origi
 {
 	vec_t scalefactor, *minbounds, *maxbounds;
 
+	if (e->csqc_renderflags & CSQC_RENDER_AXIS)
+	{
+		int worldaxis, localaxis;
+
+		VectorCopy(origin, mins);
+		VectorCopy(origin, maxs);
+		for (worldaxis = 0; worldaxis < 3; worldaxis++)
+			for (localaxis = 0; localaxis < 3; localaxis++)
+			{
+				float a = e->csqc_axis[localaxis][worldaxis] * e->model->mins[localaxis];
+				float b = e->csqc_axis[localaxis][worldaxis] * e->model->maxs[localaxis];
+				mins[worldaxis] += q_min(a, b);
+				maxs[worldaxis] += q_max(a, b);
+			}
+		return;
+	}
+
 	if (angles[0] || angles[2]) //pitch or roll
 	{
 		minbounds = e->model->rmins;
@@ -1522,12 +1539,30 @@ qboolean R_CullModelForEntityTransform (entity_t *e, const vec3_t origin, const 
 R_RotateForEntity -- johnfitz -- modified to take origin and angles instead of pointer to entity
 ===============
 */
-void R_RotateForEntity (vec3_t origin, vec3_t angles, entity_t *e)
+void R_ApplyEntityRotation (const vec3_t angles, const entity_t *e)
 {
-	glTranslatef (origin[0],  origin[1],  origin[2]);
+	if (e->csqc_renderflags & CSQC_RENDER_AXIS)
+	{
+		const vec3_t *axis = e->csqc_axis;
+		const GLfloat matrix[16] = {
+			axis[0][0], axis[0][1], axis[0][2], 0,
+			axis[1][0], axis[1][1], axis[1][2], 0,
+			axis[2][0], axis[2][1], axis[2][2], 0,
+			0, 0, 0, 1
+		};
+
+		glMultMatrixf(matrix);
+		return;
+	}
 	glRotatef (angles[1],  0, 0, 1);
 	glRotatef (-angles[0],  0, 1, 0);
 	glRotatef (angles[2],  1, 0, 0);
+}
+
+void R_RotateForEntity (vec3_t origin, vec3_t angles, entity_t *e)
+{
+	glTranslatef (origin[0],  origin[1],  origin[2]);
+	R_ApplyEntityRotation(angles, e);
 
 	if (e->netstate.scale != ENTSCALE_DEFAULT)
 	{
@@ -1622,6 +1657,44 @@ void TurnVector (vec3_t out, const vec3_t forward, const vec3_t side, float angl
 	out[2] = scale_forward*forward[2] + scale_side*side[2];
 }
 
+void R_BuildViewProjection (const view_projection_t *projection, float fovx, float fovy, float skew, mat4_t matrix)
+{
+	float nearclip, farclip;
+
+	farclip = projection->farclip_set ? projection->farclip : gl_farclip.value;
+	if (projection->orthographic)
+	{
+		double depth;
+		nearclip = projection->nearclip_set ? projection->nearclip : NEARCLIP;
+		if (farclip == 0)
+			farclip = 9999; // An orthographic depth range must be finite.
+		depth = q_max(1.0, (double)farclip - nearclip);
+		memset(matrix, 0, sizeof(mat4_t));
+		matrix[0] = 2.0f / fovx;
+		matrix[5] = 2.0f / fovy;
+		matrix[10] = -2.0 / depth;
+		matrix[14] = -1.0 - 2.0 * nearclip / depth;
+		matrix[15] = 1;
+		return;
+	}
+
+	// Reduce the default near clip at high FOVs to avoid seeing through walls.
+	if (projection->nearclip_set)
+		nearclip = q_max(0.001f, projection->nearclip);
+	else
+	{
+		float w = 1.0f / tanf(fovx * (float)M_PI / 360.0f);
+		float h = 1.0f / tanf(fovy * (float)M_PI / 360.0f);
+		nearclip = CLAMP(0.5f, 12.0f * q_min(w, h), (float)NEARCLIP);
+	}
+	// A far distance of zero requests an infinite perspective projection.
+	if (farclip == nearclip)
+		farclip = 0;
+	Matrix4_ProjectionMatrix(fovx, fovy, nearclip, farclip, false, skew, 0, matrix);
+	matrix[8] += projection->offset[0];
+	matrix[9] += projection->offset[1];
+}
+
 /*
 ===============
 R_SetFrustum -- johnfitz -- rewritten
@@ -1630,20 +1703,56 @@ R_SetFrustum -- johnfitz -- rewritten
 void R_SetFrustum (float fovx, float fovy)
 {
 	int		i;
+	const view_projection_t *projection = &r_refdef.csqc.projection;
+	float distances[4] = {0};
 
 	r_frustumplanes = 4;
-	if (r_stereo.value)
-		fovx += 10; //silly hack so that polygons don't drop out becuase of stereo skew
+	if (projection->orthographic)
+	{
+		VectorCopy(vright, frustum[0].normal);
+		VectorScale(vright, -1, frustum[1].normal);
+		VectorCopy(vup, frustum[2].normal);
+		VectorScale(vup, -1, frustum[3].normal);
+		distances[0] = distances[1] = -fovx * 0.5f;
+		distances[2] = distances[3] = -fovy * 0.5f;
+	}
+	else if (projection->offset[0] || projection->offset[1])
+	{
+		float w = tanf(fovx * (float)M_PI / 360.0f);
+		float h = tanf(fovy * (float)M_PI / 360.0f);
+		VectorMA(vright, (1 - projection->offset[0]) * w, vpn, frustum[0].normal);
+		VectorScale(vright, -1, frustum[1].normal);
+		VectorMA(frustum[1].normal, (1 + projection->offset[0]) * w, vpn, frustum[1].normal);
+		VectorMA(vup, (1 - projection->offset[1]) * h, vpn, frustum[2].normal);
+		VectorScale(vup, -1, frustum[3].normal);
+		VectorMA(frustum[3].normal, (1 + projection->offset[1]) * h, vpn, frustum[3].normal);
+		if (r_stereo.value)
+		{
+			VectorMA(frustum[0].normal, 0.125f, vpn, frustum[0].normal);
+			VectorMA(frustum[1].normal, 0.125f, vpn, frustum[1].normal);
+			distances[0] = distances[1] = -4; // half the largest stereo eye separation
+		}
+		for (i = 0; i < 4; i++)
+		{
+			float length = VectorNormalize(frustum[i].normal);
+			distances[i] /= length;
+		}
+	}
+	else
+	{
+		if (r_stereo.value)
+			fovx += 10; //silly hack so that polygons don't drop out becuase of stereo skew
 
-	TurnVector(frustum[0].normal, vpn, vright, fovx/2 - 90); //left plane
-	TurnVector(frustum[1].normal, vpn, vright, 90 - fovx/2); //right plane
-	TurnVector(frustum[2].normal, vpn, vup, 90 - fovy/2); //bottom plane
-	TurnVector(frustum[3].normal, vpn, vup, fovy/2 - 90); //top plane
+		TurnVector(frustum[0].normal, vpn, vright, fovx/2 - 90); //left plane
+		TurnVector(frustum[1].normal, vpn, vright, 90 - fovx/2); //right plane
+		TurnVector(frustum[2].normal, vpn, vup, 90 - fovy/2); //bottom plane
+		TurnVector(frustum[3].normal, vpn, vup, fovy/2 - 90); //top plane
+	}
 
 	for (i=0 ; i<4 ; i++)
 	{
 		frustum[i].type = PLANE_ANYZ;
-		frustum[i].dist = DotProduct (r_origin, frustum[i].normal); //FIXME: shouldn't this always be zero?
+		frustum[i].dist = DotProduct (r_origin, frustum[i].normal) + distances[i];
 		frustum[i].signbits = SignbitsForPlane (&frustum[i]);
 	}
 }
@@ -1690,13 +1799,7 @@ void R_SetupGL (void)
 
 	#if 1	//Spike: these should be equivelent. gpus tend not to use doubles in favour of speed, so no loss there.
 	{
-		// reduce near clip distance at high FOV's to avoid seeing through walls
-		const float w = 1.0f / tanf(r_fovx * (float)M_PI / 360.0f);
-		const float h = 1.0f / tanf(r_fovy * (float)M_PI / 360.0f);
-		const float d = 12.f * q_min(w, h);
-		const float nearclip = CLAMP(0.5f, d, (float)NEARCLIP);
-
-		Matrix4_ProjectionMatrix(r_fovx, r_fovy, nearclip, gl_farclip.value, false, frustum_skew, 0, r_projection_matrix);
+		R_BuildViewProjection(&r_refdef.csqc.projection, r_fovx, r_fovy, frustum_skew, r_projection_matrix);
 		glMatrixMode(GL_PROJECTION);
 		glLoadMatrixf(r_projection_matrix);
 
@@ -1745,11 +1848,13 @@ R_Clear -- johnfitz -- rewritten and gutted
 void R_Clear (void)
 {
 	unsigned int clearbits;
+	qboolean clearviewport = r_refdef.csqc.clearcolor > 0 && !skyroom_drawn && !r_teleport_view;
 
 	if (r_scene_fbo_cleared && !r_teleport_view && !skyroom_drawn)
 	{
 		r_scene_fbo_cleared = false;
-		return;
+		if (!clearviewport)
+			return;
 	}
 
 	clearbits = GL_DEPTH_BUFFER_BIT;
@@ -1765,9 +1870,36 @@ void R_Clear (void)
 		glStencilMask(~0u);
 		clearbits |= GL_STENCIL_BUFFER_BIT;
 	}
-	if (gl_clear.value && !skyroom_drawn && r_refdef.drawworld)
+	if (!r_refdef.csqc.clearcolor && gl_clear.value && !skyroom_drawn && r_refdef.drawworld)
 		clearbits |= GL_COLOR_BUFFER_BIT;
 	glClear (clearbits);
+
+	if (clearviewport)
+	{
+		int scale = r_refdef.drawworld ? CLAMP(1, (int)r_scale.value, 4) : 1;
+		GLint rect[4] = {
+			glx + r_refdef.vrect.x,
+			gly + glheight - r_refdef.vrect.y - r_refdef.vrect.height,
+			r_refdef.vrect.width / scale,
+			r_refdef.vrect.height / scale
+		};
+		glPushAttrib(GL_SCISSOR_BIT);
+		if (glIsEnabled(GL_SCISSOR_TEST))
+		{
+			GLint clip[4], right, top;
+			glGetIntegerv(GL_SCISSOR_BOX, clip);
+			right = q_min(rect[0] + rect[2], clip[0] + clip[2]);
+			top = q_min(rect[1] + rect[3], clip[1] + clip[3]);
+			rect[0] = q_max(rect[0], clip[0]);
+			rect[1] = q_max(rect[1], clip[1]);
+			rect[2] = q_max(0, right - rect[0]);
+			rect[3] = q_max(0, top - rect[1]);
+		}
+		glEnable(GL_SCISSOR_TEST);
+		glScissor(rect[0], rect[1], rect[2], rect[3]);
+		glClear(GL_COLOR_BUFFER_BIT);
+		glPopAttrib();
+	}
 }
 
 /*
@@ -1893,8 +2025,16 @@ void R_SetupView (void)
 				float warp_time = R_WaterWarpTime ();
 
 				//variance is a percentage of width, where width = 2 * tan(fov / 2) otherwise the effect is too dramatic at high FOV and too subtle at low FOV.  what a mess!
-				r_fovx = atan(tan(DEG2RAD(r_refdef.fov_x) / 2) * (0.97 + sin(warp_time * 1.5) * 0.03)) * 2 / M_PI_DIV_180;
-				r_fovy = atan(tan(DEG2RAD(r_refdef.fov_y) / 2) * (1.03 - sin(warp_time * 1.5) * 0.03)) * 2 / M_PI_DIV_180;
+				if (r_refdef.csqc.projection.orthographic)
+				{
+					r_fovx *= 0.97 + sin(warp_time * 1.5) * 0.03;
+					r_fovy *= 1.03 - sin(warp_time * 1.5) * 0.03;
+				}
+				else
+				{
+					r_fovx = atan(tan(DEG2RAD(r_refdef.fov_x) / 2) * (0.97 + sin(warp_time * 1.5) * 0.03)) * 2 / M_PI_DIV_180;
+					r_fovy = atan(tan(DEG2RAD(r_refdef.fov_y) / 2) * (1.03 - sin(warp_time * 1.5) * 0.03)) * 2 / M_PI_DIV_180;
+				}
 			}
 		}
 	}
@@ -1931,6 +2071,35 @@ void R_SetupView (void)
 //
 //==============================================================================
 
+// The CSQC camera's own body: the VF_VIEWENTITY target, or the local player
+// added by addentities in first person.
+static qboolean R_HideViewEntity (const entity_t *ent)
+{
+	const csqc_render_view_t *view = &r_refdef.csqc;
+	if (view->viewentity_override)
+	{
+		int number = view->viewentity;
+		return !r_teleport_reflection && number > 0 &&
+			(ent->csqc_scene_key == number ||
+			 (cl.entities && number < cl.num_entities && ent == &cl.entities[number]));
+	}
+	return view->hide_default_viewentity && cl.entities && cl.viewentity > 0 &&
+		cl.viewentity < cl.num_entities && ent == &cl.entities[cl.viewentity];
+}
+
+qboolean R_HideExteriorEntity (const entity_t *ent)
+{
+	if (r_refdef.csqc.viewentity_override)
+		return R_HideViewEntity(ent);	// FTE moves the exterior flag to the new view entity
+	return R_HideViewEntity(ent) || ((ent->eflags & EFLAGS_EXTERIORMODEL) && !r_teleport_reflection);
+}
+
+qboolean R_HideFirstPersonEntity(const entity_t *ent)
+{
+	return (ent->csqc_renderflags & CSQC_RENDER_FIRSTPERSON) &&
+		(chase_active.value || r_teleport_view || skyroom_drawing);
+}
+
 /*
 =============
 R_ShouldDrawEntity -- woods #alphasort
@@ -1941,7 +2110,7 @@ static qboolean R_ShouldDrawEntity(entity_t *ent, qboolean alphapass)
 	qboolean is_translucent;
 
 	//spike -- this would be more efficient elsewhere, but its more correct here.
-	if ((ent->eflags & EFLAGS_EXTERIORMODEL) && !r_teleport_reflection)
+	if (R_HideExteriorEntity(ent) || R_HideFirstPersonEntity(ent))
 		return false;
 	if (r_teleport_view && (ent == &cl.viewent || (ent->eflags & EFLAGS_VIEWMODEL)))
 		return false;
@@ -2054,20 +2223,33 @@ Reduces code duplication between alpha and non-alpha rendering paths.
 */
 static void R_DrawEntityModel(entity_t *ent)
 {
+	qboolean depthhack = (ent->csqc_renderflags & CSQC_RENDER_DEPTHHACK) != 0 &&
+		!(ent->model->type == mod_alias && (ent->eflags & EFLAGS_VIEWMODEL));
+	qboolean mirrored = (ent->csqc_renderflags & CSQC_RENDER_MIRRORED) != 0 &&
+		ent->model->type != mod_sprite;
+
 	if (ent->model->type == mod_brush)
 	{
 		R_FlushSpriteBatch ();
-		if (R_QueueLiquidBrush (ent))
+		if (!(ent->csqc_renderflags & (CSQC_RENDER_DEPTHHACK | CSQC_RENDER_AXIS)) && R_QueueLiquidBrush (ent))
 			return;
 	}
-	if (ent->model->type == mod_sprite)
-	{
-		R_FlushLiquidBrushes ();	// keep the translucent pass in order
-		R_DrawSpriteModel (ent);
-		return;
-	}
 	R_FlushLiquidBrushes ();	// keep the translucent pass in order
-	R_FlushSpriteBatch ();
+	if (depthhack || ent->model->type != mod_sprite)
+		R_FlushSpriteBatch ();
+	if (depthhack)
+	{
+		glPushAttrib(GL_VIEWPORT_BIT);
+		glDepthRange(0, 0.3);
+	}
+	if (mirrored)
+	{
+		GLint winding;
+
+		glPushAttrib(GL_POLYGON_BIT);
+		glGetIntegerv(GL_FRONT_FACE, &winding);
+		glFrontFace(winding == GL_CW ? GL_CCW : GL_CW);
+	}
 	switch (ent->model->type)
 	{
 	case mod_alias:
@@ -2079,10 +2261,16 @@ static void R_DrawEntityModel(entity_t *ent)
 		break;
 	case mod_sprite:
 		R_DrawSpriteModel(ent);
+		if (depthhack)
+			R_FlushSpriteBatch ();
 		break;
 	case mod_ext_invalid:
 		break;
 	}
+	if (mirrored)
+		glPopAttrib();
+	if (depthhack)
+		glPopAttrib();
 }
 
 /*
@@ -2245,7 +2433,7 @@ void R_DrawEntitiesOnList (qboolean alphapass) //johnfitz -- added parameter
 			//johnfitz
 
 			//spike -- this would be more efficient elsewhere, but its more correct here.
-			if ((currententity->eflags & EFLAGS_EXTERIORMODEL) && !r_teleport_reflection)
+			if (R_HideExteriorEntity(currententity) || R_HideFirstPersonEntity(currententity))
 				continue;
 			if (r_teleport_view && (currententity == &cl.viewent || (currententity->eflags & EFLAGS_VIEWMODEL)))
 				continue;
@@ -2267,12 +2455,14 @@ void R_DrawEntitiesOnList (qboolean alphapass) //johnfitz -- added parameter
 				continue;
 			}
 
-			if (!alphapass && currententity->model->type == mod_brush && num_brush < MAX_EDICTS)
+			if (!alphapass && currententity->model->type == mod_brush && num_brush < MAX_EDICTS &&
+				!(currententity->csqc_renderflags & (CSQC_RENDER_DEPTHHACK | CSQC_RENDER_AXIS)))
 			{
 				brush_ents[num_brush++] = currententity;
 				continue;
 			}
 			if (!alphapass && gl_alias_instancing.value &&
+				!(currententity->csqc_renderflags & (CSQC_RENDER_DEPTHHACK | CSQC_RENDER_AXIS)) &&
 				currententity->model->type == mod_alias &&
 				num_alias < MAX_ALIAS_INSTANCES)
 			{
@@ -2321,12 +2511,14 @@ void R_DrawEntitiesOnList (qboolean alphapass) //johnfitz -- added parameter
 				continue;
 			}
 
-			if (!alphapass && currententity->model->type == mod_brush && num_brush < MAX_EDICTS)
+			if (!alphapass && currententity->model->type == mod_brush && num_brush < MAX_EDICTS &&
+				!(currententity->csqc_renderflags & (CSQC_RENDER_DEPTHHACK | CSQC_RENDER_AXIS)))
 			{
 				brush_ents[num_brush++] = currententity;
 				continue;
 			}
 			if (!alphapass && gl_alias_instancing.value &&
+				!(currententity->csqc_renderflags & (CSQC_RENDER_DEPTHHACK | CSQC_RENDER_AXIS)) &&
 				currententity->model->type == mod_alias &&
 				num_alias < MAX_ALIAS_INSTANCES)
 			{
@@ -3370,7 +3562,8 @@ void R_DrawShadows (void)
 	{
 		currententity = cl_visedicts[i];
 
-		if (r_teleport_view && (currententity->eflags & EFLAGS_VIEWMODEL))
+		if ((r_teleport_view && (currententity->eflags & EFLAGS_VIEWMODEL)) ||
+			R_HideFirstPersonEntity(currententity) || R_HideViewEntity(currententity))
 			continue;
 		if (!currententity->model) // woods
 			continue;
@@ -4448,7 +4641,7 @@ static qboolean R_SkyroomWasVisible(void)
 	texture_t *t;
 	size_t i;
 	extern cvar_t r_fastsky;
-	if (!skyroom_enabled || r_fastsky.value == 1) // woods -- #fastsky2
+	if ((!skyroom_enabled && !r_refdef.csqc.skyroom_override) || r_fastsky.value == 1) // woods -- #fastsky2
 		return false;
 	for (i=0 ; i<model->numtextures ; i++)
 	{
@@ -4502,29 +4695,29 @@ void R_RenderView (void)
 
 	//Spike -- quickly draw the world from the skyroom camera's point of view.
 	skyroom_drawn = false;
-	if (r_refdef.drawworld && skyroom_enabled && skyroom_visible)
+	if (r_refdef.drawworld && (skyroom_enabled || r_refdef.csqc.skyroom_override) && skyroom_visible)
 	{
 		vec3_t vieworg;
 		vec3_t viewang;
+		const float *spin = r_refdef.csqc.skyroom_override ? r_refdef.csqc.skyroom_spin : skyroom_orientation;
 		VectorCopy(r_refdef.vieworg, vieworg);
 		VectorCopy(r_refdef.viewangles, viewang);
-		VectorMA(skyroom_origin, skyroom_origin[3],vieworg, r_refdef.vieworg); //allow a little paralax
+		if (r_refdef.csqc.skyroom_override)
+			VectorCopy(r_refdef.csqc.skyroom_origin, r_refdef.vieworg);
+		else
+			VectorMA(skyroom_origin, skyroom_origin[3], vieworg, r_refdef.vieworg);
 
-		if (skyroom_orientation[3])
+		if (spin[3])
 		{
-			vec3_t axis[3];
-			float ang = skyroom_orientation[3] * cl.time;
-			if (!skyroom_orientation[0]&&!skyroom_orientation[1]&&!skyroom_orientation[2])
-			{
-				skyroom_orientation[0] = 0;
-				skyroom_orientation[1] = 0;
-				skyroom_orientation[2] = 1;
-			}
-			VectorNormalize(skyroom_orientation);
-			RotatePointAroundVector(axis[0], skyroom_orientation, vpn, ang);
-			RotatePointAroundVector(axis[1], skyroom_orientation, vright, ang);
-			RotatePointAroundVector(axis[2], skyroom_orientation, vup, ang);
-			VectorAngles(axis[0], axis[2], r_refdef.viewangles);
+			vec3_t axis, forward, up, rotated_forward, rotated_up;
+			float ang = spin[3] * cl.time;
+			VectorCopy(spin, axis);
+			if (!VectorNormalize(axis))
+				axis[2] = 1;
+			AngleVectors(viewang, forward, NULL, up);
+			RotatePointAroundVector(rotated_forward, axis, forward, ang);
+			RotatePointAroundVector(rotated_up, axis, up, ang);
+			VectorAngles(rotated_forward, rotated_up, r_refdef.viewangles);
 		}
 
 		skyroom_drawing = true;
@@ -4543,7 +4736,7 @@ void R_RenderView (void)
 	R_SetupView (); //johnfitz -- this does everything that should be done once per frame
 
 	//johnfitz -- stereo rendering -- full of hacky goodness
-	if (r_stereo.value)
+	if (r_stereo.value && !r_refdef.csqc.projection.orthographic)
 	{
 		float eyesep = CLAMP(-8.0f, r_stereo.value, 8.0f);
 		float fdepth = CLAMP(32.0f, r_stereodepth.value, 1024.0f);
@@ -4590,7 +4783,7 @@ void R_RenderView (void)
 	}
 	//skyroom end
 
-	if (gl_motion_blur.value > 0.0f) // woods #motionblur
+	if (gl_motion_blur.value > 0.0f && !r_refdef.csqc.skip_motionblur && r_refdef.csqc.clearcolor >= 0) // woods #motionblur
 	{
 		R_RenderSceneBlur(gl_motion_blur.value);
 	}

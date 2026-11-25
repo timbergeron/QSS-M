@@ -172,7 +172,9 @@ qboolean R_BackFaceCull (msurface_t *surf)
 {
 	double dot;
 
-	if (surf->plane->type < 3)
+	if (r_refdef.csqc.projection.orthographic)
+		dot = -DotProduct (vpn, surf->plane->normal);
+	else if (surf->plane->type < 3)
 		dot = r_refdef.vieworg[surf->plane->type] - surf->plane->dist;
 	else
 		dot = DotProduct (r_refdef.vieworg, surf->plane->normal) - surf->plane->dist;
@@ -253,7 +255,7 @@ void R_MarkSurfaces (void)
 	// choose vis data
 	if (r_teleport_pvs)
 		vis = r_teleport_pvs;
-	else if (r_novis.value || r_viewleaf->contents == CONTENTS_SOLID || r_viewleaf->contents == CONTENTS_SKY)
+	else if (r_refdef.csqc.projection.orthographic || r_novis.value || r_viewleaf->contents == CONTENTS_SOLID || r_viewleaf->contents == CONTENTS_SKY)
 		vis = Mod_NoVisPVS (cl.worldmodel);
 	else if (nearwaterportal)
 		vis = SV_FatPVS (r_origin, cl.worldmodel);
@@ -9069,7 +9071,9 @@ static qboolean RSceneCache_Queue(byte *vis)
 	{
 		entity_t *ent = cl_visedicts[e];
 		size_t m;
-		if (!ent->model || ent->model->submodelof != cl.worldmodel ||	//we only want submodels of the world here.
+		if ((r_refdef.csqc.viewentity_override && R_HideExteriorEntity(ent)) ||
+			!ent->model || ent->model->submodelof != cl.worldmodel ||	//we only want submodels of the world here.
+			ent->csqc_renderflags ||
 			ent->origin[0]||ent->origin[1]||ent->origin[2] ||	//can only bake them if they're in the identity position. :(
 			ent->angles[0]||ent->angles[1]||ent->angles[2] ||	//and not rotated
 			(ent->eflags&EFLAGS_VIEWMODEL) ||	//viewmodel etc screws with origins.
@@ -9087,7 +9091,7 @@ static qboolean RSceneCache_Queue(byte *vis)
 		bakesubmodels[m>>3] |= (1u<<(m&7));
 	}
 
-	const qboolean want_spatial_cells = (!cl.worldmodel->visdata || r_novis.value != 0.0f);
+	const qboolean want_spatial_cells = (!cl.worldmodel->visdata || r_novis.value != 0.0f || r_refdef.csqc.projection.orthographic);
 
 	for (building = NULL, cache = rscenecache.cache; cache; cache = cache->next)
 	{
