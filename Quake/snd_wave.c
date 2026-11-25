@@ -157,8 +157,14 @@ static qboolean WAV_ReadRIFFHeader(const char *name, fshandle_t *file, snd_info_
 	/* Skip the rest of the format chunk if required */
 	if (fmtlen > 16)
 	{
+		/* Skip the extension bytes and the chunk's pad byte. */
 		fmtlen -= 16;
-		FS_fseek(file, fmtlen, SEEK_CUR);
+		if (fmtlen > FS_filelength(file) - FS_ftell(file) - (fmtlen & 1) ||
+			FS_fseek(file, (long)fmtlen + (fmtlen & 1), SEEK_CUR))
+		{
+			Con_Printf("%s has a truncated format chunk\n", name);
+			return false;
+		}
 	}
 
 	/* Scan for the data chunk */
