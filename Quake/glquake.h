@@ -109,6 +109,8 @@ typedef struct particle_s
 	struct trailstate_s;
 	int PScript_ParticleTrail (vec3_t startpos, vec3_t end, int type, float timeinterval, int dlkey, vec3_t axis[3], struct trailstate_s **tsk);
 	int PScript_RunParticleEffectState (vec3_t org, vec3_t dir, float count, int typenum, struct trailstate_s **tsk);
+	void PScript_RunParticleBox(int type, const char *fallback, int colour, vec3_t minb, vec3_t maxb, vec3_t velmin, vec3_t velmax, float count, float jitter);
+
 	void PScript_RunParticleWeather(vec3_t minb, vec3_t maxb, vec3_t dir, float count, int colour, const char *efname);
 	void PScript_EmitSkyEffectTris(qmodel_t *mod, msurface_t 	*fa, int ptype);
 	int PScript_FindParticleType(const char *fullname);

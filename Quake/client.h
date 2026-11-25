@@ -111,6 +111,7 @@ typedef struct
 	int		style;				// lightstyle index, or -1 for unstyled
 	vec3_t	channelfade;		// scripted particle light RGB fade per second
 	vec3_t	color;				//johnfitz -- lit support via lordhavoc
+	qboolean csqc_owned;	// QC-created lights remain queryable by restricted HUDs
 } dlight_t;
 
 

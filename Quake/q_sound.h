@@ -130,6 +130,12 @@ void S_BeginShutdown (void);
 void S_StartSound (int entnum, int entchannel, sfx_t *sfx, vec3_t origin, float fvol, float attenuation);
 void S_StaticSound (sfx_t *sfx, vec3_t origin, float vol, float attenuation);
 void S_StopSound (int entnum, int entchannel);
+sfx_t *S_FindCachedSound(const char *name);
+sfx_t *S_PrecacheOptionalSound(const char *name);
+float S_GetEntitySoundTime(int entnum, int entchannel);
+float S_GetEntityChannelLevel(int entnum, int entchannel);
+qboolean S_UpdateEntitySound(int entnum, int entchannel, const char *sample, vec3_t origin,
+	float volume, float attenuation, float offset);
 void S_StopAllSounds (qboolean clear, qboolean keep_statics);
 void S_ClearBuffer (void);
 void S_Update (vec3_t origin, vec3_t forward, vec3_t right, vec3_t up);

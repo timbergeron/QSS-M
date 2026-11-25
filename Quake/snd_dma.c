@@ -1162,6 +1162,109 @@ void S_StartSound (int entnum, int entchannel, sfx_t *sfx, vec3_t origin, float 
 	}
 }
 
+sfx_t *S_FindCachedSound(const char *name)
+{
+	int i;
+	for (i = 0; i < num_sfx; i++)
+		if (!strcmp(known_sfx[i].name, name))
+			return &known_sfx[i];
+	return NULL;
+}
+
+sfx_t *S_PrecacheOptionalSound(const char *name)
+{
+	sfx_t *sfx;
+
+	if (!sound_started || nosound.value)
+		return NULL;
+	// CSQC can supply arbitrary names. Do not exhaust the shared cache on misses.
+	if (!*name || strlen(name) >= MAX_QPATH || *name == '/' || strstr(name, "..") ||
+		strchr(name, '\\') || strchr(name, ':'))
+		return NULL;
+	sfx = S_FindCachedSound(name);
+	if (sfx && sfx->generation == sfx_generation && Cache_Check(&sfx->cache))
+		return sfx;
+	if (!sfx && num_sfx >= MAX_SFX)
+		return NULL;
+	if (!COM_FileExists(va("sound/%s", name), NULL))
+		return NULL;
+	return S_PrecacheSound(name);
+}
+
+static channel_t *S_FindEntitySound(int entnum, int entchannel)
+{
+	int i;
+	if (!sound_started || !snd_channels)
+		return NULL;
+	for (i = NUM_AMBIENTS; i < NUM_AMBIENTS + MAX_DYNAMIC_CHANNELS; i++)
+		if (snd_channels[i].sfx && snd_channels[i].entnum == entnum &&
+			snd_channels[i].entchannel == entchannel)
+			return &snd_channels[i];
+	return NULL;
+}
+
+float S_GetEntitySoundTime(int entnum, int entchannel)
+{
+	channel_t *ch = S_FindEntitySound(entnum, entchannel);
+	sfxcache_t *cache = ch ? S_LoadSound(ch->sfx) : NULL;
+	return cache && cache->speed > 0 ? (float)ch->pos / cache->speed : -1;
+}
+
+float S_GetEntityChannelLevel(int entnum, int entchannel)
+{
+	channel_t *ch = S_FindEntitySound(entnum, entchannel);
+	sfxcache_t *cache = ch ? S_LoadSound(ch->sfx) : NULL;
+	if (!cache || ch->pos < 0 || ch->pos >= cache->length)
+		return -1;
+	if (cache->width == 1)
+		return fabs(((const signed char *)cache->data)[ch->pos]) / 128.0f;
+	if (cache->width == 2)
+		return fabs(((const short *)cache->data)[ch->pos]) / 32768.0f;
+	return 0;
+}
+
+qboolean S_UpdateEntitySound(int entnum, int entchannel, const char *sample, vec3_t origin,
+	float volume, float attenuation, float offset)
+{
+	channel_t *ch = S_FindEntitySound(entnum, entchannel);
+	sfx_t *sfx = *sample ? S_PrecacheOptionalSound(sample) : ch ? ch->sfx : NULL;
+	sfxcache_t *cache;
+	double position;
+
+	if (volume < 0)
+	{
+		if (!ch)
+			return false;
+		S_StopSound(entnum, entchannel);
+		return true;
+	}
+	if (!sfx || !(cache = S_LoadSound(sfx)) || cache->length <= 0 || cache->speed <= 0)
+		return false;
+	if (!ch)
+	{
+		// FTE queues a new sound on a miss and returns zero because nothing was updated.
+		S_StartSound(entnum, entchannel, sfx, origin, volume, attenuation);
+		ch = S_FindEntitySound(entnum, entchannel);
+		if (ch)
+		{
+			position = ch->pos + (double)offset * cache->speed;
+			ch->pos = (int)CLAMP(0.0, position, (double)cache->length - 1);
+			ch->end = paintedtime + cache->length - ch->pos;
+		}
+		return false;
+	}
+	position = (ch->sfx == sfx ? ch->pos : 0) + (double)offset * cache->speed;
+	ch->sfx = sfx;
+	ch->pos = (int)CLAMP(0.0, position, (double)cache->length - 1);
+	ch->end = paintedtime + cache->length - ch->pos;
+	ch->master_vol = (int)(volume * 255);
+	ch->dist_mult = attenuation / sound_nominal_clip_dist;
+	VectorCopy(origin, ch->origin);
+	ch->advance_silently = true;
+	SND_Spatialize(ch);
+	return true;
+}
+
 void S_StopSound (int entnum, int entchannel)
 {
 	int	i;

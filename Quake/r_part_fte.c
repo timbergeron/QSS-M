@@ -7440,6 +7440,53 @@ static void PScript_RunParticleCube(int ptype, vec3_t minb, vec3_t maxb, vec3_t 
 }
 #endif
 
+// Spawn one effect at each sampled position and velocity. The script's count
+// scales the number of samples, as in FTE's Hexen II and cube emitters.
+void PScript_RunParticleBox(int type, const char *fallback, int colour, vec3_t minb,
+	vec3_t maxb, vec3_t velmin, vec3_t velmax, float count, float jitter)
+{
+	vec3_t org, vel;
+	float weight, samples;
+	int i, j, savedcolour = 0;
+	qboolean tint = false;
+
+	if (!PART_VALID(type) && fallback)
+	{
+		type = PScript_FindParticleType(va("%s_%i", fallback, colour));
+		if (!PART_VALID(type))
+		{
+			type = PScript_FindParticleType(fallback);
+			if (!PART_VALID(type))
+				type = pe_default;
+			tint = true;
+		}
+	}
+	if (!PART_VALID(type) || !(count > 0))
+		return;
+	weight = part_type[type].count;
+	if (!(weight > 0) || !isfinite(weight))
+		return;
+	samples = q_min(65535.0f, count * weight);
+	if (tint)
+	{
+		savedcolour = part_type[type].colorindex;
+		part_type[type].colorindex = colour;
+	}
+	for (i = 0; i < samples && free_particles; i++)
+	{
+		for (j = 0; j < 3; j++)
+		{
+			org[j] = minb[j] + (maxb[j] - minb[j]) * frandom();
+			vel[j] = velmin[j] + (velmax[j] - velmin[j]) * frandom();
+			if (jitter)
+				vel[j] += crandom() * jitter;
+		}
+		PScript_RunParticleEffectState(org, vel, 1.0f / weight, type, NULL);
+	}
+	if (tint)
+		part_type[type].colorindex = savedcolour;
+}
+
 void PScript_RunParticleWeather(vec3_t minb, vec3_t maxb, vec3_t dir, float count, int colour, const char *efname)
 {
 	vec3_t org;

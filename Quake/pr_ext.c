@@ -3378,6 +3378,261 @@ static void PF_sv_te_particlesnow(void)
 #define PF_sv_te_plasmaburn PF_sv_te_tarexplosion
 #define PF_sv_effect PF_void_stub
 
+// Bound client-supplied coordinates before particle and light code converts them to integers.
+static qboolean PF_EffectVector(const vec3_t v)
+{
+	return fabs(v[0]) <= 8388608 && fabs(v[1]) <= 8388608 && fabs(v[2]) <= 8388608;
+}
+
+static float PF_EffectCount(float count)
+{
+	return isfinite(count) && count > 0 ? q_min(count, 65535) : 0;
+}
+
+static void PF_cl_effect(void)
+{
+	float *org = G_VECTOR(OFS_PARM0);
+	float start = G_FLOAT(OFS_PARM2), count = G_FLOAT(OFS_PARM3), rate = G_FLOAT(OFS_PARM4);
+	qmodel_t *model;
+
+	if (!PF_EffectVector(org) || !isfinite(start) || !isfinite(count) ||
+		!isfinite(rate) || rate < 0 || rate > 65535)
+		return;
+	model = Mod_TryForName(G_STRING(OFS_PARM1));
+	if (!model || model->numframes <= 0 || start >= model->numframes)
+		return;
+	if (start < 0)
+		start = count = 0;
+	if (count < 0)
+		return;
+	count = !count ? model->numframes - (int)start : q_min(count, model->numframes - (int)start);
+	CL_SpawnSpriteEffect(org, NULL, NULL, model, (int)start, (int)count, rate,
+		model->type == mod_sprite ? -1 : 1, 1, 0, 0, P_INVALID, 0, 0, 1, 1, 1);
+}
+
+static void PF_cl_blood(float *dir, float count)
+{
+	float *org = G_VECTOR(OFS_PARM0);
+	if (count && PF_EffectVector(org) && (!dir || PF_EffectVector(dir)) &&
+		PScript_RunParticleEffectTypeString(org, dir, count, "TE_BLOOD") &&
+		PScript_RunParticleEffectTypeString(org, dir, count, "TE_QWBLOOD"))
+		R_RunParticleEffect(org, dir ? dir : vec3_origin, 73, (int)q_min(65535, 20 * count));
+}
+
+static void PF_cl_te_blooddp(void)
+{
+	PF_cl_blood(G_VECTOR(OFS_PARM1), PF_EffectCount(G_FLOAT(OFS_PARM2)));
+}
+
+static void PF_cl_te_bloodqw(void)
+{
+	PF_cl_blood(NULL, qcvm->argc > 1 ? PF_EffectCount(G_FLOAT(OFS_PARM1)) : 1);
+}
+
+static void PF_cl_te_lightningblood(void)
+{
+	float *org = G_VECTOR(OFS_PARM0);
+	if (PF_EffectVector(org) && PScript_RunParticleEffectTypeString(org, NULL, 1, "TE_LIGHTNINGBLOOD"))
+		R_RunParticleEffect(org, vec3_origin, 225, 50);
+}
+
+static void PF_cl_directedimpact(const char *name, int color)
+{
+	float *org = G_VECTOR(OFS_PARM0), *vel = G_VECTOR(OFS_PARM1);
+	float count = PF_EffectCount(G_FLOAT(OFS_PARM2));
+	if (count && PF_EffectVector(org) && PF_EffectVector(vel) &&
+		PScript_RunParticleEffectTypeString(org, vel, count, name))
+		R_RunParticleEffect(org, vel, color, (int)count);
+}
+
+static void PF_cl_te_spark(void)
+{
+	PF_cl_directedimpact("TE_SPARK", 224);
+}
+
+static void PF_cl_te_flamejet(void)
+{
+	PF_cl_directedimpact("TE_FLAMEJET", 232);
+}
+
+static void PF_cl_te_plasmaburn(void)
+{
+	float *org = G_VECTOR(OFS_PARM0);
+	if (PF_EffectVector(org) && PScript_RunParticleEffectTypeString(org, NULL, 1, "TE_PLASMABURN"))
+		R_RunParticleEffect(org, vec3_origin, 15, 50);
+}
+
+static void PF_cl_te_gunshotquad(void)
+{
+	float *org = G_VECTOR(OFS_PARM0);
+	if (PF_EffectVector(org) && PScript_RunParticleEffectTypeString(org, NULL, 1, "TE_GUNSHOTQUAD") &&
+		PScript_RunParticleEffectTypeString(org, NULL, 1, "TE_GUNSHOT"))
+		R_RunParticleEffect(org, vec3_origin, 0, 20);
+}
+
+static void PF_cl_te_spikequad(void)
+{
+	float *org = G_VECTOR(OFS_PARM0);
+	if (PF_EffectVector(org) && PScript_RunParticleEffectTypeString(org, NULL, 1, "TE_SPIKEQUAD") &&
+		PScript_RunParticleEffectTypeString(org, NULL, 1, "TE_SPIKE") &&
+		PScript_RunParticleEffectTypeString(org, NULL, 10, "TE_GUNSHOT"))
+		R_RunParticleEffect(org, vec3_origin, 0, 10);
+}
+
+static void PF_cl_te_superspikequad(void)
+{
+	float *org = G_VECTOR(OFS_PARM0);
+	if (PF_EffectVector(org) && PScript_RunParticleEffectTypeString(org, NULL, 1, "TE_SUPERSPIKEQUAD") &&
+		PScript_RunParticleEffectTypeString(org, NULL, 1, "TE_SUPERSPIKE") &&
+		PScript_RunParticleEffectTypeString(org, NULL, 2, "TE_SPIKE") &&
+		PScript_RunParticleEffectTypeString(org, NULL, 20, "TE_GUNSHOT"))
+		R_RunParticleEffect(org, vec3_origin, 0, 20);
+}
+
+static void PF_cl_explosion(float *rgb)
+{
+	float *org = G_VECTOR(OFS_PARM0);
+	dlight_t *dl;
+	if (!PF_EffectVector(org) || (rgb && !PF_EffectVector(rgb)))
+		return;
+	if ((rgb || PScript_RunParticleEffectTypeString(org, NULL, 1, "TE_EXPLOSIONQUAD")) &&
+		PScript_RunParticleEffectTypeString(org, NULL, 1, "TE_EXPLOSION"))
+		R_ParticleExplosion(org);
+	if (r_explosionlight.value)
+	{
+		dl = CL_AllocDlight(0);
+		VectorCopy(org, dl->origin);
+		dl->radius = 150 + 200 * bound(0, r_explosionlight.value, 1);
+		dl->die = cl.time + (rgb ? 0.5 : 1);
+		dl->decay = 300;
+		if (rgb)
+			VectorScale(rgb, 0.4f, dl->color);
+		else
+		{
+			dl->color[0] = 0.2f;
+			dl->color[1] = 0.155f;
+			dl->color[2] = 0.05f;
+			dl->channelfade[0] = 0.196f;
+			dl->channelfade[1] = 0.23f;
+			dl->channelfade[2] = 0.12f;
+		}
+	}
+	S_StartSound(-1, 0, S_PrecacheSound("weapons/r_exp3.wav"), org, 1, 1);
+}
+
+static void PF_cl_te_explosionrgb(void)
+{
+	PF_cl_explosion(G_VECTOR(OFS_PARM1));
+}
+
+static void PF_cl_te_explosionquad(void)
+{
+	PF_cl_explosion(NULL);
+}
+
+static void PF_cl_te_customflash(void)
+{
+	float *org = G_VECTOR(OFS_PARM0), *rgb = G_VECTOR(OFS_PARM3);
+	float radius = G_FLOAT(OFS_PARM1), lifetime = G_FLOAT(OFS_PARM2);
+	dlight_t *dl;
+	if (!PF_EffectVector(org) || !PF_EffectVector(rgb) || !(radius > 0 && radius <= 65535) ||
+		!(lifetime > 0 && lifetime <= 86400) || !isfinite(radius / lifetime))
+		return;
+	dl = CL_AllocDlight(0);
+	VectorCopy(org, dl->origin);
+	VectorScale(rgb, 0.5f, dl->color);
+	dl->radius = radius;
+	dl->decay = radius / lifetime;
+	dl->die = cl.time + lifetime;
+}
+
+static void PF_cl_te_smallflash(void)
+{
+	float *org = G_VECTOR(OFS_PARM0);
+	dlight_t *dl;
+	if (!PF_EffectVector(org))
+		return;
+	dl = CL_AllocDlight(0);
+	VectorCopy(org, dl->origin);
+	dl->color[0] = dl->color[1] = dl->color[2] = 2;
+	dl->radius = 200;
+	dl->decay = 1000;
+	dl->die = cl.time + 0.2;
+}
+
+#ifdef PSET_SCRIPT
+static int PF_EffectPalette(float value)
+{
+	return isfinite(value) ? (int)bound(0, value, 255) : 0;
+}
+
+static void PF_cl_particle2(void)
+{
+	float *org = G_VECTOR(OFS_PARM0), *min = G_VECTOR(OFS_PARM1), *max = G_VECTOR(OFS_PARM2);
+	if (PF_EffectVector(org) && PF_EffectVector(min) && PF_EffectVector(max))
+		PScript_RunParticleBox(P_INVALID, va("pe2_%i", PF_EffectPalette(G_FLOAT(OFS_PARM4))),
+			PF_EffectPalette(G_FLOAT(OFS_PARM3)), org, org, min, max, PF_EffectCount(G_FLOAT(OFS_PARM5)), 0);
+}
+
+static void PF_cl_h2spread(int kind, vec3_t max)
+{
+	float *org = G_VECTOR(OFS_PARM0);
+	vec3_t min;
+	VectorScale(max, -1, min);
+	if (PF_EffectVector(org) && PF_EffectVector(max))
+		PScript_RunParticleBox(P_INVALID, va("pe%i_%i", kind, PF_EffectPalette(G_FLOAT(OFS_PARM3))),
+			PF_EffectPalette(G_FLOAT(OFS_PARM2)), org, org, min, max, PF_EffectCount(G_FLOAT(OFS_PARM4)), 0);
+}
+
+static void PF_cl_particle3(void)
+{
+	PF_cl_h2spread(3, G_VECTOR(OFS_PARM1));
+}
+
+static void PF_cl_particle4(void)
+{
+	float radius = G_FLOAT(OFS_PARM1);
+	vec3_t max = {radius, radius, radius};
+	PF_cl_h2spread(4, max);
+}
+
+static void PF_cl_te_bloodshower(void)
+{
+	float *min = G_VECTOR(OFS_PARM0), *max = G_VECTOR(OFS_PARM1);
+	vec3_t vel = {0, 0, -G_FLOAT(OFS_PARM2)};
+	if (PF_EffectVector(min) && PF_EffectVector(max) && PF_EffectVector(vel))
+		PScript_RunParticleBox(PScript_FindParticleType("TE_BLOODSHOWER"), "te_cube", 0,
+			min, max, vel, vel, PF_EffectCount(G_FLOAT(OFS_PARM3)), 0);
+}
+
+static void PF_cl_te_particlecube(void)
+{
+	float *min = G_VECTOR(OFS_PARM0), *max = G_VECTOR(OFS_PARM1), *vel = G_VECTOR(OFS_PARM2);
+	float jitter = qcvm->argc > 6 ? G_FLOAT(OFS_PARM6) : 0;
+	if (PF_EffectVector(min) && PF_EffectVector(max) && PF_EffectVector(vel) && fabs(jitter) <= 8388608)
+		PScript_RunParticleBox(P_INVALID, G_FLOAT(OFS_PARM5) ? "te_cube_g" : "te_cube",
+			PF_EffectPalette(G_FLOAT(OFS_PARM4)), min, max, vel, vel, PF_EffectCount(G_FLOAT(OFS_PARM3)), jitter);
+}
+
+static void PF_cl_weather(const char *name)
+{
+	float *min = G_VECTOR(OFS_PARM0), *max = G_VECTOR(OFS_PARM1), *vel = G_VECTOR(OFS_PARM2);
+	if (PF_EffectVector(min) && PF_EffectVector(max) && PF_EffectVector(vel))
+		PScript_RunParticleBox(P_INVALID, name, PF_EffectPalette(G_FLOAT(OFS_PARM4)),
+			min, max, vel, vel, PF_EffectCount(G_FLOAT(OFS_PARM3)), 0);
+}
+
+static void PF_cl_te_particlerain(void)
+{
+	PF_cl_weather("te_rain");
+}
+
+static void PF_cl_te_particlesnow(void)
+{
+	PF_cl_weather("te_snow");
+}
+#endif
+
 static void PF_sv_pointsound(void)
 {
 	float *origin = G_VECTOR(OFS_PARM0);
@@ -3399,6 +3654,91 @@ static void PF_cl_pointsound(void)
 	float attenuation = G_FLOAT(OFS_PARM3);
 	S_StartSound(0, 0, S_PrecacheSound(sample), origin, volume, attenuation);
 }
+static qboolean PR_CSQC_SoundChannel(int *entity, int *channel)
+{
+	float number = G_FLOAT(OFS_PARM1);
+	edict_t *ed = G_EDICT(OFS_PARM0);
+	if (ed->free || !((double)number >= INT_MIN && (double)number <= INT_MAX))
+		return false;
+	*entity = -NUM_FOR_EDICT(ed);
+	*channel = (int)number;
+	return true;
+}
+
+static void PF_cs_stopsound(void)
+{
+	int entity, channel;
+	if (PR_CSQC_SoundChannel(&entity, &channel))
+		S_StopSound(entity, channel);
+}
+
+static void PF_cs_getsoundtime(void)
+{
+	int entity, channel;
+	G_FLOAT(OFS_RETURN) = PR_CSQC_SoundChannel(&entity, &channel) ?
+		S_GetEntitySoundTime(entity, channel) : -1;
+}
+
+static void PF_cs_getchannellevel(void)
+{
+	int entity, channel;
+	G_FLOAT(OFS_RETURN) = PR_CSQC_SoundChannel(&entity, &channel) ?
+		S_GetEntityChannelLevel(entity, channel) : -1;
+}
+
+static void PF_cs_soundupdate(void)
+{
+	float volume = G_FLOAT(OFS_PARM3), attenuation = G_FLOAT(OFS_PARM4);
+	float pitch = qcvm->argc >= 6 ? G_FLOAT(OFS_PARM5) : 0;
+	float flags = qcvm->argc >= 7 ? G_FLOAT(OFS_PARM6) : 0;
+	float offset = qcvm->argc >= 8 ? G_FLOAT(OFS_PARM7) : 0;
+	int entity, channel;
+	vec3_t origin;
+	edict_t *ed = G_EDICT(OFS_PARM0);
+
+	G_FLOAT(OFS_RETURN) = false;
+	if (!PR_CSQC_SoundChannel(&entity, &channel) || !isfinite(volume) ||
+		!isfinite(attenuation) || !isfinite(offset) || (pitch != 0 && pitch != 100) || flags != 0)
+		return;
+	VectorCopy(ed->v.origin, origin);
+	if (ed->v.solid == SOLID_BSP)
+	{
+		VectorMA(origin, 0.5, ed->v.mins, origin);
+		VectorMA(origin, 0.5, ed->v.maxs, origin);
+	}
+	if (!PF_EffectVector(origin))
+		return;
+	G_FLOAT(OFS_RETURN) = S_UpdateEntitySound(entity, channel, G_STRING(OFS_PARM2), origin,
+		q_min(volume, 1.0f), CLAMP(0.0f, attenuation, 4.0f), offset);
+}
+
+static void PF_cs_getsoundindex(void)
+{
+	const char *name = G_STRING(OFS_PARM0);
+	int i;
+
+	G_FLOAT(OFS_RETURN) = 0;
+	if (!*name)
+		return;
+	for (i = 1; i < MAX_SOUNDS; i++)
+		if (!strcmp(cl.sound_name[i], name))
+		{
+			G_FLOAT(OFS_RETURN) = i;
+			return;
+		}
+	// Like FTEQW, load local samples without issuing a network precache index.
+	if (qcvm->argc < 2 || !G_FLOAT(OFS_PARM1))
+		S_PrecacheOptionalSound(name);
+}
+
+static void PF_cs_soundnameforindex(void)
+{
+	int index;
+	G_INT(OFS_RETURN) = 0;
+	if (PR_IndexFromFloat(G_FLOAT(OFS_PARM0), MAX_SOUNDS, &index) && cl.sound_name[index][0])
+		G_INT(OFS_RETURN) = PR_MakeTempString(cl.sound_name[index]);
+}
+
 static void PF_cl_soundlength(void)
 {
 	const char *sample = G_STRING(OFS_PARM0);
@@ -5844,17 +6184,37 @@ int PF_CL_GetParticle(int idx)
 		return P_INVALID;
 	if (idx < 0)
 	{
+		if (idx <= -MAX_PARTICLETYPES)
+			return P_INVALID;
 		idx = -idx;
-		if (idx >= MAX_PARTICLETYPES)
+		if (!cl.local_particle_precache[idx].name)
 			return P_INVALID;
 		return cl.local_particle_precache[idx].index;
 	}
 	else
 	{
-		if (idx >= MAX_PARTICLETYPES)
+		if (idx >= MAX_PARTICLETYPES || !cl.particle_precache[idx].name)
 			return P_INVALID;
 		return cl.particle_precache[idx].index;
 	}
+}
+
+static void PF_cl_boxparticles(void)
+{
+	float id = G_FLOAT(OFS_PARM0), flags = qcvm->argc > 7 ? G_FLOAT(OFS_PARM7) : 0;
+	float *min = G_VECTOR(OFS_PARM2), *max = G_VECTOR(OFS_PARM3);
+	float *velmin = G_VECTOR(OFS_PARM4), *velmax = G_VECTOR(OFS_PARM5);
+	int type;
+	if (!isfinite(id) || fabs(id) >= MAX_PARTICLETYPES || !PF_EffectVector(min) || !PF_EffectVector(max) ||
+		!isfinite(flags) || flags < 0 || flags > 255)
+		return;
+	type = PF_CL_GetParticle((int)id);
+	if (type == P_INVALID)
+		return;
+	if ((int)flags & 128)
+		PScript_ParticleTrail(min, max, type, 1, 0, NULL, NULL);
+	else if (PF_EffectVector(velmin) && PF_EffectVector(velmax))
+		PScript_RunParticleBox(type, NULL, 0, min, max, velmin, velmax, PF_EffectCount(G_FLOAT(OFS_PARM6)), 0);
 }
 
 static void PF_cl_particleeffectnum(void)
@@ -8773,6 +9133,7 @@ static void PF_cs_addlight(void)
 		style = (int)stylevalue;
 
 	dl = CL_AllocDlight (key);
+	dl->csqc_owned = true;
 	VectorCopy(rgb, dl->color);
 	VectorCopy (org,  dl->origin);
 	dl->radius = radius;
@@ -8805,6 +9166,53 @@ enum
 	QCLFIELD_STYLESTRING = 17,
 	QCLFIELD_NEARCLIP = 18
 };
+
+static void PF_cs_dynamiclight_get(void)
+{
+	float handle = G_FLOAT(OFS_PARM0);
+	float field = G_FLOAT(OFS_PARM1);
+	const dlight_t *dl;
+
+	VectorClear(G_VECTOR(OFS_RETURN));
+	if (!(handle >= 0 && handle < MAX_DLIGHTS))
+	{
+		if (field == -1)
+			G_FLOAT(OFS_RETURN) = MAX_DLIGHTS;
+		return;
+	}
+	if (!(field >= QCLFIELD_ORIGIN && field <= QCLFIELD_NEARCLIP))
+		return;
+	dl = &cl_dlights[(int)handle];
+	if (qcvm->nogameaccess && !dl->csqc_owned)
+		return;
+
+	switch ((int)field)
+	{
+	case QCLFIELD_ORIGIN:
+		VectorCopy(dl->origin, G_VECTOR(OFS_RETURN));
+		break;
+	case QCLFIELD_COLOUR:
+		VectorCopy(dl->color, G_VECTOR(OFS_RETURN));
+		break;
+	case QCLFIELD_RADIUS:
+		G_FLOAT(OFS_RETURN) = dl->radius;
+		break;
+	case QCLFIELD_STYLE:
+		G_FLOAT(OFS_RETURN) = dl->style;
+		break;
+	case QCLFIELD_DIETIME:
+		G_FLOAT(OFS_RETURN) = dl->die;
+		break;
+	case QCLFIELD_RGBDECAY:
+		VectorCopy(dl->channelfade, G_VECTOR(OFS_RETURN));
+		break;
+	case QCLFIELD_RADIUSDECAY:
+		G_FLOAT(OFS_RETURN) = dl->decay;
+		break;
+	default:
+		break;
+	}
+}
 
 static void PF_cs_dynamiclight_set(void)
 {
@@ -10395,6 +10803,12 @@ static void PF_ex_localsound (void)
 	SV_LocalSound (&svs.clients[entnum-1], sample);
 }
 
+#ifdef PSET_SCRIPT
+#define PF_SCRIPT_CLIENT(func) func
+#else
+#define PF_SCRIPT_CLIENT(func) NULL
+#endif
+
 //A quick note on number ranges.
 //0: automatically assigned. more complicated, but no conflicts over numbers, just names...
 //   NOTE: #0 is potentially ambiguous - vanilla will interpret it as instruction 0 (which is normally reserved) rather than a builtin.
@@ -10509,11 +10923,11 @@ static struct
 //	{"sleep",			PF_Sleep,			PF_Sleep,			212,	PF_NoMenu, D("void(float sleeptime)", "Suspends the current QC execution thread for 'sleeptime' seconds.\nOther QC functions can and will be executed in the interim, including changing globals and field state (but not simultaneously).\nThe self and other globals will be restored when the thread wakes up (or set to world if they were removed since the thread started sleeping). Locals will be preserved, but will not be protected from remove calls.\nIf the engine is expecting the QC to return a value (even in the parent/root function), the value 0 shall be used instead of waiting for the qc to resume.")},
 	{"forceinfokey",	PF_sv_forceinfokey,	PF_NoCSQC,			213,	PF_NoMenu, D("void(entity player, string key, string value)", "Directly changes a user's info without pinging off the client. Also allows explicitly setting * keys, including *spectator. Does not affect the user's config or other servers.")},
 //	{"chat",			PF_chat,			PF_NoCSQC,			214,	PF_NoMenu, "void(string filename, float starttag, entity edict)"}, //(FTE_NPCCHAT)
-//	{"particle2",		PF_sv_particle2,	PF_cl_particle2,	215,	PF_NoMenu, "void(vector org, vector dmin, vector dmax, float colour, float effect, float count)"},
-//	{"particle3",		PF_sv_particle3,	PF_cl_particle3,	216,	PF_NoMenu, "void(vector org, vector box, float colour, float effect, float count)"},
-//	{"particle4",		PF_sv_particle4,	PF_cl_particle4,	217,	PF_NoMenu, "void(vector org, float radius, float colour, float effect, float count)"},
+	{"particle2",		PF_NoSSQC,	PF_SCRIPT_CLIENT(PF_cl_particle2),	215,	PF_NoMenu, "void(vector org, vector dmin, vector dmax, float colour, float effect, float count)"},
+	{"particle3",		PF_NoSSQC,	PF_SCRIPT_CLIENT(PF_cl_particle3),	216,	PF_NoMenu, "void(vector org, vector box, float colour, float effect, float count)"},
+	{"particle4",		PF_NoSSQC,	PF_SCRIPT_CLIENT(PF_cl_particle4),	217,	PF_NoMenu, "void(vector org, float radius, float colour, float effect, float count)"},
 	{"bitshift",		PF_bitshift,		PF_bitshift,		218,	PF_bitshift,0, "float(float number, float quantity)"},
-	{"te_lightningblood",PF_sv_te_lightningblood,NULL,			219,	PF_NoMenu, "void(vector org)"},
+	{"te_lightningblood",PF_sv_te_lightningblood,PF_cl_te_lightningblood,			219,	PF_NoMenu, "void(vector org)"},
 //	{"map_builtin",		PF_builtinsupported,PF_builtinsupported,220,	PF_NoMenu, D("float(string builtinname, float builtinnum)","Attempts to map the named builtin at a non-standard builtin number. Returns 0 on failure."), true},	//like #100 - takes 2 args. arg0 is builtinname, 1 is number to map to.
 	{"strstrofs",		PF_strstrofs,		PF_strstrofs,		221,	PF_strstrofs,221, D("float(string s1, string sub, optional float startidx)", "Returns the 0-based offset of sub within the s1 string, or -1 if sub is not in s1.\nIf startidx is set, this builtin will ignore matches before that 0-based offset.")},
 	{"str2chr",			PF_str2chr,			PF_str2chr,			222,	PF_str2chr,222, D("float(string str, float index)", "Retrieves the character value at offset 'index'.")},
@@ -10537,7 +10951,7 @@ static struct
 //	{"rotatevectorsbyvectors",PF_rotatevectorsbymatrix,PF_rotatevectorsbymatrix,PF_NoMenu, 236,"void(vector fwd, vector right, vector up)"}, // #236
 //	{"skinforname",		PF_skinforname,		PF_skinforname,		237,	"float(float mdlindex, string skinname)"},		// #237
 	{"shaderforname",	PF_NoSSQC,			PF_cl_shaderforname,	238,	PF_NoMenu, D("float(string shadername, optional string defaultshader, ...)", "Registers a stable CSQC shader handle. QSS-M resolves map, clampMap, animMap, diffuseMap, and qer_editorimage directives to a representative bitmap for drawpic and its supported 2D polygon path. Material render state, multipass shaders, and 3D scene polygons are not supported. If no shader definition exists, defaultshader's first image is used, then the shader name is treated as a plain image.")},
-	{"te_bloodqw",		PF_sv_te_bloodqw,	NULL,				239,	PF_NoMenu, "void(vector org, float count)"},
+	{"te_bloodqw",		PF_sv_te_bloodqw,	PF_cl_te_bloodqw,				239,	PF_NoMenu, "void(vector org, optional float count)"},
 	{"te_muzzleflash",	PF_sv_te_muzzleflash,PF_cl_te_muzzleflash,0,	PF_NoMenu, "void(entity ent)"},
 	{"checkpvs",		PF_checkpvs,		PF_checkpvs,		240,	PF_NoMenu, "float(vector viewpos, entity entity)"},
 //	{"matchclientname",	PF_matchclient,		PF_NoCSQC,			241,	PF_NoMenu, "entity(string match, optional float matchnum)"},
@@ -10687,7 +11101,7 @@ static struct
 	{"readuint64",		PF_NoSSQC,			PF_cl_readuint64,	0,		PF_NoMenu, D("__uint64()", "Reads a 64bit unsigned int. Paired with WriteUInt64.")},
 	{"readentitynum",	PF_NoSSQC,			PF_cl_readentitynum,368,	PF_NoMenu, "float()"},// (EXT_CSQC)
 //	{"deltalisten",		NULL,				PF_FullCSQCOnly,	371,	PF_NoMenu, D("float(string modelname, float(float isnew) updatecallback, float flags)", "Specifies a per-modelindex callback to listen for engine-networking entity updates. Such entities are automatically interpolated by the engine (unless flags specifies not to).\nThe various standard entity fields will be overwritten each frame before the updatecallback function is called.")},//  (EXT_CSQC_1)
-//	{"dynamiclight_get",PF_NoSSQC,			PF_FullCSQCOnly,	372,	PF_NoMenu, D("__variant(float lno, float fld)", "Retrieves a property from the given dynamic/rt light. Return type depends upon the light field requested.")},
+	{"dynamiclight_get", PF_NoSSQC, PF_cs_dynamiclight_get, 372, PF_NoMenu, D("__variant(float light, float field)", "Reads an ordinary dynamic light field. Use an invalid light handle and field -1 to query capacity. Unsupported fields return zero.")},
 	{"dynamiclight_set",PF_NoSSQC,			PF_cs_dynamiclight_set,373,	PF_NoMenu, D("void(float lno, float fld, __variant value)", "Changes origin, colour, radius, style, die time, RGB decay, or radius decay on a dynamic light. Projected/RT-light-only fields such as angles and cubemaps are accepted but have no effect.")},
 //	{"particleeffectquery",PF_NoSSQC,		PF_FullCSQCOnly,	374,	PF_NoMenu, D("string(float efnum, float body)", "Retrieves either the name or the body of the effect with the given number. The effect body is regenerated from internal state, and can be changed before being reapplied via the localcmd builtin.")},
 //	{"adddecal",		PF_NoSSQC,			PF_FullCSQCOnly,	375,	PF_NoMenu, D("void(string shadername, vector origin, vector up, vector side, vector rgb, float alpha)", "Adds a temporary clipped decal shader to the scene, centered at the given point with given orientation. Will be drawn by the next renderscene call, and freed by the next clearscene call.")},
@@ -10713,20 +11127,20 @@ static struct
 	{"setcolors",		PF_setcolors,		PF_NoCSQC,			401,	PF_NoMenu, D("void(entity ent, float colours)", "Changes a player's colours. The bits 0-3 are the lower/trouser colour, bits 4-7 are the upper/shirt colours.")},//DP_SV_SETCOLOR
 	{"findchain",		PF_findchain,		PF_findchain,		402,	PF_findchain,26, "entity(.string field, string match, optional .entity chainfield)"},// (DP_QC_FINDCHAIN)
 	{"findchainfloat",	PF_findchainfloat,	PF_findchainfloat,	403,	PF_findchainfloat,27, "entity(.float fld, float match, optional .entity chainfield)"},// (DP_QC_FINDCHAINFLOAT)
-	{"effect",			PF_sv_effect,		NULL,				404,	PF_NoMenu, D("void(vector org, string modelname, float startframe, float endframe, float framerate)", "stub. Spawns a self-animating sprite")},// (DP_SV_EFFECT)
-	{"te_blood",		PF_sv_te_blooddp,	NULL,				405,	PF_NoMenu, "void(vector org, vector dir, float count)"},// #405 te_blood
-	{"te_bloodshower",	PF_sv_te_bloodshower,NULL,				406,	PF_NoMenu, "void(vector mincorner, vector maxcorner, float explosionspeed, float howmany)", "stub."},// (DP_TE_BLOODSHOWER)
-	{"te_explosionrgb",	PF_sv_te_explosionrgb,NULL,				407,	PF_NoMenu, "void(vector org, vector color)", "stub."},// (DP_TE_EXPLOSIONRGB)
-	{"te_particlecube",	PF_sv_te_particlecube,NULL,				408,	PF_NoMenu, "void(vector mincorner, vector maxcorner, vector vel, float howmany, float color, float gravityflag, float randomveljitter)", "stub."},// (DP_TE_PARTICLECUBE)
-	{"te_particlerain",	PF_sv_te_particlerain,NULL,				409,	PF_NoMenu, "void(vector mincorner, vector maxcorner, vector vel, float howmany, float color)"},// (DP_TE_PARTICLERAIN)
-	{"te_particlesnow",	PF_sv_te_particlesnow,NULL,				410,	PF_NoMenu, "void(vector mincorner, vector maxcorner, vector vel, float howmany, float color)"},// (DP_TE_PARTICLESNOW)
-	{"te_spark",		PF_sv_te_spark,		NULL,				411,	PF_NoMenu, "void(vector org, vector vel, float howmany)", "stub."},// (DP_TE_SPARK)
-	{"te_gunshotquad",	PF_sv_te_gunshotquad,NULL,				412,	PF_NoMenu, "void(vector org)", "stub."},// (DP_TE_QUADEFFECTS1)
-	{"te_spikequad",	PF_sv_te_spikequad,	NULL,				413,	PF_NoMenu, "void(vector org)", "stub."},// (DP_TE_QUADEFFECTS1)
-	{"te_superspikequad",PF_sv_te_superspikequad,NULL,			414,	PF_NoMenu, "void(vector org)", "stub."},// (DP_TE_QUADEFFECTS1)
-	{"te_explosionquad",PF_sv_te_explosionquad,NULL,			415,	PF_NoMenu, "void(vector org)", "stub."},// (DP_TE_QUADEFFECTS1)
-	{"te_smallflash",	PF_sv_te_smallflash,NULL,				416,	PF_NoMenu, "void(vector org)", "stub."},// (DP_TE_SMALLFLASH)
-	{"te_customflash",	PF_sv_te_customflash,NULL,				417,	PF_NoMenu, "void(vector org, float radius, float lifetime, vector color)", "stub."},// (DP_TE_CUSTOMFLASH)
+	{"effect",			PF_sv_effect,		PF_cl_effect,				404,	PF_NoMenu, D("void(vector org, string modelname, float startframe, float framecount, float framerate)", "SSQC stub. CSQC spawns a self-animating model, starting at startframe and playing framecount frames (zero plays the remaining frames).")},// (DP_SV_EFFECT)
+	{"te_blood",		PF_sv_te_blooddp,	PF_cl_te_blooddp,				405,	PF_NoMenu, "void(vector org, vector dir, float count)"},// #405 te_blood
+	{"te_bloodshower",	PF_sv_te_bloodshower,PF_SCRIPT_CLIENT(PF_cl_te_bloodshower),				406,	PF_NoMenu, "void(vector mincorner, vector maxcorner, float explosionspeed, float howmany)", "SSQC stub."},// (DP_TE_BLOODSHOWER)
+	{"te_explosionrgb",	PF_sv_te_explosionrgb,PF_cl_te_explosionrgb,				407,	PF_NoMenu, "void(vector org, vector color)", "SSQC stub."},// (DP_TE_EXPLOSIONRGB)
+	{"te_particlecube",	PF_sv_te_particlecube,PF_SCRIPT_CLIENT(PF_cl_te_particlecube),				408,	PF_NoMenu, "void(vector mincorner, vector maxcorner, vector vel, float howmany, float color, float gravityflag, float randomveljitter)", "SSQC stub."},// (DP_TE_PARTICLECUBE)
+	{"te_particlerain",	PF_sv_te_particlerain,PF_SCRIPT_CLIENT(PF_cl_te_particlerain),				409,	PF_NoMenu, "void(vector mincorner, vector maxcorner, vector vel, float howmany, float color)"},// (DP_TE_PARTICLERAIN)
+	{"te_particlesnow",	PF_sv_te_particlesnow,PF_SCRIPT_CLIENT(PF_cl_te_particlesnow),				410,	PF_NoMenu, "void(vector mincorner, vector maxcorner, vector vel, float howmany, float color)"},// (DP_TE_PARTICLESNOW)
+	{"te_spark",		PF_sv_te_spark,		PF_cl_te_spark,				411,	PF_NoMenu, "void(vector org, vector vel, float howmany)", "SSQC stub."},// (DP_TE_SPARK)
+	{"te_gunshotquad",	PF_sv_te_gunshotquad,PF_cl_te_gunshotquad,				412,	PF_NoMenu, "void(vector org)", "SSQC stub."},// (DP_TE_QUADEFFECTS1)
+	{"te_spikequad",	PF_sv_te_spikequad,	PF_cl_te_spikequad,				413,	PF_NoMenu, "void(vector org)", "SSQC stub."},// (DP_TE_QUADEFFECTS1)
+	{"te_superspikequad",PF_sv_te_superspikequad,PF_cl_te_superspikequad,			414,	PF_NoMenu, "void(vector org)", "SSQC stub."},// (DP_TE_QUADEFFECTS1)
+	{"te_explosionquad",PF_sv_te_explosionquad,PF_cl_te_explosionquad,			415,	PF_NoMenu, "void(vector org)", "SSQC stub."},// (DP_TE_QUADEFFECTS1)
+	{"te_smallflash",	PF_sv_te_smallflash,PF_cl_te_smallflash,				416,	PF_NoMenu, "void(vector org)", "SSQC stub."},// (DP_TE_SMALLFLASH)
+	{"te_customflash",	PF_sv_te_customflash,PF_cl_te_customflash,				417,	PF_NoMenu, "void(vector org, float radius, float lifetime, vector color)", "SSQC stub."},// (DP_TE_CUSTOMFLASH)
 	{"te_gunshot",		PF_sv_te_gunshot,	PF_cl_te_gunshot,	418,	PF_NoMenu, "void(vector org, optional float count)"},// #418 te_gunshot
 	{"te_spike",		PF_sv_te_spike,		PF_cl_te_spike,		419,	PF_NoMenu, "void(vector org)"},// #419 te_spike
 	{"te_superspike",	PF_sv_te_superspike,PF_cl_te_superspike,420,	PF_NoMenu, "void(vector org)"},// #420 te_superspike
@@ -10742,7 +11156,7 @@ static struct
 	{"te_lightning3",	PF_sv_te_lightning3,PF_cl_te_lightning3,430,	PF_NoMenu, "void(entity own, vector start, vector end)"},// #430 te_lightning3
 	{"te_beam",			PF_sv_te_beam,		PF_cl_te_beam,		431,	PF_NoMenu, "void(entity own, vector start, vector end)"},// #431 te_beam
 	{"vectorvectors",	PF_vectorvectors,	PF_vectorvectors,	432,	PF_NoMenu, "void(vector dir)"},// (DP_QC_VECTORVECTORS)
-	{"te_plasmaburn",	PF_sv_te_plasmaburn,NULL,				433,	PF_NoMenu, "void(vector org)", "stub."},// (DP_TE_PLASMABURN)
+	{"te_plasmaburn",	PF_sv_te_plasmaburn,PF_cl_te_plasmaburn,				433,	PF_NoMenu, "void(vector org)", "SSQC stub."},// (DP_TE_PLASMABURN)
 	{"getsurfacenumpoints",PF_getsurfacenumpoints,PF_getsurfacenumpoints,434,PF_NoMenu, "float(entity e, float s)"},// (DP_QC_GETSURFACE)
 	{"getsurfacepoint",	PF_getsurfacepoint,	PF_getsurfacepoint,	435,	PF_NoMenu, "vector(entity e, float s, float n)"},// (DP_QC_GETSURFACE)
 	{"getsurfacenormal",PF_getsurfacenormal,PF_getsurfacenormal,436,	PF_NoMenu, "vector(entity e, float s)"},// (DP_QC_GETSURFACE)
@@ -10769,6 +11183,8 @@ static struct
 	{"spawnclient",		PF_spawnclient,		PF_NoCSQC,			454,	PF_NoMenu, "entity()", "Spawns a dummy player entity.\nNote that such dummy players will be carried from one map to the next.\nWarning: DP_SV_CLIENTCOLORS DP_SV_CLIENTNAME are not implemented in quakespasm, so use KRIMZON_SV_PARSECLIENTCOMMAND's clientcommand builtin to change the bot's name/colours/skin/team/etc, in the same way that clients would ask."},//DP_SV_BOTCLIENT
 	{"clienttype",		PF_clienttype,		PF_NoCSQC,			455,	PF_NoMenu, "float(entity client)"},//botclient
 	{"WriteUnterminatedString",PF_WriteString2,PF_NoCSQC,		456,	PF_NoMenu, "void(float target, string str)"},	//writestring but without the null terminator. makes things a little nicer.
+	{"te_flamejet", PF_NoSSQC, PF_cl_te_flamejet, 457, PF_NoMenu, "void(vector org, vector velocity, float count)"},
+
 	{"edict_num",		PF_edict_for_num,	PF_edict_for_num,	459,	PF_NoMenu, "entity(float entnum)"},//DP_QC_EDICT_NUM
 	{"buf_create",		PF_buf_create,		PF_buf_create,		460,	PF_buf_create,440, "strbuf()"},//DP_QC_STRINGBUFFERS
 	{"buf_del",			PF_buf_del,			PF_buf_del,			461,	PF_buf_del,441, "void(strbuf bufhandle)"},//DP_QC_STRINGBUFFERS
@@ -10820,6 +11236,8 @@ static struct
 	{"buf_cvarlist",	PF_buf_cvarlist,	PF_buf_cvarlist,	517,	PF_buf_cvarlist,517, D("void(strbuf strbuf, string pattern, string antipattern)", "Populates the strbuf with a list of known cvar names.")},
 	{"cvar_description",PF_cvar_description,PF_cvar_description,518,	PF_cvar_description,518, D("string(string cvarname)", "Retrieves the description of a cvar, which might be useful for tooltips or help files. This may still not be useful.")},
 	{"gettime",			PF_gettimef,		PF_gettimef,		519,	PF_gettimef,67, "float(optional float timetype)"},
+	{"boxparticles", PF_NoSSQC, PF_SCRIPT_CLIENT(PF_cl_boxparticles), 502, PF_NoMenu, D("void(float effectnum, entity owner, vector orgmin, vector orgmax, vector velmin, vector velmax, float count, optional float flags)", "Flag 128 draws a trail. Other particle override flags have no effect.")},
+
 	{"gettime_legacy",	PF_NoSSQC,			PF_NoCSQC,			0,	PF_gettimef,519, D("float(optional float timetype)", "alias. superseded qss menuqc slot, kept bound for existing bytecode")},
 	{"gettimed",		PF_gettimed,		PF_gettimed,		0,		PF_gettimed,0, "__double(optional int timetype)"},
 	{"findkeysforcommand",PF_NoSSQC,		PF_cl_findkeysforcommand,521,PF_cl_findkeysforcommand,610, D("string(string command, optional float bindmap)", "Returns a list of keycodes that perform the given console command in a format that can only be parsed via tokenize (NOT tokenize_console). This always returns at least two values - if only one key is actually bound, -1 will be returned. The bindmap argument is listed for compatibility with dp-specific defs, but is ignored in FTE.")},
@@ -10872,6 +11290,12 @@ static struct
 	{"fremove", PF_fremove, PF_fremove, 652, PF_fremove, 652, D("float(string name)", "Removes a regular file from the writable data directory. Returns 0 on success.")},
 #endif
 	{"fexists", PF_fexists, PF_fexists, 653, PF_fexists, 653, D("float(string name)", "Checks for a loose file in the current writable game directory.")},
+	{"stopsound", PF_NoSSQC, PF_cs_stopsound, 0, PF_NoMenu, "void(entity ent, float channel)"},
+	{"soundupdate", PF_NoSSQC, PF_cs_soundupdate, 0, PF_NoMenu, D("float(entity ent, float channel, string sample, float volume, float attenuation, optional float pitch, optional float flags, optional float offset)", "Changes the current local entity sound. Only native pitch and zero flags are supported.")},
+	{"getsoundtime", PF_NoSSQC, PF_cs_getsoundtime, 533, PF_NoMenu, "float(entity ent, float channel)"},
+	{"getchannellevel", PF_NoSSQC, PF_cs_getchannellevel, 0, PF_NoMenu, "float(entity ent, float channel)"},
+	{"getsoundindex", PF_NoSSQC, PF_cs_getsoundindex, 0, PF_NoMenu, "float(string sample, optional float queryonly)"},
+	{"soundnameforindex", PF_NoSSQC, PF_cs_soundnameforindex, 0, PF_NoMenu, "string(float index)"},
 	{"digest_hex",		PF_digest_hex,		PF_digest_hex,				639,	PF_digest_hex, 639, "string(string digest, string data, ...)"},
 };
 
@@ -11164,6 +11588,11 @@ static void PF_checkextension(void)
 	G_FLOAT(OFS_RETURN) = false;
 }
 
+static qboolean PR_BuiltinStub(const char *desc, qboolean server)
+{
+	return desc && (!strncmp(desc, "stub.", 5) || (server && !strncmp(desc, "SSQC stub.", 10)));
+}
+
 static void PF_builtinsupported(void)
 {
 	const char *biname = G_STRING(OFS_PARM0);
@@ -11209,7 +11638,7 @@ static void PF_checkbuiltin (void)
 					{
 						if (extensionbuiltins[i].number_menuqc == binum)
 						{	//but it will be defined if its actually executed.
-							if (extensionbuiltins[i].desc && !strncmp(extensionbuiltins[i].desc, "stub.", 5))
+							if (PR_BuiltinStub(extensionbuiltins[i].desc, qcvm == &sv.qcvm))
 								G_FLOAT(OFS_RETURN) = false;	//pretend it won't work if it probably won't be useful
 							else if (!extensionbuiltins[i].menufunc)
 								G_FLOAT(OFS_RETURN) = false;	//works, but not in this module
@@ -11225,7 +11654,7 @@ static void PF_checkbuiltin (void)
 					{
 						if (extensionbuiltins[i].number == binum)
 						{	//but it will be defined if its actually executed.
-							if (extensionbuiltins[i].desc && !strncmp(extensionbuiltins[i].desc, "stub.", 5))
+							if (PR_BuiltinStub(extensionbuiltins[i].desc, qcvm == &sv.qcvm))
 								G_FLOAT(OFS_RETURN) = false;	//pretend it won't work if it probably won't be useful
 							else if ((qcvm == &cl.qcvm && !extensionbuiltins[i].csqcfunc)
 								 || (qcvm == &sv.qcvm && !extensionbuiltins[i].ssqcfunc))
@@ -11283,7 +11712,7 @@ void PF_Fixme (void)
 						continue;
 
 					num = (qcvm == &cls.menu_qcvm?extensionbuiltins[i].documentednumber_menuqc:extensionbuiltins[i].documentednumber);
-					if (!pr_checkextension.value || (extensionbuiltins[i].desc && !strncmp(extensionbuiltins[i].desc, "stub.", 5)))
+					if (!pr_checkextension.value || (PR_BuiltinStub(extensionbuiltins[i].desc, qcvm == &sv.qcvm)))
 						Con_Warning("Mod is using builtin #%u - %s\n", num, extensionbuiltins[i].name);
 					else
 						Con_DPrintf2("Mod uses builtin #%u - %s\n", num, extensionbuiltins[i].name);
@@ -12038,6 +12467,14 @@ void PR_DumpPlatform_f(void)
 		fprintf(f, "const float VF_SCREENVSIZE = %i;", VF_SCREENVSIZE);
 		fprintf(f, "const float VF_SCREENPSIZE = %i;", VF_SCREENPSIZE);
 
+		fprintf(f, "const float LFIELD_ORIGIN = %i;", QCLFIELD_ORIGIN);
+		fprintf(f, "const float LFIELD_COLOUR = %i;", QCLFIELD_COLOUR);
+		fprintf(f, "const float LFIELD_RADIUS = %i;", QCLFIELD_RADIUS);
+		fprintf(f, "const float LFIELD_STYLE = %i;", QCLFIELD_STYLE);
+		fprintf(f, "const float LFIELD_DIETIME = %i;", QCLFIELD_DIETIME);
+		fprintf(f, "const float LFIELD_RGBDECAY = %i;", QCLFIELD_RGBDECAY);
+		fprintf(f, "const float LFIELD_RADIUSDECAY = %i;", QCLFIELD_RADIUSDECAY);
+
 		fprintf(f, "const float RF_VIEWMODEL = %i;", RF_VIEWMODEL);
 		fprintf(f, "const float RF_EXTERNALMODEL = %i;", RF_EXTERNALMODEL);
 		fprintf(f, "const float RF_DEPTHHACK = %i;", RF_DEPTHHACK);
@@ -12256,7 +12693,7 @@ void PR_DumpPlatform_f(void)
 			else
 				continue;
 
-			if (j != (extensionbuiltins[i].desc?!strncmp(extensionbuiltins[i].desc, "stub.", 5):0))
+			if (j != PR_BuiltinStub(extensionbuiltins[i].desc, targs == SS))
 				continue;
 			if (extensionbuiltins[i].desc && !strncmp(extensionbuiltins[i].desc, "alias.", 6))
 				continue;	//still bound at load, but authors should use the canonical name

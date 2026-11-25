@@ -2003,29 +2003,22 @@ const int pr_ssqcnumbuiltins = Q_COUNTOF(pr_ssqcbuiltins);
 
 static void PF_cl_sound (void)
 {
-	const char	*sample;
-	int		channel;
-	edict_t		*entity;
-	int		volume;
-	float	attenuation;
-	int entnum;
+	const char *sample = G_STRING(OFS_PARM2);
+	float channel = G_FLOAT(OFS_PARM1);
+	float volume = G_FLOAT(OFS_PARM3);
+	float attenuation = G_FLOAT(OFS_PARM4);
+	edict_t *entity = G_EDICT(OFS_PARM0);
 	vec3_t origin;
 
-	entity = G_EDICT(OFS_PARM0);
-	channel = G_FLOAT(OFS_PARM1);
-	sample = G_STRING(OFS_PARM2);
-	volume = G_FLOAT(OFS_PARM3) * 255;
-	attenuation = G_FLOAT(OFS_PARM4);
-
-	entnum = NUM_FOR_EDICT(entity);
-	//fullcsqc fixme: if (entity->v->entnum)  
-	entnum *= -1;
-
-	//fix up origin like the ssqc's would.
+	if (entity->free || !((double)channel >= INT_MIN && (double)channel <= INT_MAX) ||
+		!isfinite(volume) || !isfinite(attenuation))
+		return;
 	VectorAdd(entity->v.mins, entity->v.maxs, origin);
-	VectorMA(entity->v.origin, 0.5,origin, origin);
-
-	S_StartSound(entnum, channel, S_PrecacheSound(sample), origin, volume, attenuation);
+	VectorMA(entity->v.origin, 0.5, origin, origin);
+	if (!(fabsf(origin[0]) <= 8388608 && fabsf(origin[1]) <= 8388608 && fabsf(origin[2]) <= 8388608))
+		return;
+	S_StartSound(-NUM_FOR_EDICT(entity), (int)channel, S_PrecacheOptionalSound(sample),
+		origin, CLAMP(0.0f, volume, 1.0f), CLAMP(0.0f, attenuation, 4.0f));
 }
 static void PF_cl_ambientsound (void)
 {
