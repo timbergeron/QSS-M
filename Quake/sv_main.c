@@ -328,11 +328,11 @@ static unsigned int MSGFTE_DeltaCalcBits(entity_state_t *from, entity_state_t *t
 		bits |= UF_SCALE;
 	if (to->alpha != from->alpha)
 		bits |= UF_ALPHA;
-//	if (to->fatness != from->fatness)
-//		bits |= UF_FATNESS;
+	if (to->fatness != from->fatness)
+		bits |= UF_FATNESS;
 
-//	if (to->hexen2flags != from->hexen2flags || to->abslight != from->abslight)
-//		bits |= UF_DRAWFLAGS;
+	if (to->drawflags != from->drawflags || to->abslight != from->abslight)
+		bits |= UF_DRAWFLAGS;
 
 //	if (to->bonecount != from->bonecount || (to->bonecount && memcmp(frombonedata+from->boneoffset, tobonedata+to->boneoffset, to->bonecount*sizeof(short)*7)))
 //		bits |= UF_BONEDATA;
@@ -342,23 +342,25 @@ static unsigned int MSGFTE_DeltaCalcBits(entity_state_t *from, entity_state_t *t
 	if (to->colormod[0]!=from->colormod[0]||to->colormod[1]!=from->colormod[1]||to->colormod[2]!=from->colormod[2])
 		bits |= UF_COLORMOD;
 
-//	if (to->glowsize!=from->glowsize||to->glowcolour!=from->glowcolour||to->glowmod[0]!=from->glowmod[0]||to->glowmod[1]!=from->glowmod[1]||to->glowmod[2]!=from->glowmod[2])
-//		bits |= UF_GLOW;
+	if (to->glowsize != from->glowsize || to->glowcolour != from->glowcolour ||
+		memcmp(to->glowmod, from->glowmod, sizeof(to->glowmod)))
+		bits |= UF_GLOW;
 
 	if (to->tagentity != from->tagentity || to->tagindex != from->tagindex)
 		bits |= UF_TAGINFO;
 
-//	if (to->light[0] != from->light[0] || to->light[1] != from->light[1] || to->light[2] != from->light[2] || to->light[3] != from->light[3] || to->lightstyle != from->lightstyle || to->lightpflags != from->lightpflags)
-//		bits |= UF_LIGHT;
+	if (memcmp(to->light, from->light, sizeof(to->light)) ||
+		to->lightstyle != from->lightstyle || to->lightpflags != from->lightpflags)
+		bits |= UF_LIGHT;
 
 	if (to->traileffectnum != from->traileffectnum || to->emiteffectnum != from->emiteffectnum)
 		bits |= UF_TRAILEFFECT;
 
-//	if (to->modelindex2 != from->modelindex2)
-//		bits |= UF_MODELINDEX2;
+	if (to->modelindex2 != from->modelindex2)
+		bits |= UF_MODELINDEX2;
 
-//	if (to->gravitydir[0] != from->gravitydir[0] || to->gravitydir[1] != from->gravitydir[1])
-//		bits |= UF_GRAVITYDIR;
+	if (to->gravitydir[0] != from->gravitydir[0] || to->gravitydir[1] != from->gravitydir[1])
+		bits |= UF_GRAVITYDIR;
 
 	return bits;
 }
@@ -420,7 +422,8 @@ static void MSGFTE_WriteEntityUpdate(unsigned int bits, entity_state_t *state, s
 		bits |= UF_16BIT;
 //	if ((bits & UF_SKIN) && state->skin > 255)
 //		bits |= UF_16BIT;
-	if ((bits & UF_FRAME) && state->frame > 255)
+	if (((bits & UF_FRAME) && state->frame > 255) ||
+		((bits & UF_MODELINDEX2) && state->modelindex2 > 255))
 		bits |= UF_16BIT;
 
 	/*convert effects bits to higher lengths if needed*/
@@ -617,18 +620,18 @@ static void MSGFTE_WriteEntityUpdate(unsigned int bits, entity_state_t *state, s
 			MSG_WriteShort(msg, state->baseframe);
 		}
 	}
-	if (bits & UF_DRAWFLAGS)
+*/	if (bits & UF_DRAWFLAGS)
 	{
 		MSG_WriteByte(msg, state->drawflags);
-		if ((state->drawflags & MLS_MASK) == MLS_ABSLIGHT)
+		if ((state->drawflags & MLS_MASK) >= MLS_ADDLIGHT)
 			MSG_WriteByte(msg, state->abslight);
 	}
-*/	if (bits & UF_TAGINFO)
+	if (bits & UF_TAGINFO)
 	{
 		MSG_WriteEntity(msg, state->tagentity, pext2);
 		MSG_WriteByte(msg, state->tagindex);
 	}
-/*	if (bits & UF_LIGHT)
+	if (bits & UF_LIGHT)
 	{
 		MSG_WriteShort (msg, state->light[0]);
 		MSG_WriteShort (msg, state->light[1]);
@@ -637,7 +640,7 @@ static void MSGFTE_WriteEntityUpdate(unsigned int bits, entity_state_t *state, s
 		MSG_WriteByte (msg, state->lightstyle);
 		MSG_WriteByte (msg, state->lightpflags);
 	}
-*/	if (bits & UF_TRAILEFFECT)
+	if (bits & UF_TRAILEFFECT)
 	{
 		if (state->emiteffectnum)
 		{	//3 spare bits. so that's nice (this is guarenteed to be 14 bits max due to precaches using the upper two bits).
@@ -654,7 +657,7 @@ static void MSGFTE_WriteEntityUpdate(unsigned int bits, entity_state_t *state, s
 		MSG_WriteByte(msg, state->colormod[1]);
 		MSG_WriteByte(msg, state->colormod[2]);
 	}
-/*	if (bits & UF_GLOW)
+	if (bits & UF_GLOW)
 	{
 		MSG_WriteByte(msg, state->glowsize);
 		MSG_WriteByte(msg, state->glowcolour);
@@ -663,7 +666,7 @@ static void MSGFTE_WriteEntityUpdate(unsigned int bits, entity_state_t *state, s
 		MSG_WriteByte(msg, state->glowmod[2]);
 	}
 	if (bits & UF_FATNESS)
-		MSG_WriteByte(msg, state->fatness);
+		MSG_WriteChar(msg, state->fatness);
 	if (bits & UF_MODELINDEX2)
 	{
 		if (bits & UF_16BIT)
@@ -677,7 +680,6 @@ static void MSGFTE_WriteEntityUpdate(unsigned int bits, entity_state_t *state, s
 		MSG_WriteByte(msg, state->gravitydir[0]);
 		MSG_WriteByte(msg, state->gravitydir[1]);
 	}
-*/
 }
 
 static struct entity_num_state_s *snapshot_entstate;
@@ -1447,7 +1449,7 @@ note: ignores viewmodelforclient and other client-specific stuff.
 void SV_BuildEntityState(client_t *client, edict_t *ent, entity_state_t *state)
 {
 	eval_t			*val;
-	state->eflags = 0;
+	*state = nullentitystate;
 	VectorCopy(ent->v.origin, state->origin);
 	VectorCopy(ent->v.angles, state->angles);
 	state->modelindex = ent->v.modelindex;
@@ -1471,6 +1473,21 @@ void SV_BuildEntityState(client_t *client, edict_t *ent, entity_state_t *state)
 	}
 	else
 		state->colormod[0] = state->colormod[1] = state->colormod[2] = 32;
+	if ((val = GetEdictFieldValue(ent, qcvm->extfields.glowmod)) &&
+		(val->vector[0] || val->vector[1] || val->vector[2]))
+	{
+		int i;
+		for (i = 0; i < 3; i++)
+		{
+			float glow = val->vector[i] * 32.0f;
+			state->glowmod[i] = isfinite(glow) ? (byte)CLAMP(0.0f, glow, 255.0f) : 0;
+		}
+	}
+	if ((val = GetEdictFieldValue(ent, qcvm->extfields.drawflags)) && isfinite(val->_float))
+		state->drawflags = (byte)CLAMP(0.0f, val->_float, 255.0f);
+	if ((state->drawflags & MLS_MASK) >= MLS_ADDLIGHT &&
+		(val = GetEdictFieldValue(ent, qcvm->extfields.abslight)) && isfinite(val->_float))
+		state->abslight = (byte)(CLAMP(0.0f, val->_float, 1.0f) * 255.0f);
 	state->traileffectnum = qcvm->extfields.traileffectnum>=0?GetEdictFieldValue(ent, qcvm->extfields.traileffectnum)->_float:0;
 	state->emiteffectnum = qcvm->extfields.emiteffectnum>=0?GetEdictFieldValue(ent, qcvm->extfields.emiteffectnum)->_float:0;
 	if ((val = GetEdictFieldValue(ent, qcvm->extfields.tag_entity)) && val->edict)

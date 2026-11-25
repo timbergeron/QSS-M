@@ -376,6 +376,9 @@ struct pr_extfields_s
 	QCEXTFIELD(customphysics,			".void()")/*function*/	\
 	QCEXTFIELD(gravity,					".float")			/*float*/	\
 	QCEXTFIELD(gravitydir, ".vector") /* used by runstandardplayerphysics */ \
+	QCEXTFIELD(glowmod,                 ".vector")          \
+	QCEXTFIELD(drawflags,               ".float")           \
+	QCEXTFIELD(abslight,                ".float")           \
 	QCEXTFIELD(movechain, ".entity") \
 	QCEXTFIELD(chainmoved, ".void()") \
 	QCEXTFIELD(contentstransition, ".void(float oldcontents, float newcontents)") \

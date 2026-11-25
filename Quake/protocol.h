@@ -498,6 +498,7 @@ typedef struct entity_state_s
 	vec3_t		origin;
 	vec3_t		angles;
 	unsigned short 	modelindex;	//johnfitz -- was int
+	unsigned short	modelindex2;
 	unsigned short 	frame;		//johnfitz -- was int
 	unsigned int	effects;
 	unsigned char	colormap;	//johnfitz -- was int
@@ -514,7 +515,13 @@ typedef struct entity_state_s
 	unsigned char	colormod[3];	//spike -- entity tints, *32
 	unsigned char	glowmod[3];	//spike -- entity tints, *32
 	unsigned char	alpha;		//johnfitz -- added
-	unsigned char	drawflags;		//spike -- added for FTE-H2 client support. for the luls.
+	unsigned char	drawflags;
+	unsigned char	abslight;
+	signed char	fatness;
+	unsigned char	glowsize, glowcolour;
+	unsigned char	gravitydir[2];	// encoded pitch and yaw offsets
+	unsigned short	light[4];	// RGB multiplied by 1024, then radius
+	unsigned char	lightstyle, lightpflags;
 	unsigned int	solidsize;	//for csqc prediction logic.
 					#define ES_SOLID_NOT 0
 					#define ES_SOLID_BSP 31
@@ -522,6 +529,11 @@ typedef struct entity_state_s
 					#define ES_SOLID_HULL2 0x80401820
 #define ES_SOLID_HAS_EXTRA_BITS(solid) ((solid&0x0707) || (((solid>>16)-32768+32) & 7))
 } entity_state_t;
+// Lighting mode in the low bits of Hexen II's drawflags.
+#define MLS_MASK			7
+#define MLS_ADDLIGHT		6
+#define MLS_ABSLIGHT		7
+
 #define EFLAGS_STEP				1
 //#define EFLAGS_GLOWTRAIL		2
 #define EFLAGS_VIEWMODEL		4	//does not appear in reflections/third person. attached to the view.

@@ -3351,6 +3351,72 @@ void R_SetupEntityTransform (entity_t *e, lerpdata_t *lerpdata)
 	}
 }
 
+static void R_AddEntityDlights (const vec3_t origin, vec3_t color)
+{
+	int i;
+
+	for (i = 0; i < MAX_DLIGHTS; i++)
+	{
+		const dlight_t *light = &cl_dlights[i];
+		float scale, add;
+		vec3_t delta;
+
+		if (light->die < cl.time && !(light->spawn > cl.mtime[0] && cls.demoplayback))
+			continue;
+		scale = R_DlightStyleScale(light);
+		if (scale <= 0.0f)
+			continue;
+		VectorSubtract(origin, light->origin, delta);
+		add = (light->radius - VectorLength(delta)) * scale;
+		if (add > 0.0f)
+			VectorMA(color, add, light->color, color);
+	}
+}
+
+static qboolean R_EntityLightOverride (const entity_t *e, vec3_t color)
+{
+	int mode = e->netstate.drawflags & MLS_MASK;
+
+	if (mode == MLS_ABSLIGHT)
+		color[0] = color[1] = color[2] = e->netstate.abslight;
+	else if (mode > 0 && mode < MLS_ADDLIGHT)
+		color[0] = color[1] = color[2] = R_LightstyleValue(24 + mode) * (255.0f / 256);
+	else
+		return false;
+	return true;
+}
+
+void R_GetEntityLightColor (entity_t *e, vec3_t color)
+{
+	vec3_t savedcolor, savedspot;
+
+	if (e->effects & EF_FULLBRIGHT)
+	{
+		color[0] = color[1] = color[2] = 1;
+		return;
+	}
+	if (!R_EntityLightOverride(e, color))
+	{
+		VectorCopy(lightcolor, savedcolor);
+		VectorCopy(lightspot, savedspot);
+		if (e->model->type == mod_alias)
+			R_LightPointCachedAlias(e, e->origin, e->model->maxs[2] * 0.5f);
+		else
+			R_LightPoint(e->origin);
+		VectorCopy(lightcolor, color);
+		VectorCopy(savedcolor, lightcolor);
+		VectorCopy(savedspot, lightspot);
+		R_AddEntityDlights(e->origin, color);
+		if ((e->netstate.drawflags & MLS_MASK) == MLS_ADDLIGHT)
+		{
+			color[0] += e->netstate.abslight;
+			color[1] += e->netstate.abslight;
+			color[2] += e->netstate.abslight;
+		}
+	}
+	VectorScale(color, 1.0f / 255, color);
+}
+
 /*
 =================
 R_SetupAliasLighting -- johnfitz -- broken out from R_DrawAliasModel and rewritten
@@ -3358,12 +3424,11 @@ R_SetupAliasLighting -- johnfitz -- broken out from R_DrawAliasModel and rewritt
 */
 void R_SetupAliasLighting (entity_t	*e)
 {
-	vec3_t		dist;
-	float		add, stylescale;
-	int			i;
+	float		add;
 	int		quantizedangle;
 	float		radiansangle;
 	float		*origin;
+	qboolean	use_world_light;
 
 	// woods #damage -- tb: parsed where it is used, not here. This runs for every
 	// visible entity every frame, but the result only ever reaches the view
@@ -3383,9 +3448,10 @@ void R_SetupAliasLighting (entity_t	*e)
 		return;
 	}
 
-	if (!r_refdef.drawworld)
+	use_world_light = !R_EntityLightOverride(e, lightcolor);
+	if (use_world_light && !r_refdef.drawworld)
 		lightcolor[0] = lightcolor[1] = lightcolor[2] = 255;
-	else
+	else if (use_world_light)
 	{
 		if (e->eflags & EFLAGS_VIEWMODEL)
 		{
@@ -3398,21 +3464,14 @@ void R_SetupAliasLighting (entity_t	*e)
             R_LightPointCachedAlias (e, origin, e->model ? e->model->maxs[2] * 0.5f : 0.0f);
 		}
 
-		//add dlights
-		for (i=0 ; i<MAX_DLIGHTS ; i++)
+		R_AddEntityDlights(origin, lightcolor);
+		if ((e->netstate.drawflags & MLS_MASK) == MLS_ADDLIGHT)
 		{
-			if (cl_dlights[i].die >= cl.time || (cl_dlights[i].spawn > cl.mtime[0] && cls.demoplayback)) // woods (iw) #democontrols
-			{
-				stylescale = R_DlightStyleScale(&cl_dlights[i]);
-				if (stylescale <= 0.0f)
-					continue;
-				VectorSubtract (origin, cl_dlights[i].origin, dist);
-				add = (cl_dlights[i].radius - VectorLength(dist)) * stylescale;
-				if (add > 0)
-					VectorMA (lightcolor, add, cl_dlights[i].color, lightcolor);
-			}
+			lightcolor[0] += e->netstate.abslight;
+			lightcolor[1] += e->netstate.abslight;
+			lightcolor[2] += e->netstate.abslight;
 		}
-		
+
 		// woods #dedat -- for models on _list:  1 = greyscale: keep brightness, no hue, 2 = white-full: force` neutral shading
 		// viewmodel handling: -1 = greyscale for all models except viewmodels, -2 = greyscale for viewmodels, white-full for all other models
 

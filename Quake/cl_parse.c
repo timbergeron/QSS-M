@@ -526,12 +526,8 @@ static unsigned int CLFTE_ReadDelta(unsigned int entnum, entity_state_t *news, c
 
 	if (bits & UF_DRAWFLAGS)
 	{
-		int drawflags = MSG_ReadByte();
-		if ((drawflags & /*MLS_MASK*/7) == /*MLS_ABSLIGHT*/7)
-			/*news->abslight =*/ MSG_ReadByte();
-		//else
-		//	news->abslight = 0;
-		news->drawflags = drawflags;
+		news->drawflags = MSG_ReadByte();
+		news->abslight = (news->drawflags & MLS_MASK) >= MLS_ADDLIGHT ? MSG_ReadByte() : 0;
 	}
 	if (bits & UF_TAGINFO)
 	{
@@ -540,12 +536,12 @@ static unsigned int CLFTE_ReadDelta(unsigned int entnum, entity_state_t *news, c
 	}
 	if (bits & UF_LIGHT)
 	{
-		/*news->light[0] =*/ MSG_ReadShort();
-		/*news->light[1] =*/ MSG_ReadShort();
-		/*news->light[2] =*/ MSG_ReadShort();
-		/*news->light[3] =*/ MSG_ReadShort();
-		/*news->lightstyle =*/ MSG_ReadByte();
-		/*news->lightpflags =*/ MSG_ReadByte();
+		news->light[0] = MSG_ReadShort();
+		news->light[1] = MSG_ReadShort();
+		news->light[2] = MSG_ReadShort();
+		news->light[3] = MSG_ReadShort();
+		news->lightstyle = MSG_ReadByte();
+		news->lightpflags = MSG_ReadByte();
 	}
 	if (bits & UF_TRAILEFFECT)
 	{
@@ -568,25 +564,25 @@ static unsigned int CLFTE_ReadDelta(unsigned int entnum, entity_state_t *news, c
 	}
 	if (bits & UF_GLOW)
 	{
-		/*news->glowsize =*/ MSG_ReadByte();
-		/*news->glowcolour =*/ MSG_ReadByte();
+		news->glowsize = MSG_ReadByte();
+		news->glowcolour = MSG_ReadByte();
 		news->glowmod[0] = MSG_ReadByte();
 		news->glowmod[1] = MSG_ReadByte();
 		news->glowmod[2] = MSG_ReadByte();
 	}
 	if (bits & UF_FATNESS)
-		/*news->fatness =*/ MSG_ReadByte();
+		news->fatness = MSG_ReadChar();
 	if (bits & UF_MODELINDEX2)
 	{
 		if (bits & UF_16BIT)
-			/*news->modelindex2 =*/ MSG_ReadShort();
+			news->modelindex2 = (unsigned short)MSG_ReadShort();
 		else
-			/*news->modelindex2 =*/ MSG_ReadByte();
+			news->modelindex2 = MSG_ReadByte();
 	}
 	if (bits & UF_GRAVITYDIR)
 	{
-		/*news->gravitydir[0] =*/ MSG_ReadByte();
-		/*news->gravitydir[1] =*/ MSG_ReadByte();
+		news->gravitydir[0] = MSG_ReadByte();
+		news->gravitydir[1] = MSG_ReadByte();
 	}
 	if (bits & UF_UNUSED2)
 	{
@@ -992,7 +988,7 @@ void CLFTE_ParseCSQCEntitiesUpdate(void)
 #define E5_EXTEND4 (1u<<31)
 
 #define E5_ALLUNUSED (E5_UNUSED27|E5_UNUSED28|E5_UNUSED29|E5_UNUSED30|E5_EXTEND4)
-#define E5_ALLUNSUPPORTED (E5_LIGHT|E5_GLOW|E5_GLOWMOD|E5_COMPLEXANIMATION)
+#define E5_ALLUNSUPPORTED E5_COMPLEXANIMATION
 
 static void CLDP_ReadDelta(unsigned int entnum, entity_state_t *s, const entity_state_t *olds, const entity_state_t *baseline)
 {
@@ -1102,17 +1098,17 @@ static void CLDP_ReadDelta(unsigned int entnum, entity_state_t *s, const entity_
 	}
 	if (bits & E5_LIGHT)
 	{
-		/*s->light[0] =*/ MSG_ReadShort();
-		/*s->light[1] =*/ MSG_ReadShort();
-		/*s->light[2] =*/ MSG_ReadShort();
-		/*s->light[3] =*/ MSG_ReadShort();
-		/*s->lightstyle =*/ MSG_ReadByte();
-		/*s->lightpflags =*/ MSG_ReadByte();
+		s->light[0] = MSG_ReadShort();
+		s->light[1] = MSG_ReadShort();
+		s->light[2] = MSG_ReadShort();
+		s->light[3] = MSG_ReadShort();
+		s->lightstyle = MSG_ReadByte();
+		s->lightpflags = MSG_ReadByte();
 	}
 	if (bits & E5_GLOW)
 	{
-		/*s->glowsize =*/ MSG_ReadByte();
-		/*s->glowcolour =*/ MSG_ReadByte();
+		s->glowsize = MSG_ReadByte();
+		s->glowcolour = MSG_ReadByte();
 	}
 	if (bits & E5_COLORMOD)
 	{

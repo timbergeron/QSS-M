@@ -6642,6 +6642,7 @@ qboolean CL_CheckDownloads(void)
 	{
 	// local state
 		cl.entities[0].model = cl.worldmodel = cl.model_precache[1];
+		cl.entities[0].netstate = nullentitystate;
 		if (cl.worldmodel->type != mod_brush)
 		{
 			if (cl.worldmodel->type == mod_ext_invalid)

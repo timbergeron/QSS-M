@@ -628,6 +628,7 @@ void R_RebuildAllLightmaps (void);
 extern int lightmap_rebuilds; // woods #dlightskip -- invalidates the scene cache's lighting snapshot
 
 int R_LightPoint (vec3_t p);
+void R_GetEntityLightColor (entity_t *e, vec3_t color);
 int R_LightPointCachedAlias (entity_t *e, vec3_t p, float raise);
 
 void GL_SubdivideSurface (msurface_t *fa);

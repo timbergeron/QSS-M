@@ -9699,6 +9699,9 @@ static void PR_addentity_internal(edict_t *ed)	//adds a csqc entity into the sce
 			eval_t *frame1time = GetEdictFieldValue(ed, qcvm->extfields.frame1time);
 			eval_t *frame2time = GetEdictFieldValue(ed, qcvm->extfields.frame2time);
 			eval_t *colormod = GetEdictFieldValue(ed, qcvm->extfields.colormod);
+			eval_t *glowmod = GetEdictFieldValue(ed, qcvm->extfields.glowmod);
+			eval_t *drawflags = GetEdictFieldValue(ed, qcvm->extfields.drawflags);
+			eval_t *abslight = GetEdictFieldValue(ed, qcvm->extfields.abslight);
 			eval_t *alpha = GetEdictFieldValue(ed, qcvm->extfields.alpha);
 			eval_t *scale = GetEdictFieldValue(ed, qcvm->extfields.scale);
 			eval_t *renderflags = GetEdictFieldValue(ed, qcvm->extfields.renderflags);
@@ -9719,6 +9722,16 @@ static void PR_addentity_internal(edict_t *ed)	//adds a csqc entity into the sce
 				e->netstate.colormod[1] = PR_CSQCApplyColormod(e->netstate.colormod[1], colormod->vector[1]);
 				e->netstate.colormod[2] = PR_CSQCApplyColormod(e->netstate.colormod[2], colormod->vector[2]);
 			}
+			if (glowmod && (glowmod->vector[0] || glowmod->vector[1] || glowmod->vector[2]))
+			{
+				int i;
+				for (i = 0; i < 3; i++)
+					e->netstate.glowmod[i] = PR_CSQCApplyColormod(32, glowmod->vector[i]);
+			}
+			if (drawflags && isfinite(drawflags->_float))
+				e->netstate.drawflags = (byte)CLAMP(0.0f, drawflags->_float, 255.0f);
+			if (abslight && isfinite(abslight->_float))
+				e->netstate.abslight = PR_CSQCApplyColormod(255, abslight->_float);
 			e->alpha = alpha?ENTALPHA_ENCODE(alpha->_float):ENTALPHA_DEFAULT;
 			if (scale)
 				e->netstate.scale = ENTSCALE_ENCODE(scale->_float);
@@ -11400,103 +11413,113 @@ enum getrenderentityfield_e
 	GE_PANTSCOLOR		= 9,
 	GE_SHIRTCOLOR		= 10,
 	GE_SKIN				= 11,
-//	GE_MINS				= 12,
-//	GE_MAXS				= 13,
-//	GE_ABSMIN			= 14,
-//	GE_ABSMAX			= 15,
-//	GE_LIGHT			= 16,
+	GE_MINS				= 12,
+	GE_MAXS				= 13,
+	GE_ABSMIN			= 14,
+	GE_ABSMAX			= 15,
+	GE_LIGHT			= 16,
 
 	//FTE's range.
 	GE_MODELINDEX		= 200,
-//	GE_MODELINDEX2		= 201,
+	GE_MODELINDEX2		= 201,
 	GE_EFFECTS			= 202,
 	GE_FRAME			= 203,
 	GE_ANGLES			= 204,
-//	GE_FATNESS			= 205,
-//	GE_DRAWFLAGS		= 206,
-//	GE_ABSLIGHT			= 207,
-//	GE_GLOWMOD			= 208,
-//	GE_GLOWSIZE			= 209,
-//	GE_GLOWCOLOUR		= 210,
-//	GE_RTSTYLE			= 211,
-//	GE_RTPFLAGS			= 212,
-//	GE_RTCOLOUR			= 213,
-//	GE_RTRADIUS			= 214,
+	GE_FATNESS			= 205,
+	GE_DRAWFLAGS		= 206,
+	GE_ABSLIGHT			= 207,
+	GE_GLOWMOD			= 208,
+	GE_GLOWSIZE			= 209,
+	GE_GLOWCOLOUR		= 210,
+	GE_RTSTYLE			= 211,
+	GE_RTPFLAGS			= 212,
+	GE_RTCOLOUR			= 213,
+	GE_RTRADIUS			= 214,
 	GE_TAGENTITY		= 215,
 	GE_TAGINDEX			= 216,
-//	GE_GRAVITYDIR		= 217,
+	GE_GRAVITYDIR		= 217,
 	GE_TRAILEFFECTNUM	= 218,
 };
 static void PF_cl_getrenderentity(void)
 {
 	vec3_t tmp;
-	size_t entnum = G_FLOAT(OFS_PARM0);
-	enum getrenderentityfield_e fldnum = G_FLOAT(OFS_PARM1);
+	float entitynum = G_FLOAT(OFS_PARM0);
+	float field = G_FLOAT(OFS_PARM1);
+	enum getrenderentityfield_e fldnum;
+	entity_t *ent;
+	const entity_state_t *state;
+	float *result = G_VECTOR(OFS_RETURN);
+
+	VectorClear(result);
+	if (!isfinite(field) || field < GE_MAXENTS || field > GE_TRAILEFFECTNUM)
+		return;
+	fldnum = (enum getrenderentityfield_e)field;
 	if (qcvm->nogameaccess)
 	{
-		G_FLOAT(OFS_RETURN+0) = 0;
-		G_FLOAT(OFS_RETURN+1) = 0;
-		G_FLOAT(OFS_RETURN+2) = 0;
 		Con_Printf("PF_getrenderentity: not permitted\n");
 		return;
 	}
 	if (fldnum == GE_MAXENTS)
-		G_FLOAT(OFS_RETURN+0) = cl.num_entities;
-	else if (entnum >= cl.num_entities || !cl.entities[entnum].model)
 	{
-		G_FLOAT(OFS_RETURN+0) = 0;
-		G_FLOAT(OFS_RETURN+1) = 0;
-		G_FLOAT(OFS_RETURN+2) = 0;
+		result[0] = cl.num_entities;
+		return;
 	}
-	else switch(fldnum)
+	if (!isfinite(entitynum) || entitynum < 0 || entitynum >= cl.num_entities)
+		return;
+	ent = &cl.entities[(size_t)entitynum];
+	if (!ent->model)
+		return;
+	state = &ent->netstate;
+
+	switch (fldnum)
 	{
 	case GE_ACTIVE:
 		G_FLOAT(OFS_RETURN+0) = true;
 		break;
 	case GE_ORIGIN:
-		VectorCopy(cl.entities[entnum].origin, G_VECTOR(OFS_RETURN));
+		VectorCopy(ent->origin, G_VECTOR(OFS_RETURN));
 		break;
 	case GE_ORIGINANDVECTORS:
-		VectorCopy(cl.entities[entnum].origin, G_VECTOR(OFS_RETURN));
-		VectorCopy(cl.entities[entnum].angles, tmp);
-		if (cl.entities[entnum].model->type == mod_alias)
+		VectorCopy(ent->origin, G_VECTOR(OFS_RETURN));
+		VectorCopy(ent->angles, tmp);
+		if (ent->model->type == mod_alias)
 			tmp[0] *= -1;
 		AngleVectors(tmp, pr_global_struct->v_forward, pr_global_struct->v_right, pr_global_struct->v_up);
 		break;
 	case GE_FORWARD:
-		VectorCopy(cl.entities[entnum].angles, tmp);
-		if (cl.entities[entnum].model->type == mod_alias)
+		VectorCopy(ent->angles, tmp);
+		if (ent->model->type == mod_alias)
 			tmp[0] *= -1;
 		AngleVectors(tmp, G_VECTOR(OFS_RETURN), tmp, tmp);
 		break;
 	case GE_RIGHT:
-		VectorCopy(cl.entities[entnum].angles, tmp);
-		if (cl.entities[entnum].model->type == mod_alias)
+		VectorCopy(ent->angles, tmp);
+		if (ent->model->type == mod_alias)
 			tmp[0] *= -1;
 		AngleVectors(tmp, tmp, G_VECTOR(OFS_RETURN), tmp);
 		break;
 	case GE_UP:
-		VectorCopy(cl.entities[entnum].angles, tmp);
-		if (cl.entities[entnum].model->type == mod_alias)
+		VectorCopy(ent->angles, tmp);
+		if (ent->model->type == mod_alias)
 			tmp[0] *= -1;
 		AngleVectors(tmp, tmp, tmp, G_VECTOR(OFS_RETURN));
 		break;
 	case GE_SCALE:
-		G_FLOAT(OFS_RETURN+0) = ENTSCALE_DECODE(cl.entities[entnum].netstate.scale);
+		G_FLOAT(OFS_RETURN+0) = ENTSCALE_DECODE(state->scale);
 		break;
 	case GE_ALPHA:
-		G_FLOAT(OFS_RETURN+0) = ENTALPHA_DECODE(cl.entities[entnum].alpha);
+		G_FLOAT(OFS_RETURN+0) = ENTALPHA_DECODE(ent->alpha);
 		break;
 	case GE_COLORMOD:
-		G_FLOAT(OFS_RETURN+0) = cl.entities[entnum].netstate.colormod[0] / 32.0;
-		G_FLOAT(OFS_RETURN+1) = cl.entities[entnum].netstate.colormod[1] / 32.0;
-		G_FLOAT(OFS_RETURN+2) = cl.entities[entnum].netstate.colormod[2] / 32.0;
+		G_FLOAT(OFS_RETURN+0) = state->colormod[0] / 32.0;
+		G_FLOAT(OFS_RETURN+1) = state->colormod[1] / 32.0;
+		G_FLOAT(OFS_RETURN+2) = state->colormod[2] / 32.0;
 		break;
 	case GE_PANTSCOLOR:
 		{
-			int palidx = cl.entities[entnum].netstate.colormap;
+			int palidx = state->colormap;
 			byte *pal;
-			if ((cl.entities[entnum].netstate.eflags & EFLAGS_COLOURMAPPED) || palidx >= cl.maxclients)
+			if ((state->eflags & EFLAGS_COLOURMAPPED) || palidx >= cl.maxclients)
 				pal = (byte *)d_8to24table + 4*Sbar_ColorForMap(palidx&0x0f);
 			else
 				pal = CL_PLColours_ToRGB(&cl.scores[palidx].pants);
@@ -11507,9 +11530,9 @@ static void PF_cl_getrenderentity(void)
 		break;
 	case GE_SHIRTCOLOR:
 		{
-			int palidx = cl.entities[entnum].netstate.colormap;
+			int palidx = state->colormap;
 			byte *pal;
-			if ((cl.entities[entnum].netstate.eflags & EFLAGS_COLOURMAPPED) || palidx >= cl.maxclients)
+			if ((state->eflags & EFLAGS_COLOURMAPPED) || palidx >= cl.maxclients)
 				pal = (byte *)d_8to24table + 4*Sbar_ColorForMap(palidx&0xf0);
 			else
 				pal = CL_PLColours_ToRGB(&cl.scores[palidx].shirt);
@@ -11519,45 +11542,106 @@ static void PF_cl_getrenderentity(void)
 		}
 		break;
 	case GE_SKIN:
-		G_FLOAT(OFS_RETURN+0) = cl.entities[entnum].skinnum;
+		G_FLOAT(OFS_RETURN+0) = ent->skinnum;
 		break;
-//	case GE_MINS:
-//	case GE_MAXS:
-//	case GE_ABSMIN:
-//	case GE_ABSMAX:
-//	case GE_LIGHT:
+	case GE_MINS:
+	case GE_MAXS:
+	case GE_ABSMIN:
+	case GE_ABSMAX:
+		{
+			qboolean upper = fldnum == GE_MAXS || fldnum == GE_ABSMAX;
+			qboolean absolute = fldnum == GE_ABSMIN || fldnum == GE_ABSMAX;
+			unsigned int solid = state->solidsize;
+
+			if (solid == ES_SOLID_NOT || solid == ES_SOLID_BSP)
+			{
+				vec3_t mins, maxs;
+
+				R_GetEntityBounds(ent, mins, maxs);
+				memcpy(result, upper ? maxs : mins, sizeof(vec3_t));
+				if (!absolute)
+					VectorSubtract(result, ent->origin, result);
+			}
+			else
+			{
+				result[0] = result[1] = (upper ? 1 : -1) * (int)(solid & 255);
+				result[2] = upper ? (int)(solid >> 16) - 32768 : -(int)((solid >> 8) & 255);
+				if (absolute)
+					VectorAdd(ent->origin, result, result);
+			}
+		}
+		break;
+	case GE_LIGHT:
+		R_GetEntityLightColor(ent, result);
+		break;
 	case GE_MODELINDEX:
-		G_FLOAT(OFS_RETURN+0) = cl.entities[entnum].netstate.modelindex;
+		G_FLOAT(OFS_RETURN+0) = state->modelindex;
 		break;
-//	case GE_MODELINDEX2:
+	case GE_MODELINDEX2:
+		result[0] = state->modelindex2;
+		break;
 	case GE_EFFECTS:
-		G_FLOAT(OFS_RETURN+0) = cl.entities[entnum].effects;
+		G_FLOAT(OFS_RETURN+0) = ent->effects;
 		break;
 	case GE_FRAME:
-		G_FLOAT(OFS_RETURN+0) = cl.entities[entnum].frame;
+		G_FLOAT(OFS_RETURN+0) = ent->frame;
 		break;
 	case GE_ANGLES:
-		VectorCopy(cl.entities[entnum].angles, G_VECTOR(OFS_RETURN));
+		VectorCopy(ent->angles, G_VECTOR(OFS_RETURN));
 		break;
-//	case GE_FATNESS:
-//	case GE_DRAWFLAGS:
-//	case GE_ABSLIGHT:
-//	case GE_GLOWMOD:
-//	case GE_GLOWSIZE:
-//	case GE_GLOWCOLOUR:
-//	case GE_RTSTYLE:
-//	case GE_RTPFLAGS:
-//	case GE_RTCOLOUR:
-//	case GE_RTRADIUS:
+	case GE_FATNESS:
+		result[0] = state->fatness;
+		break;
+	case GE_DRAWFLAGS:
+		result[0] = state->drawflags;
+		break;
+	case GE_ABSLIGHT:
+		result[0] = state->abslight;
+		break;
+	case GE_GLOWMOD:
+		result[0] = state->glowmod[0] * (1.0f / 32);
+		result[1] = state->glowmod[1] * (1.0f / 32);
+		result[2] = state->glowmod[2] * (1.0f / 32);
+		break;
+	case GE_GLOWSIZE:
+		result[0] = state->glowsize;
+		break;
+	case GE_GLOWCOLOUR:
+		result[0] = state->glowcolour;
+		break;
+	case GE_RTSTYLE:
+		result[0] = state->lightstyle;
+		break;
+	case GE_RTPFLAGS:
+		result[0] = state->lightpflags;
+		break;
+	case GE_RTCOLOUR:
+		result[0] = state->light[0] * (1.0f / 1024);
+		result[1] = state->light[1] * (1.0f / 1024);
+		result[2] = state->light[2] * (1.0f / 1024);
+		break;
+	case GE_RTRADIUS:
+		result[0] = state->light[3];
+		break;
 	case GE_TAGENTITY:
-		G_FLOAT(OFS_RETURN+0) = cl.entities[entnum].netstate.tagentity;
+		G_FLOAT(OFS_RETURN+0) = state->tagentity;
 		break;
 	case GE_TAGINDEX:
-		G_FLOAT(OFS_RETURN+0) = cl.entities[entnum].netstate.tagindex;
+		G_FLOAT(OFS_RETURN+0) = state->tagindex;
 		break;
-//	case GE_GRAVITYDIR:
+	case GE_GRAVITYDIR:
+		if (!state->gravitydir[0] && !state->gravitydir[1])
+			result[2] = -1;
+		else
+		{
+			tmp[0] = (192 + state->gravitydir[0]) * (360.0f / 256);
+			tmp[1] = state->gravitydir[1] * (360.0f / 256);
+			tmp[2] = 0;
+			AngleVectors(tmp, result, NULL, NULL);
+		}
+		break;
 	case GE_TRAILEFFECTNUM:
-		G_FLOAT(OFS_RETURN+0) = cl.entities[entnum].netstate.traileffectnum;
+		G_FLOAT(OFS_RETURN+0) = state->traileffectnum;
 		break;
 
 	case GE_MAXENTS:
@@ -13242,12 +13326,29 @@ void PR_DumpPlatform_f(void)
 		fprintf(f, "const float GE_PANTSCOLOR = %i;\n", GE_PANTSCOLOR);
 		fprintf(f, "const float GE_SHIRTCOLOR = %i;\n", GE_SHIRTCOLOR);
 		fprintf(f, "const float GE_SKIN = %i;\n", GE_SKIN);
+		fprintf(f, "const float GE_MINS = %i;\n", GE_MINS);
+		fprintf(f, "const float GE_MAXS = %i;\n", GE_MAXS);
+		fprintf(f, "const float GE_ABSMIN = %i;\n", GE_ABSMIN);
+		fprintf(f, "const float GE_ABSMAX = %i;\n", GE_ABSMAX);
+		fprintf(f, "const float GE_LIGHT = %i;\n", GE_LIGHT);
 		fprintf(f, "const float GE_MODELINDEX = %i;\n", GE_MODELINDEX);
+		fprintf(f, "const float GE_MODELINDEX2 = %i;\n", GE_MODELINDEX2);
 		fprintf(f, "const float GE_EFFECTS = %i;\n", GE_EFFECTS);
 		fprintf(f, "const float GE_FRAME = %i;\n", GE_FRAME);
 		fprintf(f, "const float GE_ANGLES = %i;\n", GE_ANGLES);
+		fprintf(f, "const float GE_FATNESS = %i;\n", GE_FATNESS);
+		fprintf(f, "const float GE_DRAWFLAGS = %i;\n", GE_DRAWFLAGS);
+		fprintf(f, "const float GE_ABSLIGHT = %i;\n", GE_ABSLIGHT);
+		fprintf(f, "const float GE_GLOWMOD = %i;\n", GE_GLOWMOD);
+		fprintf(f, "const float GE_GLOWSIZE = %i;\n", GE_GLOWSIZE);
+		fprintf(f, "const float GE_GLOWCOLOUR = %i;\n", GE_GLOWCOLOUR);
+		fprintf(f, "const float GE_RTSTYLE = %i;\n", GE_RTSTYLE);
+		fprintf(f, "const float GE_RTPFLAGS = %i;\n", GE_RTPFLAGS);
+		fprintf(f, "const float GE_RTCOLOUR = %i;\n", GE_RTCOLOUR);
+		fprintf(f, "const float GE_RTRADIUS = %i;\n", GE_RTRADIUS);
 		fprintf(f, "const float GE_TAGENTITY = %i;\n", GE_TAGENTITY);
 		fprintf(f, "const float GE_TAGINDEX = %i;\n", GE_TAGINDEX);
+		fprintf(f, "const float GE_GRAVITYDIR = %i;\n", GE_GRAVITYDIR);
 		fprintf(f, "const float GE_TRAILEFFECTNUM = %i;\n", GE_TRAILEFFECTNUM);
 	}
 	if (targs & (CS|SS))
