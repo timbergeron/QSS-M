@@ -27,6 +27,11 @@ constants = "\n".join(line for line in source.splitlines() if line.startswith((
 mode_type = source[source.index("typedef struct {"):source.index("static const char *gl_vendor;")]
 menu_start = source.index("typedef struct {\n\tint width,height;")
 menu_state = source[menu_start:source.index("\n/*", menu_start)]
+items_start = source.index("enum {\n\tVID_OPT_MODE,")
+menu_items = source[items_start:source.index("\n};", items_start) + 3]
+info_end = source.index("static vid_display_info_t vid_display_info;")
+display_info = source[source.rindex("typedef struct {", 0, info_end):
+                      info_end + len("static vid_display_info_t vid_display_info;")]
 
 common = r'''
 #include <SDL3/SDL.h>
@@ -37,7 +42,7 @@ common = r'''
 typedef int qboolean;
 typedef struct { float value; } cvar_t;
 static cvar_t vid_width = {2560}, vid_height = {1440}, vid_bpp = {32};
-static cvar_t vid_refreshrate = {144}, vid_desktopfullscreen;
+static cvar_t vid_refreshrate = {144}, vid_desktopfullscreen, vid_fullscreen;
 static qboolean vid_changed;
 static struct { int refreshrate; } vid;
 static SDL_Window *draw_context;
@@ -64,6 +69,10 @@ const SDL_DisplayMode *SDL_GetCurrentDisplayMode(SDL_DisplayID display)
         return NULL;
     return display == 11 ? primary_modes : secondary_modes;
 }
+const SDL_DisplayMode *SDL_GetDesktopDisplayMode(SDL_DisplayID display)
+{
+    return SDL_GetCurrentDisplayMode(display);
+}
 SDL_DisplayMode **SDL_GetFullscreenDisplayModes(SDL_DisplayID display, int *count)
 {
     SDL_DisplayMode **result;
@@ -81,6 +90,18 @@ SDL_DisplayMode **SDL_GetFullscreenDisplayModes(SDL_DisplayID display, int *coun
 }
 void SDL_free(void *ptr) { free(ptr); }
 
+#ifdef __APPLE__
+static qboolean VID_GetCocoaNativePixelSize(int *width, int *height)
+{
+    (void)width;
+    (void)height;
+    return 0;
+}
+#endif
+
+static void q_strlcpy(char *dst, const char *src, size_t size) { snprintf(dst, size, "%s", src); }
+#define q_snprintf snprintf
+
 static void Cvar_SetValueQuick(cvar_t *cvar, float value)
 {
     cvar->value = value;
@@ -97,13 +118,14 @@ static void Cvar_SetValue(const char *name, float value)
 production = "static qboolean modelist_stale = true;\nstatic void VID_EnsureModelist (void);\n" + "\n".join(function(declaration) for declaration in (
     "static int VID_RefreshRateHz (const SDL_DisplayMode *mode)",
     "static SDL_DisplayID VID_GetDisplay (void)",
-    "static int VID_GetCurrentRefreshRate (void)",
+    "int VID_GetCurrentRefreshRate (void)",
     "qboolean VID_IsMinimized (void)",
     "static SDL_DisplayMode *VID_GetDisplayModeForDisplay(SDL_DisplayID display, int width, int height, int refreshrate, int bpp)",
     "static SDL_DisplayMode *VID_GetDisplayMode(int width, int height, int refreshrate, int bpp)",
     "static qboolean VID_ValidMode (int width, int height, int refreshrate, int bpp, qboolean fullscreen)",
     "static int VID_ModeAbsDiff (int a, int b)",
     "static qboolean VID_FindClosestFullscreenMode (int width, int height, int refreshrate, int bpp, vmode_t *bestmode)",
+    "static void VID_UpdateDisplayInfo (SDL_DisplayID display, SDL_DisplayMode **modes, int count)",
     "static void VID_InitModelist (void)",
     "static void VID_Menu_Init (void)",
     "static void VID_Menu_RebuildBppList (qboolean update_cvars)",
@@ -113,6 +135,9 @@ production = "static qboolean modelist_stale = true;\nstatic void VID_EnsureMode
     "static void VID_Menu_ChooseNextMode (int dir)",
     "static void VID_Menu_ChooseNextBpp (int dir)",
     "static void VID_Menu_ChooseNextRate (int dir)",
+    "static int VID_Menu_GetModeScaleDivisor (int width, int height)",
+    "static int VID_Menu_GetMaxRefreshRate (void)",
+    "static void VID_Menu_GetInlineTag (int index, char *buf, size_t bufsize)",
 ))
 
 checks = r'''
@@ -311,6 +336,42 @@ int main(void)
     VID_Menu_ChooseNextRate(1);
     assert(vid_refreshrate.value == 1000);
 
+    /* The first open at a custom window size should label the active display's max. */
+    char tag[24];
+    secondary_count = 2;
+    secondary_modes[0] = mode(73, 2560, 1440, 144);
+    secondary_modes[1] = mode(73, 2560, 1440, 120);
+    vid_width.value = 1294;
+    vid_height.value = 816;
+    vid_refreshrate.value = 144;
+    VID_OnDisplayChange();
+    VID_Menu_RebuildBppList(true);
+    VID_Menu_RebuildRateList(true);
+    VID_Menu_GetInlineTag(VID_OPT_REFRESHRATE, tag, sizeof(tag));
+    assert(!strcmp(tag, " (Max)"));
+    VID_Menu_GetInlineTag(VID_OPT_MODE, tag, sizeof(tag));
+    assert(!tag[0]);
+
+    vid_refreshrate.value = 120;
+    VID_Menu_RebuildRateList(true);
+    assert(vid_refreshrate.value == 120);
+    VID_Menu_GetInlineTag(VID_OPT_REFRESHRATE, tag, sizeof(tag));
+    assert(!tag[0]);
+
+    /* An unavailable exclusive mode has no mode-specific maximum. */
+    vid_fullscreen.value = 1;
+    vid_refreshrate.value = 144;
+    VID_Menu_GetInlineTag(VID_OPT_REFRESHRATE, tag, sizeof(tag));
+    assert(!tag[0]);
+
+    vid_width.value = 2560;
+    vid_height.value = 1440;
+    VID_Menu_RebuildRateList(true);
+    VID_Menu_GetInlineTag(VID_OPT_MODE, tag, sizeof(tag));
+    assert(!strcmp(tag, " (Native)"));
+    VID_Menu_GetInlineTag(VID_OPT_REFRESHRATE, tag, sizeof(tag));
+    assert(!strcmp(tag, " (Max)"));
+
     puts("SDL3 video: PASS (minimize, secondary modes, monitor changes, pacing, pending settings, empty/bounded menus)");
     return 0;
 }
@@ -327,7 +388,7 @@ def main():
         test_source = path / "video.c"
         test_source.write_text(constants + "\n" + common + mode_type
                                + "static vmode_t modelist[MAX_MODE_LIST];\nstatic int nummodes;\n"
-                               + menu_state + production + checks)
+                               + display_info + menu_items + menu_state + production + checks)
         binary = path / "video"
         subprocess.run([os.environ.get("CC", "cc"), "-std=gnu11", "-Wall", "-Wextra",
                         "-Werror", "-Wno-sign-compare", *flags, str(test_source), "-o", str(binary)], check=True)

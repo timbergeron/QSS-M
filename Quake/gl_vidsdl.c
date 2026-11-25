@@ -3688,15 +3688,9 @@ static void VID_Menu_RebuildRateList (qboolean update_cvars)
 		}
 	}
 
-	if (!update_cvars || !nummodes)
+	// A custom window size can have no exclusive modes. Keep its current refresh rate.
+	if (!update_cvars || !vid_menu_numrates)
 		return;
-
-	//if there are no valid fullscreen refreshrates for this width/height, just pick one
-	if (vid_menu_numrates == 0)
-	{
-		Cvar_SetValue ("vid_refreshrate",(float)modelist[0].refreshrate);
-		return;
-	}
 
 	//if vid_refreshrate is not in the new list, change vid_refreshrate
 	for (i = 0; i < vid_menu_numrates; i++)
@@ -4430,9 +4424,14 @@ static int VID_Menu_GetModeScaleDivisor (int width, int height)
 	return 0;
 }
 
-static int VID_Menu_GetModeMaxRefreshRate (void)
+static int VID_Menu_GetMaxRefreshRate (void)
 {
 	int i, max_rate = 0;
+
+	if (!vid_menu_numrates && (!vid_fullscreen.value || vid_desktopfullscreen.value))
+		return vid_display_info.max_refreshrate;
+	if (vid_menu_numrates == 1)
+		return 0;
 
 	for (i = 0; i < vid_menu_numrates; i++)
 	{
@@ -4469,9 +4468,9 @@ static void VID_Menu_GetInlineTag (int index, char *buf, size_t bufsize)
 	else if (index == VID_OPT_REFRESHRATE)
 	{
 		const int rate = (int)vid_refreshrate.value;
-		const int mode_max = VID_Menu_GetModeMaxRefreshRate ();
+		const int max_rate = VID_Menu_GetMaxRefreshRate ();
 
-		if (vid_menu_numrates > 1 && mode_max > 0 && rate == mode_max)
+		if (max_rate > 0 && rate == max_rate)
 			q_strlcpy (buf, " (Max)", bufsize);
 	}
 }
@@ -4556,20 +4555,22 @@ static void VID_Menu_GetFooterInfo (int cursor, char *buf, size_t bufsize)
 	else if (cursor == VID_OPT_REFRESHRATE)
 	{
 		const int rate = (int)vid_refreshrate.value;
-		const int mode_max = VID_Menu_GetModeMaxRefreshRate ();
+		const int max_rate = VID_Menu_GetMaxRefreshRate ();
 		const int display_max = vid_display_info.max_refreshrate;
 
-		if (vid_menu_numrates > 1 && mode_max > 0)
+		if (max_rate > 0)
 		{
-			if (rate == mode_max)
+			if (rate == max_rate)
 			{
-				if (display_max > mode_max)
+				if (display_max > max_rate)
 					q_snprintf (buf, bufsize, "Max for mode (panel supports %d Hz)", display_max);
 				else
 					q_strlcpy (buf, "Panel maximum refresh rate", bufsize);
 			}
+			else if (vid_menu_numrates)
+				q_snprintf (buf, bufsize, "Up to %d Hz available for this mode", max_rate);
 			else
-				q_snprintf (buf, bufsize, "Up to %d Hz available for this mode", mode_max);
+				q_snprintf (buf, bufsize, "Display supports up to %d Hz", max_rate);
 		}
 		else if (display_max > rate && rate > 0)
 			q_snprintf (buf, bufsize, "Other modes support up to %d Hz", display_max);
