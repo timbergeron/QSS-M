@@ -202,6 +202,15 @@ def check_headers(srcdir, results):
                     'GE_TAGENTITY', 'GE_TAGINDEX', 'GE_TRAILEFFECTNUM'):
         results.append(('dump/csqc-%s' % ge_name,
                         ('const float %s =' % ge_name) in cs))
+    for ext_name in ('DP_QC_FS_SEARCH', 'DP_QC_FS_SEARCH_PACKFILE',
+                     'FTE_QC_FS_SEARCH_SIZEMTIME', 'FTE_QC_CHECKPVS',
+                     'FTE_CSQC_WINDOWCAPTION'):
+        results.append(('dump/ext-%s' % ext_name,
+                        ('//%s\n' % ext_name) in cs))
+    results.append(('dump/menu-ext-FTE_CSQC_WINDOWCAPTION',
+                    '//FTE_CSQC_WINDOWCAPTION\n' in mn))
+    results.append(('dump/menu-ext-FTE_QC_CHECKPVS-absent',
+                    '//FTE_QC_CHECKPVS\n' not in mn))
 
     # The constant blocks are emitted without newlines, so one trailing //
     # comment silently comments out every constant after it on that line.

@@ -10425,11 +10425,18 @@ qboolean PR_NotQEX(unsigned int prot, unsigned int pext1, unsigned int pext2)
 		return false;
 	return true;
 }
+enum
+{
+	QCEVM_SS = 1u<<0,
+	QCEVM_CS = 1u<<1,
+	QCEVM_MN = 1u<<2,
+};
 typedef struct
 {
 	const char *name;
 	qboolean (*is_supported)(unsigned int prot, unsigned int pext1, unsigned int pext2);
 	void (*on_enable)(void);
+	unsigned int vms;
 } qcextension_t;
 static const qcextension_t qcextensions[] =
 {
@@ -10463,6 +10470,8 @@ static const qcextension_t qcextensions[] =
 	{"DP_QC_FINDCHAINFLOAT"},
 	{"DP_QC_FINDFLAGS"},
 	{"DP_QC_FINDFLOAT",			PR_NotQEX},
+	{"DP_QC_FS_SEARCH"},
+	{"DP_QC_FS_SEARCH_PACKFILE"},
 	{"DP_QC_GETLIGHT",			PR_NotQEX},
 	{"DP_QC_GETSURFACE"},
 	{"DP_QC_GETSURFACETRIANGLE"},
@@ -10514,6 +10523,7 @@ static const qcextension_t qcextensions[] =
 //	{"EX_PROMPT",				PR_Can_EX_PROMPT},	//clientside psuedo-centerprint menus to make things more game-controller friendly (FTE servers implement this by intercepting movement and generating centerprints).
 	{"FRIK_FILE",				PR_NotQEX},		//lacks the file part, but does have the strings part.
 	{"FTE_CSQC_SERVERBROWSER"},	//callable from csqc too, for feature parity.
+	{"FTE_CSQC_WINDOWCAPTION",	NULL,	NULL,	QCEVM_CS|QCEVM_MN},
 	{"FTE_ENT_SKIN_CONTENTS"},	//SOLID_BSP&&skin==CONTENTS_FOO changes CONTENTS_SOLID to CONTENTS_FOO, allowing you to swim in moving ents without qc hacks, as well as correcting view cshifts etc.
 #ifdef PSET_SCRIPT
 	{"FTE_PART_SCRIPT"},
@@ -10523,7 +10533,9 @@ static const qcextension_t qcextensions[] =
 #endif
 #endif
 	{"FTE_QC_CHECKCOMMAND"},
+	{"FTE_QC_CHECKPVS",			NULL,	NULL,	QCEVM_SS|QCEVM_CS},
 	{"FTE_QC_CROSSPRODUCT"},
+	{"FTE_QC_FS_SEARCH_SIZEMTIME"},
 	{"FTE_QC_HARDWARECURSORS"},
 	{"FTE_QC_INFOKEY",			PR_NotQEX},
 	{"FTE_QC_INTCONV"},
@@ -10550,6 +10562,23 @@ static void PF_checkextension(void)
 		if (!strcmp(extname, qcextensions[i].name))
 		{
 			ext = &qcextensions[i];
+			if (ext->vms)
+			{
+				unsigned int curvm = 0;
+				if (qcvm == &sv.qcvm)
+					curvm = QCEVM_SS;
+				else if (qcvm == &cl.qcvm)
+					curvm = QCEVM_CS;
+				else if (qcvm == &cls.menu_qcvm)
+					curvm = QCEVM_MN;
+				if (!(ext->vms & curvm))
+				{
+					if (!pr_checkextension.value)
+						Con_Printf("Mod queried extension %s, but not supported in this VM\n", extname);
+					G_FLOAT(OFS_RETURN) = false;
+					return;
+				}
+			}
 			if (ext->is_supported)
 			{
 				unsigned int prot, pext1, pext2;
@@ -11046,9 +11075,9 @@ void PR_DumpPlatform_f(void)
 	unsigned int i, j;
 	enum
 	{
-		SS=1,
-		CS=2,
-		MN=4,
+		SS=QCEVM_SS,
+		CS=QCEVM_CS,
+		MN=QCEVM_MN,
 	};
 	unsigned int targs = 0;
 	for (i = 1; i < (unsigned)Cmd_Argc(); )
@@ -11161,7 +11190,8 @@ void PR_DumpPlatform_f(void)
 
 	fprintf(f, "\n\n//List of advertised extensions\n");
 	for (i = 0; i < countof(qcextensions); i++)
-		fprintf(f, "//%s\n", qcextensions[i].name);
+		if (!qcextensions[i].vms || (qcextensions[i].vms & targs))
+			fprintf(f, "//%s\n", qcextensions[i].name);
 
 	fprintf(f, "\n\n//Explicitly flag this stuff as probably-not-referenced, meaning fteqcc will shut up about it and silently strip what it can.\n");
 	fprintf(f, "#pragma noref 1\n");

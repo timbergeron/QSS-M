@@ -89,6 +89,7 @@ void() cq_selftest =
 	st_bufstr_find();
 	cq_parity_models();
 	cq_parity_tokens();
+	cq_parity_extensions();
 	cq_surfaces();
 	cq_builtin_find();
 	cq_mousetarget();

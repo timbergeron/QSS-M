@@ -236,6 +236,11 @@ void() mq_selftest =
 	st_getgamedirinfo();
 	st_setkeybind();
 	st_numbering_shared();
+	st_eqf("ext/menu-dp-qc-fs-search", checkextension("DP_QC_FS_SEARCH"), 1);
+	st_eqf("ext/menu-dp-qc-fs-search-packfile", checkextension("DP_QC_FS_SEARCH_PACKFILE"), 1);
+	st_eqf("ext/menu-fte-qc-fs-search-sizemtime", checkextension("FTE_QC_FS_SEARCH_SIZEMTIME"), 1);
+	st_eqf("ext/menu-fte-csqc-windowcaption", checkextension("FTE_CSQC_WINDOWCAPTION"), 1);
+	st_eqf("ext/menu-fte-qc-checkpvs-false", checkextension("FTE_QC_CHECKPVS"), 0);
 	st_report("menuqc");
 	localcmd("quit\n");
 };

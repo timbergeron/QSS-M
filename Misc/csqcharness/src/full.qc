@@ -40,6 +40,7 @@ void(float width, float height, float focus) CSQC_UpdateView =
 		st_bufstr_find();
 		cq_parity_models();
 		cq_parity_tokens();
+		cq_parity_extensions();
 		cq_parity_viewprops();
 		st_report("fullcsqc");
 		localcmd("quit\n");

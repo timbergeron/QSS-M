@@ -123,6 +123,15 @@ void() cq_parity_tokens =
 	getentitytoken("owned input for shutdown");
 };
 
+void() cq_parity_extensions =
+{
+	st_eqf("ext/dp-qc-fs-search", checkextension("DP_QC_FS_SEARCH"), 1);
+	st_eqf("ext/dp-qc-fs-search-packfile", checkextension("DP_QC_FS_SEARCH_PACKFILE"), 1);
+	st_eqf("ext/fte-qc-fs-search-sizemtime", checkextension("FTE_QC_FS_SEARCH_SIZEMTIME"), 1);
+	st_eqf("ext/fte-qc-checkpvs", checkextension("FTE_QC_CHECKPVS"), 1);
+	st_eqf("ext/fte-csqc-windowcaption", checkextension("FTE_CSQC_WINDOWCAPTION"), 1);
+};
+
 void() cq_parity_viewprops =
 {
 	local vector p;
