@@ -11303,6 +11303,13 @@ void PR_DumpPlatform_f(void)
 		fprintf(f, "const float GE_PANTSCOLOR = %i;\n", GE_PANTSCOLOR);
 		fprintf(f, "const float GE_SHIRTCOLOR = %i;\n", GE_SHIRTCOLOR);
 		fprintf(f, "const float GE_SKIN = %i;\n", GE_SKIN);
+		fprintf(f, "const float GE_MODELINDEX = %i;\n", GE_MODELINDEX);
+		fprintf(f, "const float GE_EFFECTS = %i;\n", GE_EFFECTS);
+		fprintf(f, "const float GE_FRAME = %i;\n", GE_FRAME);
+		fprintf(f, "const float GE_ANGLES = %i;\n", GE_ANGLES);
+		fprintf(f, "const float GE_TAGENTITY = %i;\n", GE_TAGENTITY);
+		fprintf(f, "const float GE_TAGINDEX = %i;\n", GE_TAGINDEX);
+		fprintf(f, "const float GE_TRAILEFFECTNUM = %i;\n", GE_TRAILEFFECTNUM);
 	}
 	if (targs & (CS|SS))
 	{

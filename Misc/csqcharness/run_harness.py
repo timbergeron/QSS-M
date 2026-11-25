@@ -198,6 +198,10 @@ def check_headers(srcdir, results):
                     'float keynum, optional float bindmap) getkeybind' in mn))
     results.append(('dump/getresolution-forfullscreen-optional',
                     'float mode, optional float forfullscreen) getresolution' in mn))
+    for ge_name in ('GE_MODELINDEX', 'GE_EFFECTS', 'GE_FRAME', 'GE_ANGLES',
+                    'GE_TAGENTITY', 'GE_TAGINDEX', 'GE_TRAILEFFECTNUM'):
+        results.append(('dump/csqc-%s' % ge_name,
+                        ('const float %s =' % ge_name) in cs))
 
     # The constant blocks are emitted without newlines, so one trailing //
     # comment silently comments out every constant after it on that line.
