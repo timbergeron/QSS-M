@@ -35,6 +35,7 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 	#include <windows.h>
 #else
 	#include <dirent.h>
+	#include <unistd.h>
 	#include <fnmatch.h>
 	#ifndef FNM_CASEFOLD
 		#define FNM_CASEFOLD 0	//not available. I guess we're not on gnu/linux
@@ -4585,6 +4586,115 @@ static qboolean COM_ResolveGameDirInternal(const char *game, char *resolved,
 	}
 
 	return false;
+}
+
+/*
+==================
+COM_RemoveTree
+
+Recursively deletes a file or directory. Symlinks and reparse points are
+removed themselves and never followed.
+==================
+*/
+static qboolean COM_RemoveTree_JoinPath(char *out, size_t outsize,
+	const char *dir, const char *name)
+{
+	size_t len = strlen(dir);
+
+	if (len && (dir[len - 1] == '/' || dir[len - 1] == '\\'))
+		return (size_t)q_snprintf(out, outsize, "%s%s", dir, name) < outsize;
+	return (size_t)q_snprintf(out, outsize, "%s/%s", dir, name) < outsize;
+}
+
+qboolean COM_RemoveTree(const char *path)
+{
+#ifdef _WIN32
+	char pattern[MAX_OSPATH];
+	WIN32_FIND_DATAA data;
+	HANDLE find;
+	DWORD attrs;
+
+	attrs = GetFileAttributesA(path);
+	if (attrs == INVALID_FILE_ATTRIBUTES)
+		return false;
+	if ((attrs & FILE_ATTRIBUTE_REPARSE_POINT) ||
+		!(attrs & FILE_ATTRIBUTE_DIRECTORY))
+	{
+		SetFileAttributesA(path, FILE_ATTRIBUTE_NORMAL);
+		if (attrs & FILE_ATTRIBUTE_DIRECTORY)
+			return RemoveDirectoryA(path) != 0;
+		return DeleteFileA(path) != 0;
+	}
+	if ((size_t)q_snprintf(pattern, sizeof(pattern), "%s/*", path) >=
+		sizeof(pattern))
+		return false;
+
+	find = FindFirstFileA(pattern, &data);
+	if (find != INVALID_HANDLE_VALUE)
+	{
+		do
+		{
+			char child[MAX_OSPATH];
+
+			if (!strcmp(data.cFileName, ".") ||
+				!strcmp(data.cFileName, ".."))
+				continue;
+			if (!COM_RemoveTree_JoinPath(child, sizeof(child), path,
+				data.cFileName))
+				continue;
+			if ((data.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) &&
+				!(data.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT))
+				COM_RemoveTree(child);
+			else if (data.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)
+			{
+				SetFileAttributesA(child, FILE_ATTRIBUTE_NORMAL);
+				RemoveDirectoryA(child);
+			}
+			else
+			{
+				SetFileAttributesA(child, FILE_ATTRIBUTE_NORMAL);
+				DeleteFileA(child);
+			}
+		} while (FindNextFileA(find, &data));
+		FindClose(find);
+	}
+
+	SetFileAttributesA(path, FILE_ATTRIBUTE_NORMAL);
+	return RemoveDirectoryA(path) != 0;
+#else
+	DIR *dir;
+	struct dirent *entry;
+	struct stat st;
+
+	if (lstat(path, &st) != 0)
+		return false;
+	if (!S_ISDIR(st.st_mode) || S_ISLNK(st.st_mode))
+		return remove(path) == 0;
+
+	dir = opendir(path);
+	if (dir)
+	{
+		while ((entry = readdir(dir)) != NULL)
+		{
+			char child[MAX_OSPATH];
+
+			if (!strcmp(entry->d_name, ".") ||
+				!strcmp(entry->d_name, ".."))
+				continue;
+			if (!COM_RemoveTree_JoinPath(child, sizeof(child), path,
+				entry->d_name))
+				continue;
+			if (lstat(child, &st) == 0 && S_ISDIR(st.st_mode) &&
+				!S_ISLNK(st.st_mode))
+				COM_RemoveTree(child);
+			else
+				remove(child);
+		}
+		closedir(dir);
+	}
+
+	return rmdir(path) == 0;
+#endif
 }
 
 qboolean COM_ResolveGameDir(const char *game, char *resolved, size_t resolved_size)

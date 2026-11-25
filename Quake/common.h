@@ -487,6 +487,7 @@ const char *COM_GetGameNames(qboolean full);
 qboolean COM_GameDirMatches(const char *tdirs);
 qboolean COM_ResolveGameDir(const char *game, char *resolved, size_t resolved_size);
 qboolean COM_ResolveGameDirPath(const char *game, char *resolved, size_t resolved_size);
+qboolean COM_RemoveTree(const char *path);
 qboolean COM_GameDirHasPlayableContent(const char *game_path);
 qboolean COM_GameDirNameHasPlayableContent(const char *game);
 qboolean COM_FindLooseFileInOtherGameDirs(const char *relpath, const char *companion, char *out, size_t outsize); // woods #siblingcopy

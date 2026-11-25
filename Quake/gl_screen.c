@@ -7509,7 +7509,8 @@ static void SCR_DrawNotifyStringBox(int y)
 	if (box_x < 0)
 		box_x = 0;
 
-	M_DrawTextBox(box_x, y - 12, box_width, lines + 1);
+	/* One blank line of padding above and below the text. */
+	M_DrawTextBox(box_x, y - 20, box_width, lines + 3);
 }
 
 static qboolean SCR_NotifyStringWantsBox(void)
@@ -8917,6 +8918,10 @@ void SCR_UpdateScreen (void)
 	{
 		if (con_forcedup)
 			Draw_ConsoleBackground ();
+		/* A boxed dialog raised from a menu keeps that menu visible behind it. */
+		if (scr_notifystyle == SCR_MODAL_BOXED && key_dest == key_menu &&
+			!cls.menu_qcvm.extfuncs.m_draw)
+			M_Draw ();
 		Draw_FadeScreen ();
 		SCR_DrawNotifyString ();
 	}

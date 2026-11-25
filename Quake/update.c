@@ -1368,97 +1368,6 @@ static qboolean M_Update_PathsEqual(const char *a, const char *b)
 #endif
 }
 
-static qboolean M_Update_RemoveTree(const char *path)
-{
-#ifdef _WIN32
-	char pattern[MAX_OSPATH];
-	WIN32_FIND_DATAA data;
-	HANDLE find;
-	DWORD attrs;
-
-	attrs = GetFileAttributesA(path);
-	if (attrs == INVALID_FILE_ATTRIBUTES)
-		return false;
-	if ((attrs & FILE_ATTRIBUTE_REPARSE_POINT) ||
-		!(attrs & FILE_ATTRIBUTE_DIRECTORY))
-	{
-		SetFileAttributesA(path, FILE_ATTRIBUTE_NORMAL);
-		if (attrs & FILE_ATTRIBUTE_DIRECTORY)
-			return RemoveDirectoryA(path) != 0;
-		return DeleteFileA(path) != 0;
-	}
-	if ((size_t)q_snprintf(pattern, sizeof(pattern), "%s/*", path) >=
-		sizeof(pattern))
-		return false;
-
-	find = FindFirstFileA(pattern, &data);
-	if (find != INVALID_HANDLE_VALUE)
-	{
-		do
-		{
-			char child[MAX_OSPATH];
-
-			if (!strcmp(data.cFileName, ".") ||
-				!strcmp(data.cFileName, ".."))
-				continue;
-			if (!M_Update_JoinPath(child, sizeof(child), path,
-				data.cFileName))
-				continue;
-			if ((data.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) &&
-				!(data.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT))
-				M_Update_RemoveTree(child);
-			else if (data.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)
-			{
-				SetFileAttributesA(child, FILE_ATTRIBUTE_NORMAL);
-				RemoveDirectoryA(child);
-			}
-			else
-			{
-				SetFileAttributesA(child, FILE_ATTRIBUTE_NORMAL);
-				DeleteFileA(child);
-			}
-		} while (FindNextFileA(find, &data));
-		FindClose(find);
-	}
-
-	SetFileAttributesA(path, FILE_ATTRIBUTE_NORMAL);
-	return RemoveDirectoryA(path) != 0;
-#else
-	DIR *dir;
-	struct dirent *entry;
-	struct stat st;
-
-	if (lstat(path, &st) != 0)
-		return false;
-	if (!S_ISDIR(st.st_mode) || S_ISLNK(st.st_mode))
-		return remove(path) == 0;
-
-	dir = opendir(path);
-	if (dir)
-	{
-		while ((entry = readdir(dir)) != NULL)
-		{
-			char child[MAX_OSPATH];
-
-			if (!strcmp(entry->d_name, ".") ||
-				!strcmp(entry->d_name, ".."))
-				continue;
-			if (!M_Update_JoinPath(child, sizeof(child), path,
-				entry->d_name))
-				continue;
-			if (lstat(child, &st) == 0 && S_ISDIR(st.st_mode) &&
-				!S_ISLNK(st.st_mode))
-				M_Update_RemoveTree(child);
-			else
-				remove(child);
-		}
-		closedir(dir);
-	}
-
-	return rmdir(path) == 0;
-#endif
-}
-
 static qboolean M_Update_StageDirNameOwned(const char *name)
 {
 	static const char *const platform_markers[] =
@@ -1551,7 +1460,7 @@ static void M_Update_PruneStageRoot(const char *current_stage_dir)
 			mtime = (time_t)(li.QuadPart / 10000000LL - 11644473600LL);
 			if (difftime(now, mtime) < UPDATE_STAGE_PRUNE_AGE)
 				continue;
-			if (M_Update_RemoveTree(child))
+			if (COM_RemoveTree(child))
 				Con_DPrintf("Pruned stale update staging dir %s\n",
 					child);
 		} while (FindNextFileA(find, &data));
@@ -1585,7 +1494,7 @@ static void M_Update_PruneStageRoot(const char *current_stage_dir)
 			if (!Sys_GetFileTime(child, &mtime) ||
 				difftime(now, mtime) < UPDATE_STAGE_PRUNE_AGE)
 				continue;
-			if (M_Update_RemoveTree(child))
+			if (COM_RemoveTree(child))
 				Con_DPrintf("Pruned stale update staging dir %s\n",
 					child);
 		}
@@ -4099,7 +4008,7 @@ static qboolean M_Update_RemoveApplyPath(const updateapplyfile_t *file,
 				"live target is not a directory: %s", file->dst);
 			return false;
 		}
-		if (!M_Update_RemoveTree(path))
+		if (!COM_RemoveTree(path))
 		{
 			q_snprintf(error, error_size,
 				"unable to remove directory tree: %s", path);
@@ -4126,7 +4035,7 @@ static qboolean M_Update_BackupApplyEntry(updateapplyfile_t *file,
 	{
 		if (!(live_type & FS_ENT_DIRECTORY))
 			return true;
-		if (Sys_FileType(backup_path) && !M_Update_RemoveTree(backup_path))
+		if (Sys_FileType(backup_path) && !COM_RemoveTree(backup_path))
 		{
 			q_snprintf(error, error_size,
 				"unable to remove stale backup tree: %s", backup_path);
@@ -4813,7 +4722,7 @@ static void M_Update_RemoveManifestStageDir(const updateapplymanifest_t *manifes
 
 	M_Update_PathDirName(manifest->extract_dir, stage_dir, sizeof(stage_dir));
 	if (M_Update_StagePathLooksOwned(stage_dir))
-		M_Update_RemoveTree(stage_dir);
+		COM_RemoveTree(stage_dir);
 }
 
 static void M_Update_RemoveManifestRecoveryDir(const updateapplymanifest_t *manifest)
@@ -4836,7 +4745,7 @@ static void M_Update_RemoveManifestRecoveryDir(const updateapplymanifest_t *mani
 		!M_Update_PathsEqual(recovery_dir, expected_dir))
 		return;
 
-	M_Update_RemoveTree(recovery_dir);
+	COM_RemoveTree(recovery_dir);
 }
 
 static qboolean M_Update_ManifestHasAppliedImage(
@@ -5255,7 +5164,7 @@ void M_Update_RecoverAtStartup(void)
 			if (log)
 				fclose(log);
 			M_Update_ReleaseStartupLock();
-			M_Update_RemoveTree(recovery_dir);
+			COM_RemoveTree(recovery_dir);
 			M_Update_RemoveManifestStageDir(&manifest);
 			return;
 		}
@@ -5276,7 +5185,7 @@ void M_Update_RecoverAtStartup(void)
 				if (log)
 					fclose(log);
 				M_Update_ReleaseStartupLock();
-				M_Update_RemoveTree(recovery_dir);
+				COM_RemoveTree(recovery_dir);
 				M_Update_RemoveManifestStageDir(&manifest);
 				if (restored_image)
 				{
@@ -5336,7 +5245,7 @@ void M_Update_RecoverAtStartup(void)
 		if (log)
 			fclose(log);
 		M_Update_ReleaseStartupLock();
-		M_Update_RemoveTree(recovery_dir);
+		COM_RemoveTree(recovery_dir);
 		M_Update_RemoveManifestStageDir(&manifest);
 		if (restored_image)
 		{
@@ -5446,7 +5355,7 @@ void M_Update_ConfirmStartup(void)
 	if (log)
 		fclose(log);
 	M_Update_ReleaseStartupLock();
-	M_Update_RemoveTree(recovery_dir);
+	COM_RemoveTree(recovery_dir);
 	M_Update_RemoveManifestStageDir(&manifest);
 }
 

@@ -37753,6 +37753,87 @@ qboolean M_Mods_Match(int index, char initial)
 	return q_tolower(modsmenu.items[mod_idx].name[0]) == initial;
 }
 
+/*
+==================
+M_Mods_DeleteSelected
+
+Asks for confirmation, then permanently deletes the mod folder under the
+cursor. The loaded game and id1 are refused.
+==================
+*/
+static void M_Mods_DeleteSelected(void)
+{
+	moditem_t *mod;
+	listsearch_t search;
+	char name[MAX_QPATH];
+	char path[MAX_OSPATH];
+	int old_cursor;
+
+	if (modsmenu.list.numitems <= 0 || modsmenu.list.cursor < 0 ||
+		modsmenu.list.cursor >= modsmenu.list.numitems)
+	{
+		S_LocalSound("misc/menu3.wav");
+		return;
+	}
+
+	mod = &modsmenu.items[modsmenu.filtered_indices[modsmenu.list.cursor]];
+	if (mod->download_menu)
+	{
+		S_LocalSound("misc/menu3.wav");
+		return;
+	}
+
+	// The list is rebuilt below, which frees the name mod points at
+	q_strlcpy(name, mod->name, sizeof(name));
+
+	if (!q_strcasecmp(name, GAMENAME))
+	{
+		S_LocalSound("misc/menu3.wav");
+		Con_Printf("cannot delete ^m%s^m\n", name);
+		return;
+	}
+	if (mod->active)
+	{
+		S_LocalSound("misc/menu3.wav");
+		Con_Printf("cannot delete ^m%s^m while it is loaded\n", name);
+		return;
+	}
+	if (!COM_ResolveGameDirPath(name, path, sizeof(path)))
+	{
+		S_LocalSound("misc/menu3.wav");
+		Con_Printf("cannot find the folder for mod ^m%s^m\n", name);
+		return;
+	}
+
+	if (!SCR_ModalMessageStyled(va("Delete mod ^m%.24s^m?\n\nIts folder and all of its files\nwill be permanently removed.\n\nContinue? (^my^m/^mn^m)", name), 0.0f, SCR_MODAL_BOXED))
+	{
+		S_LocalSound("misc/menu1.wav");
+		return;
+	}
+
+	if (!COM_RemoveTree(path))
+	{
+		S_LocalSound("misc/menu3.wav");
+		Con_Printf("failed to fully delete ^m%s^m\n", path);
+	}
+	else
+	{
+		S_LocalSound("misc/menu1.wav");
+		Con_Printf("mod ^m%s^m deleted\n", path);
+	}
+
+	// Another root (games/, mods/, userdir) may still hold a same-named copy
+	if (!COM_ResolveGameDir(name, NULL, 0))
+		FileList_Subtract(name, &modlist);
+
+	search = modsmenu.list.search;
+	old_cursor = modsmenu.list.cursor;
+	M_Mods_Init();
+	modsmenu.list.search = search;
+	modsmenu.list.cursor = old_cursor;
+	M_Mods_Refilter();
+}
+
 void M_Mods_Key(int key)
 {
 
@@ -37771,6 +37852,11 @@ void M_Mods_Key(int key)
 		{
 			M_DeletePrevWord(&modsmenu.list.search);
 			M_Mods_Refilter();
+			return;
+		}
+		else if (key == K_BACKSPACE)
+		{
+			M_Mods_DeleteSelected();
 			return;
 		}
 	}
@@ -37797,6 +37883,12 @@ void M_Mods_Key(int key)
 			modsmenu.scrollbar_grab = false;
 			break;
 		}
+		return;
+	}
+
+	if (key == K_DEL)
+	{
+		M_Mods_DeleteSelected();
 		return;
 	}
 
@@ -45881,6 +45973,82 @@ static void M_Demos_MouseClickPathField(void)
 	M_Demos_UpdatePathHint();
 }
 
+/*
+==================
+M_Demos_DeleteSelected
+
+Asks for confirmation, then deletes the demo under the cursor.
+==================
+*/
+static void M_Demos_DeleteSelected(void)
+{
+	demoitem_t *demo;
+	char demo_name[MAX_QPATH];
+	char demo_path[MAX_OSPATH];
+	int old_cursor;
+
+	if (!demosmenu.path_valid || demosmenu.list.numitems <= 0 ||
+		demosmenu.list.cursor < 0 || demosmenu.list.cursor >= demosmenu.list.numitems)
+	{
+		S_LocalSound("misc/menu3.wav");
+		return;
+	}
+
+	demo = &demosmenu.items[demosmenu.filtered_indices[demosmenu.list.cursor]];
+
+	// Copy demo name to local buffer BEFORE the list is rebuilt
+	q_strlcpy(demo_name, demo->name, sizeof(demo_name));
+
+	if (demo->from_id1)
+	{
+		S_LocalSound("misc/menu3.wav");
+		Con_Printf("cannot delete inherited id1 demo ^m%s^m from this menu\n", M_Demos_CommandName(demo_name));
+		return;
+	}
+
+	if (demo->source_searchpath && demo->source_searchpath->pack)
+	{
+		S_LocalSound("misc/menu3.wav");
+		Con_Printf("cannot delete ^m%s^m: it is inside ^m%s^m\n",
+			COM_SkipPath(demo_name), COM_SkipPath(demo->source_searchpath->filename));
+		return;
+	}
+
+	if (!SCR_ModalMessageStyled(va("Delete demo ^m%.28s^m?\n\nThis cannot be undone.\n\nContinue? (^my^m/^mn^m)", COM_SkipPath(demo_name)), 0.0f, SCR_MODAL_BOXED))
+	{
+		S_LocalSound("misc/menu1.wav");
+		return;
+	}
+
+	// Construct the full path to the demo file
+	if (strchr(demo_name, '/') || strchr(demo_name, '\\'))
+		q_snprintf(demo_path, sizeof(demo_path), "%s/%s", com_gamedir, demo_name);
+	else
+		q_snprintf(demo_path, sizeof(demo_path), "%s/demos/%s", com_gamedir, demo_name);
+
+	if (remove(demo_path) != 0)
+	{
+		S_LocalSound("misc/menu3.wav");
+		Con_Printf("failed to delete demo ^m%s^m\n", demo_name);
+		return;
+	}
+
+	FileList_Subtract(demo_name, &demolist);
+
+	old_cursor = demosmenu.list.cursor;
+	M_Demos_RebuildForCurrentPath();
+
+	if (demosmenu.list.numitems <= 0)
+		demosmenu.list.cursor = -1;
+	else if (old_cursor >= demosmenu.list.numitems)
+		demosmenu.list.cursor = demosmenu.list.numitems - 1;
+	else
+		demosmenu.list.cursor = old_cursor;
+
+	S_LocalSound("misc/menu1.wav");
+	Con_Printf("demo ^m%s^m deleted\n", demo_name);
+}
+
 void M_Demos_Key(int key)
 {
 	if (key == K_MOUSE1 && !demosmenu.scrollbar_grab)
@@ -46029,61 +46197,9 @@ void M_Demos_Key(int key)
 			M_Demos_Refilter();
 			return;
 		}
-		else if (key == K_BACKSPACE && demosmenu.list.numitems > 0)
+		else if (key == K_BACKSPACE)
 		{
-			// Delete the currently selected demo file
-			int demo_idx = demosmenu.filtered_indices[demosmenu.list.cursor];
-			demoitem_t *demo = &demosmenu.items[demo_idx];
-
-			// Copy demo name to local buffer BEFORE freeing memory
-			char demo_name[MAX_QPATH];
-			q_strlcpy(demo_name, demo->name, sizeof(demo_name));
-
-			if (demo->from_id1)
-			{
-				S_LocalSound("misc/menu3.wav");
-				Con_Printf("cannot delete inherited id1 demo ^m%s^m from this menu\n", M_Demos_CommandName(demo_name));
-				return;
-			}
-
-			char demo_path[MAX_OSPATH];
-
-			// Construct the full path to the demo file
-			if (strchr(demo_name, '/') || strchr(demo_name, '\\'))
-				q_snprintf(demo_path, sizeof(demo_path), "%s/%s", com_gamedir, demo_name);
-			else
-				q_snprintf(demo_path, sizeof(demo_path), "%s/demos/%s", com_gamedir, demo_name);
-
-			// Try to delete the file
-			if (remove(demo_path) == 0)
-			{
-				// Successfully deleted file, now remove from demo list
-				FileList_Subtract(demo_name, &demolist);
-
-				// Store current cursor position
-				int old_cursor = demosmenu.list.cursor;
-
-				M_Demos_RebuildForCurrentPath();
-
-				// Restore cursor position (adjust if necessary)
-				if (old_cursor >= demosmenu.list.numitems && demosmenu.list.numitems > 0)
-					demosmenu.list.cursor = demosmenu.list.numitems - 1;
-				else if (demosmenu.list.numitems > 0)
-					demosmenu.list.cursor = old_cursor;
-				else
-					demosmenu.list.cursor = -1;
-
-				// Play confirmation sound
-				S_LocalSound("misc/menu1.wav");
-
-				Con_Printf("demo ^m%s^m deleted\n", demo_name);
-			}
-			else
-			{
-				// Failed to delete file
-				S_LocalSound("misc/menu3.wav");
-				Con_Printf("failed to delete demo ^m%s^m\n", demo_name);
-			}
+			M_Demos_DeleteSelected();
 			return;
 		}
 	}
@@ -46107,6 +46223,12 @@ void M_Demos_Key(int key)
             M_Demos_Refilter();
             return;
         }
+    }
+
+    if (key == K_DEL)
+    {
+        M_Demos_DeleteSelected();
+        return;
     }
 
     if (demosmenu.scrollbar_grab)
