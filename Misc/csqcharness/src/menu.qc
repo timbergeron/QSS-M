@@ -275,7 +275,10 @@ void(vector screensize) m_draw =
 	// Wait for the frame loop proper before asserting on it.
 	mq_frames = mq_frames + 1;
 	if (autocvar_hq_menu_selftest && mq_frames == 120)
+	{
+		st_client_ui_globals(screensize);
 		mq_selftest();
+	}
 
 	RotPic_DrawTests(screensize);
 	Parity_DrawTests('360 72 0');

@@ -161,7 +161,10 @@ void(vector virtsize, float showscores) CSQC_DrawHud =
 		}
 	}
 	else if (autocvar_hq_csqc_selftest && cq_frames == 60)
+	{
+		st_client_ui_globals(virtsize);
 		cq_selftest();
+	}
 
 	RotPic_DrawTests(virtsize);
 	Parity_DrawTests('360 72 0');

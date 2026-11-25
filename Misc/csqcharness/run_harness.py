@@ -206,6 +206,12 @@ def check_headers(srcdir, results):
                     'GE_TAGENTITY', 'GE_TAGINDEX', 'GE_TRAILEFFECTNUM'):
         results.append(('dump/csqc-%s' % ge_name,
                         ('const float %s =' % ge_name) in cs))
+    for name, value in (('IE_ACCELEROMETER', 4), ('IE_FOCUS', 5),
+                        ('IE_GYROSCOPE', 7), ('IE_PASTE', 8)):
+        declaration = 'const float %s = %d;' % (name, value)
+        results.append(('dump/csqc-%s' % name, declaration in cs))
+        if name in ('IE_FOCUS', 'IE_PASTE'):
+            results.append(('dump/menu-%s' % name, declaration in mn))
     for ext_name in ('DP_QC_FS_SEARCH', 'DP_QC_FS_SEARCH_PACKFILE',
                      'FTE_QC_FS_SEARCH_SIZEMTIME', 'FTE_QC_CHECKPVS',
                      'FTE_CSQC_WINDOWCAPTION'):

@@ -325,3 +325,12 @@ void(vector origin) Parity_DrawTests =
 	drawfill(p + '64 4 0', '16 16 0', '1 0 0', 0.5, 2);
 	drawfill(p + '96 4 0', '16 16 0', '1 0 0', 0.5, 3);
 };
+void(vector size) st_client_ui_globals =
+{
+	st_eqf("ui/virtual-width", autocvar_vid_conwidth, size_x);
+	st_eqf("ui/virtual-height", autocvar_vid_conheight, size_y);
+	drawfontscale = '2 3 0';
+	st_eqf("ui/scaled-stringwidth", stringwidth("abc", FALSE, '8 8 0'), 48);
+	rawfontscale = '1 1 0';
+	st_eqf("ui/default-stringwidth", stringwidth("abc", FALSE, '8 8 0'), 24);
+};
