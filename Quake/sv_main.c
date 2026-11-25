@@ -1605,13 +1605,13 @@ invisible:
 				parent = ent;
 				while (GetEdictFieldEval(parent, tag_entity)->edict)
 					parent = PROG_TO_EDICT(GetEdictFieldEval(parent, tag_entity)->edict);
-				if (parent->num_leafs < MAX_ENT_LEAFS)	//assumed to be in all leafs, if there's an overflow.
 				{
 					// ignore if not touching a PV leaf
 					for (i=0 ; i < parent->num_leafs ; i++)
 						if (pvs[parent->leafnums[i] >> 3] & (1 << (parent->leafnums[i]&7) ))
 							break;
-					if (i == parent->num_leafs)
+					// woods #pvsoverflow -- leaf list overflowed and the first MAX_ENT_LEAFS missed, so test the whole box
+					if (i == parent->num_leafs && (parent->num_leafs < MAX_ENT_LEAFS || !SV_BoxInPVS(parent->v.absmin, parent->v.absmax, pvs, qcvm->worldmodel->nodes)))
 						goto invisible;		// not visible
 				}
 				break;
@@ -3361,7 +3361,8 @@ void SV_WriteEntitiesToClient (client_t *client, sizebuf_t *msg)
 			// for us to say whether it's in the PVS, so don't try to vis cull it.
 			// this commonly happens with rotators, because they often have huge bboxes
 			// spanning the entire map, or really tall lifts, etc.
-			if (i == ent->num_leafs && ent->num_leafs < MAX_ENT_LEAFS)
+			// woods #pvsoverflow -- on overflow, fall back to testing the whole box against the pvs
+			if (i == ent->num_leafs && (ent->num_leafs < MAX_ENT_LEAFS || !SV_BoxInPVS(ent->v.absmin, ent->v.absmax, pvs, qcvm->worldmodel->nodes)))
 				continue;		// not visible
 		}
 

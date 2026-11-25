@@ -65,6 +65,8 @@ void SV_UnlinkEdict (edict_t *ent);
 // so it doesn't clip against itself
 // flags ent->v.modified
 
+qboolean SV_BoxInPVS (vec3_t mins, vec3_t maxs, byte* pvs, mnode_t* node); // woods #pvsoverflow
+
 void SV_LinkEdict (edict_t *ent, qboolean touch_triggers);
 // Needs to be called any time an entity changes origin, mins, maxs, or solid
 // flags ent->v.modified
