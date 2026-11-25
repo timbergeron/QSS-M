@@ -68,7 +68,8 @@ int LMBLOCK_WIDTH, LMBLOCK_HEIGHT;
 // pipeline sync per touched atlas per frame); staging through an orphaned PBO
 // turns the update into a GPU-side blit instead.
 static GLuint lm_scratchpbo; // reset by GL_BuildLightmaps on map load / video restart
-static SDL_Mutex *lm_dirty_mutex; // woods #lmrect -- guards modified/rectchange/dirtyrects between the scenecache worker and the main thread's uploads
+static SDL_Mutex *lm_dirty_mutex; // woods #lmrect -- guards modified/rectchange/dirtytiles between the scenecache worker and the main thread's uploads
+static int lm_tilew = 16, lm_tilerows; // woods #lmtiles -- set by LM_AllocateStaging from the current atlas size
 // Bumped each time a lightmap is flagged modified. R_UploadLightmaps runs once per
 // brush entity drawn, so on maps with hundreds of them it skips its scan of every
 // lightmap when nothing was flagged since the last one.
@@ -90,9 +91,39 @@ static qboolean LM_CanUsePersistentPBO (void)
 		&& GL_UnmapBufferFunc;
 }
 
+// woods #lmtiles -- whole atlas dirty (fresh allocation)
+static void LM_MarkAllDirty (struct lightmap_s *lm)
+{
+	int cols = (LMBLOCK_WIDTH + lm_tilew - 1) / lm_tilew;
+	unsigned int full = cols >= 32 ? 0xffffffffu : ((1u << cols) - 1u);
+	int i;
+
+	for (i = 0; i < lm_tilerows; i++)
+		lm->dirtytiles[i] = full;
+	lm->dirtylo = 0;
+	lm->dirtyhi = lm_tilerows - 1;
+}
+
+// woods #lmtiles -- nothing pending; caller holds lm_dirty_mutex or owns the lightmap
+static void LM_ClearDirty (struct lightmap_s *lm)
+{
+	if (lm->dirtytiles && lm->dirtylo <= lm->dirtyhi)
+		memset (lm->dirtytiles + lm->dirtylo, 0, (lm->dirtyhi - lm->dirtylo + 1) * sizeof(*lm->dirtytiles));
+	lm->dirtylo = lm_tilerows;
+	lm->dirtyhi = -1;
+}
+
 static void LM_AllocateStaging (struct lightmap_s *lm)
 {
 	const size_t bytes = (size_t)4 * (size_t)LMBLOCK_WIDTH * (size_t)LMBLOCK_HEIGHT;
+
+	lm_tilew = q_max (1, (LMBLOCK_WIDTH + 31) / 32);
+	lm_tilerows = (LMBLOCK_HEIGHT + LM_TILE_H - 1) / LM_TILE_H;
+	lm->dirtytiles = (unsigned int *) calloc (lm_tilerows, sizeof(*lm->dirtytiles));
+	if (!lm->dirtytiles)
+		Sys_Error ("GL_BuildLightmaps: out of memory on %u dirty tile rows", (unsigned int)lm_tilerows);
+	lm->dirtylo = lm_tilerows;
+	lm->dirtyhi = -1;
 
 	if (LM_CanUsePersistentPBO ())
 	{
@@ -747,8 +778,8 @@ void R_DrawBrushModel_ShowTris (entity_t *e)
 
 // woods #lmrect -- shared by all three dynamic-lightmap dirty paths
 // (R_RenderDynamicLightmaps here, plus the bmodel-drawcache and scenecache copies
-// in r_world.c). Accumulates the surface's exact texel rect, growing whichever
-// existing rect wastes the least area once the list fills.
+// in r_world.c). Sets the dirty-tile bits the surface's texel rect covers
+// (woods #lmtiles).
 // Sets lm->modified and grows lm->rectchange too, all under lm_dirty_mutex so the
 // scenecache worker's marks can't be lost to R_UploadLightmap's concurrent
 // snapshot-and-clear. Call this AFTER R_BuildLightMap has written the staging
@@ -758,7 +789,7 @@ void R_DrawBrushModel_ShowTris (entity_t *e)
 void R_LightmapMarkDirtyRect (struct lightmap_s *lm, int light_s, int light_t, int smax, int tmax)
 {
 	int l = light_s, t = light_t, r = light_s + smax, b = light_t + tmax;
-	int i, best, bestwaste;
+	int i;
 	glRect_t *theRect;
 
 	if (l < 0) l = 0;
@@ -788,34 +819,16 @@ void R_LightmapMarkDirtyRect (struct lightmap_s *lm, int light_s, int light_t, i
 	if ((theRect->h + theRect->t) < b)
 		theRect->h = b - theRect->t;
 
-	best = -1; bestwaste = INT_MAX;
-	for (i = 0; i < lm->numdirtyrects; i++)
+	// woods #lmtiles -- set the covered tile bits; bands are LM_TILE_H rows, columns lm_tilew texels
 	{
-		glRect_t *dr = &lm->dirtyrects[i];
-		int ul = q_min(l, (int)dr->l), ut = q_min(t, (int)dr->t);
-		int ur = q_max(r, dr->l + dr->w), ub = q_max(b, dr->t + dr->h);
-		int waste = (ur-ul)*(ub-ut) - dr->w*dr->h - (r-l)*(b-t);
-		if (waste < bestwaste)
-		{
-			bestwaste = waste;
-			best = i;
-		}
-	}
-	// merge when the grown rect adds little dead area (or we're out of slots);
-	// adjacent surfaces of the same dlight typically collapse into one rect.
-	if (best >= 0 && (bestwaste <= 1024 || lm->numdirtyrects == LM_DIRTYRECTS))
-	{
-		glRect_t *dr = &lm->dirtyrects[best];
-		int ul = q_min(l, (int)dr->l), ut = q_min(t, (int)dr->t);
-		int ur = q_max(r, dr->l + dr->w), ub = q_max(b, dr->t + dr->h);
-		dr->l = ul; dr->t = ut;
-		dr->w = ur-ul; dr->h = ub-ut;
-	}
-	else
-	{
-		glRect_t *dr = &lm->dirtyrects[lm->numdirtyrects++];
-		dr->l = l; dr->t = t;
-		dr->w = r-l; dr->h = b-t;
+		int c0 = l / lm_tilew, c1 = (r - 1) / lm_tilew;
+		int r0 = t / LM_TILE_H, r1 = (b - 1) / LM_TILE_H;
+		unsigned int mask = (c1 - c0 >= 31) ? 0xffffffffu : (((1u << (c1 - c0 + 1)) - 1u) << c0);
+
+		for (i = r0; i <= r1; i++)
+			lm->dirtytiles[i] |= mask;
+		if (r0 < lm->dirtylo) lm->dirtylo = r0;
+		if (r1 > lm->dirtyhi) lm->dirtyhi = r1;
 	}
 
 	SDL_UnlockMutex (lm_dirty_mutex);
@@ -1028,11 +1041,7 @@ int AllocBlock (int w, int h, int *x, int *y)
 			lightmaps[texnum].rectchange.t = 0;
 			lightmaps[texnum].rectchange.h = LMBLOCK_HEIGHT;
 			lightmaps[texnum].rectchange.w = LMBLOCK_WIDTH;
-			lightmaps[texnum].numdirtyrects = 1; // woods #lmrect -- whole texture dirty
-			lightmaps[texnum].dirtyrects[0].l = 0;
-			lightmaps[texnum].dirtyrects[0].t = 0;
-			lightmaps[texnum].dirtyrects[0].w = LMBLOCK_WIDTH;
-			lightmaps[texnum].dirtyrects[0].h = LMBLOCK_HEIGHT;
+			LM_MarkAllDirty (&lightmaps[texnum]); // woods #lmtiles -- whole texture dirty
 		}
 		best = LMBLOCK_HEIGHT;
 		bestx = -1;
@@ -1562,6 +1571,7 @@ void GL_BuildLightmaps (void)
 		}
 		else
 			free(lightmaps[i].pbodata);
+		free(lightmaps[i].dirtytiles); // woods #lmtiles
 	}
 	free(lightmaps);
 	lightmaps = NULL;
@@ -1762,7 +1772,7 @@ void GL_BuildLightmaps (void)
 		lm->rectchange.t = LMBLOCK_HEIGHT;
 		lm->rectchange.w = 0;
 		lm->rectchange.h = 0;
-		lm->numdirtyrects = 0; // woods #lmrect
+		LM_ClearDirty (lm); // woods #lmtiles
 
 		//johnfitz -- use texture manager
 		sprintf(name, "lightmap%07i",i);
@@ -2474,9 +2484,14 @@ static void R_TexSubImageLightmap (int x, int t, int w, int h, const GLvoid *src
 				GL_UNSIGNED_BYTE, src);
 }
 
+static size_t *lm_upload_offsets; // woods #lmtiles -- main thread only, grown with lm_upload_rects
+static glRect_t *lm_upload_rects;
+static unsigned int *lm_upload_tiles;
+static int lm_upload_maxrects, lm_upload_maxtiles;
+
 static qboolean R_UploadLightmapScratch (const struct lightmap_s *lm, const glRect_t *rects, int count)
 {
-	size_t offsets[LM_DIRTYRECTS], bytes = 0;
+	size_t *offsets = lm_upload_offsets, bytes = 0;
 	const size_t stride = (size_t)LMBLOCK_WIDTH * lightmap_bytes;
 	byte *dst;
 	int i;
@@ -2521,47 +2536,102 @@ static qboolean R_UploadLightmapScratch (const struct lightmap_s *lm, const glRe
 	return false;
 }
 
+// woods #lmtiles -- grow the main-thread upload scratch arrays
+static void LM_ReserveUpload (int rects, int tiles)
+{
+	if (rects > lm_upload_maxrects)
+	{
+		int n = q_max (rects, lm_upload_maxrects * 2);
+		glRect_t *r = (glRect_t *) realloc (lm_upload_rects, n * sizeof(*r));
+		size_t *o = (size_t *) realloc (lm_upload_offsets, n * sizeof(*o));
+		if (r) lm_upload_rects = r;
+		if (o) lm_upload_offsets = o;
+		if (!r || !o)
+			Sys_Error ("R_UploadLightmap: out of memory (%d rects)", n);
+		lm_upload_maxrects = n;
+	}
+	if (tiles > lm_upload_maxtiles)
+	{
+		unsigned int *t = (unsigned int *) realloc (lm_upload_tiles, tiles * sizeof(*t));
+		if (!t)
+			Sys_Error ("R_UploadLightmap: out of memory (%d tile rows)", tiles);
+		lm_upload_tiles = t;
+		lm_upload_maxtiles = tiles;
+	}
+}
+
 static void R_UploadLightmap(int lmap)
 {
 	struct lightmap_s *lm = &lightmaps[lmap];
-	glRect_t rects[LM_DIRTYRECTS]; // woods #lmrect
-	int i, n, valid;
+	glRect_t *rects;
+	unsigned int *tiles;
+	int i, lo, hi, valid;
 
 	if (!lm->modified)
 		return;
 
 	// woods #lmrect -- snapshot-and-clear under the same lock
-	// R_LightmapMarkDirtyRect appends under, so a mark from the scenecache
+	// R_LightmapMarkDirtyRect sets bits under it, so a mark from the scenecache
 	// worker either lands before the snapshot (uploaded now, its staging bytes
 	// are complete because marks happen after R_BuildLightMap) or after the
-	// clear (stays in the list for the next upload). Without this, clearing the
-	// list mid-job dropped the worker's marks and left dead dlights baked into
-	// the GPU texture.
+	// clear (stays set for the next upload). Without this, clearing mid-job
+	// dropped the worker's marks and left dead dlights baked into the GPU texture.
 	SDL_LockMutex(lm_dirty_mutex);
 	lm->modified = false;
-	n = lm->numdirtyrects;
-	if (n > LM_DIRTYRECTS)
-		n = LM_DIRTYRECTS;
-	if (n > 0)
-		memcpy(rects, lm->dirtyrects, n * sizeof(rects[0]));
-	lm->numdirtyrects = 0;
+	lo = lm->dirtylo;
+	hi = lm->dirtyhi;
+	if (lo <= hi)
+	{
+		LM_ReserveUpload (0, hi - lo + 1);
+		memcpy (lm_upload_tiles, lm->dirtytiles + lo, (hi - lo + 1) * sizeof(*lm_upload_tiles));
+	}
+	LM_ClearDirty (lm);
 	lm->rectchange.l = LMBLOCK_WIDTH;
 	lm->rectchange.t = LMBLOCK_HEIGHT;
 	lm->rectchange.h = 0;
 	lm->rectchange.w = 0;
 	SDL_UnlockMutex(lm_dirty_mutex);
 
-	for (i = 0, valid = 0; i < n; i++)
-	{
-		glRect_t rect = rects[i];
+	if (lo > hi)
+		return;
 
-		if (rect.l >= LMBLOCK_WIDTH || rect.t >= LMBLOCK_HEIGHT)
+	// woods #lmtiles -- bands with an identical column mask merge vertically,
+	// then each run of set columns becomes one rect
+	tiles = lm_upload_tiles;
+	valid = 0;
+	for (i = lo; i <= hi; i++)
+	{
+		unsigned int m = tiles[i - lo];
+		int j, c;
+
+		if (!m)
 			continue;
-		rect.w = q_min(rect.w, LMBLOCK_WIDTH - rect.l);
-		rect.h = q_min(rect.h, LMBLOCK_HEIGHT - rect.t);
-		if (rect.w > 0 && rect.h > 0)
-			rects[valid++] = rect;
+		for (j = i; j < hi && tiles[j + 1 - lo] == m; j++)
+			;
+		for (c = 0; c < 32; )
+		{
+			int c0, x, y, w, h;
+
+			if (!(m & (1u << c))) { c++; continue; }
+			c0 = c;
+			while (c < 32 && (m & (1u << c)))
+				c++;
+			x = c0 * lm_tilew;
+			y = i * LM_TILE_H;
+			w = q_min (c * lm_tilew, LMBLOCK_WIDTH) - x;
+			h = q_min ((j + 1) * LM_TILE_H, LMBLOCK_HEIGHT) - y;
+			if (w <= 0 || h <= 0)
+				continue;
+			LM_ReserveUpload (valid + 1, 0);
+			lm_upload_rects[valid].l = x;
+			lm_upload_rects[valid].t = y;
+			lm_upload_rects[valid].w = w;
+			lm_upload_rects[valid].h = h;
+			valid++;
+		}
+		i = j;
 	}
+	rects = lm_upload_rects;
 
 	if (!valid)
 		return;
@@ -2644,7 +2714,9 @@ void R_UploadLightmaps (void)
 			lightmaps[lmap].rectchange.t = LMBLOCK_HEIGHT;
 			lightmaps[lmap].rectchange.h = 0;
 			lightmaps[lmap].rectchange.w = 0;
-			lightmaps[lmap].numdirtyrects = 0; // woods #lmrect
+			SDL_LockMutex (lm_dirty_mutex);
+			LM_ClearDirty (&lightmaps[lmap]); // woods #lmtiles
+			SDL_UnlockMutex (lm_dirty_mutex);
 		}
 		else
 		{
@@ -2793,7 +2865,7 @@ void R_RebuildAllLightmaps (void)
 		lightmaps[i].rectchange.t = LMBLOCK_HEIGHT;
 		lightmaps[i].rectchange.h = 0;
 		lightmaps[i].rectchange.w = 0;
-		lightmaps[i].numdirtyrects = 0; // woods #lmrect -- whole texture just uploaded
+		LM_ClearDirty (&lightmaps[i]); // woods #lmtiles -- whole texture just uploaded
 	}
 }
 

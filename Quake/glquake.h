@@ -512,14 +512,13 @@ struct lightmap_s
 	glpoly_t	*polys;
 	qboolean	modified;
 	glRect_t	rectchange;
-	// woods #lmrect -- exact dirty-texel rects, merged as the list fills. The old
-	// row-band tracking uploaded full-width 256-row bands of the 512x16384 atlas;
-	// scattered dlight/lightstyle surfaces merged into multi-megabyte uploads per
-	// frame on Apple's GL-on-Metal. Rects keep uploads proportional to the texels
-	// actually rebuilt.
-#define LM_DIRTYRECTS 64
-	glRect_t	dirtyrects[LM_DIRTYRECTS];
-	int			numdirtyrects;
+	// woods #lmtiles -- dirty texels tracked as a tile bitmap: one 32-bit column
+	// mask per LM_TILE_H-row band (tile width = LMBLOCK_WIDTH/32). The previous
+	// 64-rect list merged hundreds of scattered lightstyle surfaces into
+	// near-whole-atlas boxes, uploading 10-40x the texels actually rebuilt.
+#define LM_TILE_H 8
+	unsigned int *dirtytiles;	// [lm_tilerows]
+	int			dirtylo, dirtyhi;	// band range holding any set bit; lo > hi when clean
 
 	// PBO use allows us to simply copy the lightmap data into a texture on-gpu, reducing stutters. It'll be writethrough though, so we need to keep things cache-friendly.
 	//the data ptr points to a persistently mapped buffer so we can paint it from other threads while the main thread is doing other work so other than creation+upload we can just treat it like regular memory with slightly different cache properties.
