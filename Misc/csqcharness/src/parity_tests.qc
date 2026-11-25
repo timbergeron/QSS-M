@@ -123,6 +123,64 @@ void() cq_parity_tokens =
 	getentitytoken("owned input for shutdown");
 };
 
+void() cq_parity_viewprops =
+{
+	local vector p;
+	local float badprop = 99999;
+	clearscene();
+	st_poisonf();
+	st_eqf("viewprop/set-origin-returns-true", setproperty(VF_ORIGIN, '11 22 33'), 1);
+	st_poisonv();
+	st_eqv("viewprop/get-origin-roundtrip", (vector)getproperty(VF_ORIGIN), '11 22 33');
+	st_poisonf();
+	st_eqf("viewprop/set-angles-returns-true", setproperty(VF_ANGLES, '15 45 -5'), 1);
+	st_poisonv();
+	st_eqv("viewprop/get-angles-roundtrip", (vector)getproperty(VF_ANGLES), '15 45 -5');
+	st_poisonf();
+	st_eqf("viewprop/set-unsupported-returns-false", setproperty(badprop, 1), 0);
+	st_poisonf();
+	st_eqf("viewprop/set-activeseat-zero", setproperty(VF_ACTIVESEAT, 0), 1);
+	st_poisonf();
+	st_eqf("viewprop/set-activeseat-nonzero-false", setproperty(VF_ACTIVESEAT, 1), 0);
+
+	// Single-axis FOV must derive the unset axis from the viewport aspect.
+	setproperty(VF_VIEWPORT, '0 0 0', '640 480 0');
+	setproperty(VF_ORIGIN, '0 0 0');
+	setproperty(VF_ANGLES, '0 0 0');
+	setproperty(VF_FOV_X, 90);
+	p = project('100 -100 0');
+	st_ok("viewprop/fovx-only-right-edge", fabs(p_x - 640) < 0.5 && fabs(p_y - 240) < 0.5);
+	p = project('100 0 75');
+	st_ok("viewprop/fovx-only-derived-fovy", fabs(p_x - 320) < 0.5 && fabs(p_y) < 0.5);
+
+	setproperty(VF_FOV, '0 90 0');
+	p = project('100 0 100');
+	st_ok("viewprop/fovy-only-top-edge", fabs(p_x - 320) < 0.5 && fabs(p_y) < 0.5);
+	p = project('100 -100 0');
+	st_ok("viewprop/fovy-only-derived-fovx", fabs(p_x - 560) < 0.5 && fabs(p_y - 240) < 0.5);
+
+	// VF_AFOV clears explicit FOV, and explicit FOV clears VF_AFOV.
+	setproperty(VF_AFOV, 90);
+	st_eqv("viewprop/afov-clears-fov", (vector)getproperty(VF_FOV), '0 0 0');
+	st_eqf("viewprop/afov-stored", (float)getproperty(VF_AFOV), 90);
+	setproperty(VF_FOV_X, 90);
+	st_eqf("viewprop/fovx-clears-afov", (float)getproperty(VF_AFOV), 0);
+
+	// Extreme and non-finite single-axis FOV must clamp instead of hitting CalcFovy Sys_Error.
+	setproperty(VF_FOV, '0.1 0 0');
+	p = project('100 0 0');
+	st_ok("viewprop/fovx-sub1-clamped", fabs(p_x - 320) < 0.5 && fabs(p_y - 240) < 0.5);
+	setproperty(VF_FOV, '999 0 0');
+	p = project('100 0 0');
+	st_ok("viewprop/fovx-over179-clamped", fabs(p_x - 320) < 0.5 && fabs(p_y - 240) < 0.5);
+	setproperty(VF_FOV, [stof("nan"), 0, 0]);
+	p = project('100 0 0');
+	st_ok("viewprop/fovx-nan-safe", fabs(p_x - 320) < 0.5 && fabs(p_y - 240) < 0.5);
+	setproperty(VF_FOV, [stof("inf"), 0, 0]);
+	p = project('100 0 0');
+	st_ok("viewprop/fovx-inf-safe", fabs(p_x - 320) < 0.5 && fabs(p_y - 240) < 0.5);
+};
+
 void() cq_model_stress =
 {
 	local float i, unexpected;

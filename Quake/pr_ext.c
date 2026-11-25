@@ -8543,7 +8543,7 @@ static void PF_cl_getproperty(void)
 	case VF_ORIGIN:	//vieworigin
 		if (qcvm->nogameaccess)
 			goto accessblocked;
-		VectorCopy(viewprops.origin, G_VECTOR(OFS_PARM1));
+		VectorCopy(viewprops.origin, G_VECTOR(OFS_RETURN));
 		break;
 	case VF_ORIGIN_X:
 	case VF_ORIGIN_Y:
@@ -8555,7 +8555,7 @@ static void PF_cl_getproperty(void)
 	case VF_ANGLES:	//viewangles
 		if (qcvm->nogameaccess)
 			goto accessblocked;
-		VectorCopy(viewprops.angles, G_VECTOR(OFS_PARM1));
+		VectorCopy(viewprops.angles, G_VECTOR(OFS_RETURN));
 		break;
 	case VF_ANGLES_X:
 	case VF_ANGLES_Y:
@@ -8645,6 +8645,7 @@ static void PF_cl_getproperty(void)
 static void PF_cl_setproperty(void)
 {
 	int prop = G_FLOAT(OFS_PARM0);
+	G_FLOAT(OFS_RETURN) = true;	//FTE returns whether the property was accepted
 	switch(prop)
 	{	//NOTE: These indexes are shared between engines. whoever thought THAT would be a good idea...
 	case VF_MIN:		//min
@@ -8674,13 +8675,16 @@ static void PF_cl_setproperty(void)
 		viewprops.rect_size[1] = G_FLOAT(OFS_PARM2+1);
 		break;
 	case VF_FOV:
+		viewprops.afov = 0;
 		viewprops.fov_x = G_FLOAT(OFS_PARM1+0);
 		viewprops.fov_y = G_FLOAT(OFS_PARM1+1);
 		break;
 	case VF_FOV_X:
+		viewprops.afov = 0;
 		viewprops.fov_x = G_FLOAT(OFS_PARM1);
 		break;
 	case VF_FOV_Y:
+		viewprops.afov = 0;
 		viewprops.fov_y = G_FLOAT(OFS_PARM1);
 		break;
 	case VF_ORIGIN:	//vieworigin
@@ -8725,10 +8729,15 @@ static void PF_cl_setproperty(void)
 //	case VF_DP_CLEARSCREEN:	//active seat
 	case VF_ACTIVESEAT:		//active seat
 		if (G_FLOAT(OFS_PARM1))
+		{
 			Con_Printf("VF_ACTIVESEAT: splitscreen not supported\n");
+			G_FLOAT(OFS_RETURN) = false;
+		}
 		break;
 	case VF_AFOV:	//aproximate fov
 		viewprops.afov = G_FLOAT(OFS_PARM1);
+		viewprops.fov_x = 0;
+		viewprops.fov_y = 0;
 		break;
 //	case VF_SCREENVSIZE:	//virtual size (readonly)
 //	case VF_SCREENPSIZE:	//physical size (readonly)
@@ -8757,6 +8766,7 @@ static void PF_cl_setproperty(void)
 //	case VF_DP_MINFPS_QUALITY: //lodquality
 	default:
 		Con_Printf("PF_m_setproperty: unsupported property %i\n", prop);
+		G_FLOAT(OFS_RETURN) = false;
 		break;
 	}
 }
@@ -8783,10 +8793,17 @@ static qboolean PF_cl_computerefdef(void)
 	if (r_refdef.vrect.width < 1 || r_refdef.vrect.height < 1)
 		return false;
 
-	if (viewprops.fov_x && viewprops.fov_y)
-	{
-		r_refdef.fov_x = viewprops.fov_x;
-		r_refdef.fov_y = viewprops.fov_y;
+	if ((isfinite(viewprops.fov_x) && viewprops.fov_x > 0) ||
+		(isfinite(viewprops.fov_y) && viewprops.fov_y > 0))
+	{	//Preserve an explicit FOV and derive its missing axis from the viewport aspect.
+		float fx = (isfinite(viewprops.fov_x) && viewprops.fov_x > 0) ? CLAMP(1.0f, viewprops.fov_x, 179.0f) : 0;
+		float fy = (isfinite(viewprops.fov_y) && viewprops.fov_y > 0) ? CLAMP(1.0f, viewprops.fov_y, 179.0f) : 0;
+		if (fx <= 0)
+			fx = CLAMP(1.0f, CalcFovy(fy, r_refdef.vrect.height, r_refdef.vrect.width), 179.0f);
+		else if (fy <= 0)
+			fy = CLAMP(1.0f, CalcFovy(fx, r_refdef.vrect.width, r_refdef.vrect.height), 179.0f);
+		r_refdef.fov_x = fx;
+		r_refdef.fov_y = fy;
 	}
 	else
 	{
