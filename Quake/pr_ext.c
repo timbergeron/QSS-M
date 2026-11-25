@@ -29,16 +29,6 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 #include "q_hash.h"
 #include "platform.h"
 #include "net_curl.h" // woods #uri
-#include <errno.h>
-#ifdef _WIN32
-#include <windows.h>
-#include <io.h>
-#include <fcntl.h>
-#else
-#include <fcntl.h>
-#include <sys/stat.h>
-#include <unistd.h>
-#endif
 
 static float g_menu_vm_scale_override = 0.0f; // woods #spinnymodel
 static float PR_GetVMScale(void)
@@ -4130,79 +4120,8 @@ static void PF_cl_localsound(void)
 
 //file stuff
 
-//returns false if the file is denied.
-//fallbackread can be NULL, if the qc is not allowed to read that (original) file at all.
-/* woods #remotecmd -- the directory and extension checks below compare the
- * spelling QC supplied, so only accept spellings that name one file. Reject
- * empty, "." and ".." components ("./configs/x" would dodge the configs/ ban),
- * components ending in '.' or ' ' (Windows drops those when opening, so
- * "config.cfg." opens config.cfg), and '~' (Windows 8.3 short names such as
- * CONFIG~1 alias configs). */
-static qboolean QC_PathIsCanonical(const char *name)
-{
-	const char *c = name, *end;
-
-	for (;;)
-	{
-		end = strchr(c, '/');
-		if (!end)
-			end = c + strlen(c);
-		if (end == c ||
-			(end - c == 1 && c[0] == '.') ||
-			(end - c == 2 && c[0] == '.' && c[1] == '.') ||
-			end[-1] == '.' || end[-1] == ' ')
-			return false;
-		if (!*end)
-			break;
-		c = end + 1;
-	}
-	return !strchr(name, '~');
-}
-
-static qboolean QC_FixFileName(const char *name, const char **result, const char **fallbackread)
-{
-	if (!*name ||	//blank names are bad
-		!QC_PathIsCanonical(name) ||	// woods #remotecmd
-		strchr(name, ':') ||	//dos/win absolute path, ntfs ADS, amiga drives. reject them all.
-		strchr(name, '\\') ||	//windows-only paths.
-		*name == '/' ||	//absolute path was given - reject
-		strstr(name, ".."))	//someone tried to be clever.
-	{
-		return false;
-	}
-
-	*fallbackread = name;
-	//if its a user config, ban any fallback locations so that csqc can't read passwords or whatever.
-	// woods #remotecmd -- QSS-M keeps the user's config.cfg and autoexec.cfg in
-	// configs/, which the upstream rule exempted. Client gamecode (CSQC, menu)
-	// can come from a remote server, so ban everything there for it, and any
-	// other .cfg outside the content directories mods legitimately ship.
-	// Server gamecode is installed by the server admin and reads its own
-	// configs/ (levels, warp lists, map settings), so it keeps the upstream
-	// exemption; only the user's own config files stay off limits to it.
-	if (!q_strcasecmp(name, "configs/config.cfg") || !q_strcasecmp(name, "configs/autoexec.cfg"))
-		*fallbackread = NULL;
-	else if (qcvm == &sv.qcvm)
-	{
-		if ((!strchr(name, '/') || q_strncasecmp(name, "configs/", 8))
-			&& !q_strcasecmp(COM_FileGetExtension(name), "cfg")
-			&& q_strncasecmp(name, "particles/", 10) && q_strncasecmp(name, "huds/", 5) && q_strncasecmp(name, "models/", 7))
-			*fallbackread = NULL;
-	}
-	else if (!q_strncasecmp(name, "configs/", 8) ||
-		(!q_strcasecmp(COM_FileGetExtension(name), "cfg")
-		&& q_strncasecmp(name, "particles/", 10) && q_strncasecmp(name, "huds/", 5) && q_strncasecmp(name, "models/", 7)))
-		*fallbackread = NULL;
-	*result = va("data/%s", name);
-	return true;
-}
-
-//small note on access modes:
-//when reading, we fopen files inside paks, for compat with (crappy non-zip-compatible) filesystem code
-//when writing, we directly fopen the file such that it can never be inside a pak.
-//this means that we need to take care when reading in order to detect EOF properly.
-//writing doesn't need anything like that, so it can just dump stuff out, but we do need to ensure that the modes don't get mixed up, because trying to read from a writable file will not do what you would expect.
-//even libc mandates a seek between reading+writing, so no great loss there.
+// The filesystem opens a bounded game file. Stored PAK entries start at
+// their offset within the archive, while inflated PK3 entries start at zero.
 static struct qcfile_s
 {
 	qcvm_t *owningvm;
@@ -4216,190 +4135,32 @@ static struct qcfile_s
 } *qcfiles;
 static size_t qcfiles_max;
 #define QC_FILE_BASE 1
-static int QC_OpenReadAt(const searchpath_t *source, const char *cand, FILE **out_file, size_t *out_size);
-
-// Return -1 on rejection, 0 on missing file, and 1 on success. A rejected
-// data/ candidate must not fall through to a second location.
-static int QC_OpenRead(const char *name, FILE **file, size_t *size)
-{
-	const char *prefixed, *fallback;
-	int status;
-	*file = NULL;
-	*size = 0;
-	if (strlen(name) >= MAX_QPATH || !QC_FixFileName(name, &prefixed, &fallback))
-		return -1;
-	status = QC_OpenReadAt(COM_FileSearchPath(prefixed), prefixed, file, size);
-	if (!status && fallback)
-		status = QC_OpenReadAt(COM_FileSearchPath(fallback), fallback, file, size);
-	return status;
-}
-
 static void PF_fexists(void)
 {
-	const char *name = G_STRING(OFS_PARM0), *prefixed, *fallback;
-	searchpath_t writable = {0};
-	FILE *file;
-	size_t size;
-
-	G_FLOAT(OFS_RETURN) = false;
-	if (!com_gamedir[0] || strlen(name) >= MAX_QPATH ||
-		!QC_FixFileName(name, &prefixed, &fallback) ||
-		(!fallback && q_strncasecmp(name, "data/", 5)))
-		return;
-	q_strlcpy(writable.filename, com_gamedir, sizeof(writable.filename));
-	if (QC_OpenReadAt(&writable, name, &file, &size) > 0)
-	{
-		fclose(file);
-		G_FLOAT(OFS_RETURN) = true;
-	}
+	G_FLOAT(OFS_RETURN) = COM_QCLooseFileExists(G_STRING(OFS_PARM0), qcvm == &sv.qcvm);
 }
 
 #ifndef _WIN32
-static int QC_OpenDataParent(const char *name, qboolean create, char *path, const char **leaf)
-{
-	const char *prefixed, *fallback;
-	char *segment, *slash;
-	int dir, next;
-
-	if (!com_gamedir[0] || strlen(name) >= MAX_QPATH ||
-		!QC_FixFileName(name, &prefixed, &fallback))
-		return -1;
-	q_strlcpy(path, prefixed, MAX_QPATH + 5);
-	dir = open(com_gamedir, O_RDONLY | O_DIRECTORY | O_CLOEXEC);
-	if (dir < 0)
-		return -1;
-
-	for (segment = path; (slash = strchr(segment, '/')) != NULL; segment = slash + 1)
-	{
-		*slash = 0;
-		if (create && mkdirat(dir, segment, 0755) && errno != EEXIST)
-		{
-			close(dir);
-			return -1;
-		}
-		next = openat(dir, segment, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
-		close(dir);
-		if (next < 0)
-			return -1;
-		dir = next;
-	}
-	*leaf = segment;
-	return dir;
-}
-
-static qboolean QC_IsRegularFile(int dir, const char *name)
-{
-	struct stat st;
-	return fstatat(dir, name, &st, AT_SYMLINK_NOFOLLOW) == 0 && S_ISREG(st.st_mode);
-}
-
 static void PF_fremove(void)
 {
-	char path[MAX_QPATH + 5];
-	const char *leaf;
-	int dir = QC_OpenDataParent(G_STRING(OFS_PARM0), false, path, &leaf);
-
-	G_FLOAT(OFS_RETURN) = -1;
-	if (dir >= 0)
-	{
-		G_FLOAT(OFS_RETURN) = QC_IsRegularFile(dir, leaf) && unlinkat(dir, leaf, 0) == 0 ? 0 : -5;
-		close(dir);
-	}
+	G_FLOAT(OFS_RETURN) = COM_QCRemoveFile(G_STRING(OFS_PARM0));
 }
 
 static void PF_frename(void)
 {
-	char srcpath[MAX_QPATH + 5], dstpath[MAX_QPATH + 5];
-	const char *srcname, *dstname;
-	int src, dst;
-
-	G_FLOAT(OFS_RETURN) = -1;
-	src = QC_OpenDataParent(G_STRING(OFS_PARM0), false, srcpath, &srcname);
-	if (src < 0)
-		return;
-	dst = QC_OpenDataParent(G_STRING(OFS_PARM1), false, dstpath, &dstname);
-	if (dst >= 0)
-	{
-		G_FLOAT(OFS_RETURN) = QC_IsRegularFile(src, srcname) &&
-			renameat(src, srcname, dst, dstname) == 0 ? 0 : -5;
-		close(dst);
-	}
-	close(src);
+	G_FLOAT(OFS_RETURN) = COM_QCRenameFile(G_STRING(OFS_PARM0), G_STRING(OFS_PARM1));
 }
 
 static void PF_fcopy(void)
 {
-	char path[MAX_QPATH + 5], tmp[64], buffer[16384];
-	const char *dstname;
-	static unsigned int sequence;
-	FILE *input, *output;
-	int dir, fd = -1, attempts;
-	size_t size;
-	qboolean copied = true;
-
-	G_FLOAT(OFS_RETURN) = -1;
-	if (QC_OpenRead(G_STRING(OFS_PARM0), &input, &size) <= 0)
-		return;
-	dir = QC_OpenDataParent(G_STRING(OFS_PARM1), true, path, &dstname);
-	if (dir < 0)
-	{
-		fclose(input);
-		G_FLOAT(OFS_RETURN) = -2;
-		return;
-	}
-
-	// Publish only a complete copy and leave any old destination on a write failure.
-	for (attempts = 0; attempts < 16; attempts++)
-	{
-		q_snprintf(tmp, sizeof(tmp), ".qccopy-%ld-%u", (long)getpid(), sequence++);
-		fd = openat(dir, tmp, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0600);
-		if (fd >= 0 || errno != EEXIST)
-			break;
-	}
-	if (fd < 0)
-	{
-		G_FLOAT(OFS_RETURN) = -2;
-		goto done;
-	}
-
-	output = fdopen(fd, "wb");
-	if (!output)
-	{
-		close(fd);
-		copied = false;
-	}
-	else
-	{
-		while (size > 0)
-		{
-			size_t chunk = q_min(size, sizeof(buffer));
-			if (fread(buffer, 1, chunk, input) != chunk || fwrite(buffer, 1, chunk, output) != chunk)
-			{
-				copied = false;
-				break;
-			}
-			size -= chunk;
-		}
-		if (fclose(output))
-			copied = false;
-	}
-	if (copied && renameat(dir, tmp, dir, dstname) == 0)
-		G_FLOAT(OFS_RETURN) = 0;
-	else
-	{
-		unlinkat(dir, tmp, 0);
-		G_FLOAT(OFS_RETURN) = -3;
-	}
-done:
-	close(dir);
-	fclose(input);
+	G_FLOAT(OFS_RETURN) = COM_QCCopyFile(G_STRING(OFS_PARM0), G_STRING(OFS_PARM1), qcvm == &sv.qcvm);
 }
 #endif
 
 static float QC_RegisterFile(FILE *file, int fmode, int filesize)
 {
 	size_t i;
-	long base = ftell(file);
+	long base = fmode ? 0 : ftell(file);
 	if (base < 0 || base > INT_MAX)
 	{
 		fclose(file);
@@ -4416,7 +4177,7 @@ static float QC_RegisterFile(FILE *file, int fmode, int filesize)
 		if (!qcfiles[i].file)
 			break;
 	}
-	qcfiles[i].filebase = base;
+	qcfiles[i].filebase = (int)base;
 	qcfiles[i].owningvm = qcvm;
 	qcfiles[i].file = file;
 	qcfiles[i].mode = fmode;
@@ -4430,61 +4191,32 @@ static float QC_RegisterFile(FILE *file, int fmode, int filesize)
 
 static void PF_fopen(void)
 {
-	const char *fname = G_STRING(OFS_PARM0);
-	int fmode = G_FLOAT(OFS_PARM1);
-	const char *fallback;
+	const char *name = G_STRING(OFS_PARM0);
+	int mode = G_FLOAT(OFS_PARM1);
 	FILE *file;
-	char name[MAX_OSPATH], *sl;
-	int filesize = 0;
+	size_t size = 0;
 
-	G_FLOAT(OFS_RETURN) = -1;	//assume failure
-
-	if (!QC_FixFileName(fname, &fname, &fallback))
+	G_FLOAT(OFS_RETURN) = -1;
+	switch (mode)
 	{
-		Con_Printf("qcfopen: Access denied: %s\n", fname);
-		return;
-	}
-	//if we were told to use 'foo.txt'
-	//fname is now 'data/foo.txt'
-	//fallback is now 'foo.txt', and must ONLY be read.
-
-	switch(fmode)
-	{
-	case 0: //read
-		filesize = COM_FOpenFile (fname, &file, NULL);
-		if (!file && fallback)
-			filesize = COM_FOpenFile (fallback, &file, NULL);
+	case 0: // read
+		if (COM_QCOpenRead(name, qcvm == &sv.qcvm, &file, &size) <= 0)
+			return;
 		break;
-	case 1:	//append
-		q_snprintf (name, sizeof(name), "%s/%s", com_gamedir, fname);
-		Sys_mkdir (name);
-		file = fopen(name, "w+b");
-		if (file)
-			fseek(file, 0, SEEK_END);
-		break;
-	case 2: //write
-		q_snprintf (name, sizeof(name), "%s/%s", com_gamedir, fname);
-		sl = name+1;
-		while (*sl)
-		{
-			if (*sl == '/')
-			{
-				*sl = 0;
-				Sys_mkdir (name);	//make sure each part of the path exists.
-				*sl = '/';
-			}
-			sl++;
-		}
-		file = fopen(name, "wb");
+	case 1: // append
+	case 2: // write
+		file = COM_QCOpenWrite(name, mode == 1);
+		if (!file)
+			return;
 		break;
 	default:
-		Con_Warning("PF_fopen: unsupported mode: %i\n", fmode);
+		Con_Warning("PF_fopen: unsupported mode: %i\n", mode);
 		return;
 	}
-	if (!file)
-		return;
-
-	G_FLOAT(OFS_RETURN) = QC_RegisterFile(file, fmode, filesize);
+	if (size > INT_MAX)
+		fclose(file);
+	else
+		G_FLOAT(OFS_RETURN) = QC_RegisterFile(file, mode, (int)size);
 }
 static void PF_fgets(void)
 {
@@ -4730,7 +4462,7 @@ static void PF_search_begin(void)
 		if (!searches[i].owner)
 		{
 			searches[i].flags = flags;
-			COM_ListAllFiles(&searches[i], pattern, PR_Search_AddFile, flags, pkgfilter);
+			COM_QCListFiles(&searches[i], pattern, PR_Search_AddFile, flags, pkgfilter, qcvm == &sv.qcvm);
 			if (!searches[i].numfiles)
 				break;
 			searches[i].owner = qcvm;
@@ -4755,9 +4487,7 @@ static void PF_search_fopen(void)
 {
 	float handle = G_FLOAT(OFS_PARM0), index = G_FLOAT(OFS_PARM1);
 	struct filesearch_s *search;
-	const char *name, *prefixed, *fallback;
-	searchpath_t *sp;
-	size_t size;
+	size_t entry, size;
 	FILE *file;
 
 	G_FLOAT(OFS_RETURN) = -1;
@@ -4766,18 +4496,14 @@ static void PF_search_fopen(void)
 	search = &searches[(size_t)handle];
 	if (search->owner != qcvm || !(index >= 0 && index < search->numfiles))
 		return;
-	name = search->file[(size_t)index].name;
-	if (!QC_FixFileName(name, &prefixed, &fallback) || !fallback)
-		return;
-	for (sp = com_searchpaths; sp; sp = sp->next)
-		if (sp == search->file[(size_t)index].spath)
-			break;
-	if (QC_OpenReadAt(sp, name, &file, &size) <= 0)
+	entry = (size_t)index;
+	if (COM_QCOpenSearchFile(search->file[entry].spath, search->file[entry].name,
+		qcvm == &sv.qcvm, &file, &size) <= 0)
 		return;
 	if (size > INT_MAX)
 		fclose(file);
 	else
-		G_FLOAT(OFS_RETURN) = QC_RegisterFile(file, 0, size);
+		G_FLOAT(OFS_RETURN) = QC_RegisterFile(file, 0, (int)size);
 }
 static void PF_search_getsize(void)
 {
@@ -4862,30 +4588,8 @@ static void PF_search_getpackagename(void)
 
 static void PF_whichpack(void)
 {
-	const char *fname = G_STRING(OFS_PARM0);	//uses native paths, as this isn't actually reading anything.
-	unsigned int path_id;
-	if (COM_FileExists(fname, &path_id))
-	{
-		//FIXME: quakespasm reports which gamedir the file is in, but paks are hidden.
-		//I'm too lazy to rewrite COM_FindFile, so I'm just going to hack something small to get the gamedir, just not the paks
-
-		searchpath_t *path;
-		for (path = com_searchpaths; path; path = path->next)
-			if (!path->pack && path->path_id == path_id)
-				break;	//okay, this one looks like one we can report
-
-		//sandbox it by stripping the basedir
-		fname = path->filename;
-		if (!strncmp(fname, com_basedir, strlen(com_basedir)))
-			fname += strlen(com_basedir);
-		else
-			fname = "?";	//no idea where this came from. something is screwing with us.
-		while (*fname == '/' || *fname == '\\')
-			fname++;	//small cleanup, just in case
-		G_INT(OFS_RETURN) = PR_SetEngineString(fname);
-	}
-	else
-		G_INT(OFS_RETURN) = 0;
+	const char *gamedir = COM_QCFileGameDir(G_STRING(OFS_PARM0), qcvm == &sv.qcvm);
+	G_INT(OFS_RETURN) = gamedir ? PR_MakeTempString(gamedir) : 0;
 }
 
 //string buffers
@@ -5371,7 +5075,6 @@ static void PF_buf_loadfile(void)
 	const char *fname = G_STRING(OFS_PARM0);
 	size_t bufno = G_FLOAT(OFS_PARM1)-BUFSTRBASE;
 	char *buffer, *line, *nl;
-	const char *fallback;
 
 	G_FLOAT(OFS_RETURN) = 0;
 
@@ -5380,14 +5083,7 @@ static void PF_buf_loadfile(void)
 	if (!strbuflist[bufno].owningvm)
 		return;
 
-	if (!QC_FixFileName(fname, &fname, &fallback))
-	{
-		Con_Printf("qcfopen: Access denied: %s\n", fname);
-		return;
-	}
-	buffer = (char*)COM_LoadMallocFile(fname, NULL);
-	if (!buffer && fallback)
-		buffer = (char*)COM_LoadMallocFile(fallback, NULL);
+	buffer = COM_QCLoadFile(fname, qcvm == &sv.qcvm, INT_MAX - 1);
 	if (!buffer)
 		return;
 
@@ -5749,22 +5445,9 @@ static void PF_loadfromdata(void)
 
 static void PF_loadfromfile(void)
 {
-	FILE *file;
-	char *data;
-	size_t size;
-	G_FLOAT(OFS_RETURN) = -1;
-	if (QC_OpenRead(G_STRING(OFS_PARM0), &file, &size) <= 0)
-		return;
-	if (size <= 1024 * 1024 && (data = malloc(size + 1)) != NULL)
-	{
-		if (fread(data, 1, size, file) == size)
-		{
-			data[size] = 0;
-			G_FLOAT(OFS_RETURN) = PR_LoadClientEntities(data) ? 0 : -1;
-		}
-		free(data);
-	}
-	fclose(file);
+	char *data = COM_QCLoadFile(G_STRING(OFS_PARM0), qcvm == &sv.qcvm, 1024 * 1024);
+	G_FLOAT(OFS_RETURN) = data && PR_LoadClientEntities(data) ? 0 : -1;
+	free(data);
 }
 
 static void PF_cs_entityprotection(void)
@@ -9199,179 +8882,6 @@ void URI_Frame(void) {
     }
 }
 
-static qboolean URI_PathWithinRoot(const char *root, const char *path,
-    char sep, const char **rel_out)
-{
-    size_t root_len = strlen(root);
-    while (root_len > 1 && root[root_len - 1] == sep)
-        root_len--;
-    if (strncmp(path, root, root_len))
-        return false;
-    if (root[root_len - 1] == sep)
-        *rel_out = path + root_len;
-    else if (path[root_len] == sep)
-        *rel_out = path + root_len + 1;
-    else
-        return false;
-    return **rel_out != '\0';
-}
-
-static qboolean URI_AllowResolvedPath(const char *candidate, const char *relative)
-{
-    const char *prefixed, *fallback;
-
-    if (!QC_FixFileName(relative, &prefixed, &fallback))
-        return false;
-    if (!q_strncasecmp(relative, "data/", 5))
-        return true;
-    return q_strncasecmp(candidate, "data/", 5) && fallback;
-}
-
-#ifndef _WIN32
-/* Open the validated relative path from the game directory descriptor.
-   Reject symlinks introduced after resolution, including in parent directories. */
-static int URI_OpenResolvedPath(int dirfd, char *relative)
-{
-    char *sep;
-    int fd;
-
-    while ((sep = strchr(relative, '/')) != NULL) {
-        *sep = 0;
-        fd = openat(dirfd, relative, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
-        close(dirfd);
-        if (fd < 0)
-            return -1;
-        dirfd = fd;
-        relative = sep + 1;
-    }
-    fd = openat(dirfd, relative, O_RDONLY | O_NOFOLLOW | O_CLOEXEC | O_NONBLOCK);
-    close(dirfd);
-    return fd;
-}
-#endif
-
-/* Open a QC payload from its game mount. Return 0 only for a missing
-   candidate so a rejected path never triggers a fallback read. */
-static int QC_OpenReadAt(const searchpath_t *source, const char *cand, FILE **out_file, size_t *out_size)
-{
-    char netpath[MAX_OSPATH];
-    char rel_norm[MAX_OSPATH];
-    FILE *f = NULL;
-
-    *out_file = NULL;
-    *out_size = 0;
-
-    if (!source)
-        return 0;
-
-    if (source->pack) {
-        int filesize;
-        f = COM_OpenPackEntry(source->pack, cand, &filesize);
-        if (!f)
-            return -1;
-        *out_file = f;
-        *out_size = (size_t)filesize;
-        return 1;
-    }
-
-    if (!registered.value && (strchr(cand, '/') || !q_strcasecmp(COM_FileGetExtension(cand), "dat")))
-        return -1;
-    if ((size_t)q_snprintf(netpath, sizeof(netpath), "%s/%s", source->filename, cand) >= sizeof(netpath))
-        return -1;
-
-#ifdef _WIN32
-    {
-        char real_root[MAX_OSPATH * 4];
-        char real_file[MAX_OSPATH * 4];
-        const char *rel_tail = NULL;
-        HANDLE hroot, hfile;
-        DWORD rlen, flen_path;
-        LARGE_INTEGER fsize;
-        int fd;
-        char *p;
-
-        hroot = CreateFileA(source->filename, 0, FILE_SHARE_READ | FILE_SHARE_WRITE,
-            NULL, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, NULL);
-        if (hroot == INVALID_HANDLE_VALUE)
-            return -1;
-
-        hfile = CreateFileA(netpath, GENERIC_READ, FILE_SHARE_READ,
-            NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
-        rlen = GetFinalPathNameByHandleA(hroot, real_root, (DWORD)sizeof(real_root), FILE_NAME_NORMALIZED);
-        CloseHandle(hroot);
-        if (hfile == INVALID_HANDLE_VALUE)
-            return -1;
-        if (rlen == 0 || rlen >= sizeof(real_root) || GetFileType(hfile) != FILE_TYPE_DISK) {
-            CloseHandle(hfile);
-            return -1;
-        }
-        flen_path = GetFinalPathNameByHandleA(hfile, real_file, (DWORD)sizeof(real_file), FILE_NAME_NORMALIZED);
-        if (flen_path == 0 || flen_path >= sizeof(real_file) ||
-            !URI_PathWithinRoot(real_root, real_file, '\\', &rel_tail) ||
-            q_strlcpy(rel_norm, rel_tail, sizeof(rel_norm)) >= sizeof(rel_norm)) {
-            CloseHandle(hfile);
-            return -1;
-        }
-        for (p = rel_norm; *p; p++)
-            if (*p == '\\')
-                *p = '/';
-        if (!URI_AllowResolvedPath(cand, rel_norm)) {
-            CloseHandle(hfile);
-            return -1;
-        }
-        if (!GetFileSizeEx(hfile, &fsize) || fsize.QuadPart < 0) {
-            CloseHandle(hfile);
-            return -1;
-        }
-        fd = _open_osfhandle((intptr_t)hfile, _O_RDONLY | _O_BINARY);
-        if (fd < 0) {
-            CloseHandle(hfile);
-            return -1;
-        }
-        f = _fdopen(fd, "rb");
-        if (!f) {
-            _close(fd);
-            return -1;
-        }
-        *out_file = f;
-        *out_size = (size_t)q_min((uint64_t)fsize.QuadPart, (uint64_t)SIZE_MAX);
-        return 1;
-    }
-#else
-    {
-        char real_root[PATH_MAX];
-        char real_file[PATH_MAX];
-        const char *rel_tail = NULL;
-        struct stat st;
-        int dirfd, fd;
-
-        if (!realpath(source->filename, real_root) || !realpath(netpath, real_file) ||
-            !URI_PathWithinRoot(real_root, real_file, '/', &rel_tail) ||
-            q_strlcpy(rel_norm, rel_tail, sizeof(rel_norm)) >= sizeof(rel_norm) ||
-            !URI_AllowResolvedPath(cand, rel_norm))
-            return -1;
-        dirfd = open(real_root, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
-        if (dirfd < 0)
-            return -1;
-        fd = URI_OpenResolvedPath(dirfd, rel_norm);
-        if (fd < 0)
-            return -1;
-        if (fstat(fd, &st) != 0 || !S_ISREG(st.st_mode) || st.st_size < 0) {
-            close(fd);
-            return -1;
-        }
-        f = fdopen(fd, "rb");
-        if (!f) {
-            close(fd);
-            return -1;
-        }
-        *out_file = f;
-        *out_size = (size_t)q_min((uint64_t)st.st_size, (uint64_t)SIZE_MAX);
-        return 1;
-    }
-#endif
-}
-
 static void PF_uri_get(void) {
     const char *url      = G_STRING(OFS_PARM0);
     float id             = G_FLOAT(OFS_PARM1);
@@ -9416,28 +8926,10 @@ static void PF_uri_get(void) {
         if (postdata[0] == '@') {
             /* File payload mode: read a game file beyond the QC string limit.
                Apply the QC file policy to both the requested and resolved paths. */
-            const char *rel = postdata + 1; /* after '@' */
-            const char *fname = NULL;
-            const char *fallback = NULL;
-            char resolved[MAX_OSPATH];
-            FILE *f = NULL;
-            size_t flen = 0;
-            int open_rc;
-
-            if (!QC_FixFileName(rel, &fname, &fallback)) {
-                SDL_LockMutex(uri_pending_mtx);
-                active_uri_requests--;
-                SDL_UnlockMutex(uri_pending_mtx);
-                free(req);
-                Con_Printf("PF_uri_get: Access denied for payload file \"%s\"\n", rel);
-                return;
-            }
-            q_strlcpy(resolved, fname, sizeof(resolved));
-            open_rc = QC_OpenReadAt(COM_FileSearchPath(resolved), resolved, &f, &flen);
-            if (open_rc == 0 && fallback) {
-                q_strlcpy(resolved, fallback, sizeof(resolved));
-                open_rc = QC_OpenReadAt(COM_FileSearchPath(resolved), resolved, &f, &flen);
-            }
+            const char *rel = postdata + 1;
+            FILE *f;
+            size_t flen;
+            int open_rc = COM_QCOpenRead(rel, qcvm == &sv.qcvm, &f, &flen);
 
             if (open_rc <= 0 || !f) {
                 if (f) fclose(f);
@@ -9470,7 +8962,7 @@ static void PF_uri_get(void) {
             req->postlen = rd;
             req->postdata[rd] = 0;
             Con_DPrintf("PF_uri_post(file:%s,%g) bytes=%d\n",
-                        resolved, req->id, (int)rd);
+                        rel, req->id, (int)rd);
         } else {
             /* Normal string payload from QC */
             size_t len = strlen(postdata);
@@ -13209,10 +12701,11 @@ void PR_DumpPlatform_f(void)
 
 	if (strstr(outname, ".."))
 		return;
-	q_snprintf (name, sizeof(name), "%s/src/%s", com_gamedir, outname);
+	if ((size_t)q_snprintf (name, sizeof(name), "src/%s", outname) >= sizeof(name))
+		return;
 	COM_AddExtension (name, ".qc", sizeof(name));
 
-	f = fopen (name, "w");
+	f = COM_OpenGameWrite(name, false);
 	if (!f)
 	{
 		Con_Printf("%s: Couldn't write %s\n", Cmd_Argv(0), name);

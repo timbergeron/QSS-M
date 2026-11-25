@@ -28,11 +28,13 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 #include "bgmusic.h"
 #include "json.h"
 #include <errno.h>
+#include <fcntl.h>
 #include <limits.h>
 #include <sys/stat.h>
 
 #if defined(_WIN32)
 	#include <windows.h>
+	#include <io.h>
 #else
 	#include <dirent.h>
 	#include <unistd.h>
@@ -3184,7 +3186,7 @@ static int COM_FindPackFileIndex (pack_t *pak, const char *filename)
 
 // Open the exact archive selected by an enumeration, including an inflated
 // standalone stream for compressed entries.
-FILE *COM_OpenPackEntry(pack_t *pack, const char *name, int *size)
+static FILE *COM_OpenPackEntry(pack_t *pack, const char *name, int *size)
 {
 	int i = COM_FindPackFileIndex(pack, name);
 	const packfile_t *entry;
@@ -3531,6 +3533,633 @@ const searchpath_t *COM_FileSearchPath (const char *filename)
 	COM_FindFile(filename, NULL, NULL, NULL, &source);
 	return source;
 }
+
+/* woods #remotecmd -- the directory and extension checks below compare the
+ * spelling QC supplied, so only accept spellings that name one file. Reject
+ * empty, "." and ".." components ("./configs/x" would dodge the configs/ ban),
+ * components ending in '.' or ' ' (Windows drops those when opening, so
+ * "config.cfg." opens config.cfg), and '~' (Windows 8.3 short names such as
+ * CONFIG~1 alias configs). */
+static qboolean COM_GamePathIsCanonical(const char *name)
+{
+	const char *c = name, *end;
+
+	if (strpbrk(name, ":*?\"<>|\\~") || strstr(name, ".."))
+		return false;
+	for (;;)
+	{
+		end = strchr(c, '/');
+		if (!end)
+			end = c + strlen(c);
+		if (end == c || end[-1] == '.' || end[-1] == ' ')
+			return false;
+		if (!*end)
+			break;
+		c = end + 1;
+	}
+	return true;
+}
+
+// A valid name always has a data/ candidate. Fallback may still be denied.
+static qboolean COM_QCFileName(const char *name, qboolean server, char *data, qboolean *fallback)
+{
+	if (strlen(name) >= MAX_OSPATH - 5 || !COM_GamePathIsCanonical(name))
+		return false;
+
+	*fallback = true;
+	//if its a user config, ban any fallback locations so that csqc can't read passwords or whatever.
+	// woods #remotecmd -- QSS-M keeps the user's config.cfg and autoexec.cfg in
+	// configs/, which the upstream rule exempted. Client gamecode (CSQC, menu)
+	// can come from a remote server, so ban everything there for it, and any
+	// other .cfg outside the content directories mods legitimately ship.
+	// Server gamecode is installed by the server admin and reads its own
+	// configs/ (levels, warp lists, map settings), so it keeps the upstream
+	// exemption; only the user's own config files stay off limits to it.
+	if (!q_strcasecmp(name, "configs/config.cfg") || !q_strcasecmp(name, "configs/autoexec.cfg"))
+		*fallback = false;
+	else if (server)
+	{
+		if ((!strchr(name, '/') || q_strncasecmp(name, "configs/", 8))
+			&& !q_strcasecmp(COM_FileGetExtension(name), "cfg")
+			&& q_strncasecmp(name, "particles/", 10) && q_strncasecmp(name, "huds/", 5) && q_strncasecmp(name, "models/", 7))
+			*fallback = false;
+	}
+	else if (!q_strncasecmp(name, "configs/", 8) ||
+		(!q_strcasecmp(COM_FileGetExtension(name), "cfg")
+		&& q_strncasecmp(name, "particles/", 10) && q_strncasecmp(name, "huds/", 5) && q_strncasecmp(name, "models/", 7)))
+		*fallback = false;
+	if (data)
+		q_snprintf(data, MAX_OSPATH, "data/%s", name);
+	return true;
+}
+
+static qboolean COM_PathWithinRoot(const char *root, const char *path,
+	char sep, const char **rel_out)
+{
+	size_t root_len = strlen(root);
+	while (root_len > 1 && root[root_len - 1] == sep)
+		root_len--;
+	if (!root_len || strncmp(path, root, root_len))
+		return false;
+	if (root[root_len - 1] == sep)
+		*rel_out = path + root_len;
+	else if (path[root_len] == sep)
+		*rel_out = path + root_len + 1;
+	else
+		return false;
+	return **rel_out != '\0';
+}
+
+static qboolean COM_QCAllowResolvedPath(const char *candidate, const char *relative, qboolean server)
+{
+	qboolean fallback;
+
+	if (!COM_QCFileName(relative, server, NULL, &fallback))
+		return false;
+	if (!q_strncasecmp(relative, "data/", 5))
+		return true;
+	return q_strncasecmp(candidate, "data/", 5) && fallback;
+}
+
+#ifndef _WIN32
+/* Open the validated relative path from the game directory descriptor.
+   Reject symlinks introduced after resolution, including in parent directories. */
+static int COM_OpenResolvedPath(int dirfd, char *relative)
+{
+	char *sep;
+	int fd;
+
+	while ((sep = strchr(relative, '/')) != NULL) {
+		*sep = 0;
+		fd = openat(dirfd, relative, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
+		close(dirfd);
+		if (fd < 0)
+			return -1;
+		dirfd = fd;
+		relative = sep + 1;
+	}
+	fd = openat(dirfd, relative, O_RDONLY | O_NOFOLLOW | O_CLOEXEC | O_NONBLOCK);
+	close(dirfd);
+	return fd;
+}
+#endif
+
+/* Open a QC file from its game mount. Return 0 only for a missing
+   candidate so a rejected path never triggers a fallback read. */
+static int COM_QCOpenReadAt(const searchpath_t *source, const char *cand, qboolean server, FILE **out_file, size_t *out_size)
+{
+	char netpath[MAX_OSPATH];
+	char rel_norm[MAX_OSPATH];
+	FILE *f = NULL;
+
+	*out_file = NULL;
+	*out_size = 0;
+
+	if (!source)
+		return 0;
+
+	if (source->pack) {
+		int filesize;
+		f = COM_OpenPackEntry(source->pack, cand, &filesize);
+		if (!f)
+			return -1;
+		*out_file = f;
+		*out_size = (size_t)filesize;
+		return 1;
+	}
+
+	if (!registered.value && (strchr(cand, '/') || !q_strcasecmp(COM_FileGetExtension(cand), "dat")))
+		return -1;
+	if ((size_t)q_snprintf(netpath, sizeof(netpath), "%s/%s", source->filename, cand) >= sizeof(netpath))
+		return -1;
+
+#ifdef _WIN32
+	{
+		char real_root[MAX_OSPATH * 4];
+		char real_file[MAX_OSPATH * 4];
+		const char *rel_tail = NULL;
+		HANDLE hroot, hfile;
+		DWORD rlen, flen_path;
+		LARGE_INTEGER fsize;
+		int fd;
+		char *p;
+
+		hroot = CreateFileA(source->filename, 0, FILE_SHARE_READ | FILE_SHARE_WRITE,
+			NULL, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, NULL);
+		if (hroot == INVALID_HANDLE_VALUE)
+			return -1;
+
+		hfile = CreateFileA(netpath, GENERIC_READ, FILE_SHARE_READ,
+			NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+		rlen = GetFinalPathNameByHandleA(hroot, real_root, (DWORD)sizeof(real_root), FILE_NAME_NORMALIZED);
+		CloseHandle(hroot);
+		if (hfile == INVALID_HANDLE_VALUE)
+			return -1;
+		if (rlen == 0 || rlen >= sizeof(real_root) || GetFileType(hfile) != FILE_TYPE_DISK) {
+			CloseHandle(hfile);
+			return -1;
+		}
+		flen_path = GetFinalPathNameByHandleA(hfile, real_file, (DWORD)sizeof(real_file), FILE_NAME_NORMALIZED);
+		if (flen_path == 0 || flen_path >= sizeof(real_file) ||
+			!COM_PathWithinRoot(real_root, real_file, '\\', &rel_tail) ||
+			q_strlcpy(rel_norm, rel_tail, sizeof(rel_norm)) >= sizeof(rel_norm)) {
+			CloseHandle(hfile);
+			return -1;
+		}
+		for (p = rel_norm; *p; p++)
+			if (*p == '\\')
+				*p = '/';
+		if (!COM_QCAllowResolvedPath(cand, rel_norm, server)) {
+			CloseHandle(hfile);
+			return -1;
+		}
+		if (!GetFileSizeEx(hfile, &fsize) || fsize.QuadPart < 0) {
+			CloseHandle(hfile);
+			return -1;
+		}
+		fd = _open_osfhandle((intptr_t)hfile, _O_RDONLY | _O_BINARY);
+		if (fd < 0) {
+			CloseHandle(hfile);
+			return -1;
+		}
+		f = _fdopen(fd, "rb");
+		if (!f) {
+			_close(fd);
+			return -1;
+		}
+		*out_file = f;
+		*out_size = (size_t)q_min((uint64_t)fsize.QuadPart, (uint64_t)SIZE_MAX);
+		return 1;
+	}
+#else
+	{
+		char real_root[PATH_MAX];
+		char real_file[PATH_MAX];
+		const char *rel_tail = NULL;
+		struct stat st;
+		int dirfd, fd;
+
+		if (!realpath(source->filename, real_root) || !realpath(netpath, real_file) ||
+			!COM_PathWithinRoot(real_root, real_file, '/', &rel_tail) ||
+			q_strlcpy(rel_norm, rel_tail, sizeof(rel_norm)) >= sizeof(rel_norm) ||
+			!COM_QCAllowResolvedPath(cand, rel_norm, server))
+			return -1;
+		dirfd = open(real_root, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
+		if (dirfd < 0)
+			return -1;
+		fd = COM_OpenResolvedPath(dirfd, rel_norm);
+		if (fd < 0)
+			return -1;
+		if (fstat(fd, &st) != 0 || !S_ISREG(st.st_mode) || st.st_size < 0) {
+			close(fd);
+			return -1;
+		}
+		f = fdopen(fd, "rb");
+		if (!f) {
+			close(fd);
+			return -1;
+		}
+		*out_file = f;
+		*out_size = (size_t)q_min((uint64_t)st.st_size, (uint64_t)SIZE_MAX);
+		return 1;
+	}
+#endif
+}
+
+// QC names are virtual paths. Read data/ first, then the permitted game path.
+int COM_QCOpenRead(const char *name, qboolean server, FILE **file, size_t *size)
+{
+	char data[MAX_OSPATH];
+	qboolean fallback;
+	int status;
+
+	*file = NULL;
+	*size = 0;
+	if (!COM_QCFileName(name, server, data, &fallback))
+		return -1;
+	status = COM_QCOpenReadAt(COM_FileSearchPath(data), data, server, file, size);
+	if (!status && fallback)
+		status = COM_QCOpenReadAt(COM_FileSearchPath(name), name, server, file, size);
+	return status;
+}
+
+int COM_QCOpenSearchFile(const searchpath_t *mount, const char *name, qboolean server, FILE **file, size_t *size)
+{
+	const searchpath_t *sp;
+	qboolean allowed;
+
+	*file = NULL;
+	*size = 0;
+	if (!COM_QCFileName(name, server, NULL, &allowed) || !allowed)
+		return -1;
+	for (sp = com_searchpaths; sp; sp = sp->next)
+		if (sp == mount)
+			return COM_QCOpenReadAt(sp, name, server, file, size);
+	return 0;
+}
+
+qboolean COM_QCLooseFileExists(const char *name, qboolean server)
+{
+	searchpath_t writable = {0};
+	qboolean allowed;
+	FILE *file;
+	size_t size;
+
+	if (!com_gamedir[0] || !COM_QCFileName(name, server, NULL, &allowed) ||
+		(!allowed && q_strncasecmp(name, "data/", 5)))
+		return false;
+	q_strlcpy(writable.filename, com_gamedir, sizeof(writable.filename));
+	if (COM_QCOpenReadAt(&writable, name, server, &file, &size) <= 0)
+		return false;
+	fclose(file);
+	return true;
+}
+
+const char *COM_QCFileGameDir(const char *name, qboolean server)
+{
+	const searchpath_t *sp;
+	qboolean allowed;
+	FILE *file;
+	size_t size;
+
+	if (!COM_QCFileName(name, server, NULL, &allowed) || !allowed)
+		return NULL;
+	sp = COM_FileSearchPath(name);
+	if (!sp)
+		return NULL;
+	if (!sp->pack)
+	{
+		if (COM_QCOpenReadAt(sp, name, server, &file, &size) <= 0)
+			return NULL;
+		fclose(file);
+	}
+	return sp->gamedir;
+}
+
+char *COM_QCLoadFile(const char *name, qboolean server, size_t limit)
+{
+	FILE *file;
+	char *buffer = NULL;
+	size_t size;
+
+	if (COM_QCOpenRead(name, server, &file, &size) <= 0)
+		return NULL;
+	if (size <= limit && size < SIZE_MAX && (buffer = malloc(size + 1)) != NULL)
+	{
+		if (fread(buffer, 1, size, file) == size)
+			buffer[size] = 0;
+		else
+		{
+			free(buffer);
+			buffer = NULL;
+		}
+	}
+	fclose(file);
+	return buffer;
+}
+
+#ifdef _WIN32
+// Hold every directory without FILE_SHARE_DELETE while building a path.
+// Opening reparse points themselves keeps junctions out of the writable tree.
+typedef struct
+{
+	HANDLE dirs[MAX_OSPATH / 2 + 1];
+	size_t count;
+} com_game_dirs_t;
+
+static void COM_CloseGameDirs(com_game_dirs_t *dirs)
+{
+	while (dirs->count)
+		CloseHandle(dirs->dirs[--dirs->count]);
+}
+
+static qboolean COM_WinFileHasType(HANDLE handle, qboolean directory)
+{
+	BY_HANDLE_FILE_INFORMATION info;
+	return GetFileType(handle) == FILE_TYPE_DISK && GetFileInformationByHandle(handle, &info) &&
+		!(info.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) &&
+		!!(info.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) == directory;
+}
+
+static qboolean COM_WinGamePath(const char *root, const char *name, qboolean create,
+	com_game_dirs_t *dirs, char *path, size_t capacity)
+{
+	const char *part = name;
+	HANDLE dir;
+	DWORD len;
+
+	dir = CreateFileA(root, 0, FILE_SHARE_READ | FILE_SHARE_WRITE,
+		NULL, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, NULL);
+	if (dir == INVALID_HANDLE_VALUE)
+		return false;
+	dirs->dirs[dirs->count++] = dir;
+	len = GetFinalPathNameByHandleA(dir, path, (DWORD)capacity, FILE_NAME_NORMALIZED);
+	if (!len || len >= capacity)
+		return false;
+
+	while (*part)
+	{
+		const char *slash = strchr(part, '/');
+		size_t count = slash ? (size_t)(slash - part) : strlen(part);
+		if (len + count + 2 > capacity)
+			return false;
+		if (path[len - 1] != '\\')
+			path[len++] = '\\';
+		memcpy(path + len, part, count);
+		len += count;
+		path[len] = 0;
+		if (!slash)
+			break;
+
+		dir = CreateFileA(path, FILE_READ_ATTRIBUTES, FILE_SHARE_READ | FILE_SHARE_WRITE,
+			NULL, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT, NULL);
+		if (dir == INVALID_HANDLE_VALUE && create && GetLastError() == ERROR_FILE_NOT_FOUND)
+		{
+			if (CreateDirectoryA(path, NULL))
+				COM_MarkLoadCacheStale();
+			else if (GetLastError() != ERROR_ALREADY_EXISTS)
+				return false;
+			dir = CreateFileA(path, FILE_READ_ATTRIBUTES, FILE_SHARE_READ | FILE_SHARE_WRITE,
+				NULL, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT, NULL);
+		}
+		if (dir == INVALID_HANDLE_VALUE)
+			return false;
+		dirs->dirs[dirs->count++] = dir;
+		if (!COM_WinFileHasType(dir, true))
+			return false;
+		part = slash + 1;
+	}
+	return true;
+}
+#else
+// Walk each parent from the mount descriptor. A symlink cannot redirect writes
+// or mutations, including through a parent created by another process.
+static int COM_OpenGameParent(const char *root, char *path, qboolean create, const char **leaf)
+{
+	char *segment, *slash;
+	int next, dir = open(root, O_RDONLY | O_DIRECTORY | O_CLOEXEC);
+
+	if (dir < 0)
+		return -1;
+	for (segment = path; (slash = strchr(segment, '/')) != NULL; segment = slash + 1)
+	{
+		*slash = 0;
+		if (create)
+		{
+			if (mkdirat(dir, segment, 0755) == 0)
+				COM_MarkLoadCacheStale();
+			else if (errno != EEXIST)
+			{
+				close(dir);
+				return -1;
+			}
+		}
+		next = openat(dir, segment, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
+		close(dir);
+		if (next < 0)
+			return -1;
+		dir = next;
+	}
+	*leaf = segment;
+	return dir;
+}
+#endif
+
+FILE *COM_OpenGameWrite(const char *name, qboolean append)
+{
+	FILE *file;
+	int fd;
+
+	if (!com_gamedir[0] || strlen(name) >= MAX_OSPATH || !COM_GamePathIsCanonical(name))
+		return NULL;
+
+#ifdef _WIN32
+	{
+		com_game_dirs_t dirs = {0};
+		char path[MAX_OSPATH * 4];
+		HANDLE handle = INVALID_HANDLE_VALUE;
+
+		if (COM_WinGamePath(com_gamedir, name, true, &dirs, path, sizeof(path)))
+			handle = CreateFileA(path, GENERIC_WRITE, FILE_SHARE_READ, NULL, OPEN_ALWAYS,
+				FILE_ATTRIBUTE_NORMAL | FILE_FLAG_OPEN_REPARSE_POINT, NULL);
+		COM_CloseGameDirs(&dirs);
+		if (handle == INVALID_HANDLE_VALUE)
+			return NULL;
+		if (!COM_WinFileHasType(handle, false) || (!append && !SetEndOfFile(handle)))
+		{
+			CloseHandle(handle);
+			return NULL;
+		}
+		fd = _open_osfhandle((intptr_t)handle, _O_WRONLY | _O_BINARY | (append ? _O_APPEND : 0));
+		if (fd < 0)
+		{
+			CloseHandle(handle);
+			return NULL;
+		}
+		file = _fdopen(fd, append ? "ab" : "wb");
+		if (!file)
+			_close(fd);
+	}
+#else
+	{
+		char path[MAX_OSPATH];
+		const char *leaf;
+		struct stat st;
+		int dir;
+
+		q_strlcpy(path, name, sizeof(path));
+		dir = COM_OpenGameParent(com_gamedir, path, true, &leaf);
+		if (dir < 0)
+			return NULL;
+		fd = openat(dir, leaf, O_WRONLY | O_CREAT | O_NOFOLLOW | O_CLOEXEC | O_NONBLOCK |
+			(append ? O_APPEND : 0), 0666);
+		close(dir);
+		if (fd < 0)
+			return NULL;
+		if (fstat(fd, &st) || !S_ISREG(st.st_mode) || (!append && ftruncate(fd, 0)))
+		{
+			close(fd);
+			return NULL;
+		}
+		file = fdopen(fd, append ? "ab" : "wb");
+		if (!file)
+			close(fd);
+	}
+#endif
+	if (file && append && fseek(file, 0, SEEK_END))
+	{
+		fclose(file);
+		return NULL;
+	}
+	return file;
+}
+
+FILE *COM_QCOpenWrite(const char *name, qboolean append)
+{
+	char path[MAX_OSPATH];
+	qboolean fallback;
+
+	if (!COM_QCFileName(name, false, path, &fallback))
+		return NULL;
+	return COM_OpenGameWrite(path, append);
+}
+
+#ifndef _WIN32
+static int COM_QCOpenDataParent(const char *name, qboolean create, char *path, const char **leaf)
+{
+	qboolean fallback;
+
+	if (!com_gamedir[0] || !COM_QCFileName(name, false, path, &fallback))
+		return -1;
+	return COM_OpenGameParent(com_gamedir, path, create, leaf);
+}
+
+static qboolean COM_IsRegularFile(int dir, const char *name)
+{
+	struct stat st;
+	return fstatat(dir, name, &st, AT_SYMLINK_NOFOLLOW) == 0 && S_ISREG(st.st_mode);
+}
+
+int COM_QCRemoveFile(const char *name)
+{
+	char path[MAX_OSPATH];
+	const char *leaf;
+	int result, dir = COM_QCOpenDataParent(name, false, path, &leaf);
+
+	if (dir < 0)
+		return -1;
+	result = COM_IsRegularFile(dir, leaf) && unlinkat(dir, leaf, 0) == 0 ? 0 : -5;
+	close(dir);
+	return result;
+}
+
+int COM_QCRenameFile(const char *oldname, const char *newname)
+{
+	char srcpath[MAX_OSPATH], dstpath[MAX_OSPATH];
+	const char *srcname, *dstname;
+	int src, dst, result = -1;
+
+	src = COM_QCOpenDataParent(oldname, false, srcpath, &srcname);
+	if (src < 0)
+		return -1;
+	dst = COM_QCOpenDataParent(newname, false, dstpath, &dstname);
+	if (dst >= 0)
+	{
+		result = COM_IsRegularFile(src, srcname) &&
+			renameat(src, srcname, dst, dstname) == 0 ? 0 : -5;
+		close(dst);
+	}
+	close(src);
+	return result;
+}
+
+int COM_QCCopyFile(const char *name, const char *newname, qboolean server)
+{
+	char path[MAX_OSPATH], tmp[64], buffer[16384];
+	const char *dstname;
+	static unsigned int sequence;
+	FILE *input, *output;
+	int dir, fd = -1, attempts, result;
+	size_t size;
+	qboolean copied = true;
+
+	if (COM_QCOpenRead(name, server, &input, &size) <= 0)
+		return -1;
+	dir = COM_QCOpenDataParent(newname, true, path, &dstname);
+	if (dir < 0)
+	{
+		fclose(input);
+		return -2;
+	}
+
+	// Publish only a complete copy and leave any old destination on a write failure.
+	for (attempts = 0; attempts < 16; attempts++)
+	{
+		q_snprintf(tmp, sizeof(tmp), ".qccopy-%ld-%u", (long)getpid(), sequence++);
+		fd = openat(dir, tmp, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0600);
+		if (fd >= 0 || errno != EEXIST)
+			break;
+	}
+	if (fd < 0)
+	{
+		result = -2;
+		goto done;
+	}
+
+	output = fdopen(fd, "wb");
+	if (!output)
+	{
+		close(fd);
+		copied = false;
+	}
+	else
+	{
+		while (size > 0)
+		{
+			size_t chunk = q_min(size, sizeof(buffer));
+			if (fread(buffer, 1, chunk, input) != chunk || fwrite(buffer, 1, chunk, output) != chunk)
+			{
+				copied = false;
+				break;
+			}
+			size -= chunk;
+		}
+		if (fclose(output))
+			copied = false;
+	}
+	if (copied && renameat(dir, tmp, dir, dstname) == 0)
+		result = 0;
+	else
+	{
+		unlinkat(dir, tmp, 0);
+		result = -3;
+	}
+done:
+	close(dir);
+	fclose(input);
+	return result;
+}
+#endif
 
 static qboolean COM_ConfigDirPath (const char *filename, char *config_path, size_t config_path_size)
 {
@@ -3935,9 +4564,10 @@ void COM_ListSystemFiles(void *ctx, const char *gamedir, const char *ext, qboole
 #endif
 }
 
-static void COM_ListFiles(void *ctx, searchpath_t *spath, const char *pattern, qboolean (*cb)(void *ctx, const char *fname, time_t mtime, size_t fsize, searchpath_t *spath), unsigned int flags)
+static void COM_ListFiles(void *ctx, searchpath_t *spath, const char *pattern, qboolean (*cb)(void *ctx, const char *fname, time_t mtime, size_t fsize, searchpath_t *spath), unsigned int flags, const qboolean *qcserver)
 {
 	char prefixdir[MAX_OSPATH];
+	qboolean allowed;
 	char *sl;
 	sl = strrchr(pattern, '/');
 	if (sl)
@@ -3952,25 +4582,55 @@ static void COM_ListFiles(void *ctx, searchpath_t *spath, const char *pattern, q
 	else
 		*prefixdir = 0;
 
+	if (qcserver && *prefixdir)
+	{
+		size_t len = strlen(prefixdir);
+		prefixdir[len - 1] = 0;
+		if (!COM_GamePathIsCanonical(prefixdir))
+			return;
+		prefixdir[len - 1] = '/';
+	}
+
 #ifdef _WIN32
 	{
 		char filestring[MAX_OSPATH];
-		WIN32_FIND_DATA	fdat;
-		HANDLE		fhnd;
-		q_snprintf (filestring, sizeof(filestring), "%s/%s%s", spath->filename, prefixdir, pattern);
-		fhnd = FindFirstFile(filestring, &fdat);
+		com_game_dirs_t dirs = {0};
+		WIN32_FIND_DATAA fdat;
+		HANDLE fhnd = INVALID_HANDLE_VALUE;
+
+		if (qcserver)
+		{
+			char path[MAX_OSPATH * 4];
+			if (COM_WinGamePath(spath->filename, prefixdir, false, &dirs, path, sizeof(path)) &&
+				(path[strlen(path) - 1] == '\\' || q_strlcat(path, "\\", sizeof(path)) < sizeof(path)) &&
+				q_strlcat(path, pattern, sizeof(path)) < sizeof(path))
+				fhnd = FindFirstFileA(path, &fdat);
+		}
+		else
+		{
+			q_snprintf(filestring, sizeof(filestring), "%s/%s%s", spath->filename, prefixdir, pattern);
+			fhnd = FindFirstFileA(filestring, &fdat);
+		}
 		if (fhnd == INVALID_HANDLE_VALUE)
+		{
+			COM_CloseGameDirs(&dirs);
 			return;
+		}
 		do
 		{
 			//the enumeration already knows what each entry is, so callers that
 			//only want files needn't stat every name they get handed back.
 			if ((flags & COM_LIST_NODIRS) && (fdat.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY))
 				continue;
-			q_snprintf (filestring, sizeof(filestring), "%s%s", prefixdir, fdat.cFileName);
+			if ((size_t)q_snprintf(filestring, sizeof(filestring), "%s%s", prefixdir, fdat.cFileName) >= sizeof(filestring))
+				continue;
+			if (qcserver && ((fdat.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) ||
+				!COM_QCFileName(filestring, *qcserver, NULL, &allowed) || !allowed))
+				continue;
 			cb (ctx, filestring, Sys_FileTimeToTime(fdat.ftLastWriteTime), fdat.nFileSizeLow, spath);
-		} while (FindNextFile(fhnd, &fdat));
+		} while (FindNextFileA(fhnd, &fdat));
 		FindClose(fhnd);
+		COM_CloseGameDirs(&dirs);
 	}
 #else
 	{
@@ -3978,8 +4638,25 @@ static void COM_ListFiles(void *ctx, searchpath_t *spath, const char *pattern, q
 		DIR		*dir_p;
 		struct dirent	*dir_t;
 
-		q_snprintf (filestring, sizeof(filestring), "%s/%s", spath->filename, prefixdir);
-		dir_p = opendir(filestring);
+		if (qcserver)
+		{
+			char path[MAX_OSPATH];
+			const char *leaf;
+			int dir;
+
+			q_strlcpy(path, prefixdir, sizeof(path));
+			dir = COM_OpenGameParent(spath->filename, path, false, &leaf);
+			if (dir < 0)
+				return;
+			dir_p = fdopendir(dir);
+			if (!dir_p)
+				close(dir);
+		}
+		else
+		{
+			q_snprintf(filestring, sizeof(filestring), "%s/%s", spath->filename, prefixdir);
+			dir_p = opendir(filestring);
+		}
 		if (dir_p == NULL)
 			return;
 		while ((dir_t = readdir(dir_p)) != NULL)
@@ -3989,8 +4666,20 @@ static void COM_ListFiles(void *ctx, searchpath_t *spath, const char *pattern, q
 			if (!fnmatch(pattern, dir_t->d_name, FNM_NOESCAPE|FNM_PATHNAME|FNM_CASEFOLD))
 			{
 				struct stat s;
-				q_snprintf (filestring, sizeof(filestring), "%s/%s%s", spath->filename, prefixdir, dir_t->d_name);
-				if (stat(filestring, &s) < 0)
+				int status;
+
+				if (qcserver)
+				{
+					status = fstatat(dirfd(dir_p), dir_t->d_name, &s, AT_SYMLINK_NOFOLLOW);
+					if (status || S_ISLNK(s.st_mode))
+						continue;
+				}
+				else
+				{
+					q_snprintf(filestring, sizeof(filestring), "%s/%s%s", spath->filename, prefixdir, dir_t->d_name);
+					status = stat(filestring, &s);
+				}
+				if (status < 0)
 				{
 					if (flags & COM_LIST_NODIRS)
 						continue;
@@ -3999,7 +4688,10 @@ static void COM_ListFiles(void *ctx, searchpath_t *spath, const char *pattern, q
 				else if ((flags & COM_LIST_NODIRS) && !S_ISREG(s.st_mode))
 					continue;	//reuse stat: pipes/devices must not reach demo readers
 
-				q_snprintf (filestring, sizeof(filestring), "%s%s", prefixdir, dir_t->d_name);
+				if ((size_t)q_snprintf(filestring, sizeof(filestring), "%s%s", prefixdir, dir_t->d_name) >= sizeof(filestring))
+					continue;
+				if (qcserver && (!COM_QCFileName(filestring, *qcserver, NULL, &allowed) || !allowed))
+					continue;
 				cb (ctx, filestring, s.st_mtime, s.st_size, spath);
 			}
 		}
@@ -4007,7 +4699,7 @@ static void COM_ListFiles(void *ctx, searchpath_t *spath, const char *pattern, q
 	}
 #endif
 }
-void COM_ListAllFiles(void *ctx, const char *pattern, qboolean (*cb)(void *ctx, const char *fname, time_t mtime, size_t fsize, searchpath_t *spath), unsigned int flags, const char *pkgfilter)
+static void COM_ListAllFilesInternal(void *ctx, const char *pattern, qboolean (*cb)(void *ctx, const char *fname, time_t mtime, size_t fsize, searchpath_t *spath), unsigned int flags, const char *pkgfilter, const qboolean *qcserver)
 {
 	searchpath_t *search;
 	const char *sp;
@@ -4047,13 +4739,16 @@ void COM_ListAllFiles(void *ctx, const char *pattern, qboolean (*cb)(void *ctx, 
 			int i;
 			for (i = 0; i < pak->numfiles; i++)
 			{
-				if (wildcmp(pattern, pak->files[i].name))
-					cb(ctx, pak->files[i].name, pak->mtime, pak->files[i].filelen, search);
+				const char *name = pak->files[i].name;
+				qboolean allowed;
+				if (wildcmp(pattern, name) &&
+					(!qcserver || (COM_QCFileName(name, *qcserver, NULL, &allowed) && allowed)))
+					cb(ctx, name, pak->mtime, pak->files[i].filelen, search);
 			}
 		}
 		else
 		{
-			COM_ListFiles(ctx, search, pattern, cb, flags);
+			COM_ListFiles(ctx, search, pattern, cb, flags, qcserver);
 		}
 	}
 
@@ -4063,6 +4758,16 @@ void COM_ListAllFiles(void *ctx, const char *pattern, qboolean (*cb)(void *ctx, 
 //		dummy.filename =
 		Con_Printf("search_begin: SB_FORCESEARCH not supported\n");
 	}
+}
+
+void COM_ListAllFiles(void *ctx, const char *pattern, qboolean (*cb)(void *ctx, const char *fname, time_t mtime, size_t fsize, searchpath_t *spath), unsigned int flags, const char *pkgfilter)
+{
+	COM_ListAllFilesInternal(ctx, pattern, cb, flags, pkgfilter, NULL);
+}
+
+void COM_QCListFiles(void *ctx, const char *pattern, qboolean (*cb)(void *ctx, const char *fname, time_t mtime, size_t fsize, searchpath_t *spath), unsigned int flags, const char *pkgfilter, qboolean server)
+{
+	COM_ListAllFilesInternal(ctx, pattern, cb, flags, pkgfilter, &server);
 }
 
 static void COM_RemoveTempFilesInDir_r(const char *path)
@@ -5780,8 +6485,8 @@ _add_path:
 		COM_ListPackageFiles(searchdir, paksubdir, "paks");
 	}
 
-	COM_ListFiles(NULL, searchdir, "#*", AddHashedDirectories, 0); // woods #pakdirs
-	COM_ListFiles(NULL, searchdir, "paks/#*", AddHashedDirectories, 0); // woods #pakdirs
+	COM_ListFiles(NULL, searchdir, "#*", AddHashedDirectories, 0, NULL); // woods #pakdirs
+	COM_ListFiles(NULL, searchdir, "paks/#*", AddHashedDirectories, 0, NULL); // woods #pakdirs
 
 	// then finally link the directory to the search path
 	//spike -- moved this last (also explicitly blocked loading progs.dat from system paths when running the demo)

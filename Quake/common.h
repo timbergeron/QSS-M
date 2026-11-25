@@ -404,7 +404,6 @@ typedef struct pack_s
 } pack_t;
 
 void COM_BuildPackHash (pack_t *pack);
-FILE *COM_OpenPackEntry(pack_t *pack, const char *name, int *size);
 
 typedef struct searchpath_s
 {
@@ -484,6 +483,7 @@ void COM_NegativeCache_SaveIfDirty(com_negative_cache_t *cache, const com_negati
 #define COM_LIST_NODIRS	(1u<<16)	// skip directories and other non-file entries
 void COM_ListSystemFiles(void *ctx, const char *gamedir, const char *ext, qboolean (*cb)(void *ctx, const char *fname));
 void COM_ListAllFiles(void *ctx, const char *pattern, qboolean (*cb)(void *ctx, const char *fname, time_t mtime, size_t fsize, searchpath_t *spath), unsigned int flags, const char *pkgfilter);
+void COM_QCListFiles(void *ctx, const char *pattern, qboolean (*cb)(void *ctx, const char *fname, time_t mtime, size_t fsize, searchpath_t *spath), unsigned int flags, const char *pkgfilter, qboolean server);
 const char *COM_GetGameNames(qboolean full);
 qboolean COM_GameDirMatches(const char *tdirs);
 qboolean COM_ResolveGameDir(const char *game, char *resolved, size_t resolved_size);
@@ -514,6 +514,22 @@ void COM_InvalidateLoadCache (void);
 void COM_MarkLoadCacheStale (void);
 qboolean COM_FileExists (const char *filename, unsigned int *path_id);
 const searchpath_t *COM_FileSearchPath (const char *filename); // valid until the search paths change
+FILE *COM_OpenGameWrite(const char *name, qboolean append);
+
+// QuakeC accepts virtual names only. Read results are 1 (open), 0 (absent),
+// or -1 (rejected). The stream starts at the file's data and size bounds it.
+int COM_QCOpenRead(const char *name, qboolean server, FILE **file, size_t *size);
+int COM_QCOpenSearchFile(const searchpath_t *mount, const char *name, qboolean server, FILE **file, size_t *size);
+char *COM_QCLoadFile(const char *name, qboolean server, size_t limit);
+const char *COM_QCFileGameDir(const char *name, qboolean server);
+qboolean COM_QCLooseFileExists(const char *name, qboolean server);
+FILE *COM_QCOpenWrite(const char *name, qboolean append);
+#ifndef _WIN32
+int COM_QCRemoveFile(const char *name);
+int COM_QCRenameFile(const char *oldname, const char *newname);
+int COM_QCCopyFile(const char *name, const char *newname, qboolean server);
+#endif
+
 qboolean COM_ConfigFileUsesConfigsDir (const char *filename);
 qboolean COM_ConfigFilePrefersConfigsDir (const char *filename);
 void COM_ConfigFileEffectivePath (const char *filename, char *path, size_t path_size);
