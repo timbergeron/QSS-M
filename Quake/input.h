@@ -40,6 +40,7 @@ qboolean IN_IsGamepadAt (int index);
 const char *IN_GetGamepadNameAt (int index);
 
 // mouse moved by dx and dy pixels; fractional deltas accumulate
+void IN_SetCursorPosition(float x, float y);
 void IN_MouseMotion(float dx, float dy, float wx, float wy);
 #ifdef __APPLE__
 const char *IN_GetMacRawMouseStatus(void);

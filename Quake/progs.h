@@ -351,6 +351,8 @@ struct pr_extfields_s
 #define QCEXTFIELDS_CS	\
 	/*csqc-only*/	\
 	QCEXTFIELD(entnum,					".float")				/*for csqc.*/	\
+	QCEXTFIELD(idealpitch, ".float") \
+	QCEXTFIELD(pitch_speed, ".float") \
 	QCEXTFIELD(drawmask,				".float")			/*for csqc's addentities builtin.*/	\
 	QCEXTFIELD(predraw,					".float()")			/*for csqc's addentities builtin.*/	\
 	//end of list
@@ -435,6 +437,7 @@ struct qcvm_s
 	int			numbuiltins;
 
 	int			argc;
+	qboolean		implicitpause;	// CSQC single-player pause request
 
 	qboolean	trace;
 	dfunction_t	*xfunction;
@@ -449,6 +452,7 @@ struct qcvm_s
 	struct pr_extfields_s extfields;
 
 	qboolean cursorforced;
+	float mousedelta[2];
 	void *cursorhandle;	//video code.
 	qboolean nogameaccess;	//simplecsqc isn't allowed to poke properties of the actual game (to prevent cheats when there's no restrictions on what it can access)
 	qboolean qexlogic;			//2021 rerelease gamecode owns behaviors that conflict with some DP extensions.

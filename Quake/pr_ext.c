@@ -478,6 +478,44 @@ static void PF_vectorvectors(void)
 	}
 	CrossProduct(pr_global_struct->v_right, pr_global_struct->v_forward, pr_global_struct->v_up);
 }
+static void PR_RotateBasis(vec3_t transform[3], qboolean concatenate_first)
+{
+	vec3_t basis[3], result[3];
+
+	VectorCopy(pr_global_struct->v_forward, basis[0]);
+	VectorScale(pr_global_struct->v_right, -1, basis[1]);
+	VectorCopy(pr_global_struct->v_up, basis[2]);
+	if (concatenate_first)
+		R_ConcatRotations(transform, basis, result);
+	else
+		R_ConcatRotations(basis, transform, result);
+	VectorCopy(result[0], pr_global_struct->v_forward);
+	VectorScale(result[1], -1, pr_global_struct->v_right);
+	VectorCopy(result[2], pr_global_struct->v_up);
+}
+
+static void PF_rotatevectorsbyangles(void)
+{
+	const float *input = G_VECTOR(OFS_PARM0);
+	vec3_t angles = {-input[0], input[1], input[2]};
+	vec3_t transform[3];
+
+	// FTE's Quake mesh convention negates pitch and uses a left axis internally.
+	AngleVectors(angles, transform[0], transform[1], transform[2]);
+	VectorScale(transform[1], -1, transform[1]);
+	PR_RotateBasis(transform, true);
+}
+
+static void PF_rotatevectorsbymatrix(void)
+{
+	vec3_t transform[3];
+
+	VectorCopy(G_VECTOR(OFS_PARM0), transform[0]);
+	VectorScale(G_VECTOR(OFS_PARM1), -1, transform[1]);
+	VectorCopy(G_VECTOR(OFS_PARM2), transform[2]);
+	PR_RotateBasis(transform, false);
+}
+
 static void PF_ext_vectoangles(void)
 {	//alternative version of the original builtin, that can deal with roll angles too, by accepting an optional second argument for 'up'.
 	float	*value1, *up;
@@ -1712,6 +1750,11 @@ static void PF_strtolower(void)
 	G_INT(OFS_RETURN) = PR_SetEngineString(result);
 }
 #include <time.h>
+static void PF_cl_setpause(void)
+{
+	qcvm->implicitpause = !!G_FLOAT(OFS_PARM0);
+}
+
 static void PF_strftime(void)
 {
 	const char *in = G_STRING(OFS_PARM1);
@@ -2346,6 +2389,65 @@ static qboolean PR_IndexFromFloat(float v, int limit, int *out)
 	*out = (int)v;
 	return true;
 }
+static void PF_cs_modelframecount(void)
+{
+	float idx = G_FLOAT(OFS_PARM0);
+	qmodel_t *model = (idx > -MAX_MODELS && idx < MAX_MODELS) ? PR_GetVMModel((int)idx) : NULL;
+	G_FLOAT(OFS_RETURN) = model ? model->numframes : 0;
+}
+
+static void PF_cs_anglesub(void)
+{
+	double delta = fmod((double)G_FLOAT(OFS_PARM0) - G_FLOAT(OFS_PARM1), 360.0);
+	G_FLOAT(OFS_RETURN) = delta > 180 ? delta - 360 : delta < -180 ? delta + 360 : delta;
+}
+
+static void PF_cs_changepitch(void)
+{
+	// FTE operates on self, including when called with its documented entity argument.
+	edict_t *self = PROG_TO_EDICT(pr_global_struct->self);
+	eval_t *ideal = GetEdictFieldValue(self, qcvm->extfields.idealpitch);
+	eval_t *speed = GetEdictFieldValue(self, qcvm->extfields.pitch_speed);
+	float current, move;
+	if (!ideal || !speed || self->free || self == qcvm->edicts ||
+		!isfinite(self->v.angles[PITCH]) || !isfinite(ideal->_float) || !(speed->_float >= 0 && speed->_float <= 360))
+		return;
+	current = anglemod(fmodf(self->v.angles[PITCH], 360));
+	move = fmodf(ideal->_float, 360) - current;
+	if (move >= 180)
+		move -= 360;
+	else if (move <= -180)
+		move += 360;
+	self->v.angles[PITCH] = anglemod(current + bound(-speed->_float, move, speed->_float));
+}
+
+static void PF_cs_getlightstyle(void)
+{
+	int style;
+	G_INT(OFS_RETURN) = 0;
+	if (!PR_IndexFromFloat(G_FLOAT(OFS_PARM0), MAX_LIGHTSTYLES, &style))
+	{
+		VectorClear(G_VECTOR(OFS_PARM1));
+		return;
+	}
+	G_VECTORSET(OFS_PARM1, 1, 1, 1); // native lightstyles modulate all three channels equally
+	if (cl_lightstyle[style].length)
+		G_INT(OFS_RETURN) = PR_MakeTempString(cl_lightstyle[style].map);
+}
+
+static void PF_cs_getlightstylergb(void)
+{
+	int style;
+	float value = PR_IndexFromFloat(G_FLOAT(OFS_PARM0), MAX_LIGHTSTYLES, &style) ?
+		R_LightstyleValue(style) / 256.0f : 0;
+	G_VECTORSET(OFS_RETURN, value, value, value);
+}
+
+static void PF_cs_getlocationname(void)
+{
+	G_INT(OFS_RETURN) = PR_MakeTempString(LOC_GetLocation(G_VECTOR(OFS_PARM0)));
+}
+
 static void PF_frameforname(void)
 {
 	float modelindex	= G_FLOAT(OFS_PARM0);
@@ -6277,6 +6379,56 @@ static void PF_cl_pointparticles(void)
 #endif
 
 
+static void PF_cs_getplayerstat(void)
+{
+	int player, stat, type, i;
+	VectorClear(G_VECTOR(OFS_RETURN));
+	if (!PR_IndexFromFloat(G_FLOAT(OFS_PARM0), cl.maxclients, &player) ||
+		player != cl.viewentity - 1 || !PR_IndexFromFloat(G_FLOAT(OFS_PARM1), MAX_CL_STATS, &stat) ||
+		!PR_IndexFromFloat(G_FLOAT(OFS_PARM2), ev_ext_double + 1, &type))
+		return;
+	switch (type)
+	{
+	case ev_string:
+		if (cl.statss[stat])
+			G_INT(OFS_RETURN) = PR_MakeTempString(cl.statss[stat]);
+		break;
+	case ev_float:
+		G_FLOAT(OFS_RETURN) = cl.statsf[stat];
+		break;
+	case ev_vector:
+		for (i = 0; i < 3 && stat + i < MAX_CL_STATS; i++)
+			G_FLOAT(OFS_RETURN+i) = cl.statsf[stat+i];
+		break;
+	case ev_entity:
+		if (!qcvm->nogameaccess && (unsigned int)cl.stats[stat] < cl.ssqc_to_csqc_max)
+		{
+			edict_t *ed = cl.ssqc_to_csqc[cl.stats[stat]];
+			if (ed && !ed->free)
+				G_INT(OFS_RETURN) = EDICT_TO_PROG(ed);
+		}
+		break;
+	case ev_field:
+	case ev_function:
+	case ev_pointer:
+	case ev_ext_sint64:
+	case ev_ext_uint64:
+		G_INT(OFS_RETURN) = cl.stats[stat];
+		G_INT(OFS_RETURN+1) = stat + 1 < MAX_CL_STATS ? cl.stats[stat+1] : 0;
+		break;
+	case ev_ext_double:
+	{
+		double d = cl.statsf[stat];
+		memcpy(G_VECTOR(OFS_RETURN), &d, sizeof(d));
+		break;
+	}
+	case ev_ext_integer:
+	case ev_ext_uint32:
+		G_INT(OFS_RETURN) = cl.stats[stat];
+		break;
+	}
+}
+
 static void PF_cl_getstat_int(void)
 {
 	int stnum = G_FLOAT(OFS_PARM0);
@@ -6489,6 +6641,73 @@ static qboolean DrawQC_PicValid(const qpic_t *pic)
 {	//drawing a missing image may legitimately show a diagnostic, but the cache-query builtins must not
 	//claim that diagnostic is a resource that actually loaded.
 	return pic && pic != pic_nul && pic->width > 0 && pic->height > 0;
+}
+
+enum
+{
+	RESTYPE_MODEL, RESTYPE_SOUND, RESTYPE_PARTICLE, RESTYPE_PIC, RESTYPE_SKIN, RESTYPE_TEXTURE
+};
+enum
+{
+	RESSTATE_UNSUPPORTED = -1, RESSTATE_NOTKNOWN, RESSTATE_NOTLOADED,
+	RESSTATE_LOADING, RESSTATE_FAILED, RESSTATE_LOADED
+};
+
+static void PF_cs_resourcestatus(void)
+{
+	float type = G_FLOAT(OFS_PARM0);
+	qboolean load = G_FLOAT(OFS_PARM1) != 0;
+	const char *name = G_STRING(OFS_PARM2);
+
+	G_FLOAT(OFS_RETURN) = RESSTATE_NOTKNOWN;
+	if (!*name || strlen(name) >= MAX_QPATH)
+		return;
+
+	if (type == RESTYPE_MODEL)
+	{
+		int index = CL_ModelIndexForName(name, true);
+		qmodel_t *mod = PR_GetVMModel(index);
+		if (!index)
+			return;
+		if (mod && !mod->needload)
+			G_FLOAT(OFS_RETURN) = RESSTATE_LOADED;
+		else if (load)
+			G_FLOAT(OFS_RETURN) = Mod_TryForName(name) ? RESSTATE_LOADED : RESSTATE_FAILED;
+		else
+			G_FLOAT(OFS_RETURN) = RESSTATE_NOTLOADED;
+	}
+	else if (type == RESTYPE_SOUND)
+	{
+		sfx_t *sfx = S_FindCachedSound(name);
+		if (load && !sfx)
+			sfx = S_PrecacheOptionalSound(name);
+		if (sfx)
+			G_FLOAT(OFS_RETURN) = (load ? S_LoadSound(sfx) != NULL : sfx->cache.data != NULL) ?
+				RESSTATE_LOADED : load ? RESSTATE_FAILED : RESSTATE_NOTLOADED;
+	}
+	else if (type == RESTYPE_PIC)
+	{
+		size_t i;
+		if (load)
+		{
+			G_FLOAT(OFS_RETURN) = DrawQC_PicValid(DrawQC_CachePic(name, PICFLAG_BLOCK)) ?
+				RESSTATE_LOADED : RESSTATE_FAILED;
+			return;
+		}
+		for (i = 0; i < numqcpics; i++)
+			if (!strcmp(qcpics[i].name, name))
+			{
+				G_FLOAT(OFS_RETURN) = DrawQC_PicValid(qcpics[i].pic) ? RESSTATE_LOADED : RESSTATE_NOTLOADED;
+				break;
+			}
+	}
+	else if (type == RESTYPE_TEXTURE)
+	{
+		if (TexMgr_FindTexture(NULL, name))
+			G_FLOAT(OFS_RETURN) = RESSTATE_LOADED;
+	}
+	else
+		G_FLOAT(OFS_RETURN) = RESSTATE_UNSUPPORTED;
 }
 
 static qboolean DrawQC_ShaderImageTokenValid(const char *name)
@@ -6733,6 +6952,30 @@ static qpic_t *DrawQC_FontPic(csqcfont_t *font)
 		return NULL;
 	}
 	return font->pic;
+}
+
+static void PF_cl_findfont(void)
+{
+	const char *name = G_STRING(OFS_PARM0);
+	int face = -1;
+	int i;
+
+	if (*name)
+	{
+		for (i = 0; i < countof(csqcfonts); i++)
+		{
+			if (!csqcfonts[i].active)
+				continue;
+			if (!q_strcasecmp(csqcfonts[i].slotname, name))
+			{
+				G_FLOAT(OFS_RETURN) = i;
+				return;
+			}
+			if (face < 0 && !q_strcasecmp(csqcfonts[i].facename, name))
+				face = i;
+		}
+	}
+	G_FLOAT(OFS_RETURN) = face < 0 ? 0 : face;
 }
 
 static void PF_cl_loadfont(void)
@@ -6987,6 +7230,19 @@ static void PF_cl_precachepic(void)
 	if ((flags & PICFLAG_BLOCK) && !DrawQC_PicValid(pic))
 		G_INT(OFS_RETURN) = 0;	//caller asked us to block, so it wants a real answer
 }
+static void PF_cs_freepic(void)
+{
+	// The renderer owns the backing picture, which may also be used by a HUD or font.
+	const char *name = G_STRING(OFS_PARM0);
+	size_t i;
+	for (i = 0; i < numqcpics; i++)
+		if (!strcmp(name, qcpics[i].name))
+		{
+			qcpics[i] = qcpics[--numqcpics];
+			break;
+		}
+}
+
 static void PF_cl_iscachedpic(void)
 {
 	const char *name	= G_STRING(OFS_PARM0);
@@ -7392,6 +7648,8 @@ static void PF_cl_setcursormode(void)
 	float cursorscale = (qcvm->argc<=3)?1:G_FLOAT(OFS_PARM3);
 
 	VID_SetCursor(qcvm, cursorname, hotspot, cursorscale);
+	if (qcvm->cursorforced != absmode)
+		qcvm->mousedelta[0] = qcvm->mousedelta[1] = 0;
 	qcvm->cursorforced = absmode;
 }
 static void PF_cl_getcursormode(void)
@@ -7533,6 +7791,62 @@ void PF_cl_serverkey_internal(const char *key, qboolean retfloat)
 	else
 		G_INT(OFS_RETURN) = (ret && *ret)?PR_SetEngineString(ret):0;	//null string, not an empty tempstring
 }
+static void PF_cs_infokey(void)
+{
+	edict_t *ed = G_EDICT(OFS_PARM0);
+	const char *key = G_STRING(OFS_PARM1);
+	if (ed == qcvm->edicts)
+		PF_cl_serverkey_internal(key, false);
+	else
+	{
+		eval_t *entnum = GetEdictFieldValue(ed, qcvm->extfields.entnum);
+		if (!ed->free && entnum && entnum->_float >= 1 && entnum->_float <= cl.maxclients)
+			PF_cl_playerkey_internal((int)entnum->_float - 1, key, false);
+		else
+			G_INT(OFS_RETURN) = 0;
+	}
+}
+
+static void PF_cs_getlocaluserinfo(void)
+{
+	char value[sizeof(cls.userinfo)];
+	if (G_FLOAT(OFS_PARM0) != 0)
+		PR_RunError("getlocaluserinfo: invalid seat");
+	Info_GetKey(cls.userinfo, G_STRING(OFS_PARM1), value, sizeof(value));
+	G_INT(OFS_RETURN) = PR_MakeTempString(value);
+}
+
+static void PF_cs_setlocaluserinfo(void)
+{
+	const char *key = G_STRING(OFS_PARM1);
+	const char *value = G_STRING(OFS_PARM2);
+	char updated[sizeof(cls.userinfo)], check[sizeof(cls.userinfo)];
+	cvar_t *var;
+	if (G_FLOAT(OFS_PARM0) != 0)
+		PR_RunError("setlocaluserinfo: invalid seat");
+	if (!*key || *key == '*' || strpbrk(key, "\\\"\r\n") || strpbrk(value, "\\\"\r\n") ||
+		strlen(key) + strlen(value) + 3 > sizeof(updated))
+		return;
+
+	// Check capacity before changing either the local copy or the server's copy.
+	q_strlcpy(updated, cls.userinfo, sizeof(updated));
+	Info_SetKey(updated, sizeof(updated), key, value);
+	if (strcmp(Info_GetKey(updated, key, check, sizeof(check)), value))
+		return;
+	var = Cvar_FindVar(key);
+	if (var && (var->flags & CVAR_USERINFO))
+		Cvar_Set(key, value);
+	else if (strcmp(updated, cls.userinfo))
+	{
+		q_strlcpy(cls.userinfo, updated, sizeof(cls.userinfo));
+		if (cls.state == ca_connected && !cls.demoplayback)
+		{
+			MSG_WriteByte(&cls.message, clc_stringcmd);
+			MSG_WriteString(&cls.message, va("setinfo \"%s\" \"%s\"\n", key, value));
+		}
+	}
+}
+
 static void PF_cl_serverkey_s(void)
 {
 	const char *keyname = G_STRING(OFS_PARM0);
@@ -7737,6 +8051,22 @@ static void PF_m_getmousepos(void)
 	G_FLOAT(OFS_RETURN+1) = vid.cursorpos[1]/s;
 	G_FLOAT(OFS_RETURN+2) = 0;
 }
+static void PF_cs_getmousepos(void)
+{
+	if (qcvm->cursorforced)
+		PF_m_getmousepos();
+	else
+		G_VECTORSET(OFS_RETURN, qcvm->mousedelta[0], qcvm->mousedelta[1], 0);
+	qcvm->mousedelta[0] = qcvm->mousedelta[1] = 0;
+}
+
+static void PF_cs_setmousepos(void)
+{
+	float *pos = G_VECTOR(OFS_PARM0), scale = PR_GetVMScale();
+	if (qcvm->cursorforced && isfinite(pos[0]) && isfinite(pos[1]))
+		IN_SetCursorPosition(pos[0] * scale, pos[1] * scale);
+}
+
 static void PF_m_setmousetarget(void)
 {
 	int d = G_FLOAT(OFS_PARM0);
@@ -9302,6 +9632,40 @@ static struct
 } viewprops;
 
 void V_CalcRefdef (void);
+static void PF_cs_calcrefdef(void)
+{
+	edict_t *ed = G_EDICT(OFS_PARM0);
+	vec3_t savedorigin, savedangles, savedvelocity;
+	qboolean savedground = cl.onground;
+	float savedcrouch = cl.crouch;
+	entity_t *view;
+	if (qcvm->nogameaccess || ed->free || !cl.entities || cl.viewentity < 1 || cl.viewentity >= cl.num_entities)
+		return;
+
+	// Native bob, roll, clipping and viewmodel placement read the current view player.
+	view = &cl.entities[cl.viewentity];
+	VectorCopy(view->origin, savedorigin);
+	VectorCopy(view->angles, savedangles);
+	VectorCopy(cl.velocity, savedvelocity);
+	VectorCopy(ed->v.origin, view->origin);
+	VectorCopy(ed->v.velocity, cl.velocity);
+	cl.onground = !!((int)ed->v.flags & FL_ONGROUND);
+	cl.crouch = CL_ViewCrouch(ed->v.origin, cl.onground, true);
+	V_CalcRefdef();
+	VectorCopy(savedorigin, view->origin);
+	VectorCopy(savedangles, view->angles);
+	VectorCopy(savedvelocity, cl.velocity);
+	cl.onground = savedground;
+	cl.crouch = savedcrouch;
+
+	memset(&viewprops, 0, sizeof(viewprops));
+	viewprops.rect_size[0] = glwidth / PR_GetVMScale();
+	viewprops.rect_size[1] = glheight / PR_GetVMScale();
+	r_refdef.drawworld = true;
+	VectorCopy(r_refdef.vieworg, viewprops.origin);
+	VectorCopy(r_refdef.viewangles, viewprops.angles);
+}
+
 static void PF_cl_clearscene(void)
 {
 	int i;
@@ -10447,6 +10811,32 @@ static void PF_cs_setlistener(void)
 	VectorCopy(up, cl.listener_axis[2]);
 }
 
+static void PF_cs_rotatemoves(void)
+{
+	vec3_t basis[3], forward, up, rotatedforward, rotatedup;
+	float *angles = G_VECTOR(OFS_PARM0);
+	size_t i;
+	int j;
+	if (qcvm->nogameaccess || (qcvm->argc > 1 && G_FLOAT(OFS_PARM1) != 0) ||
+		!isfinite(angles[0]) || !isfinite(angles[1]) || !isfinite(angles[2]))
+		return;
+	AngleVectors(angles, basis[0], basis[1], basis[2]);
+	VectorScale(basis[1], -1, basis[1]);
+	for (i = 0; i < countof(cl.movecmds); i++)
+	{
+		usercmd_t *cmd = &cl.movecmds[i];
+		if ((int)cmd->sequence <= cl.ackedmovemessages || cmd->sequence >= (unsigned int)cl.movemessages)
+			continue;
+		AngleVectors(cmd->viewangles, forward, NULL, up);
+		for (j = 0; j < 3; j++)
+		{
+			rotatedforward[j] = DotProduct(forward, basis[j]);
+			rotatedup[j] = DotProduct(up, basis[j]);
+		}
+		VectorAngles(rotatedforward, rotatedup, cmd->viewangles);
+	}
+}
+
 static void PF_cs_getinputstate(void)
 {
 	unsigned int seq = G_FLOAT(OFS_PARM0);
@@ -10867,13 +11257,23 @@ static struct
 	{"sin",				PF_Sin,				PF_Sin,				60,	PF_Sin,38, "float(float angle)"},	//60
 	{"cos",				PF_Cos,				PF_Cos,				61,	PF_Cos,39, "float(float angle)"},	//61
 	{"sqrt",			PF_Sqrt,			PF_Sqrt,			62,	PF_Sqrt,40, "float(float value)"},	//62
+	{"anglesub", PF_NoSSQC, PF_cs_anglesub, 0, PF_NoMenu, D("float(float a, float b)", "Returns the signed angle difference in degrees, from -180 to 180.")},
+	{"changepitch", PF_NoSSQC, PF_cs_changepitch, 63, PF_NoMenu, D("void(entity ent)", "Moves self.angles_x towards self.idealpitch by up to self.pitch_speed degrees.")},
+	{"getlocationname", PF_NoSSQC, PF_cs_getlocationname, 0, PF_NoMenu, D("string(vector point)", "Returns the local map location name for the point.")},
+	{"getlocaluserinfo", PF_NoSSQC, PF_cs_getlocaluserinfo, 0, PF_NoMenu, D("string(float seat, string key)", "Reads the local userinfo key for seat zero.")},
+	{"setlocaluserinfo", PF_NoSSQC, PF_cs_setlocaluserinfo, 0, PF_NoMenu, D("void(float seat, string key, string value)", "Sets a local userinfo key for seat zero. The engine owns reserved star keys.")},
+	{"CL_RotateMoves", PF_NoSSQC, PF_cs_rotatemoves, 638, PF_NoMenu, D("void(vector angles, optional float seat)", "Rotates the recorded view angles of unacknowledged input commands for seat zero.")},
+	{"setmousepos", PF_NoSSQC, PF_cs_setmousepos, 0, PF_NoMenu, D("void(vector pos)", "Positions the game cursor in virtual screen coordinates while absolute cursor mode is active.")},
 	{"removeinstant", PF_NoSSQC, PF_cs_removeinstant, 0, PF_NoMenu, D("void(entity ent)", "Removes a client edict and allows immediate reuse of its slot.")},
+	{"V_CalcRefdef", PF_NoSSQC, PF_cs_calcrefdef, 640, PF_NoMenu, D("void(entity viewpoint, float flags)", "Calculates the native view from the supplied entity origin, velocity and grounded state. Flags are reserved.")},
+	{"getlightstyle", PF_NoSSQC, PF_cs_getlightstyle, 0, PF_NoMenu, D("string(float style, optional __out vector rgb)", "Returns the lightstyle animation and its native white modulation color.")},
+	{"getlightstylergb", PF_NoSSQC, PF_cs_getlightstylergb, 0, PF_NoMenu, D("vector(float style)", "Returns the current displayed red, green and blue intensity of a lightstyle.")},
 	{"tracetoss",		PF_TraceToss,		PF_TraceToss,		64,	PF_NoMenu, "void(entity ent, entity ignore)"},
 	{"etos",			PF_etos,			PF_etos,			65,	PF_etos,20, "string(entity ent)"},
 
 	{"etof",			PF_num_for_edict,	PF_num_for_edict,	0, PF_num_for_edict,79, "float(entity ent)"},
 	{"ftoe",			PF_edict_for_num,	PF_edict_for_num,	0, PF_edict_for_num,80, "entity(float ent)"},
-	{"infokey",			PF_infokey_s,		PF_NoCSQC,			80,	PF_NoMenu, D("string(entity e, string key)", "If e is world, returns the field 'key' from either the serverinfo or the localinfo. If e is a player, returns the value of 'key' from the player's userinfo string. There are a few special exceptions, like 'ip' which is not technically part of the userinfo.")},	//80
+	{"infokey",			PF_infokey_s,		PF_cs_infokey,			80,	PF_NoMenu, D("string(entity e, string key)", "If e is world, returns the field 'key' from either the serverinfo or the localinfo. If e is a player, returns the value of 'key' from the player's userinfo string. There are a few special exceptions, like 'ip' which is not technically part of the userinfo.")},	//80
 	{"infokeyf",		PF_infokey_f,		PF_NoCSQC,			0,	PF_NoMenu, D("float(entity e, string key)", "Identical to regular infokey, but returns it as a float instead of creating new tempstrings.")},	//80
 	{"stof",			PF_stof,			PF_stof,			81,	PF_stof,21, "float(string)"},	//81
 	{"multicast",		PF_multicast,		PF_NoCSQC,			82,	PF_NoMenu, D("#define unicast(pl,reli) do{msg_entity = pl; multicast('0 0 0', reli?MULITCAST_ONE_R:MULTICAST_ONE);}while(0)\n"
@@ -10908,6 +11308,7 @@ static struct
 	{"strunzone",		PF_strunzone,		PF_strunzone,		119, PF_strunzone,57,	D("void(string s)", "Destroys a string that was allocated by strunzone. Further references to the string MAY crash the game.")},	// (FRIK_FILE)
 	{"tokenize_menuqc",	PF_Tokenize,		PF_Tokenize,		0,	PF_Tokenize,58, "float(string s)"},	//alias of tokenize's canonical #58; kept so existing source using this name still compiles
 	{"localsound",		PF_NoSSQC,			PF_cl_localsound,	177,	PF_cl_localsound,65, D("void(string soundname, optional float channel, optional float volume)", "Plays a sound... locally... probably best not to call this from ssqc. Also disables reverb.")},//	#177
+	{"resourcestatus", PF_NoSSQC, PF_cs_resourcestatus, 286, PF_NoMenu, D("float(float resourcetype, float tryload, string resourcename)", "Queries model, sound, picture or texture status. Tryload can reload known models or load a picture or sound.")},
 	{"getmodelindex",	PF_NoSSQC,			PF_cs_getmodelindex,			200,	PF_m_getmodelindex,200, D("float(string modelname, optional float queryonly)", "Acts as an alternative to precache_model(foo);setmodel(bar, foo); return bar.modelindex;\nIf queryonly is set and the model was not previously precached, the builtin will return 0 without needlessly precaching the model.")},
 //	{"externcall",		PF_externcall,		PF_externcall,		201,	PF_NoMenu, D("__variant(float prnum, string funcname, ...)", "Directly call a function in a different/same progs by its name.\nprnum=0 is the 'default' or 'main' progs.\nprnum=-1 means current progs.\nprnum=-2 will scan through the active progs and will use the first it finds.")},
 //	{"addprogs",		PF_addprogs,		PF_addprogs,		202,	PF_NoMenu, D("float(string progsname)", "Loads an additional .dat file into the current qcvm. The returned handle can be used with any of the externcall/externset/externvalue builtins.\nThere are cvars that allow progs to be loaded automatically.")},
@@ -10947,8 +11348,8 @@ static struct
 	{"globalstat",		PF_globalstat,		PF_NoCSQC,			233,	PF_NoMenu, D("void(float num, float type, string name)", "Specifies what data to use in order to send various stats, in a non-client-specific way. num and type are as in clientstat, name however, is the name of the global to read in the form of a string (pass \"foo\").")},	//EXT_CSQC_1 actually
 	{"pointerstat",		PF_pointerstat,		PF_NoCSQC,			0,		PF_NoMenu, D("void(float num, float type, __variant *address)", "Specifies what data to use in order to send various stats, in a non-client-specific way. num and type are as in clientstat, address however, is the address of the variable you would like to use (pass &foo).")},
 	{"isbackbuffered",	PF_isbackbuffered,	PF_NoCSQC,			234,	PF_NoMenu, D("float(entity player)", "Returns if the given player's network buffer will take multiple network frames in order to clear. If this builtin returns non-zero, you should delay or reduce the amount of reliable (and also unreliable) data that you are sending to that client.")},
-//	{"rotatevectorsbyangle",PF_rotatevectorsbyangles,PF_rotatevectorsbyangles,235,PF_NoMenu,D("void(vector angle)", "rotates the v_forward,v_right,v_up matrix by the specified angles.")}, // #235
-//	{"rotatevectorsbyvectors",PF_rotatevectorsbymatrix,PF_rotatevectorsbymatrix,PF_NoMenu, 236,"void(vector fwd, vector right, vector up)"}, // #236
+	{"rotatevectorsbyangle", PF_rotatevectorsbyangles, PF_rotatevectorsbyangles, 235, PF_NoMenu, D("void(vector angles)", "Rotates the current forward, right, and up vectors using Quake mesh angles.")},
+	{"rotatevectorsbyvectors", PF_rotatevectorsbymatrix, PF_rotatevectorsbymatrix, 236, PF_NoMenu, D("void(vector forward, vector right, vector up)", "Composes the current forward, right, and up vectors with the supplied basis.")},
 //	{"skinforname",		PF_skinforname,		PF_skinforname,		237,	"float(float mdlindex, string skinname)"},		// #237
 	{"shaderforname",	PF_NoSSQC,			PF_cl_shaderforname,	238,	PF_NoMenu, D("float(string shadername, optional string defaultshader, ...)", "Registers a stable CSQC shader handle. QSS-M resolves map, clampMap, animMap, diffuseMap, and qer_editorimage directives to a representative bitmap for drawpic and its supported 2D polygon path. Material render state, multipass shaders, and 3D scene polygons are not supported. If no shader definition exists, defaultshader's first image is used, then the shader name is treated as a plain image.")},
 	{"te_bloodqw",		PF_sv_te_bloodqw,	PF_cl_te_bloodqw,				239,	PF_NoMenu, "void(vector org, optional float count)"},
@@ -11012,7 +11413,7 @@ static struct
 //	{"argescape",		PF_argescape,		PF_argescape,		295,	PF_NoMenu, D("string(string s)", "Marks up a string so that it can be reliably tokenized as a single argument later.")},
 //	{"clusterevent",	PF_clusterevent,	PF_NoCSQC,			0,		PF_NoMenu, D("void(string dest, string from, string cmd, string info)", "Only functions in mapcluster mode. Sends an event to whichever server the named player is on. The destination server can then dispatch the event to the client or handle it itself via the SV_ParseClusterEvent entrypoint. If dest is empty, the event is broadcast to ALL servers. If the named player can't be found, the event will be returned to this server with the cmd prefixed with 'error:'.")},
 //	{"clustertransfer",	PF_clustertransfer,	PF_NoCSQC,			0,		PF_NoMenu, D("string(entity player, optional string newnode)", "Only functions in mapcluster mode. Initiate transfer of the player to a different node. Can take some time. If dest is specified, returns null on error. Otherwise returns the current/new target node (or null if not transferring).")},
-//	{"modelframecount", PF_modelframecount, PF_modelframecount,	0,		PF_NoMenu, D("float(float mdlidx)", "Retrieves the number of frames in the specified model.")},
+	{"modelframecount", PF_NoSSQC, PF_cs_modelframecount, 0, PF_NoMenu, D("float(float modelindex)", "Returns the number of frames in the specified model.")},
 
 	{"clearscene",		PF_NoSSQC,			PF_cl_clearscene,	300,	PF_cl_clearscene,300, D("void()", "Forgets all rentities, polygons, and temporary dlights. Resets all view properties to their default values.")},// (EXT_CSQC)
 	{"addentities",		PF_NoSSQC,			PF_cs_addentities,	301,	PF_NoMenu, D("void(float mask)", "Walks through all entities effectively doing this:\n if (ent.drawmask&mask){ if (!ent.predaw()) addentity(ent); }\nIf mask&MASK_DELTA, non-csqc entities, particles, and related effects will also be added to the rentity list.\n If mask&MASK_STDVIEWMODEL then the default view model will also be added.")},// (EXT_CSQC)
@@ -11035,7 +11436,7 @@ static struct
 //	{"r_uploadimage",	PF_NoSSQC,			PF_FullCSQCOnly,	0,		PF_NoMenu, D("void(string imagename, int width, int height, int *pixeldata)", "Updates a texture with the specified rgba data. Will be created if needed.")},
 //	{"r_readimage",		PF_NoSSQC,			PF_FullCSQCOnly,	0,		PF_NoMenu, D("int*(string filename, __out int width, __out int height)", "Reads and decodes an image from disk, providing raw pixel data. Returns __NULL__ if the image could not be read for any reason. Use memfree to free the data once you're done with it.")},
 	{"drawgetimagesize",PF_NoSSQC,			PF_cl_getimagesize,	318,	PF_cl_getimagesize,460,		D("#define draw_getimagesize drawgetimagesize\nvector(string picname)", "Returns the dimensions of the named image. Images specified with .lmp should give the original .lmp's dimensions even if texture replacements use a different resolution.")},// (EXT_CSQC)
-//	{"freepic",			PF_NoSSQC,			PF_FullCSQCOnly,	319,	PF_NoMenu, D("void(string name)", "Tells the engine that the image is no longer needed. The image will appear to be new the next time its needed.")},// (EXT_CSQC)
+	{"freepic", PF_NoSSQC, PF_cs_freepic, 319, PF_NoMenu, D("void(string name)", "Releases a named QC picture cache entry. The renderer manages the lifetime of shared texture data.")},
 	{"drawcharacter",	PF_NoSSQC,			PF_cl_drawcharacter,320,	PF_cl_drawcharacter,454,	D("float(vector position, float character, vector size, vector rgb, float alpha, optional float drawflag)", "Draw the given quake character at the given position.\nIf flag&4, the function will consider the char to be a unicode char instead (or display as a ? if outside the 32-127 range).\nsize should normally be something like '8 8 0'.\nrgb should normally be '1 1 1'\nalpha normally 1.\nSoftware engines may assume the named defaults.\nNote that ALL text may be rescaled on the X axis due to variable width fonts. The X axis may even be ignored completely.")},// (EXT_CSQC, [EXT_CSQC_???])
 	{"drawrawstring",	PF_NoSSQC,			PF_cl_drawrawstring,321,	PF_cl_drawrawstring,455,	D("float(vector position, string text, vector size, vector rgb, float alpha, optional float drawflag)", "Draws the specified string without using any markup at all, even in engines that support it.\nIf UTF-8 is globally enabled in the engine, then that encoding is used (without additional markup), otherwise it is raw quake chars.\nSoftware engines may assume a size of '8 8 0', rgb='1 1 1', alpha=1, flag&3=0, but it is not an error to draw out of the screen.")},// (EXT_CSQC, [EXT_CSQC_???])
 	{"drawpic",			PF_NoSSQC,			PF_cl_drawpic,		322,	PF_cl_drawpic,456,			D("float(vector position, string pic, vector size, vector rgb, float alpha, optional float drawflag)", "Draws an shader within the given 2d screen box. Software engines may omit support for rgb+alpha, but must support rescaling, and must clip to the screen without crashing.")},// (EXT_CSQC, [EXT_CSQC_???])
@@ -11053,7 +11454,7 @@ static struct
 	{"getstati",		PF_NoSSQC,			PF_cl_getstat_int,	330,	PF_NoMenu, D("#define getstati_punf(stnum) (float)(__variant)getstati(stnum)\nint(float stnum)", "Retrieves the numerical value of the given EV_INTEGER or EV_ENTITY stat. Use getstati_punf if you wish to type-pun a float stat as an int to avoid truncation issues with DP's network protocol.")},// (EXT_CSQC)
 	{"getstatf",		PF_NoSSQC,			PF_cl_getstat_float,331,	PF_NoMenu, D("#define getstatbits getstatf\nfloat(float stnum, optional float firstbit, optional float bitcount)", "Retrieves the numerical value of the given EV_FLOAT stat. If firstbit and bitcount are specified, retrieves the upper bits of the STAT_ITEMS stat (converted into a float, so there are no VM dependancies).")},// (EXT_CSQC)
 	{"getstats",		PF_NoSSQC,			PF_cl_getstat_string,332,	PF_NoMenu, D("string(float stnum)", "Retrieves the value of the given EV_STRING stat, as a tempstring.\nString stats use a separate pool of stats from numeric ones.\n")},
-//	{"getplayerstat",	PF_NoSSQC,			PF_FullCSQCOnly,	0,		PF_NoMenu, D("__variant(float playernum, float statnum, float stattype)", "Retrieves a specific player's stat, matching the type specified on the server. This builtin is primarily intended for mvd playback where ALL players are known. For EV_ENTITY, world will be returned if the entity is not in the pvs, use type-punning with EV_INTEGER to get the entity number if you just want to see if its set. STAT_ITEMS should be queried as an EV_INTEGER on account of runes and items2 being packed into the upper bits.")},
+	{"getplayerstat", PF_NoSSQC, PF_cs_getplayerstat, 0, PF_NoMenu, D("__variant(float playernum, float statnum, float stattype)", "Returns typed stats for the local view player. Untracked players and unavailable types return zero.")},
 	{"setmodelindex",	PF_sv_setmodelindex,PF_cl_setmodelindex,333,	PF_NoMenu, D("void(entity e, float mdlindex)", "Sets a model by precache index instead of by name. Otherwise identical to setmodel.")},//
 	{"modelnameforindex",PF_modelnameforidx,PF_modelnameforidx,	334,	PF_NoMenu, D("string(float mdlindex)", "Retrieves the name of the model based upon a precache index. This can be used to reduce csqc network traffic by enabling model matching.")},//
 	{"particleeffectnum",PF_sv_particleeffectnum,PF_cl_particleeffectnum,335,PF_NoMenu, D("float(string effectname)", "Precaches the named particle effect. If your effect name is of the form 'foo.bar' then particles/foo.cfg will be loaded by the client if foo.bar was not already defined.\nDifferent engines will have different particle systems, this specifies the QC API only.")},// (EXT_CSQC)
@@ -11068,7 +11469,7 @@ static struct
 	{"getkeybind",		NULL,				PF_cl_getkeybind,	342,	PF_cl_getkeybind,342, D("string(float keynum, optional float bindmap)", "Returns the current binding for the given key (returning only the command executed when no modifiers are pressed).")},// (EXT_CSQC)
 	{"setcursormode",	PF_NoSSQC,			PF_cl_setcursormode,343,	PF_cl_setcursormode,343, D("void(float usecursor, optional string cursorimage, optional vector hotspot, optional float scale)", "Pass TRUE if you want the engine to release the mouse cursor (absolute input events + touchscreen mode). Pass FALSE if you want the engine to grab the cursor (relative input events + standard looking). If the image name is specified, the engine will use that image for a cursor (use an empty string to clear it again), in a way that will not conflict with the console. Images specified this way will be hardware accelerated, if supported by the platform/port.")},
 	{"getcursormode",	PF_NoSSQC,			PF_cl_getcursormode,0,		PF_cl_getcursormode,0, D("float(float effective)", "Reports the cursor mode this module previously attempted to use. If 'effective' is true, reports the cursor mode currently active (if was overriden by a different module which has precidence, for instance, or if there is only a touchscreen and no mouse).")},
-	{"getmousepos",		PF_NoSSQC,			PF_NoCSQC,	344,	PF_m_getmousepos,66, D("vector()", "Nasty convoluted DP extension. Typically returns deltas instead of positions. Use CSQC_InputEvent for such things in csqc mods.")},	// #344 This is a DP extension
+	{"getmousepos",		PF_NoSSQC,			PF_cs_getmousepos,	344,	PF_m_getmousepos,66, D("vector()", "Nasty convoluted DP extension. Typically returns deltas instead of positions. Use CSQC_InputEvent for such things in csqc mods.")},	// #344 This is a DP extension
 	{"getinputstate",	PF_NoSSQC,			PF_cs_getinputstate,345,	PF_NoMenu, D("float(float inputsequencenum)", "Looks up an input frame from the log, setting the input_* globals accordingly.\nThe sequence number range used for prediction should normally be servercommandframe < sequence <= clientcommandframe.\nThe sequence equal to clientcommandframe will change between input frames.")},// (EXT_CSQC)
 	{"setsensitivityscaler",PF_NoSSQC,		PF_cl_setsensitivity,346,	PF_NoMenu, D("void(float sens)", "Temporarily scales the player's mouse sensitivity based upon something like zoom, avoiding potential cvar saving and thus corruption.")},// (EXT_CSQC)
 	{"runstandardplayerphysics",PF_sv_pmove,PF_cs_pmove,		347,	PF_NoMenu, D("void(entity ent)", "Perform the engine's standard player movement prediction upon the given entity using the input_* globals to describe movement.")},
@@ -11083,7 +11484,7 @@ static struct
 	{"serverkey",		PF_sv_serverkey_s,	PF_cl_serverkey_s,	354,	PF_cl_serverkey_s,354, D("string(string key)", "Look up a key in the server's public serverinfo string")},//
 	{"serverkeyfloat",	PF_sv_serverkey_f,	PF_cl_serverkey_f,	0,		PF_cl_serverkey_f,0, D("float(string key, optional float assumevalue)", "Version of serverkey that returns the value as a float (which avoids tempstrings).")},//
 	{"getentitytoken",	PF_NoSSQC,			PF_cs_getentitytoken,355,	PF_NoMenu, D("string(optional string resetstring)", "Grab the next token in the map's entity lump.\nIf resetstring is not specified, the next token will be returned with no other sideeffects.\nIf empty, resets to the map entity lump and returns null.\nIf not empty, copies that string as the new input and returns null.\nAlways returns tempstrings.")},//;
-//	{"findfont",		PF_NoSSQC,			PF_FullCSQCOnly,	356,	PF_NoMenu, D("float(string s)", "Looks up a named font slot. Matches the actual font name as a last resort.")},//;
+	{"findfont", PF_NoSSQC, PF_cl_findfont, 356, PF_NoMenu, D("float(string name)", "Returns the drawfont handle for a loaded slot name or bitmap face. Returns 0 for the default font when no name matches.")},
 	{"loadfont",		PF_NoSSQC,			PF_cl_loadfont,		357,	PF_NoMenu, D("float(string fontname, string fontmaps, string sizes, float slot, optional float fix_scale, optional float fix_voffset)", "Loads a 16-by-16 bitmap font atlas into one of 32 CSQC font slots and returns its drawfont handle. Automatic allocation skips reserved slot 0, but an explicit slot 0 is supported. TrueType fonts are not supported.")},
 	{"sendevent",		PF_NoSSQC,			PF_cl_sendevent,	359,	PF_NoMenu, D("void(string evname, string evargs, ...)", "Invoke Cmd_evname_evargs in ssqc. evargs must be a string of initials refering to the types of the arguments to pass. v=vector, e=entity(.entnum field is sent), f=float, i=int. 6 arguments max - you can get more if you pack your floats into vectors.")},// (EXT_CSQC_1)
 	{"readbyte",		PF_NoSSQC,			PF_cl_readbyte,		360,	PF_NoMenu, "float()"},// (EXT_CSQC)
@@ -11290,6 +11691,7 @@ static struct
 	{"fremove", PF_fremove, PF_fremove, 652, PF_fremove, 652, D("float(string name)", "Removes a regular file from the writable data directory. Returns 0 on success.")},
 #endif
 	{"fexists", PF_fexists, PF_fexists, 653, PF_fexists, 653, D("float(string name)", "Checks for a loose file in the current writable game directory.")},
+	{"setpause", PF_NoSSQC, PF_cl_setpause, 531, PF_NoMenu, D("void(float pause)", "Pauses local single-player simulation while CSQC requests it.")},
 	{"stopsound", PF_NoSSQC, PF_cs_stopsound, 0, PF_NoMenu, "void(entity ent, float channel)"},
 	{"soundupdate", PF_NoSSQC, PF_cs_soundupdate, 0, PF_NoMenu, D("float(entity ent, float channel, string sample, float volume, float attenuation, optional float pitch, optional float flags, optional float offset)", "Changes the current local entity sound. Only native pitch and zero flags are supported.")},
 	{"getsoundtime", PF_NoSSQC, PF_cs_getsoundtime, 533, PF_NoMenu, "float(entity ent, float channel)"},
@@ -12466,6 +12868,19 @@ void PR_DumpPlatform_f(void)
 		fprintf(f, "const float VF_AFOV = %i;", VF_AFOV);
 		fprintf(f, "const float VF_SCREENVSIZE = %i;", VF_SCREENVSIZE);
 		fprintf(f, "const float VF_SCREENPSIZE = %i;", VF_SCREENPSIZE);
+
+		fprintf(f, "const float RESTYPE_MODEL = %i;", RESTYPE_MODEL);
+		fprintf(f, "const float RESTYPE_SOUND = %i;", RESTYPE_SOUND);
+		fprintf(f, "const float RESTYPE_PARTICLE = %i;", RESTYPE_PARTICLE);
+		fprintf(f, "const float RESTYPE_PIC = %i;", RESTYPE_PIC);
+		fprintf(f, "const float RESTYPE_SKIN = %i;", RESTYPE_SKIN);
+		fprintf(f, "const float RESTYPE_TEXTURE = %i;", RESTYPE_TEXTURE);
+		fprintf(f, "const float RESSTATE_UNSUPPORTED = %i;", RESSTATE_UNSUPPORTED);
+		fprintf(f, "const float RESSTATE_NOTKNOWN = %i;", RESSTATE_NOTKNOWN);
+		fprintf(f, "const float RESSTATE_NOTLOADED = %i;", RESSTATE_NOTLOADED);
+		fprintf(f, "const float RESSTATE_LOADING = %i;", RESSTATE_LOADING);
+		fprintf(f, "const float RESSTATE_FAILED = %i;", RESSTATE_FAILED);
+		fprintf(f, "const float RESSTATE_LOADED = %i;", RESSTATE_LOADED);
 
 		fprintf(f, "const float LFIELD_ORIGIN = %i;", QCLFIELD_ORIGIN);
 		fprintf(f, "const float LFIELD_COLOUR = %i;", QCLFIELD_COLOUR);

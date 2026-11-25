@@ -2868,73 +2868,83 @@ CL_CalcCrouch
 Smooth out stair step ups / fast elevator rises before temp entities update.
 ===============
 */
-static void CL_CalcCrouch (void)
+float CL_ViewCrouch (const vec3_t origin, qboolean onground, qboolean csqc)
 {
-	entity_t	*ent;
-	static	vec3_t	oldorigin = {0, 0, 0};
-	static	float	oldz = 0;
-	static	float	extracrouch = 0;
-	static	float	crouchspeed = 80;
+	typedef struct
+	{
+		vec3_t oldorigin;
+		float oldz, extracrouch, crouchspeed, offset;
+	} crouchstate_t;
+	static crouchstate_t native = {.crouchspeed = 80}, scripted = {.crouchspeed = 80};
+	crouchstate_t *state = csqc ? &scripted : &native;
 	float		steptime;
 	vec3_t		odiff;
 
 	if (!cl.entities || cl.viewentity < 1 || cl.viewentity >= cl.num_entities)
 	{
-		cl.crouch = 0;
-		return;
+		state->offset = 0;
+		return 0;
 	}
 
-	ent = &cl.entities[cl.viewentity];
 
 	steptime = cl.time - cl.oldtime;
 	if (steptime < 0)
 		steptime = 0;
 
-	VectorSubtract (ent->origin, oldorigin, odiff);
+	VectorSubtract (origin, state->oldorigin, odiff);
 	if (DotProduct (odiff, odiff) > 48 * 48)
 	{
-		oldz = ent->origin[2];
-		extracrouch = 0;
-		crouchspeed = 80;
-		cl.crouch = 0;
-		VectorCopy (ent->origin, oldorigin);
-		return;
+		state->oldz = origin[2];
+		state->extracrouch = 0;
+		state->crouchspeed = 80;
+		state->offset = 0;
+		VectorCopy (origin, state->oldorigin);
+		return 0;
 	}
-	VectorCopy (ent->origin, oldorigin);
+	VectorCopy (origin, state->oldorigin);
 
-	if (!noclip_anglehack && cl.onground && ent->origin[2] - oldz > 0)
+	if (!noclip_anglehack && onground && origin[2] - state->oldz > 0)
 	{
-		if (ent->origin[2] - oldz > 20)
+		if (origin[2] - state->oldz > 20)
 		{
-			if (crouchspeed < 160)
+			if (state->crouchspeed < 160)
 			{
-				extracrouch = ent->origin[2] - oldz - steptime * 200 - 15;
-				extracrouch = q_min (extracrouch, 5);
+				state->extracrouch = origin[2] - state->oldz - steptime * 200 - 15;
+				state->extracrouch = q_min (state->extracrouch, 5);
 			}
-			crouchspeed = 160;
+			state->crouchspeed = 160;
 		}
 
-		oldz += steptime * crouchspeed;
-		if (oldz > ent->origin[2])
-			oldz = ent->origin[2];
-		if (ent->origin[2] - oldz > 12 + extracrouch)
-			oldz = ent->origin[2] - 12 - extracrouch;
+		state->oldz += steptime * state->crouchspeed;
+		if (state->oldz > origin[2])
+			state->oldz = origin[2];
+		if (origin[2] - state->oldz > 12 + state->extracrouch)
+			state->oldz = origin[2] - 12 - state->extracrouch;
 
-		extracrouch -= steptime * 200;
-		if (extracrouch < 0)
-			extracrouch = 0;
+		state->extracrouch -= steptime * 200;
+		if (state->extracrouch < 0)
+			state->extracrouch = 0;
 
-		cl.crouch = oldz - ent->origin[2];
+		state->offset = state->oldz - origin[2];
 	}
 	else
 	{
-		oldz = ent->origin[2];
-		cl.crouch += steptime * 150;
-		if (cl.crouch > 0)
-			cl.crouch = 0;
-		crouchspeed = 80;
-		extracrouch = 0;
+		state->oldz = origin[2];
+		state->offset += steptime * 150;
+		if (state->offset > 0)
+			state->offset = 0;
+		state->crouchspeed = 80;
+		state->extracrouch = 0;
 	}
+	return state->offset;
+}
+
+static void CL_CalcCrouch (void)
+{
+	if (!cl.entities || cl.viewentity < 1 || cl.viewentity >= cl.num_entities)
+		cl.crouch = 0;
+	else
+		cl.crouch = CL_ViewCrouch(cl.entities[cl.viewentity].origin, cl.onground, false);
 }
 
 #ifdef PSET_SCRIPT

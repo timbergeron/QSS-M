@@ -64,34 +64,29 @@ void CL_UpdateLightstyle(unsigned int idx, const char *str)
 R_AnimateLight
 ==================
 */
+int R_LightstyleValue (int style)
+{
+	const lightstyle_t *s = &cl_lightstyle[style];
+	int k;
+	if (!s->length)
+		return 256;
+	if (r_flatlightstyles.value == 2)
+		k = s->peak - 'a';
+	else if (r_flatlightstyles.value == 1 || !r_dynamic.value)
+		k = s->average - 'a';
+	else
+	{
+		int frame = (int)(q_max(0.0, cl.time) * 10) % s->length;
+		k = s->map[frame] - 'a';
+	}
+	return k * 22;
+}
+
 void R_AnimateLight (void)
 {
-	int			i,j,k;
-
-//
-// light animations
-// 'm' is normal light, 'a' is no light, 'z' is double bright
-	i = (int)(cl.time*10);
-	for (j=0 ; j<MAX_LIGHTSTYLES ; j++)
-	{
-		if (!cl_lightstyle[j].length)
-		{
-			d_lightstylevalue[j] = 256;
-			continue;
-		}
-		//johnfitz -- r_flatlightstyles
-		if (r_flatlightstyles.value == 2)
-			k = cl_lightstyle[j].peak - 'a';
-		else if (r_flatlightstyles.value == 1 || !r_dynamic.value)
-			k = cl_lightstyle[j].average - 'a';
-		else
-		{
-			k = i % cl_lightstyle[j].length;
-			k = cl_lightstyle[j].map[k] - 'a';
-		}
-		d_lightstylevalue[j] = k*22;
-		//johnfitz
-	}
+	int j;
+	for (j = 0; j < MAX_LIGHTSTYLES; j++)
+		d_lightstylevalue[j] = R_LightstyleValue(j);
 }
 
 /*

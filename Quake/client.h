@@ -615,6 +615,7 @@ extern	int				cl_maxvisedicts;	//extended if we exceeded it the previous frame
 // cl_main
 //
 dlight_t *CL_AllocDlight (int key);
+float CL_ViewCrouch(const vec3_t origin, qboolean onground, qboolean csqc);
 void	CL_DecayLights (void);
 
 void CL_Init (void);

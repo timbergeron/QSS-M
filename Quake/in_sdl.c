@@ -2753,12 +2753,30 @@ static float IN_RecenterEasing (float frac)
 	return frac * frac;
 }
 
+void IN_SetCursorPosition(float x, float y)
+{
+	SDL_Window *window = (SDL_Window *)VID_GetWindow();
+	int w, h;
+	if (!window || !windowhasfocus || (key_dest != key_game && key_dest != key_message) ||
+		!SDL_GetWindowSize(window, &w, &h) || w <= 0 || h <= 0)
+		return;
+	vid.cursorpos[0] = bound(0, x, w - 1);
+	vid.cursorpos[1] = bound(0, y, h - 1);
+	SDL_WarpMouseInWindow(window, vid.cursorpos[0], vid.cursorpos[1]);
+}
+
 static void IN_ApplyMouseMotion(float dx, float dy, float wx, float wy)
 {
 	if (!windowhasfocus)
 		dx = dy = 0;	//don't change view angles etc while unfocused.
 	vid.cursorpos[0] = wx;
 	vid.cursorpos[1] = wy;
+
+	if (cl.qcvm.progs && !cl.qcvm.cursorforced && (key_dest == key_game || key_dest == key_message))
+	{
+		cl.qcvm.mousedelta[0] += dx;
+		cl.qcvm.mousedelta[1] += dy;
+	}
 
 	if (cl.paused || cl.match_pause_time > 0) // if the game is paused in any way (regular or match pause) #pong
 	{

@@ -570,6 +570,7 @@ const char *Fog_GetFogCommand(void);	//for demo recording
 void R_NewGame (void);
 
 void CL_UpdateLightstyle(unsigned int idx, const char *stylestring);
+int R_LightstyleValue(int style);
 void R_AnimateLight (void);
 void R_MarkSurfaces (void);
 qboolean R_CullBox (const vec3_t emins, const vec3_t emaxs);
