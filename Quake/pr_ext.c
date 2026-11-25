@@ -56,6 +56,15 @@ static float PR_GetVMScale(void)
 	return s;
 }
 
+void PR_UpdateClientUI(void)
+{
+	float scale = PR_GetVMScale();
+	if (qcvm->extglobals.autocvar_vid_conwidth)
+		*qcvm->extglobals.autocvar_vid_conwidth = glwidth > 0 ? glwidth / scale : 0;
+	if (qcvm->extglobals.autocvar_vid_conheight)
+		*qcvm->extglobals.autocvar_vid_conheight = glheight > 0 ? glheight / scale : 0;
+}
+
 static qmodel_t *PR_GetVMModel(int modelindex)
 {	//some vms intentionally have no model resolver. hand back null so each handler
 	//follows its normal invalid-model path rather than dereferencing it.
@@ -7164,13 +7173,26 @@ static void DrawQC_EndBlend(qboolean additive)
 		glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
 }
 
+static void DrawQC_FontSize(const float *size, vec3_t scaled)
+{
+	const float *scale = qcvm->extglobals.drawfontscale;
+	if (!scale || (!scale[0] && !scale[1]))
+		scale = qcvm->extglobals.rawfontscale;
+	VectorCopy(size, scaled);
+	if (scale && (scale[0] || scale[1]) && isfinite(scale[0]) && isfinite(scale[1]))
+	{
+		scaled[0] *= scale[0];
+		scaled[1] *= scale[1];
+	}
+}
+
 static void PF_cl_drawcharacter(void)
 {
 	G_FLOAT(OFS_RETURN) = 0;	//declared float; set it before any early out
 
 	float *pos	= G_VECTOR(OFS_PARM0);
 	int charcode= (int)G_FLOAT (OFS_PARM1) & 0xff;
-	float *size	= G_VECTOR(OFS_PARM2);
+	vec3_t size;
 	float *rgb	= G_VECTOR(OFS_PARM3);
 	float alpha	= G_FLOAT (OFS_PARM4);
 	float sl, tl, sh, th;
@@ -7179,6 +7201,7 @@ static void PF_cl_drawcharacter(void)
 	if (charcode == 32)
 		return; //don't waste time on spaces
 
+	DrawQC_FontSize(G_VECTOR(OFS_PARM2), size);
 	additive = DrawQC_BeginBlend(qcvm->argc > 5 ? G_FLOAT(OFS_PARM5) : 0);
 	DrawQC_BindFont(&sl, &tl, &sh, &th);
 	glColor4f (rgb[0], rgb[1], rgb[2], alpha);
@@ -7194,7 +7217,7 @@ static void PF_cl_drawrawstring(void)
 
 	float *pos	= G_VECTOR(OFS_PARM0);
 	const char *text = G_STRING (OFS_PARM1);
-	float *size	= G_VECTOR(OFS_PARM2);
+	vec3_t size;
 	float *rgb	= G_VECTOR(OFS_PARM3);
 	float alpha	= G_FLOAT (OFS_PARM4);
 	float sl, tl, sh, th;
@@ -7206,6 +7229,7 @@ static void PF_cl_drawrawstring(void)
 	if (!*text)
 		return; //don't waste time on spaces
 
+	DrawQC_FontSize(G_VECTOR(OFS_PARM2), size);
 	additive = DrawQC_BeginBlend(qcvm->argc > 5 ? G_FLOAT(OFS_PARM5) : 0);
 	DrawQC_BindFont(&sl, &tl, &sh, &th);
 	glColor4f (rgb[0], rgb[1], rgb[2], alpha);
@@ -7224,7 +7248,7 @@ static void PF_cl_drawstring(void)
 
 	float *pos	= G_VECTOR(OFS_PARM0);
 	const char *text = G_STRING (OFS_PARM1);
-	float *size	= G_VECTOR(OFS_PARM2);
+	vec3_t size;
 	float *rgb	= G_VECTOR(OFS_PARM3);
 	float alpha	= G_FLOAT (OFS_PARM4);
 	float sl, tl, sh, th;
@@ -7239,6 +7263,7 @@ static void PF_cl_drawstring(void)
 
 	PR_Markup_Begin(&mu, text, rgb, alpha);
 
+	DrawQC_FontSize(G_VECTOR(OFS_PARM2), size);
 	additive = DrawQC_BeginBlend(qcvm->argc > 5 ? G_FLOAT(OFS_PARM5) : 0);
 	DrawQC_BindFont(&sl, &tl, &sh, &th);
 	glBegin (GL_QUADS);
@@ -7253,12 +7278,13 @@ static void PF_cl_drawstring(void)
 }
 static void PF_cl_stringwidth(void)
 {
-	static const float defaultfontsize[] = {8,8};
+	static const float defaultfontsize[] = {8,8,0};
 	const char *text = G_STRING (OFS_PARM0);
 	qboolean usecolours = G_FLOAT(OFS_PARM1);
 	const float *fontsize = (qcvm->argc>2)?G_VECTOR (OFS_PARM2):defaultfontsize;
 	struct markup_s mu;
 	int r = 0;
+	vec3_t size;
 
 	if (!usecolours)
 		r = strlen(text);
@@ -7272,7 +7298,8 @@ static void PF_cl_stringwidth(void)
 	}
 
 	//primitive and lame, but hey.
-	G_FLOAT(OFS_RETURN) = fontsize[0] * r;
+	DrawQC_FontSize(fontsize, size);
+	G_FLOAT(OFS_RETURN) = size[0] * r;
 }
 
 
@@ -12446,7 +12473,8 @@ func_t PR_FindExtFunction(const char *entryname)
 static void *PR_FindExtGlobal(int type, const char *name)
 {
 	ddef_t *def = ED_FindGlobal(name);
-	if (def && (def->type&~DEF_SAVEGLOBAL) == type && def->ofs < qcvm->progs->numglobals)
+	int words = type == ev_vector ? 3 : 1;
+	if (def && (def->type&~DEF_SAVEGLOBAL) == type && def->ofs <= qcvm->progs->numglobals - words)
 		return qcvm->globals + def->ofs;
 	return NULL;
 }
@@ -12604,6 +12632,10 @@ void PR_EnableExtensions(ddef_t *pr_globaldefs)
 	QCEXTGLOBALS_COMMON
 	QCEXTGLOBALS_GAME
 	QCEXTGLOBALS_CSQC
+	if (qcvm == &cl.qcvm || menuqc)
+	{
+		QCEXTGLOBALS_CLIENT_UI
+	}
 #undef QCEXTGLOBAL_FLOAT
 #undef QCEXTGLOBAL_INT
 #undef QCEXTGLOBAL_VECTOR
@@ -12660,6 +12692,10 @@ void PR_EnableExtensions(ddef_t *pr_globaldefs)
 		const char *n = PR_GetString(qcvm->globaldefs[i].s_name);
 		if (!strncmp(n, "autocvar_", 9))
 		{
+			// These client globals follow the virtual canvas, not the cvar registry.
+			if ((qcvm == &cl.qcvm || menuqc) &&
+				(!strcmp(n, "autocvar_vid_conwidth") || !strcmp(n, "autocvar_vid_conheight")))
+				continue;
 			//really crappy approach
 			const char *def;
 			cvar_t *var;
@@ -12933,6 +12969,14 @@ void PR_DumpPlatform_f(void)
 #undef QCEXTGLOBAL_FLOAT
 #undef QCEXTGLOBAL_VECTOR
 
+	if (targs & (CS|MN))
+	{
+		fprintf(f, "float autocvar_vid_conwidth, autocvar_vid_conheight;\n");
+		fprintf(f, "var vector drawfontscale = '1 1 0';\n");
+		fprintf(f, "#define rawfontscale drawfontscale\n");
+	}
+
+
 	fprintf(f, "const float FALSE		= 0;\n");
 	fprintf(f, "const float TRUE		= 1;\n");
 
@@ -13102,6 +13146,13 @@ void PR_DumpPlatform_f(void)
 		fprintf(f, "const float IE_MOUSEDELTA	= %i;\n", CSIE_MOUSEDELTA);
 		fprintf(f, "const float IE_MOUSEABS		= %i;\n", CSIE_MOUSEABS);
 		fprintf(f, "const float IE_JOYAXIS		= %i;\n", CSIE_JOYAXIS);
+		fprintf(f, "const float IE_FOCUS = %i;\n", CSIE_FOCUS);
+		fprintf(f, "const float IE_PASTE = %i;\n", CSIE_PASTE);
+		if (targs & CS)
+		{
+			fprintf(f, "const float IE_ACCELEROMETER = %i;\n", CSIE_ACCELEROMETER);
+			fprintf(f, "const float IE_GYROSCOPE = %i;\n", CSIE_GYROSCOPE);
+		}
 
 		fprintf(f, "const float VF_MIN = %i;", VF_MIN);
 		fprintf(f, "const float VF_MIN_X = %i;", VF_MIN_X);

@@ -370,6 +370,8 @@ void PR_ExecuteProgram (func_t fnum)
 	}
 
 	f = &qcvm->functions[fnum];
+	if (!qcvm->depth && (qcvm->extglobals.autocvar_vid_conwidth || qcvm->extglobals.autocvar_vid_conheight))
+		PR_UpdateClientUI();
 
 	//FIXME: if this is a builtin, then we're going to crash.
 

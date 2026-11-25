@@ -81,6 +81,7 @@ qboolean PR_LoadProgs (const char *filename, qboolean fatal, unsigned int needcr
 void PR_InitExtensions(void);
 void PR_EnableExtensions(ddef_t *pr_globaldefs);	//adds in the extra builtins etc
 void PR_AutoCvarChanged(cvar_t *var);				//updates the autocvar_ globals when their cvar is changed
+void PR_UpdateClientUI(void);
 struct qmodel_s *PR_MenuModelForIndex(int modelindex);
 void PR_ShutdownExtensions(void);					//nooooes!
 void PR_ReloadPics(qboolean purge);					//for gamedir or video changes
@@ -308,12 +309,19 @@ struct pr_extglobals_s
 	QCEXTGLOBAL_FLOAT(clientcommandframe)\
 	QCEXTGLOBAL_FLOAT(servercommandframe)\
 	//end
+#define QCEXTGLOBALS_CLIENT_UI \
+	QCEXTGLOBAL_FLOAT(autocvar_vid_conwidth)\
+	QCEXTGLOBAL_FLOAT(autocvar_vid_conheight)\
+	QCEXTGLOBAL_VECTOR(drawfontscale)\
+	QCEXTGLOBAL_VECTOR(rawfontscale)\
+	//end
 #define QCEXTGLOBAL_FLOAT(n) float *n;
 #define QCEXTGLOBAL_INT(n) int *n;
 #define QCEXTGLOBAL_VECTOR(n) float *n;
 	QCEXTGLOBALS_COMMON
 	QCEXTGLOBALS_GAME
 	QCEXTGLOBALS_CSQC
+	QCEXTGLOBALS_CLIENT_UI
 #undef QCEXTGLOBAL_FLOAT
 #undef QCEXTGLOBAL_INT
 #undef QCEXTGLOBAL_VECTOR
@@ -410,10 +418,11 @@ typedef struct areanode_s
 #define CSIE_KEYUP				1
 #define CSIE_MOUSEDELTA			2
 #define CSIE_MOUSEABS			3
-//#define CSIE_ACCELEROMETER	4
-//#define CSIE_FOCUS			5
+#define CSIE_ACCELEROMETER		4
+#define CSIE_FOCUS			5
 #define CSIE_JOYAXIS			6
-//#define CSIE_GYROSCOPE		7
+#define CSIE_GYROSCOPE			7
+#define CSIE_PASTE			8
 
 typedef enum
 {
@@ -453,6 +462,7 @@ struct qcvm_s
 
 	qboolean cursorforced;
 	float mousedelta[2];
+	unsigned int inputfocus;
 	void *cursorhandle;	//video code.
 	qboolean nogameaccess;	//simplecsqc isn't allowed to poke properties of the actual game (to prevent cheats when there's no restrictions on what it can access)
 	qboolean qexlogic;			//2021 rerelease gamecode owns behaviors that conflict with some DP extensions.

@@ -272,6 +272,8 @@ void Key_Event (int key, qboolean down);
 void Key_EventWithKeycode (int key, qboolean down, int keycode);
 void Char_Event (int key);
 qboolean Key_TextEntry (void);
+void Key_UpdateQCInputFocus(qboolean mouse, qboolean keyboard);
+void Key_SendQCSensorEvent(int type, float x, float y, float z);
 
 void Key_SetBinding (int keynum, const char *binding, int bindmap);
 keydevice_t Key_GetDeviceForKeynum (int keynum);

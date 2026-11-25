@@ -3401,6 +3401,98 @@ qboolean CSQC_HandleKeyEvent(qboolean down, int keyc, int unic)
 	return false;
 }
 
+static qboolean Key_SendQCInputEvent(qcvm_t *vm, func_t callback, int type, float a, float b, float c)
+{
+	qboolean consumed;
+	PR_SwitchQCVM(vm);
+	G_FLOAT(OFS_PARM0) = type;
+	G_VECTORSET(OFS_PARM1, a, 0, 0);
+	G_VECTORSET(OFS_PARM2, b, 0, 0);
+	G_VECTORSET(OFS_PARM3, c, 0, 0);
+	PR_ExecuteProgram(callback);
+	consumed = G_FLOAT(OFS_RETURN) != 0;
+	PR_SwitchQCVM(NULL);
+	return consumed;
+}
+
+static void Key_UpdateQCVMFocus(qcvm_t *vm, func_t callback, qboolean active, qboolean mouse, qboolean keyboard)
+{
+	unsigned int focus = active ? (mouse ? 1u : 0u) | (keyboard ? 2u : 0u) : 0;
+	unsigned int changed = vm->inputfocus ^ focus;
+	if (!callback || !changed)
+		return;
+	vm->inputfocus = focus;
+	Key_SendQCInputEvent(vm, callback, CSIE_FOCUS,
+		changed & 1u ? (focus & 1u) != 0 : -1,
+		changed & 2u ? (focus & 2u) != 0 : -1, 0);
+}
+
+void Key_UpdateQCInputFocus(qboolean mouse, qboolean keyboard)
+{
+	if (qcvm)
+		return;
+	Key_UpdateQCVMFocus(&cl.qcvm, cl.qcvm.extfuncs.CSQC_InputEvent,
+		!key_inputgrab.active && key_dest == key_game && !con_forcedup, mouse, keyboard);
+	Key_UpdateQCVMFocus(&cls.menu_qcvm, cls.menu_qcvm.extfuncs.Menu_InputEvent,
+		!key_inputgrab.active && key_dest == key_menu, mouse, keyboard);
+}
+
+void Key_SendQCSensorEvent(int type, float x, float y, float z)
+{
+	if (!qcvm && !key_inputgrab.active && key_dest == key_game && !con_forcedup &&
+		windowhasfocus && cl.qcvm.extfuncs.CSQC_InputEvent &&
+		isfinite(x) && isfinite(y) && isfinite(z))
+		Key_SendQCInputEvent(&cl.qcvm, cl.qcvm.extfuncs.CSQC_InputEvent, type, x, y, z);
+}
+
+static qboolean Key_QCPaste(void)
+{
+	keydest_t dest = key_dest;
+	qcvm_t *vm;
+	func_t *callback;
+	func_t inputevent;
+	char *text;
+	const char *next;
+	qboolean consumed = false;
+	unsigned int codepoint;
+	int count;
+
+	if (qcvm || !windowhasfocus)
+		return false;
+	// Clipboard data is sent only for an explicit paste into an active QC UI.
+	if (dest == key_menu && cls.menu_qcvm.extfuncs.Menu_InputEvent && Key_TextEntry())
+	{
+		vm = &cls.menu_qcvm;
+		callback = &vm->extfuncs.Menu_InputEvent;
+	}
+	else if (dest == key_game && !con_forcedup && cl.qcvm.extfuncs.CSQC_InputEvent &&
+		cl.qcvm.cursorforced && !cl.qcvm.nogameaccess)
+	{
+		vm = &cl.qcvm;
+		callback = &vm->extfuncs.CSQC_InputEvent;
+	}
+	else
+		return false;
+
+	inputevent = *callback;
+	if (key_dest != dest || !inputevent)
+		return false;
+	text = SDL_GetClipboardText();
+	if (!text)
+		return false;
+	next = text;
+	for (count = 0; count < STRINGTEMP_LENGTH && key_dest == dest && *callback == inputevent; count++)
+	{
+		codepoint = SDL_StepUTF8(&next, NULL);
+		if (!codepoint)
+			break;
+		if (Key_SendQCInputEvent(vm, inputevent, CSIE_PASTE, 0, codepoint, 0))
+			consumed = true;
+	}
+	SDL_free(text);
+	return consumed;
+}
+
 // Older scripted menus cannot report text-field focus. Give them basic ASCII
 // character events without enabling the IME. Menus needing composed text or
 // layout-specific shifted symbols can opt in via Menu_TextEntry.
@@ -3778,7 +3870,8 @@ void Key_EventWithKeycode (int key, qboolean down, int keycode)
 		return;
 	}
 
-	if (down && !wasdown && (key == 'v' || key == 'V') && Key_IsShortcutModifierDown() && IN_PasteClipboardFile())
+	if (down && !wasdown && (key == 'v' || key == 'V') && Key_IsShortcutModifierDown() &&
+		(IN_PasteClipboardFile() || Key_QCPaste()))
 		return;
 
 	if (down && !wasdown && key_dest == key_game && (key == 'c' || key == 'C') && Key_IsShortcutModifierDown())

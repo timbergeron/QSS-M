@@ -3431,6 +3431,8 @@ static void IN_RefreshActiveControllerInfo(void)
 	if (IN_GamepadHasCapability(joy_active_controller, SDL_PROP_GAMEPAD_CAP_RGB_LED_BOOLEAN))
 		SDL_SetGamepadLED(joy_active_controller, 80, 20, 0);
 	joy_has_touchpad = SDL_GetNumGamepadTouchpads(joy_active_controller) > 0;
+	if (SDL_GamepadHasSensor(joy_active_controller, SDL_SENSOR_ACCEL))
+		SDL_SetGamepadSensorEnabled(joy_active_controller, SDL_SENSOR_ACCEL, true);
 	if (SDL_GamepadHasSensor(joy_active_controller, SDL_SENSOR_GYRO) &&
 		SDL_SetGamepadSensorEnabled(joy_active_controller, SDL_SENSOR_GYRO, true))
 	{
@@ -7120,11 +7122,19 @@ void IN_SendKeyEvents (void)
 		case SDL_EVENT_GAMEPAD_TOUCHPAD_UP:
 			break;
 		case SDL_EVENT_GAMEPAD_SENSOR_UPDATE:
-			if (event.gsensor.sensor == SDL_SENSOR_GYRO && event.gsensor.which == joy_active_instanceid)
+			if (event.gsensor.which != joy_active_instanceid)
+				break;
+			if (event.gsensor.sensor == SDL_SENSOR_ACCEL)
+				Key_SendQCSensorEvent(CSIE_ACCELEROMETER, event.gsensor.data[0],
+					event.gsensor.data[1], event.gsensor.data[2]);
+			else if (event.gsensor.sensor == SDL_SENSOR_GYRO)
 			{
 				float prev_yaw = gyro_yaw;
 				float prev_pitch = gyro_pitch;
 
+				// SDL reports radians per second. FTE's QC event uses degrees per second.
+				Key_SendQCSensorEvent(CSIE_GYROSCOPE, RAD2DEG(event.gsensor.data[0]),
+					RAD2DEG(event.gsensor.data[1]), RAD2DEG(event.gsensor.data[2]));
 				if (IN_UpdateGyroCalibration(event.gsensor.data))
 					break;
 
@@ -7221,6 +7231,11 @@ void IN_SendKeyEvents (void)
 
 	if (display_changed)
 		VID_OnDisplayChange ();
+
+	SDL_Window *window = (SDL_Window *)VID_GetWindow();
+	SDL_WindowFlags focus = window ? SDL_GetWindowFlags(window) : 0;
+	Key_UpdateQCInputFocus((focus & SDL_WINDOW_MOUSE_FOCUS) != 0,
+		(focus & SDL_WINDOW_INPUT_FOCUS) != 0);
 
 	IN_DemoScrubRefreshCursor();
 
