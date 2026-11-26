@@ -2884,7 +2884,11 @@ void Key_WriteBindings (FILE *f)
 
 	// unbindall before loading stored bindings:
 	if (cfg_unbindall.value)
-		fprintf (f, "unbindall\n");
+	{
+		Config_BeginEntry (f, "cmd", "unbindall"); // woods #cfgcomments
+		fprintf (f, "unbindall");
+		Config_EndEntry (f, "cmd", "unbindall");
+	}
 	for (bindmap = 0; bindmap < MAX_BINDMAPS; bindmap++)
 	{
 		for (i = 0; i < MAX_KEYS; i++)
@@ -2893,10 +2897,14 @@ void Key_WriteBindings (FILE *f)
 			const char *b = keybinding_untrusted[bindmap][i] ? keybinding_saved[bindmap][i] : keybindings[bindmap][i];
 			if (b && *b)
 			{
+				char entry[64];
+				q_snprintf (entry, sizeof (entry), "%i %s", bindmap, Key_KeynumToString(i)); // woods #cfgcomments
+				Config_BeginEntry (f, "bind", entry);
 				if (bindmap)
-					fprintf (f, "in_bind %i \"%s\" \"%s\"\n", bindmap, Key_KeynumToString(i), b);
+					fprintf (f, "in_bind %i \"%s\" \"%s\"", bindmap, Key_KeynumToString(i), b);
 				else
-					fprintf (f, "bind \"%s\" \"%s\"\n", Key_KeynumToString(i), b);
+					fprintf (f, "bind \"%s\" \"%s\"", Key_KeynumToString(i), b);
+				Config_EndEntry (f, "bind", entry);
 			}
 		}
 	}

@@ -26,6 +26,48 @@ static fshandle_t		*cfg_file;
 
 /*
 ===================
+CFG_DiscardRestOfLine -- woods #cfgcomments
+
+if a line exceeded buff, consume the rest up to '\n' so its tail
+cannot be read as a separate line on the next FS_fgets call
+===================
+*/
+static void CFG_DiscardRestOfLine (const char *buff, fshandle_t *fh)
+{
+	int c;
+
+	if (strchr (buff, '\n'))
+		return;
+	while ((c = FS_fgetc (fh)) != EOF && c != '\n')
+		;
+}
+
+/*
+===================
+CFG_StripComment -- woods #cfgcomments
+
+cuts a line at a "//" comment that is not inside quotes,
+so lines with a trailing comment are still read correctly
+===================
+*/
+static void CFG_StripComment (char *buff)
+{
+	qboolean quoted = false;
+
+	for ( ; *buff; buff++)
+	{
+		if (*buff == '\"')
+			quoted = !quoted;
+		else if (!quoted && buff[0] == '/' && buff[1] == '/')
+		{
+			*buff = '\0';
+			return;
+		}
+	}
+}
+
+/*
+===================
 CFG_ReadCvars
 
 used for doing early reads from config.cfg searching the list
@@ -54,6 +96,8 @@ void CFG_ReadCvars (const char **vars, int num_vars)
 		// editing it, it's his fault.
 		if (FS_fgets(buff, sizeof(buff), cfg_file))
 		{
+			CFG_DiscardRestOfLine (buff, cfg_file); // woods #cfgcomments
+			CFG_StripComment (buff); // woods #cfgcomments
 			// remove end-of-line characters
 			while (buff[i])
 			{
@@ -122,6 +166,9 @@ char* CFG_ReadCvarValue (const char* var_name) // woods -- same as CFG_ReadCvars
 	name_len = strlen(var_name);
 
 	while (FS_fgets(buff, sizeof(buff), cfg_file)) {
+		CFG_DiscardRestOfLine(buff, cfg_file); // woods #cfgcomments
+		CFG_StripComment(buff); // woods #cfgcomments
+
 		// Remove end-of-line characters and replace tabs with spaces
 		for (int i = 0; buff[i]; i++) {
 			if (buff[i] == '\r' || buff[i] == '\n' || buff[i] == '\t')

@@ -22,6 +22,21 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 */
 // host.c -- coordinates spawning and killing of local servers
 
+#include <errno.h>
+#include <fcntl.h>
+#include <sys/stat.h>
+#ifdef _WIN32
+#include <windows.h>
+#include <io.h>
+#else
+#include <unistd.h>
+#ifdef __APPLE__
+#include <sys/acl.h>
+#elif defined(__linux__)
+#include <sys/xattr.h>
+#endif
+#endif
+
 #include "quakedef.h"
 #include "qwatch.h"
 #include "bgmusic.h"
@@ -1110,6 +1125,555 @@ static void Config_PrintHeading(FILE* f, char* title)
 	fprintf(f, "\n");
 }
 
+/*
+=============================================================================
+
+CONFIG COMMENT PRESERVATION -- woods #cfgcomments
+
+When the config is rewritten, comments the user added are carried over:
+ - full-line "//" comments directly above a line stay above that line
+ - a trailing "// ..." at the end of a line stays on that line
+Comments whose line is no longer written (unbound key, removed alias,
+hand-added command, ...) are kept in a section at the end of the file.
+
+=============================================================================
+*/
+
+typedef struct
+{
+	char		*key;		// "<type> <name>" (only "cmd" names are lowercased)
+	char		*leading;	// full-line comments above the entry, each '\n' terminated
+	char		*trailing;	// end-of-line comment, starting with "//"
+	char		*command;	// original command text, used for orphaned trailing comments
+	qboolean	used;
+} cfgcomment_t;
+
+static cfgcomment_t	*cfg_comments;
+static int			cfg_numcomments, cfg_maxcomments;
+static cfgcomment_t	*cfg_activeentry;	// entry currently being written by Begin/End
+static char			*cfg_orphans;		// comments from lines with no identifiable command
+static char			*cfg_tailcomments;	// comments after the last command line
+
+#define CFG_NOTE_KEEP		"// Comments added above a line, or at the end of it (// like this), are kept when this file is saved."
+#define CFG_NOTE_ORPHANED	"// Comments whose line is no longer written (unbound key, removed alias, etc). Safe to delete."
+
+static char *Config_StrDupLen (const char *s, size_t len)
+{
+	char *p = (char *) malloc (len + 1);
+	if (!p)
+		Sys_Error ("Config_StrDupLen: out of memory");
+	memcpy (p, s, len);
+	p[len] = 0;
+	return p;
+}
+
+// appends text (plus a newline if addnewline) to a malloc'd string
+static char *Config_AppendText (char *dst, const char *text, qboolean addnewline)
+{
+	size_t dstlen = dst ? strlen (dst) : 0;
+	size_t textlen = strlen (text);
+	char *p = (char *) realloc (dst, dstlen + textlen + 2);
+	if (!p)
+		Sys_Error ("Config_AppendText: out of memory");
+	memcpy (p + dstlen, text, textlen);
+	if (addnewline)
+		p[dstlen + textlen++] = '\n';
+	p[dstlen + textlen] = 0;
+	return p;
+}
+
+// appends "// <command> <comment>\n", used to keep a comment whose line is gone
+static char *Config_AppendCommentedLine (char *dst, const char *command, const char *comment)
+{
+	dst = Config_AppendText (dst, "// ", false);
+	if (command && *command)
+		dst = Config_AppendText (dst, command, false);
+	if (comment && *comment)
+	{
+		if (command && *command)
+			dst = Config_AppendText (dst, " ", false);
+		dst = Config_AppendText (dst, comment, false);
+	}
+	return Config_AppendText (dst, "", true);
+}
+
+// cvar and alias names are case-sensitive, so only engine command names are folded
+static void Config_MakeKey (char *out, size_t outsize, const char *type, const char *name)
+{
+	q_snprintf (out, outsize, "%s %s", type, name);
+	if (!strcmp (type, "cmd"))
+		q_strlwr (out);
+}
+
+static cfgcomment_t *Config_FindComment (const char *key)
+{
+	int i;
+	for (i = 0; i < cfg_numcomments; i++)
+		if (!strcmp (cfg_comments[i].key, key))
+			return &cfg_comments[i];
+	return NULL;
+}
+
+static cfgcomment_t *Config_FindCommentFor (const char *type, const char *name)
+{
+	char key[1024];
+	if (!cfg_numcomments)
+		return NULL;
+	Config_MakeKey (key, sizeof (key), type, name);
+	return Config_FindComment (key);
+}
+
+static cfgcomment_t *Config_AddComment (const char *key)
+{
+	cfgcomment_t *e = Config_FindComment (key);
+	if (e)
+		return e;
+	if (cfg_numcomments == cfg_maxcomments)
+	{
+		int newmax = cfg_maxcomments ? cfg_maxcomments * 2 : 64;
+		cfgcomment_t *p = (cfgcomment_t *) realloc (cfg_comments, newmax * sizeof (*p));
+		if (!p)
+			Sys_Error ("Config_AddComment: out of memory");
+		cfg_comments = p;
+		cfg_maxcomments = newmax;
+	}
+	e = &cfg_comments[cfg_numcomments++];
+	memset (e, 0, sizeof (*e));
+	e->key = Config_StrDupLen (key, strlen (key));
+	return e;
+}
+
+static void Config_FreeComments (void)
+{
+	int i;
+	for (i = 0; i < cfg_numcomments; i++)
+	{
+		free (cfg_comments[i].key);
+		free (cfg_comments[i].leading);
+		free (cfg_comments[i].trailing);
+		free (cfg_comments[i].command);
+	}
+	free (cfg_comments);
+	free (cfg_orphans);
+	free (cfg_tailcomments);
+	cfg_comments = NULL;
+	cfg_activeentry = NULL;
+	cfg_orphans = NULL;
+	cfg_tailcomments = NULL;
+	cfg_numcomments = cfg_maxcomments = 0;
+}
+
+// Mirrors COM_ParseEx: within one command, "//" is a comment only where a
+// token would start (so "http://a//b" or 90//x stay part of a word).
+// Returns that "//", or NULL.
+static char *Config_FindTokenComment (char *s, const char *end)
+{
+	while (s < end)
+	{
+		while (s < end && (unsigned char) *s <= ' ')
+			s++;
+		if (s >= end)
+			return NULL;
+		if (s[0] == '/' && s[1] == '/')
+			return s;
+		if (s[0] == '/' && s[1] == '*')
+		{
+			for (s += 2; s < end && !(s[0] == '*' && s[1] == '/'); s++)
+				;
+			if (s < end)
+				s += 2;
+			continue;
+		}
+		if (*s == '\"')
+		{
+			for (s++; s < end && *s != '\"'; s++)
+				;
+			if (s < end)
+				s++;
+			continue;
+		}
+		if (*s == '{' || *s == '}' || *s == '(' || *s == ')' || *s == '\'' || *s == ':')
+		{
+			s++;
+			continue;
+		}
+		do
+			s++;
+		while (s < end && (unsigned char) *s > ' ' &&
+			*s != '{' && *s != '}' && *s != '(' && *s != ')' && *s != '\'');
+	}
+	return NULL;
+}
+
+// Mirrors Cbuf_Execute's command split: ';' ends a command only with an even
+// number of quotes so far and no "//" anywhere before it in that command.
+// Returns where the next command starts (after the ';'), or NULL at the end.
+static char *Config_NextCommandSplit (char *seg)
+{
+	int quotes = 0;
+	qboolean slashes = false;
+	char *p;
+
+	for (p = seg; *p; p++)
+	{
+		if (*p == '\"')
+			quotes++;
+		if (p[0] == '/' && p[1] == '/')
+			slashes = true;
+		if (*p == ';' && !(quotes & 1) && !slashes)
+			return p;
+	}
+	return NULL;
+}
+
+// Returns the "//" where the engine stops reading this line, or NULL.
+static char *Config_FindTrailingComment (char *line)
+{
+	char *seg = line;
+
+	for (;;)
+	{
+		char *split = Config_NextCommandSplit (seg);
+		char *c = Config_FindTokenComment (seg, split ? split : seg + strlen (seg));
+		if (c)
+			return c;
+		if (!split)
+			return NULL;
+		seg = split + 1;
+	}
+}
+
+// comment lines that the engine writes itself and must not be preserved
+static qboolean Config_IsEngineComment (const char *line)
+{
+	static const char verprefix[] = "// QSS-M ";
+	size_t len = strlen (line);
+
+	// borders, banner and section headings
+	if (len == CONFIG_WIDTH && line[len - 2] == '/' && line[len - 1] == '/')
+		return true;
+	if (!strcmp (line, CFG_NOTE_KEEP) || !strcmp (line, CFG_NOTE_ORPHANED))
+		return true;
+	// "// <name>'s config (<date>)"
+	if (strstr (line, "'s config (") && line[len - 1] == ')')
+		return true;
+	// "// QSS-M <version>"
+	if (!strcmp (line, "// " ENGINE_NAME_AND_VER))
+		return true;
+	if (!strncmp (line, verprefix, sizeof (verprefix) - 1) && !strchr (line + sizeof (verprefix) - 1, ' '))
+		return true;
+	return false;
+}
+
+// spells a key the way Key_WriteBindings does, so "space", "SPACE", "SEMICOLON"/";", etc. match
+static const char *Config_CanonicalKeyName (const char *name)
+{
+	int keynum = Key_StringToKeynum (name);
+	return (keynum >= 0) ? Key_KeynumToString (keynum) : name;
+}
+
+// builds the lookup key for a single config command; false if it has no command
+static qboolean Config_ParseKey (const char *cmd, char *key, size_t keysize)
+{
+	char		cmdname[256];
+	const char	*data;
+	cvar_t		*var;
+
+	data = COM_Parse (cmd);
+	if (!data || !com_token[0])
+		return false;
+	q_strlcpy (cmdname, com_token, sizeof (cmdname));
+
+	if (!q_strcasecmp (cmdname, "bind"))
+	{
+		data = COM_Parse (data);
+		if (!data || !com_token[0])
+			return false;
+		Config_MakeKey (key, keysize, "bind", va ("0 %s", Config_CanonicalKeyName (com_token)));
+	}
+	else if (!q_strcasecmp (cmdname, "in_bind"))
+	{
+		int bindmap;
+		data = COM_Parse (data);
+		if (!data || !com_token[0])
+			return false;
+		bindmap = atoi (com_token);
+		if (bindmap < 0 || bindmap >= MAX_BINDMAPS)
+			bindmap = 0;
+		data = COM_Parse (data);
+		if (!data || !com_token[0])
+			return false;
+		Config_MakeKey (key, keysize, "bind", va ("%i %s", bindmap, Config_CanonicalKeyName (com_token)));
+	}
+	else if (!q_strcasecmp (cmdname, "alias"))
+	{
+		data = COM_Parse (data);
+		if (!data || !com_token[0])
+			return false;
+		Config_MakeKey (key, keysize, "alias", com_token);
+	}
+	else if (!q_strcasecmp (cmdname, "seta") || !q_strcasecmp (cmdname, "set") || !q_strcasecmp (cmdname, "setfl"))
+	{
+		data = COM_Parse (data);
+		if (!data || !com_token[0])
+			return false;
+		var = Cvar_FindVar (com_token);
+		Config_MakeKey (key, keysize, "cvar", var ? var->name : com_token);
+	}
+	else
+	{
+		var = Cvar_FindVar (cmdname);
+		Config_MakeKey (key, keysize, var ? "cvar" : "cmd", var ? var->name : cmdname);
+	}
+
+	return true;
+}
+
+// reads the user comments from an existing config file; false if it can't be opened
+static qboolean Config_LoadComments (const char *path)
+{
+	FILE	*f;
+	long	size;
+	char	*buf, *line, *next, *end, *p, *trailing;
+	char	*pending = NULL;
+	char	key[1024];
+
+	Config_FreeComments ();
+
+	f = fopen (path, "rb");
+	if (!f)
+		return false;
+	fseek (f, 0, SEEK_END);
+	size = ftell (f);
+	fseek (f, 0, SEEK_SET);
+	if (size <= 0)
+	{
+		fclose (f);
+		return true;
+	}
+	buf = (char *) malloc (size + 1);
+	if (!buf)
+	{
+		fclose (f);
+		return true;
+	}
+	size = (long) fread (buf, 1, size, f);
+	buf[size] = 0;
+	fclose (f);
+
+	for (line = buf; line; line = next)
+	{
+		next = strchr (line, '\n');
+		if (next)
+			*next++ = 0;
+
+		// strip trailing whitespace / CR
+		end = line + strlen (line);
+		while (end > line && (end[-1] == '\r' || end[-1] == ' ' || end[-1] == '\t'))
+			*--end = 0;
+
+		p = line;
+		while (*p == ' ' || *p == '\t')
+			p++;
+		if (!*p)
+			continue; // blank lines don't break a comment's link to the next line
+
+		if (p[0] == '/' && p[1] == '/')
+		{
+			if (!Config_IsEngineComment (p))
+				pending = Config_AppendText (pending, line, true);
+			continue;
+		}
+
+		// command line, possibly with a trailing comment
+		trailing = Config_FindTrailingComment (p);
+		end = trailing ? trailing : p + strlen (p);
+		while (end > p && (end[-1] == ' ' || end[-1] == '\t'))
+			end--;
+
+		{
+			char			*cmd = Config_StrDupLen (p, end - p);
+			char			*seg, *s, *segend, *lastcmd = NULL;
+			char			segkey[1024], lastkey[1024];
+			qboolean		havefirst = false, lastvalid = false;
+			cfgcomment_t	*e;
+
+			// a line can chain several commands with ';' -- comments above it
+			// belong to the first command, a trailing comment to the last one
+			for (seg = cmd; ; )
+			{
+				s = Config_NextCommandSplit (seg); // same split as Cbuf_Execute
+				if (!s)
+					s = seg + strlen (seg);
+				{
+					qboolean last = (*s == 0);
+					*s = 0;
+
+					while (*seg == ' ' || *seg == '\t')
+						seg++;
+					segend = seg + strlen (seg);
+					while (segend > seg && (segend[-1] == ' ' || segend[-1] == '\t'))
+						*--segend = 0;
+
+					if (*seg)
+					{
+						if (Config_ParseKey (seg, segkey, sizeof (segkey)))
+						{
+							// a setting can appear more than once; the later line takes
+							// effect, so demote any earlier trailing comment above it
+							e = Config_FindComment (segkey);
+							if (e && e->trailing)
+							{
+								e->leading = Config_AppendCommentedLine (e->leading, e->command, e->trailing);
+								free (e->trailing);
+								e->trailing = NULL;
+							}
+							if (!havefirst)
+							{
+								havefirst = true;
+								q_strlcpy (key, segkey, sizeof (key));
+							}
+							q_strlcpy (lastkey, segkey, sizeof (lastkey));
+							lastvalid = true;
+						}
+						else
+							lastvalid = false;
+						lastcmd = seg;
+					}
+
+					if (last)
+						break;
+					seg = s + 1;
+				}
+			}
+
+			if (pending)
+			{
+				if (havefirst)
+				{
+					e = Config_AddComment (key);
+					e->leading = Config_AppendText (e->leading, pending, false);
+				}
+				else
+					cfg_orphans = Config_AppendText (cfg_orphans, pending, false);
+				free (pending);
+				pending = NULL;
+			}
+
+			if (trailing)
+			{
+				if (lastvalid)
+				{
+					e = Config_AddComment (lastkey);
+					e->trailing = Config_StrDupLen (trailing, strlen (trailing));
+					free (e->command);
+					e->command = Config_StrDupLen (lastcmd, strlen (lastcmd));
+				}
+				else
+					cfg_orphans = Config_AppendCommentedLine (cfg_orphans, lastcmd ? lastcmd : "", trailing);
+			}
+			free (cmd);
+		}
+	}
+
+	cfg_tailcomments = pending;
+	free (buf);
+	return true;
+}
+
+// loads comments from the file about to be overwritten, or from config.cfg if it doesn't exist yet
+static void Config_LoadCommentsForWrite (const char *fullpath)
+{
+	char config_name[MAX_QPATH];
+
+	if (Config_LoadComments (fullpath))
+		return;
+	COM_ConfigFileEffectivePath ("config.cfg", config_name, sizeof (config_name));
+	Config_LoadComments (va ("%s/%s", com_gamedir, config_name));
+}
+
+/*
+===============
+Config_BeginEntry / Config_EndEntry -- woods #cfgcomments
+
+Wrap every line written to the config:
+  Config_BeginEntry (f, type, name); fprintf (f, "...");  // no newline
+  Config_EndEntry (f, type, name);                         // writes the newline
+type is "bind" (name "<bindmap> <key>"), "cvar", "alias" or "cmd".
+===============
+*/
+void Config_BeginEntry (FILE *f, const char *type, const char *name)
+{
+	cfgcomment_t *e = Config_FindCommentFor (type, name);
+	if (!e || e->used)
+	{
+		cfg_activeentry = NULL;
+		return;
+	}
+	e->used = true;
+	cfg_activeentry = e;
+	if (e->leading)
+		fputs (e->leading, f);
+}
+
+void Config_EndEntry (FILE *f, const char *type, const char *name)
+{
+	if (cfg_activeentry && cfg_activeentry->trailing)
+		fprintf (f, " %s", cfg_activeentry->trailing);
+	cfg_activeentry = NULL;
+	fputc ('\n', f);
+}
+
+static qboolean Config_HasPreservedComments (void)
+{
+	int i;
+
+	if (cfg_orphans || cfg_tailcomments)
+		return true;
+	for (i = 0; i < cfg_numcomments; i++)
+		if (!cfg_comments[i].used)
+			return true;
+	return false;
+}
+
+static void Config_WritePreservedComments (FILE *f)
+{
+	int i;
+
+	if (!Config_HasPreservedComments ())
+		return;
+
+	Config_PrintHeading (f, "P R E S E R V E D   C O M M E N T S");
+	fprintf (f, "%s\n\n", CFG_NOTE_ORPHANED);
+	for (i = 0; i < cfg_numcomments; i++)
+	{
+		cfgcomment_t *e = &cfg_comments[i];
+		if (e->used)
+			continue;
+		if (e->leading)
+			fputs (e->leading, f);
+		if (e->trailing)
+			fprintf (f, "// %s %s\n", e->command ? e->command : "", e->trailing);
+	}
+	if (cfg_orphans)
+		fputs (cfg_orphans, f);
+	if (cfg_tailcomments)
+		fputs (cfg_tailcomments, f);
+}
+
+static void Config_WriteMiscCommands (FILE *f)
+{
+	Config_BeginEntry (f, "cmd", "vid_restart");
+	fprintf (f, "vid_restart");
+	Config_EndEntry (f, "cmd", "vid_restart");
+	if (in_mlook.state & 1)
+	{
+		Config_BeginEntry (f, "cmd", "+mlook");
+		fprintf (f, "+mlook");
+		Config_EndEntry (f, "cmd", "+mlook");
+	}
+}
+
 static void Config_PrintPreamble(FILE* f)
 {
 	extern cvar_t cl_name;
@@ -1132,7 +1696,595 @@ static void Config_PrintPreamble(FILE* f)
 	Config_PrintBorder(f);
 	fprintf(f, "\n// %s's config (%s)\n", cl_name.string, str);
 	fprintf(f, "// "ENGINE_NAME_AND_VER"\n");
+	fprintf(f, "%s\n", CFG_NOTE_KEEP); // woods #cfgcomments
 
+}
+
+/*
+===============
+Config_WriteContents -- woods #cfgcomments
+
+Writes the whole config (key bindings, archived cvars, aliases, comments)
+===============
+*/
+static void Config_WriteContents (FILE *f, qboolean preserved)
+{
+	int i;
+
+	for (i = 0; i < cfg_numcomments; i++)
+		cfg_comments[i].used = false;
+	cfg_activeentry = NULL;
+
+	//VID_SyncCvars (); //johnfitz -- write actual current mode to config file, in case cvars were messed with
+
+	Config_PrintPreamble(f);
+
+	if (cfg_save_aliases.value) // woods #serveralias
+	{
+		Config_PrintHeading(f, "A L I A S E S");
+		Alias_WriteAliases(f);
+	}
+	Config_PrintHeading(f, "K E Y   B I N D I N G S"); // woods #configprint
+	Key_WriteBindings (f);
+	Config_PrintHeading(f, "V A R I A B L E S"); // woods #configprint
+	Cvar_WriteVariables (f);
+
+	Config_PrintHeading(f, "M I S C E L L A N E O U S"); // woods #configprint
+	//johnfitz -- extra commands to preserve state
+	Config_WriteMiscCommands(f);
+	//johnfitz
+
+	if (preserved)
+		Config_WritePreservedComments(f);
+}
+
+/*
+===============
+Config_WriteFile -- woods #cfgcomments
+
+exec loads a whole config into the command buffer at once (1<<18 bytes,
+see Cbuf_Init) and drops the entire file if it doesn't fit, so kept
+comments must never push the config past that. The file is written to a
+unique exclusive temporary file next to the resolved target (preserving
+symlinks and existing file permissions) and atomically replaces the target
+only once complete. If it is too big, the preserved-comments section is
+dropped first, then all comments.
+===============
+*/
+#define CFG_MAX_COMMENTED_SIZE	(224 * 1024)	// leaves 32 KB headroom inside Cbuf_Init's 256 KB buffer
+
+// Resolves a symlinked config path to its real destination so atomic
+// replacement updates the target file instead of severing the symlink.
+static qboolean Config_ResolveWriteTarget (const char *path, char *out, size_t outsize)
+{
+#ifdef _WIN32
+	DWORD attrs;
+
+	if (q_strlcpy (out, path, outsize) >= outsize)
+		return false;
+
+	attrs = GetFileAttributesA (path);
+	if (attrs != INVALID_FILE_ATTRIBUTES && (attrs & FILE_ATTRIBUTE_REPARSE_POINT))
+	{
+		typedef DWORD (WINAPI *get_final_path_fn)(HANDLE, LPSTR, DWORD, DWORD);
+		get_final_path_fn fn = (get_final_path_fn) GetProcAddress (
+			GetModuleHandleA ("kernel32.dll"), "GetFinalPathNameByHandleA");
+		if (fn)
+		{
+			HANDLE h = CreateFileA (path, 0,
+				FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+				NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+			if (h != INVALID_HANDLE_VALUE)
+			{
+				char resolved[MAX_OSPATH];
+				DWORD len = fn (h, resolved, (DWORD) sizeof (resolved), 0);
+				CloseHandle (h);
+				if (len > 0 && len < sizeof (resolved))
+				{
+					if (!strncmp (resolved, "\\\\?\\UNC\\", 8))
+					{
+						if (q_snprintf (out, outsize, "\\\\%s", resolved + 8) >= (int) outsize)
+							return false;
+					}
+					else if (!strncmp (resolved, "\\\\?\\", 4))
+					{
+						if (q_strlcpy (out, resolved + 4, outsize) >= outsize)
+							return false;
+					}
+					else if (q_strlcpy (out, resolved, outsize) >= outsize)
+						return false;
+				}
+			}
+		}
+	}
+	return true;
+#else
+	char cur[MAX_OSPATH];
+	int hop;
+
+	if (q_strlcpy (cur, path, sizeof (cur)) >= sizeof (cur))
+		return false;
+
+	for (hop = 0; hop < 16; hop++)
+	{
+		struct stat lst;
+		char linkbuf[MAX_OSPATH];
+		char next[MAX_OSPATH];
+		ssize_t len;
+
+		if (lstat (cur, &lst) != 0)
+		{
+			if (errno == ENOENT)
+				return q_strlcpy (out, cur, outsize) < outsize;
+			return false;
+		}
+		if (!S_ISLNK (lst.st_mode))
+			return q_strlcpy (out, cur, outsize) < outsize;
+
+		// Existing target: let realpath resolve relative and multi-hop links
+		{
+			char *resolved = realpath (cur, NULL);
+			if (resolved)
+			{
+				qboolean fits = (q_strlcpy (out, resolved, outsize) < outsize);
+				free (resolved);
+				return fits;
+			}
+		}
+
+		// Dangling symlink: follow one hop so the link is preserved when created
+		len = readlink (cur, linkbuf, sizeof (linkbuf) - 1);
+		if (len <= 0)
+			return false;
+		linkbuf[len] = '\0';
+
+		if (linkbuf[0] == '/')
+		{
+			if (q_strlcpy (next, linkbuf, sizeof (next)) >= sizeof (next))
+				return false;
+		}
+		else
+		{
+			const char *slash = strrchr (cur, '/');
+			int n;
+			if (slash)
+				n = q_snprintf (next, sizeof (next), "%.*s%s", (int)(slash - cur + 1), cur, linkbuf);
+			else
+				n = q_snprintf (next, sizeof (next), "%s", linkbuf);
+			if (n < 0 || (size_t)n >= sizeof (next))
+				return false;
+		}
+		q_strlcpy (cur, next, sizeof (cur));
+	}
+	return false; // symlink loop
+#endif
+}
+
+// Flushes a finished file to disk so a crash right after the rename can't
+// leave a truncated config behind.
+static qboolean Config_SyncFile (FILE *f)
+{
+	if (fflush (f) != 0)
+		return false;
+#ifdef _WIN32
+	return _commit (_fileno (f)) == 0;
+#else
+	return fsync (fileno (f)) == 0;
+#endif
+}
+
+// What we know about the config being replaced, so the new file can carry
+// the same access controls (or we can tell that it can't).
+typedef struct
+{
+	qboolean		existed;
+	unsigned int	mode;		// POSIX permission bits
+	long			uid, gid;	// POSIX owner, -1 if unknown
+} cfgorig_t;
+
+#ifndef _WIN32
+// Gives the temp file the original's ACL (or none, if the original had none:
+// a default/inheritable ACL on the folder must not widen access). Returns
+// false if the ACL state can't be reproduced, so the caller rewrites in place.
+static qboolean Config_CopyACL (const char *target, int fd)
+{
+#if defined(__APPLE__)
+	acl_t	src = acl_get_file (target, ACL_TYPE_EXTENDED);
+	acl_t	cur = acl_get_fd_np (fd, ACL_TYPE_EXTENDED);
+	qboolean ok = true;
+
+	if (src)
+		ok = (acl_set_fd_np (fd, src, ACL_TYPE_EXTENDED) == 0);
+	else if (errno != ENOENT)
+		ok = false; // couldn't read it: don't guess
+	else if (cur)
+	{
+		acl_t empty = acl_init (0);
+		ok = empty && acl_set_fd_np (fd, empty, ACL_TYPE_EXTENDED) == 0;
+		if (empty)
+			acl_free (empty);
+	}
+	if (src)
+		acl_free (src);
+	if (cur)
+		acl_free (cur);
+	return ok;
+#elif defined(__linux__)
+	static const char name[] = "system.posix_acl_access";
+	char	buf[4096];
+	ssize_t	len = getxattr (target, name, buf, sizeof (buf));
+
+	if (len >= 0)
+		return fsetxattr (fd, name, buf, (size_t) len, 0) == 0;
+	if (errno != ENODATA && errno != ENOTSUP)
+		return false; // couldn't read it (or too big): don't guess
+	if (fgetxattr (fd, name, NULL, 0) >= 0)
+		return fremovexattr (fd, name) == 0;
+	return true;
+#else
+	(void) target;
+	(void) fd;
+	return true;
+#endif
+}
+#endif
+
+// Creates a unique temporary file exclusively (O_EXCL) next to target,
+// starting private (0600 on POSIX). For an existing config it reproduces
+// the owner, group, mode and ACL; if any of those can't be matched exactly
+// (or the folder isn't writable) it returns NULL with *need_inplace set,
+// because a rename would change who can read the file.
+static FILE *Config_OpenTempFile (const char *target, char *tmppath, size_t tmpsize,
+	const cfgorig_t *orig, qboolean *need_inplace)
+{
+	static unsigned long counter = 0;
+	unsigned long pid = Sys_GetProcessId ();
+	unsigned long now = (unsigned long) time (NULL);
+	int attempt;
+
+	*need_inplace = false;
+	for (attempt = 0; attempt < 64; attempt++)
+	{
+		int fd;
+		FILE *f;
+
+		if (q_snprintf (tmppath, tmpsize, "%s.tmp-%lu-%lx-%lu",
+			target, pid, now, counter++) >= (int) tmpsize)
+			return NULL;
+
+#ifdef _WIN32
+		fd = _open (tmppath, _O_CREAT | _O_EXCL | _O_WRONLY | _O_TEXT, _S_IREAD | _S_IWRITE);
+#else
+		fd = open (tmppath, O_CREAT | O_EXCL | O_WRONLY, 0600);
+#endif
+		if (fd < 0)
+		{
+			if (errno == EEXIST)
+				continue;
+			// The folder may be read-only while the config itself is
+			// writable (the old fopen-in-place path handled that).
+			if (orig->existed && (errno == EACCES || errno == EPERM || errno == EROFS))
+				*need_inplace = true;
+			return NULL;
+		}
+
+#ifndef _WIN32
+		// On Windows, ReplaceFileA carries the original's ACL and attributes.
+		if (orig->existed)
+		{
+			struct stat st;
+			qboolean match;
+
+			if (fchown (fd, (uid_t) orig->uid, (gid_t) orig->gid) != 0)
+				(void) (fchown (fd, (uid_t) -1, (gid_t) orig->gid) == 0);
+			match = Config_CopyACL (target, fd);
+			if (match && fchmod (fd, (mode_t) (orig->mode & 0777)) != 0)
+				match = false;
+			if (match && (fstat (fd, &st) != 0 ||
+				(long) st.st_uid != orig->uid || (long) st.st_gid != orig->gid ||
+				(unsigned int) (st.st_mode & 0777) != (orig->mode & 0777)))
+				match = false;
+			if (!match)
+			{
+				close (fd);
+				remove (tmppath);
+				*need_inplace = true;
+				return NULL;
+			}
+		}
+#endif
+
+#ifdef _WIN32
+		f = _fdopen (fd, "w");
+#else
+		f = fdopen (fd, "w");
+#endif
+		if (!f)
+		{
+#ifdef _WIN32
+			_close (fd);
+#else
+			close (fd);
+#endif
+			remove (tmppath);
+			return NULL;
+		}
+		return f;
+	}
+	return NULL;
+}
+
+typedef enum
+{
+	CFG_REPLACE_OK,
+	CFG_REPLACE_FAILED,		// target left as it was (or recovered)
+	CFG_REPLACE_INPLACE		// can't replace atomically here; rewrite in place
+} cfgreplace_t;
+
+static qboolean Config_FileExists (const char *path)
+{
+#ifdef _WIN32
+	return GetFileAttributesA (path) != INVALID_FILE_ATTRIBUTES;
+#else
+	struct stat st;
+	return lstat (path, &st) == 0;
+#endif
+}
+
+// Replaces target with tmppath without ever removing target first. The temp
+// file is only deleted once target is known to still exist, so a failure can
+// never leave the user with neither the old config nor the new one.
+static cfgreplace_t Config_ReplaceFile (const char *tmppath, const char *target, qboolean existed)
+{
+#ifdef _WIN32
+	if (existed)
+	{
+		char	backup[MAX_OSPATH + 64];
+		DWORD	err;
+
+		// With a backup name, every ReplaceFileA failure leaves the original
+		// either untouched or under that name (with NULL, ERROR_UNABLE_TO_
+		// MOVE_REPLACEMENT deletes it).
+		if (q_snprintf (backup, sizeof (backup), "%s.bak-%lu-%lx",
+			target, Sys_GetProcessId (), (unsigned long) time (NULL)) >= (int) sizeof (backup))
+		{
+			remove (tmppath);
+			return CFG_REPLACE_FAILED;
+		}
+		DeleteFileA (backup);
+
+		if (ReplaceFileA (target, tmppath, backup, REPLACEFILE_IGNORE_MERGE_ERRORS, NULL, NULL))
+		{
+			DeleteFileA (backup);
+			return CFG_REPLACE_OK;
+		}
+		err = GetLastError ();
+
+		if (Config_FileExists (target))
+		{
+			// Original (or, rarely, the new file) is in place: safe to clean up
+			remove (tmppath);
+			if (Config_FileExists (backup))
+				Con_Warning ("Kept a copy of the previous config at %s\n", backup);
+			if (err == ERROR_NOT_SUPPORTED || err == ERROR_CALL_NOT_IMPLEMENTED ||
+				err == ERROR_INVALID_FUNCTION)
+				return CFG_REPLACE_INPLACE; // e.g. some network shares / FAT
+			return CFG_REPLACE_FAILED;
+		}
+
+		// ERROR_UNABLE_TO_MOVE_REPLACEMENT_2: the original now lives under the
+		// backup name. Put the new config in place, or else restore the old.
+		if (MoveFileExA (tmppath, target, MOVEFILE_WRITE_THROUGH))
+		{
+			DeleteFileA (backup);
+			return CFG_REPLACE_OK;
+		}
+		if (Config_FileExists (backup) && MoveFileExA (backup, target, MOVEFILE_WRITE_THROUGH))
+		{
+			remove (tmppath);
+			return CFG_REPLACE_FAILED;
+		}
+		Con_Warning ("Couldn't put %s back; the previous config is at %s and the new one at %s\n",
+			target, Config_FileExists (backup) ? backup : "(missing)", tmppath);
+		return CFG_REPLACE_FAILED;
+	}
+	if (MoveFileExA (tmppath, target, MOVEFILE_WRITE_THROUGH))
+		return CFG_REPLACE_OK;
+	remove (tmppath);
+	return CFG_REPLACE_FAILED;
+#else
+	(void) existed;
+	if (rename (tmppath, target) == 0)
+		return CFG_REPLACE_OK;
+	// rename(2) is atomic: on failure target is unchanged
+	remove (tmppath);
+	return CFG_REPLACE_FAILED;
+#endif
+}
+
+// Reads a whole file as raw bytes (the in-place fallback's recovery copy).
+static char *Config_ReadRaw (const char *path, long *outlen)
+{
+	FILE	*f = fopen (path, "rb");
+	char	*buf = NULL;
+	long	len;
+
+	*outlen = 0;
+	if (!f)
+		return NULL;
+	if (fseek (f, 0, SEEK_END) == 0 && (len = ftell (f)) >= 0 && fseek (f, 0, SEEK_SET) == 0)
+	{
+		buf = (char *) malloc ((size_t) len + 1);
+		if (buf && (long) fread (buf, 1, (size_t) len, f) == len && !ferror (f))
+			*outlen = len;
+		else
+		{
+			free (buf);
+			buf = NULL;
+		}
+	}
+	fclose (f);
+	return buf;
+}
+
+// Puts the recovery copy back after a failed in-place rewrite.
+static qboolean Config_RestoreRaw (const char *path, const char *data, long len)
+{
+	FILE	*f = fopen (path, "wb");
+	qboolean ok;
+
+	if (!f)
+		return false;
+	ok = (len == 0 || fwrite (data, 1, (size_t) len, f) == (size_t) len) && Config_SyncFile (f);
+	if (fclose (f) != 0)
+		ok = false;
+	return ok;
+}
+
+static qboolean Config_WriteFile (const char *path)
+{
+	char		target[MAX_OSPATH];
+	char		tmppath[MAX_OSPATH + 64];
+	FILE		*f;
+	long		size;
+	qboolean	ok, preserved = true;
+	qboolean	inplace = false, need_inplace;
+	char		*original = NULL;	// recovery copy, in-place mode only
+	long		originallen = 0;
+	cfgorig_t	orig;
+	cfgreplace_t res;
+
+	orig.existed = false;
+	orig.mode = 0600;
+	orig.uid = orig.gid = -1;
+
+	if (!Config_ResolveWriteTarget (path, target, sizeof (target)))
+	{
+		Config_FreeComments ();
+		return false;
+	}
+
+#ifdef _WIN32
+	{
+		DWORD attrs = GetFileAttributesA (target);
+		if (attrs != INVALID_FILE_ATTRIBUTES)
+		{
+			if (attrs & (FILE_ATTRIBUTE_DIRECTORY | FILE_ATTRIBUTE_READONLY))
+			{
+				Config_FreeComments ();
+				return false;
+			}
+			orig.existed = true;
+		}
+	}
+#else
+	{
+		struct stat st;
+		if (stat (target, &st) == 0)
+		{
+			if (S_ISDIR (st.st_mode) || access (target, W_OK) != 0)
+			{
+				Config_FreeComments ();
+				return false;
+			}
+			orig.existed = true;
+			orig.mode = (unsigned int) (st.st_mode & 0777);
+			orig.uid = (long) st.st_uid;
+			orig.gid = (long) st.st_gid;
+		}
+		else if (errno != ENOENT)
+		{
+			Config_FreeComments ();
+			return false;
+		}
+	}
+#endif
+
+	for (;;)
+	{
+		f = NULL;
+		if (!inplace)
+		{
+			f = Config_OpenTempFile (target, tmppath, sizeof (tmppath), &orig, &need_inplace);
+			if (!f && need_inplace)
+				inplace = true;
+		}
+		if (inplace && !original)
+		{
+			// The in-place rewrite truncates the config, so keep its bytes
+			// to put back if the write fails (disk full, I/O error...).
+			original = Config_ReadRaw (target, &originallen);
+			if (!original)
+			{
+				Config_FreeComments ();
+				return false;
+			}
+		}
+		if (inplace)
+			f = fopen (target, "w");
+		if (!f)
+		{
+			free (original);
+			Config_FreeComments ();
+			return false;
+		}
+		Config_WriteContents (f, preserved);
+		size = ftell (f);
+		ok = !ferror (f) && size >= 0 && Config_SyncFile (f);
+		if (fclose (f) != 0)
+			ok = false;
+		if (!ok)
+		{
+			if (inplace)
+			{
+				if (!Config_RestoreRaw (target, original, originallen))
+					Con_Warning ("Couldn't restore %s after a failed save; it may be incomplete.\n", target);
+			}
+			else
+				remove (tmppath);
+			free (original);
+			Config_FreeComments ();
+			return false;
+		}
+
+		if (size > CFG_MAX_COMMENTED_SIZE && (cfg_numcomments || cfg_orphans || cfg_tailcomments))
+		{
+			if (!inplace)
+				remove (tmppath);
+			if (preserved && Config_HasPreservedComments ())
+			{
+				preserved = false;
+				free (cfg_orphans);
+				cfg_orphans = NULL;
+				free (cfg_tailcomments);
+				cfg_tailcomments = NULL;
+				Con_Warning ("%s is too large; not keeping its preserved-comments section.\n", COM_SkipPath (path));
+			}
+			else
+			{
+				Config_FreeComments ();
+				Con_Warning ("%s is too large; not keeping its comments.\n", COM_SkipPath (path));
+			}
+			continue;
+		}
+
+		if (inplace)
+			break; // already written where it belongs
+
+		res = Config_ReplaceFile (tmppath, target, orig.existed);
+		if (res == CFG_REPLACE_INPLACE)
+		{
+			inplace = true; // ReplaceFileA unsupported here: write it in place
+			continue;
+		}
+		free (original);
+		Config_FreeComments ();
+		return res == CFG_REPLACE_OK;
+	}
+
+	free (original);
+	Config_FreeComments ();
+	return true;
 }
 
 /*
@@ -1144,7 +2296,6 @@ Writes key bindings and archived cvars to specified file
 */
 void Host_WriteConfigurationToFile (const char* name)
 {
-	FILE	*f;
 	char	write_name[MAX_QPATH];
 	char	config_dir[MAX_OSPATH];
 	char	fullpath[MAX_OSPATH];
@@ -1161,39 +2312,13 @@ void Host_WriteConfigurationToFile (const char* name)
 		}
 
 		q_snprintf(fullpath, sizeof(fullpath), "%s/%s", com_gamedir, write_name);
-		f = fopen (fullpath, "w");
-		if (!f)
+		Config_LoadCommentsForWrite(fullpath); // woods #cfgcomments -- read before overwriting
+		if (!Config_WriteFile(fullpath))
 		{
 			Con_Printf ("Couldn't write %s.\n", write_name);
 			return;
 		}
 
-		//VID_SyncCvars (); //johnfitz -- write actual current mode to config file, in case cvars were messed with
-
-		Config_PrintPreamble(f);
-
-		if (cfg_save_aliases.value) // woods #serveralias
-		{ 
-			Config_PrintHeading(f, "A L I A S E S");
-			Alias_WriteAliases(f);
-		}
-		Config_PrintHeading(f, "K E Y   B I N D I N G S"); // woods #configprint
-		Key_WriteBindings (f);
-		Config_PrintHeading(f, "V A R I A B L E S"); // woods #configprint
-		Cvar_WriteVariables (f);
-
-		Config_PrintHeading(f, "M I S C E L L A N E O U S"); // woods #configprint
-		//johnfitz -- extra commands to preserve state
-		fprintf (f, "vid_restart\n");
-		if (in_mlook.state & 1) fprintf (f, "+mlook\n");
-		//johnfitz
-
-		qboolean failed = ferror(f) != 0;
-		if (fclose(f) || failed)
-		{
-			Con_Printf("Couldn't finish writing %s.\n", write_name);
-			return;
-		}
 		Cvar_MarkArchiveSaved();
 
 		Con_SafePrintf("Wrote ");
@@ -1245,6 +2370,7 @@ void Host_BackupConfiguration(void)
 
 	char	name[MAX_OSPATH];
 	char	config_name[MAX_QPATH];
+	char	backup_path[MAX_OSPATH];
 	
 	char str[24];
 	time_t systime = time(0);
@@ -1269,35 +2395,10 @@ void Host_BackupConfiguration(void)
 			Sys_mkdir(name);
 		}
 		
-		f = fopen(va("%s/backups/%s.cfg", com_gamedir, str), "w");
-		if (!f)
-		{
+		Config_LoadComments(va("%s/%s", com_gamedir, config_name)); // woods #cfgcomments
+		q_snprintf(backup_path, sizeof(backup_path), "%s/backups/%s.cfg", com_gamedir, str);
+		if (!Config_WriteFile(backup_path))
 			Con_Printf("Couldn't write backup config.cfg.\n");
-			return;
-		}
-
-		//VID_SyncCvars (); //johnfitz -- write actual current mode to config file, in case cvars were messed with
-
-		Config_PrintPreamble(f);
-
-		if (cfg_save_aliases.value) // woods #serveralias
-		{
-			Config_PrintHeading(f, "A L I A S E S");
-			Alias_WriteAliases(f);
-		}
-
-		Config_PrintHeading(f, "K E Y   B I N D I N G S"); // woods #configprint
-		Key_WriteBindings(f);
-		Config_PrintHeading(f, "V A R I A B L E S"); // woods #configprint
-		Cvar_WriteVariables(f);
-
-		Config_PrintHeading(f, "M I S C E L L A N E O U S"); // woods #configprint
-		//johnfitz -- extra commands to preserve state
-		fprintf(f, "vid_restart\n");
-		if (in_mlook.state & 1) fprintf(f, "+mlook\n");
-		//johnfitz
-
-		fclose(f);
 	}
 }
 

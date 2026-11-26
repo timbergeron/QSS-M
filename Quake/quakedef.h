@@ -466,6 +466,8 @@ void Host_ShutdownSave (void);
 qboolean Host_IsSaving (void);
 void Host_SaveConfiguration (void); // woods #cfgsave
 void Host_BackupConfiguration (void); // woods #cfgbackup
+void Config_BeginEntry (FILE *f, const char *type, const char *name); // woods #cfgcomments
+void Config_EndEntry (FILE *f, const char *type, const char *name); // woods #cfgcomments
 
 qboolean Host_AppendDownloadData(client_t *client, sizebuf_t *buf);
 int Host_ChunkDownloadAllowance(client_t *client);
