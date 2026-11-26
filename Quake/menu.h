@@ -129,7 +129,7 @@ qboolean M_WantsIBeamCursor(void);
 void M_MenuSearch_CloseForVideoRestart(void);
 qboolean M_MenuSearch_UseGamepadBack(void);
 
-#define VID_MENU_SEARCH_ITEMS 8
+#define VID_MENU_SEARCH_ITEMS 7
 const char *VID_MenuSearch_GetItemText(int index);
 cvar_t *VID_MenuSearch_GetItemCvar(int index);
 const char *VID_MenuSearch_GetItemHintText(int index);

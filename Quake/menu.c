@@ -23816,8 +23816,8 @@ static const char * const menusearch_options_labels[] = {
 	"Demos", "Misc", "Search", "", "Menu Scale", "Goto Console", "Reset Config"
 };
 static const char * const menusearch_video_labels[] = {
-	"Video Mode", "Color Depth", "Refresh Rate", "Display Mode",
-	"Vertical Sync", "FPS Limit", "Test Changes", "Apply Changes"
+	"Display Mode", "Video Mode", "Color Depth", "Refresh Rate",
+	"Vertical Sync", "FPS Limit", "Apply Changes"
 };
 static const char * const menusearch_graphics_labels[] = {
 	"Brightness", "Contrast", "Texture Filtering", "Screen Anti-Aliasing",
@@ -24132,14 +24132,13 @@ static const char *MenuSearch_VideoKeywords(int index)
 {
 	switch (index)
 	{
-	case 0: return "resolution width height dimensions aspect ratio screen size video mode";
-	case 1: return "bpp bits per pixel color colour depth truecolor 24bit 32bit";
-	case 2: return "hz monitor refresh rate frequency";
-	case 3: return "fullscreen windowed borderless exclusive desktop display mode";
+	case 0: return "fullscreen windowed borderless exclusive desktop display mode";
+	case 1: return "resolution width height dimensions aspect ratio screen size video mode";
+	case 2: return "bpp bits per pixel color colour depth truecolor 24bit 32bit";
+	case 3: return "hz monitor refresh rate frequency";
 	case 4: return "vsync tearing tear vertical sync synchronized";
 	case 5: return "framerate frame rate maxfps fps cap limiter limit uncapped frametime";
-	case 6: return "preview test confirm revert timeout video changes";
-	case 7: return "apply commit save restart video changes";
+	case 6: return "apply confirm revert timeout save restart video changes";
 	default: return NULL;
 	}
 }
