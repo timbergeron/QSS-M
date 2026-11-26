@@ -294,6 +294,9 @@ qsocket_t *NET_NewQSocket (void)
 	sock->receiveMessageLength = 0;
 	sock->pending_max_datagram = 1024;
 	sock->proquake_angle_hack = false;
+	sock->minping_delay = 0;
+	sock->minping_head = sock->minping_tail = NULL;
+	sock->minping_count = sock->minping_bytes = 0;
 
 	return sock;
 }
@@ -304,6 +307,7 @@ void NET_FreeQSocket(qsocket_t *sock)
 	qsocket_t	*s;
 
 	NetDiag_SockClosed (sock); // woods #netgraph -- storage is reused; never attribute another socket's traffic
+	Datagram_MinPingFreeQueue (sock); // every close path, whatever isvirtual says
 
 	// remove it from active list
 	if (sock == net_activeSockets)
@@ -548,6 +552,23 @@ qboolean NET_QSocketGetProQuakeAngleHack(const qsocket_t *s)
 void NET_QSocketSetMSS(qsocket_t *s, int mss)
 {
 	s->pending_max_datagram = mss;
+}
+
+// sv_minping: a delay <= 0 flushes anything still held on the next receive poll.
+// Only Datagram server connections (isvirtual) hold packets; loopback and ICE
+// sockets never do, so a delay there would only ramp up and misreport.
+void NET_QSocketSetMinPingDelay(qsocket_t *s, double delay)
+{
+	if (!s)
+		return;
+	if (!isfinite(delay) || delay < 0 || !s->isvirtual || IS_LOOP_DRIVER(s->driver))
+		delay = 0;
+	s->minping_delay = delay;
+}
+
+double NET_QSocketGetMinPingDelay(const qsocket_t *s)
+{
+	return s ? s->minping_delay : 0;
 }
 
 static void NET_UpdateListen (void)
@@ -1220,6 +1241,7 @@ void NET_GetServerMessages(void (*callback)(struct qsocket_s *sock))
 {
 	if (!callback)
 		callback = NET_DiscardServerMessage;
+	SetNetTime();	// sv_minping due times are compared against net_time
 	for (net_driverlevel = 0; net_driverlevel < net_numdrivers; net_driverlevel++)
 	{
 		if (!net_drivers[net_driverlevel].initialized)

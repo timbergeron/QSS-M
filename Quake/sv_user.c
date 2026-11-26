@@ -51,6 +51,111 @@ cvar_t	sv_fullpitch = {"sv_fullpitch","1",CVAR_ARCHIVE| CVAR_SERVERINFO}; // woo
 cvar_t	sv_antilag = {"sv_antilag", "0", CVAR_SERVERINFO}; // 0: off, 1: QC opt-in, 2: force player traceline calls
 cvar_t	sv_antilag_frac = {"sv_antilag_frac", "1", CVAR_SERVERINFO};
 cvar_t	sv_antilag_maxrewind = {"sv_antilag_maxrewind", "0.25", CVAR_SERVERINFO}; // operator ceiling on rewind, in seconds
+cvar_t	sv_minping = {"sv_minping", "0", CVAR_SERVERINFO|CVAR_NOTIFY}; // fake lag (ms) for players pinging below this
+
+/*
+sv_minping, ported from FTEQW (https://github.com/fte-team/fteqw).
+The netcode holds a client's inbound packets for minping_delay seconds; this
+controller nudges that delay after every ping sample until ping ~= sv_minping.
+Capped below the 0.5 s antilag history, pmove timestamp clamp and frame window.
+The target is approximate: pings are measured, and held packets released, once per
+server tick, so at sys_ticrate 0.05 readings land within about one tick (50 ms).
+*/
+#define SV_MINPING_MAX_DELAY	0.4
+#define SV_MINPING_DEADBAND_MS	2.0
+
+extern cvar_t host_timescale;
+extern cvar_t host_framerate;
+
+static qboolean SV_MinPing_Eligible (client_t *cl)
+{
+	char spectator_val[16];
+
+	if (sv_minping.value <= 0 || !isfinite(sv_minping.value))
+		return false;
+	if (!cl || !cl->active || !cl->spawned || !cl->netconnection)
+		return false;	// bots, signon, map changes: never stall reliable stop-and-wait
+	if (cl->download.file)
+		return false;
+	Info_GetKey (cl->userinfo, "*spectator", spectator_val, sizeof(spectator_val));
+	if (spectator_val[0] && Q_atoi(spectator_val))
+		return false;
+	return true;
+}
+
+void SV_MinPing_Reset (client_t *cl)
+{
+	if (cl && cl->netconnection)
+		NET_QSocketSetMinPingDelay (cl->netconnection, 0);
+}
+
+void SV_MinPing_ResetAll (void)
+{
+	int i;
+	if (!svs.clients)
+		return;
+	for (i = 0; i < svs.maxclients; i++)
+		SV_MinPing_Reset (&svs.clients[i]);
+}
+
+// per server frame: drop the delay for anyone who stopped qualifying
+void SV_MinPing_Frame (void)
+{
+	int i;
+	client_t *cl;
+	if (!svs.clients)
+		return;
+	for (i = 0, cl = svs.clients; i < svs.maxclients; i++, cl++)
+	{
+		if (cl->netconnection && NET_QSocketGetMinPingDelay (cl->netconnection) > 0 &&
+			!SV_MinPing_Eligible (cl))
+			SV_MinPing_Reset (cl);
+	}
+}
+
+void SV_MinPing_Update (client_t *cl, double ping)
+{
+	double delay, diff;
+
+	if (!SV_MinPing_Eligible (cl))
+	{
+		SV_MinPing_Reset (cl);
+		return;
+	}
+	// qcvm->time stalls or skews against wall time here; samples are meaningless
+	if (sv.paused || (host_timescale.value > 0 && host_timescale.value != 1) ||
+		host_framerate.value != 0)
+		return;
+	if (!isfinite(ping) || ping < 0 || ping > 2)
+		return;	// garbage/forged client timestamp
+
+	delay = NET_QSocketGetMinPingDelay (cl->netconnection);
+	diff = ping*1000 - sv_minping.value;
+	if (fabs(diff) <= SV_MINPING_DEADBAND_MS)
+		return;
+	diff = CLAMP(-25.0, diff, 25.0);	// don't swing wildly
+	delay -= 0.001 * (diff / 25.0);		// scale towards the ideal value
+	delay = CLAMP(0.0, delay, SV_MINPING_MAX_DELAY);
+	NET_QSocketSetMinPingDelay (cl->netconnection, delay);
+}
+
+static void SV_MinPing_Changed (cvar_t *var)
+{
+	if (!isfinite(var->value) || var->value < 0)
+	{
+		Cvar_SetQuick (var, "0");	// re-enters with a sane value
+		return;
+	}
+	if (var->value <= 0 && sv.active)
+		SV_MinPing_ResetAll ();	// flush held packets on the next poll
+	Host_Callback_Notify (var);	// CVAR_NOTIFY only broadcasts through this callback
+}
+
+void SV_MinPing_Init (void)
+{
+	Cvar_RegisterVariable (&sv_minping);
+	Cvar_SetCallback (&sv_minping, SV_MinPing_Changed);
+}
 
 qboolean SV_RunThink (edict_t *ent);
 
@@ -602,6 +707,7 @@ void SV_ReadClientMove (usercmd_t *move)
 		host_client->ping_times[host_client->num_pings%NUM_PING_TIMES]
 			= qcvm->time - timestamp;
 		host_client->num_pings++;
+		SV_MinPing_Update (host_client, qcvm->time - timestamp);
 	}	//otherwise time is still useful for determining the input frame's time value
 
 	// read movement
@@ -984,6 +1090,7 @@ void SV_RunClients (void)
 	//Spike -- reworked this to use callback with connection context.
 	//this allows the network code to serve multiple clients with the same listening port and without having to requery the ipv4 socket for each extra ipv6 packet etc.
 	//which solves server-side nats, which is important for coop etc.
+	SV_MinPing_Frame ();	// clients that stopped qualifying get their held packets flushed below
 	NET_GetServerMessages(NET_GotServerMessage);
 
 	//then do the per-frame stuff

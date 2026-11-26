@@ -403,6 +403,7 @@ extern	cvar_t	timelimit;
 extern	cvar_t	sv_antilag;
 extern	cvar_t	sv_antilag_frac;
 extern	cvar_t	sv_antilag_maxrewind;
+extern	cvar_t	sv_minping;
 
 extern	server_static_t	svs;				// persistant server info
 extern	server_t		sv;					// local server
@@ -467,6 +468,11 @@ void SV_ConnectClient (int clientnum);	//called from the netcode to add new clie
 void SV_CheckForNewClients (void);
 void SV_RunClients (void);
 void SV_RunClientMessages (void);
+void SV_MinPing_Init (void);
+void SV_MinPing_Update (client_t *cl, double ping);
+void SV_MinPing_Reset (client_t *cl);
+void SV_MinPing_ResetAll (void);
+void SV_MinPing_Frame (void);
 void SV_SaveSpawnparms ();
 void SV_SpawnServer (const char *server);
 

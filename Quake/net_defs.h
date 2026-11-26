@@ -181,6 +181,13 @@ typedef struct qsocket_s
 	qboolean proquake_angle_hack;	//1 if we're trying, 2 if the server acked.
 	int		max_datagram;			//32000 for local, 1442 for 666, 1024 for 15. this is for reliable fragments.
 	int		pending_max_datagram;	//don't change the mtu if we're resending, as that would confuse the peer.
+
+	// sv_minping: inbound datagrams held back before transport processing, in arrival order
+	double		minping_delay;
+	struct minping_packet_s	*minping_head;
+	struct minping_packet_s	*minping_tail;
+	int		minping_count;
+	int		minping_bytes;
 } qsocket_t;
 
 extern qsocket_t	*net_activeSockets;
@@ -257,6 +264,7 @@ extern int		unreliableMessagesReceived;
 qsocket_t *NET_NewQSocket (void);
 void NET_FreeQSocket(qsocket_t *);
 double SetNetTime(void);
+void Datagram_MinPingFreeQueue (qsocket_t *sock);
 
 
 #define HOSTCACHESIZE	128	//fixme: make dynamic.

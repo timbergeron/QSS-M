@@ -1714,11 +1714,181 @@ qboolean Datagram_ProcessPacket(unsigned int received_length, qsocket_t *sock)
 	return false;
 }
 
+/*
+sv_minping (from FTEQW, https://github.com/fte-team/fteqw): inbound datagrams from a
+client whose qsocket has minping_delay > 0 are held before Datagram_ProcessPacket, so
+acks, unreliables and reliables all arrive late together and stay in arrival order.
+*/
+#define MINPING_SMALL_CAPACITY	1500		// typical client packet; recycled through the free list
+#define MINPING_MAX_FREE		64
+#define MINPING_MAX_PACKETS		128		// per client
+#define MINPING_MAX_BYTES		(256*1024)	// per client; a lone packet is always accepted
+
+typedef struct minping_packet_s
+{
+	struct minping_packet_s	*next;
+	double			due;
+	unsigned int	length;
+	unsigned int	capacity;
+	byte			data[1];
+} minping_packet_t;
+
+static minping_packet_t *minping_free;
+static int minping_numfree;
+
+static minping_packet_t *Datagram_MinPingAlloc (unsigned int length)
+{
+	minping_packet_t *p;
+	unsigned int capacity = q_max(length, MINPING_SMALL_CAPACITY);
+
+	if (capacity == MINPING_SMALL_CAPACITY && minping_free)
+	{
+		p = minping_free;
+		minping_free = p->next;
+		minping_numfree--;
+		return p;
+	}
+	p = (minping_packet_t *) malloc (offsetof(minping_packet_t, data) + capacity);
+	if (p)
+		p->capacity = capacity;
+	return p;
+}
+
+static void Datagram_MinPingRecycle (minping_packet_t *p)
+{
+	if (p->capacity == MINPING_SMALL_CAPACITY && minping_numfree < MINPING_MAX_FREE)
+	{
+		p->next = minping_free;
+		minping_free = p;
+		minping_numfree++;
+	}
+	else
+		free (p);
+}
+
+void Datagram_MinPingFreeQueue (qsocket_t *sock)
+{
+	minping_packet_t *p;
+
+	while ((p = sock->minping_head))
+	{
+		sock->minping_head = p->next;
+		Datagram_MinPingRecycle (p);
+	}
+	sock->minping_tail = NULL;
+	sock->minping_count = 0;
+	sock->minping_bytes = 0;
+}
+
+static void Datagram_MinPingFreeAll (void)
+{
+	qsocket_t *s;
+	minping_packet_t *p;
+
+	for (s = net_activeSockets; s; s = s->next)
+		Datagram_MinPingFreeQueue (s);
+	while ((p = minping_free))
+	{
+		minping_free = p->next;
+		free (p);
+	}
+	minping_numfree = 0;
+}
+
+// Returns true if the packet in packetBuffer now belongs to the queue (or was dropped by it).
+static qboolean Datagram_MinPingHold (qsocket_t *s, int length)
+{
+	minping_packet_t *p;
+	double due;
+
+	if (s->minping_delay <= 0 && !s->minping_head)
+		return false;	// nothing held: process directly
+	if (s->minping_head && (s->minping_count >= MINPING_MAX_PACKETS ||
+		s->minping_bytes + length > MINPING_MAX_BYTES))
+	{	// flood: drop it, and back the delay off like FTEQW does
+		s->minping_delay = q_max(0.0, s->minping_delay - 0.001);
+		return true;
+	}
+	p = Datagram_MinPingAlloc ((unsigned int)length);
+	if (!p)
+		return true;
+
+	due = net_time + q_max(0.0, s->minping_delay);
+	if (s->minping_tail && due < s->minping_tail->due)
+		due = s->minping_tail->due;	// a shrinking delay must not let a later packet overtake
+	p->next = NULL;
+	p->due = due;
+	p->length = (unsigned int)length;
+	memcpy (p->data, &packetBuffer, length);
+
+	if (s->minping_tail)
+		s->minping_tail->next = p;
+	else
+		s->minping_head = p;
+	s->minping_tail = p;
+	s->minping_count++;
+	s->minping_bytes += length;
+	return true;
+}
+
+#define MINPING_MAX_SNAPSHOT 256
+static void Datagram_MinPingRelease (void(*callback)(qsocket_t *))
+{
+	qsocket_t *list[MINPING_MAX_SNAPSHOT];
+	qsocket_t *s;
+	minping_packet_t *p;
+	int n = 0, i;
+	// NET_GetServerMessages and our own read loop iterate these globals; a callback
+	// (rcon, client commands) may run NET_* code that changes them, so restore after each
+	int saved_driverlevel = net_driverlevel;
+	int saved_landriverlevel = net_landriverlevel;
+
+	// callbacks can close sockets (relinking net_activeSockets), so snapshot first
+	for (s = net_activeSockets; s && n < MINPING_MAX_SNAPSHOT; s = s->next)
+	{
+		if (s->minping_head && s->driver == myDriverLevel)	// net_driverlevel can be clobbered by callbacks
+			list[n++] = s;
+	}
+
+	for (i = 0; i < n; i++)
+	{
+		s = list[i];
+		while (!s->disconnected && s->isvirtual && (p = s->minping_head))
+		{
+			unsigned int length;
+
+			if (s->minping_delay > 0 && p->due > net_time)
+				break;
+			// unlink before parsing: the callback may close s and free its queue
+			s->minping_head = p->next;
+			if (!s->minping_head)
+				s->minping_tail = NULL;
+			s->minping_count--;
+			s->minping_bytes -= (int)p->length;
+
+			length = p->length;
+			memcpy (&packetBuffer, p->data, length);
+			Datagram_MinPingRecycle (p);
+
+			if (Datagram_ProcessPacket (length, s))
+			{
+				s->lastMessageTime = net_time;
+				callback (s);
+				net_driverlevel = saved_driverlevel;
+				net_landriverlevel = saved_landriverlevel;
+			}
+		}
+	}
+}
+
 void Datagram_GetAnyMessages(void(*callback)(qsocket_t *))
 {
 	qsocket_t *s;
 	struct qsockaddr addr;
 	int length;
+
+	Datagram_MinPingRelease (callback);
+
 	for (net_landriverlevel = 0; net_landriverlevel < net_numlandrivers; net_landriverlevel++)
 	{
 		sys_socket_t sock;
@@ -1762,6 +1932,9 @@ void Datagram_GetAnyMessages(void(*callback)(qsocket_t *))
 					continue;
 				if (dfunc.AddrCompare(&addr, &s->addr) == 0)
 				{
+					//sv_minping: hold it back instead (keeps FIFO order with anything already held)
+					if (Datagram_MinPingHold(s, length))
+						break;
 					//okay, looks like this is us. try to process it, and if there's new data
 					if (Datagram_ProcessPacket(length, s))
 					{
@@ -1782,6 +1955,9 @@ void Datagram_GetAnyMessages(void(*callback)(qsocket_t *))
 			}
 		}
 	}
+	// packets that arrived during this poll may already be due (delay 0 = flush)
+	Datagram_MinPingRelease (callback);
+
 	for (s = net_activeSockets; s; s = s->next)
 	{
 		if (s->driver != net_driverlevel)
@@ -2514,6 +2690,7 @@ void Datagram_Shutdown (void)
 	Datagram_ConnectResolverShutdown();
 	NET_PortPingProbe_Shutdown();
 	Datagram_Listen(false);
+	Datagram_MinPingFreeAll();
 
 //
 // shutdown the lan drivers
@@ -2572,6 +2749,7 @@ void Datagram_Listen (qboolean state)
 			{
 				if (s->isvirtual)
 				{
+					Datagram_MinPingFreeQueue (s);	// held packets can never be released now
 					s->isvirtual = false;
 					s->socket = INVALID_SOCKET;
 				}

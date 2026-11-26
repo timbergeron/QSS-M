@@ -2605,6 +2605,7 @@ void Host_ShutdownServer(qboolean crash)
 		CL_Disconnect ();
 
 // flush any pending messages - like the score!!!
+	SV_MinPing_ResetAll ();	// don't hold the acks we're about to wait for
 	start = Sys_DoubleTime();
 	do
 	{

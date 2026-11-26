@@ -913,6 +913,7 @@ void SVFTE_Ack(client_t *client, int sequence)
 
 		client->ping_times[client->num_pings%NUM_PING_TIMES] = qcvm->time - frame->timestamp;
 		client->num_pings++;
+		SV_MinPing_Update (client, qcvm->time - frame->timestamp);
 
 		if (sv_antilag.value > 0 && maxrewind > 0.0f)
 		{
@@ -1976,7 +1977,7 @@ void SV_Init (void)
 	Cvar_RegisterVariable (&sv_antilag);
 	Cvar_RegisterVariable (&sv_antilag_frac);
 	Cvar_RegisterVariable (&sv_antilag_maxrewind);
-
+	SV_MinPing_Init ();
 
 	Cvar_RegisterVariable (&sv_sound_watersplash); //spike
 	Cvar_RegisterVariable (&sv_sound_land); //spike
@@ -2427,6 +2428,7 @@ void SV_SendServerinfo (client_t *client)
 	SV_VoiceInitClient(client);
 
 	SV_ClearClientSignonMessages (client);
+	SV_MinPing_Reset (client);	// signon is stop-and-wait; held acks would stall it
 	client->spawned = false;		// need prespawn, spawn, etc
 	client->spawnprepared = false;
 	client->signon_phase = CLIENT_SIGNON_NONE;
@@ -4562,6 +4564,7 @@ void SV_SendReconnect (void)
 
 	MSG_WriteChar (&msg, svc_stufftext);
 	MSG_WriteString (&msg, "reconnect\n");
+	SV_MinPing_ResetAll ();	// NET_SendToAll waits on acks
 	NET_SendToAll (&msg, 5.0);
 
 	if (!isDedicated)

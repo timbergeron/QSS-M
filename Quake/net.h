@@ -89,6 +89,8 @@ double NET_QSocketGetUnreliableReceiveMapDropWindowSecs(const struct qsocket_s *
 int NET_QSocketGetPacketLoss(const struct qsocket_s *sock);
 const char *NET_QSocketGetOwnerString(const struct qsocket_s *sock);
 void NET_QSocketSetMSS(struct qsocket_s *s, int mss);
+void NET_QSocketSetMinPingDelay(struct qsocket_s *s, double delay); // sv_minping: seconds to hold inbound packets
+double NET_QSocketGetMinPingDelay(const struct qsocket_s *s);
 
 qboolean NET_CanSendMessage (struct qsocket_s *sock);
 // Returns true or false if the given qsocket can currently accept a

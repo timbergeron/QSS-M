@@ -8240,6 +8240,8 @@ static void Host_Ping_f (void)
 	float		total;
 	client_t	*client;
 	const char* n;	// JPG - for ping +N // woods #pqlag (add const)
+	qboolean	local;
+	void		(*print) (const char *fmt, ...) FUNCP_PRINTF(1,2);
 
 	n = Cmd_Argv(1);
 
@@ -8283,22 +8285,31 @@ static void Host_Ping_f (void)
 		}
 	}
 
-	if (cmd_source != src_client)
+	// a dedicated console has no server to forward to, so answer locally
+	local = (cmd_source != src_client && isDedicated && sv.active);
+	if (cmd_source != src_client && !local)
 	{
 		Cmd_ForwardToServer ();
 		return;
 	}
 
-	SV_ClientPrintf ("Client ping times:\n");
+	print = local ? Con_Printf : SV_ClientPrintf;
+	print ("Client ping times:\n");
 	for (i = 0, client = svs.clients; i < svs.maxclients; i++, client++)
 	{
+		int added;
 		if (!client->spawned || !client->netconnection)
 			continue;
 		total = 0;
 		for (j = 0; j < NUM_PING_TIMES; j++)
 			total+=client->ping_times[j];
 		total /= NUM_PING_TIMES;
-		SV_ClientPrintf ("%4i %s\n", (int)(total*1000), client->name);
+		// sv_minping delay: console only, clients parse "<ping> <name>" lines (cl_parse.c PRINT_PINGS)
+		added = (int)(NET_QSocketGetMinPingDelay(client->netconnection)*1000 + 0.5);
+		if (local && added > 0)
+			print ("%4i %s (-%i)\n", (int)(total*1000), client->name, added);
+		else
+			print ("%4i %s\n", (int)(total*1000), client->name);
 	}
 }
 
