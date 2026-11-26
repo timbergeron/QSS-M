@@ -244,9 +244,11 @@ void R_EntityParticles (entity_t *ent)
 		if (!(p = R_AllocParticle())) // woods (iw) #allocpart
 			return;
 
-		p->die = cl.time + 0.01;
+		// Relinking emits a fresh set each frame, even while paused.
+		// CL_RunParticles frees this set after rendering.
+		p->die = -1;
 		p->color = 0x6f;
-		p->type = pt_explode;
+		p->type = pt_static;
 
 		p->org[0] = ent->origin[0] + r_avertexnormals[i][0]*dist + forward[0]*beamlength;
 		p->org[1] = ent->origin[1] + r_avertexnormals[i][1]*dist + forward[1]*beamlength;
