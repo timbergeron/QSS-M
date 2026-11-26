@@ -586,7 +586,7 @@ void R_EntityAxisToLocal (const entity_t *e, vec3_t point);
 void R_MarkLights (dlight_t *light, vec3_t lightorg, int framecount, int num, mnode_t *node);
 
 void R_InitParticles (void);
-void R_DrawParticles (void);
+void R_DrawParticles (qboolean opaque);
 void CL_RunParticles (void);
 void R_ClearParticles (void);
 

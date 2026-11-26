@@ -97,7 +97,7 @@ void R_InitParticleTextures (void)
 			*dst++ = 255;
 			*dst++ = x || y ? 0 : 255;
 		}
-	particletexture2 = TexMgr_LoadImage (NULL, "particle2", 2, 2, SRC_RGBA, particle2_data, "", (src_offset_t)particle2_data, TEXPREF_PERSIST | TEXPREF_ALPHA | TEXPREF_NEAREST);
+	particletexture2 = TexMgr_LoadImage (NULL, "particle2", 2, 2, SRC_RGBA, particle2_data, "", (src_offset_t)particle2_data, TEXPREF_PERSIST | TEXPREF_ALPHA | TEXPREF_NEAREST | TEXPREF_NOPICMIP);
 
 	// particle texture 3 -- blob
 	dst = particle3_data;
@@ -827,7 +827,7 @@ void CL_RunParticles (void)
 
 /*
 ===============
-R_DrawParticles -- johnfitz -- moved all non-drawing code to CL_RunParticles
+R_CullParticlePoint
 ===============
 */
 static FUNC_ALWAYSINLINE qboolean R_CullParticlePoint (const vec3_t org, float rad)
@@ -846,7 +846,45 @@ static FUNC_ALWAYSINLINE qboolean R_CullParticlePoint (const vec3_t org, float r
 	return false;
 }
 
-void R_DrawParticles (void)
+static void R_BeginParticleState (qboolean square)
+{
+	GL_Bind (particletexture);
+	glTexEnvf (GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_MODULATE);
+	if (square)
+	{
+		// square particles are fully opaque: alpha-test them with depth
+		// writes so translucent surfaces drawn later sort over them
+		glEnable (GL_ALPHA_TEST);
+	}
+	else
+	{
+		glEnable (GL_BLEND);
+		glDepthMask (GL_FALSE); //johnfitz -- fix for particle z-buffer bug
+	}
+}
+
+static void R_EndParticleState (qboolean square)
+{
+	if (square)
+		glDisable (GL_ALPHA_TEST);
+	else
+	{
+		glDepthMask (GL_TRUE); //johnfitz -- fix for particle z-buffer bug
+		glDisable (GL_BLEND);
+	}
+	glTexEnvf (GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_REPLACE);
+	glColor3f (1, 1, 1);
+}
+
+/*
+===============
+R_DrawParticles -- johnfitz -- moved all non-drawing code to CL_RunParticles
+
+opaque selects the pass: square particles (r_particles 2) are drawn in the
+opaque pass before translucent surfaces, all others in the translucent pass.
+===============
+*/
+void R_DrawParticles (qboolean opaque)
 {
 	particle_t		*p;
 	float			scale, rad;
@@ -854,8 +892,15 @@ void R_DrawParticles (void)
 	GLubyte			color[4], *c;
 	extern	cvar_t	r_particles; //johnfitz
 	qboolean		state_bound = false;
+	qboolean		square;
 
 	if (!r_particles.value)
+		return;
+
+	// follow the texture actually bound: unsupported r_particles values keep
+	// the previous selection
+	square = particletexture == particletexture2;
+	if (square != opaque)
 		return;
 
 	if (!active_particles)
@@ -886,10 +931,7 @@ void R_DrawParticles (void)
 
 			if (!state_bound)
 			{
-				GL_Bind (particletexture);
-				glEnable (GL_BLEND);
-				glTexEnvf (GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_MODULATE);
-				glDepthMask (GL_FALSE); //johnfitz -- fix for particle z-buffer bug
+				R_BeginParticleState (square);
 				glBegin (GL_QUADS);
 				state_bound = true;
 			}
@@ -938,10 +980,7 @@ void R_DrawParticles (void)
 
 			if (!state_bound)
 			{
-				GL_Bind (particletexture);
-				glEnable (GL_BLEND);
-				glTexEnvf (GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_MODULATE);
-				glDepthMask (GL_FALSE);
+				R_BeginParticleState (square);
 				glBegin (GL_TRIANGLES);
 				state_bound = true;
 			}
@@ -969,10 +1008,7 @@ void R_DrawParticles (void)
 	if (state_bound)
 	{
 		glEnd ();
-		glDepthMask (GL_TRUE); //johnfitz -- fix for particle z-buffer bug
-		glDisable (GL_BLEND);
-		glTexEnvf (GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_REPLACE);
-		glColor3f (1, 1, 1);
+		R_EndParticleState (square);
 	}
 }
 

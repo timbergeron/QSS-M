@@ -4259,6 +4259,12 @@ void R_RenderScene (void)
 	if (r_refdef.drawworld)
 		R_DrawShadows (); //johnfitz -- render entity shadows
 
+	// Square particles are opaque: draw them with depth writes before any
+	// blended surface, including liquid faces of brush entities that take the
+	// nonalpha entity pass, so those surfaces blend over them.
+	if (r_refdef.drawworld && !(r_teleport_view && r_telestyle_detail.value < 1))
+		R_DrawParticles (true);
+
 	R_DrawEntitiesOnList (false); //johnfitz -- false means this is the pass for nonalpha entities
 
 #ifdef PSET_SCRIPT
@@ -4278,7 +4284,7 @@ void R_RenderScene (void)
 		// Render particles after alpha entities for correct depth sorting -- woods #alphasort
 		if (r_refdef.drawworld && !(r_teleport_view && r_telestyle_detail.value < 1))
 		{
-			R_DrawParticles ();
+			R_DrawParticles (false);
 #ifdef PSET_SCRIPT
 			PScript_DrawParticles();
 #endif
@@ -4293,7 +4299,7 @@ void R_RenderScene (void)
 
 		if (r_refdef.drawworld && !(r_teleport_view && r_telestyle_detail.value < 1))
 		{
-			R_DrawParticles ();
+			R_DrawParticles (false);
 #ifdef PSET_SCRIPT
 			PScript_DrawParticles();
 #endif
