@@ -1161,40 +1161,39 @@ static char *Config_StrDupLen (const char *s, size_t len)
 {
 	char *p = (char *) malloc (len + 1);
 	if (!p)
-		Sys_Error ("Config_StrDupLen: out of memory");
+		return NULL;
 	memcpy (p, s, len);
 	p[len] = 0;
 	return p;
 }
 
 // appends text (plus a newline if addnewline) to a malloc'd string
-static char *Config_AppendText (char *dst, const char *text, qboolean addnewline)
+static qboolean Config_AppendText (char **dst, const char *text, qboolean addnewline)
 {
-	size_t dstlen = dst ? strlen (dst) : 0;
+	size_t dstlen = *dst ? strlen (*dst) : 0;
 	size_t textlen = strlen (text);
-	char *p = (char *) realloc (dst, dstlen + textlen + 2);
+	char *p;
+
+	if (textlen > SIZE_MAX - dstlen - 2)
+		return false;
+	p = (char *) realloc (*dst, dstlen + textlen + 2);
 	if (!p)
-		Sys_Error ("Config_AppendText: out of memory");
+		return false;
 	memcpy (p + dstlen, text, textlen);
 	if (addnewline)
 		p[dstlen + textlen++] = '\n';
 	p[dstlen + textlen] = 0;
-	return p;
+	*dst = p;
+	return true;
 }
 
 // appends "// <command> <comment>\n", used to keep a comment whose line is gone
-static char *Config_AppendCommentedLine (char *dst, const char *command, const char *comment)
+static qboolean Config_AppendCommentedLine (char **dst, const char *command, const char *comment)
 {
-	dst = Config_AppendText (dst, "// ", false);
-	if (command && *command)
-		dst = Config_AppendText (dst, command, false);
-	if (comment && *comment)
-	{
-		if (command && *command)
-			dst = Config_AppendText (dst, " ", false);
-		dst = Config_AppendText (dst, comment, false);
-	}
-	return Config_AppendText (dst, "", true);
+	return Config_AppendText (dst, "// ", false) &&
+		Config_AppendText (dst, command, false) &&
+		(!*command || Config_AppendText (dst, " ", false)) &&
+		Config_AppendText (dst, comment, true);
 }
 
 // cvar and alias names are case-sensitive, so only engine command names are folded
@@ -1230,16 +1229,26 @@ static cfgcomment_t *Config_AddComment (const char *key)
 		return e;
 	if (cfg_numcomments == cfg_maxcomments)
 	{
-		int newmax = cfg_maxcomments ? cfg_maxcomments * 2 : 64;
-		cfgcomment_t *p = (cfgcomment_t *) realloc (cfg_comments, newmax * sizeof (*p));
+		int newmax;
+		cfgcomment_t *p;
+
+		if (cfg_maxcomments > INT_MAX / 2)
+			return NULL;
+		newmax = cfg_maxcomments ? cfg_maxcomments * 2 : 64;
+		if ((size_t) newmax > SIZE_MAX / sizeof (*p))
+			return NULL;
+		p = (cfgcomment_t *) realloc (cfg_comments, newmax * sizeof (*p));
 		if (!p)
-			Sys_Error ("Config_AddComment: out of memory");
+			return NULL;
 		cfg_comments = p;
 		cfg_maxcomments = newmax;
 	}
-	e = &cfg_comments[cfg_numcomments++];
+	e = &cfg_comments[cfg_numcomments];
 	memset (e, 0, sizeof (*e));
 	e->key = Config_StrDupLen (key, strlen (key));
+	if (!e->key)
+		return NULL;
+	cfg_numcomments++;
 	return e;
 }
 
@@ -1429,37 +1438,58 @@ static qboolean Config_ParseKey (const char *cmd, char *key, size_t keysize)
 	return true;
 }
 
-// reads the user comments from an existing config file; false if it can't be opened
-static qboolean Config_LoadComments (const char *path)
+typedef enum
+{
+	CFG_READ_OK,
+	CFG_READ_MISSING,
+	CFG_READ_FAILED
+} cfgread_t;
+
+// Reads the whole file for comment preservation or in-place write recovery.
+static cfgread_t Config_ReadRaw (const char *path, char **outbuf, size_t *outlen)
 {
 	FILE	*f;
-	long	size;
-	char	*buf, *line, *next, *end, *p, *trailing;
-	char	*pending = NULL;
-	char	key[1024];
-
-	Config_FreeComments ();
+	qofs_t	len;
+	char	*buf = NULL;
+	qboolean ok = false;
 
 	f = fopen (path, "rb");
 	if (!f)
-		return false;
-	fseek (f, 0, SEEK_END);
-	size = ftell (f);
-	fseek (f, 0, SEEK_SET);
-	if (size <= 0)
+		return errno == ENOENT ? CFG_READ_MISSING : CFG_READ_FAILED;
+
+	if (fseek (f, 0, SEEK_END) == 0 && (len = ftell (f)) >= 0 &&
+		(uint64_t) len < SIZE_MAX && fseek (f, 0, SEEK_SET) == 0)
 	{
-		fclose (f);
-		return true;
+		buf = (char *) malloc ((size_t) len + 1);
+		ok = buf && fread (buf, 1, (size_t) len, f) == (size_t) len && !ferror (f);
 	}
-	buf = (char *) malloc (size + 1);
-	if (!buf)
+	if (fclose (f) != 0)
+		ok = false;
+	if (!ok)
 	{
-		fclose (f);
-		return true;
+		free (buf);
+		return CFG_READ_FAILED;
 	}
-	size = (long) fread (buf, 1, size, f);
-	buf[size] = 0;
-	fclose (f);
+
+	buf[len] = 0;
+	*outbuf = buf;
+	*outlen = (size_t) len;
+	return CFG_READ_OK;
+}
+
+static cfgread_t Config_LoadComments (const char *path)
+{
+	size_t	size;
+	char	*buf, *line, *next, *end, *p, *trailing;
+	char	*pending = NULL;
+	char	*cmd = NULL;
+	char	key[1024];
+	cfgread_t result;
+
+	Config_FreeComments ();
+	result = Config_ReadRaw (path, &buf, &size);
+	if (result != CFG_READ_OK)
+		return result;
 
 	for (line = buf; line; line = next)
 	{
@@ -1480,8 +1510,8 @@ static qboolean Config_LoadComments (const char *path)
 
 		if (p[0] == '/' && p[1] == '/')
 		{
-			if (!Config_IsEngineComment (p))
-				pending = Config_AppendText (pending, line, true);
+			if (!Config_IsEngineComment (p) && !Config_AppendText (&pending, line, true))
+				goto failed;
 			continue;
 		}
 
@@ -1492,11 +1522,14 @@ static qboolean Config_LoadComments (const char *path)
 			end--;
 
 		{
-			char			*cmd = Config_StrDupLen (p, end - p);
 			char			*seg, *s, *segend, *lastcmd = NULL;
 			char			segkey[1024], lastkey[1024];
 			qboolean		havefirst = false, lastvalid = false;
 			cfgcomment_t	*e;
+
+			cmd = Config_StrDupLen (p, end - p);
+			if (!cmd)
+				goto failed;
 
 			// a line can chain several commands with ';' -- comments above it
 			// belong to the first command, a trailing comment to the last one
@@ -1524,7 +1557,8 @@ static qboolean Config_LoadComments (const char *path)
 							e = Config_FindComment (segkey);
 							if (e && e->trailing)
 							{
-								e->leading = Config_AppendCommentedLine (e->leading, e->command, e->trailing);
+								if (!Config_AppendCommentedLine (&e->leading, e->command, e->trailing))
+									goto failed;
 								free (e->trailing);
 								e->trailing = NULL;
 							}
@@ -1552,10 +1586,11 @@ static qboolean Config_LoadComments (const char *path)
 				if (havefirst)
 				{
 					e = Config_AddComment (key);
-					e->leading = Config_AppendText (e->leading, pending, false);
+					if (!e || !Config_AppendText (&e->leading, pending, false))
+						goto failed;
 				}
-				else
-					cfg_orphans = Config_AppendText (cfg_orphans, pending, false);
+				else if (!Config_AppendText (&cfg_orphans, pending, false))
+					goto failed;
 				free (pending);
 				pending = NULL;
 			}
@@ -1565,31 +1600,46 @@ static qboolean Config_LoadComments (const char *path)
 				if (lastvalid)
 				{
 					e = Config_AddComment (lastkey);
+					if (!e)
+						goto failed;
 					e->trailing = Config_StrDupLen (trailing, strlen (trailing));
+					if (!e->trailing)
+						goto failed;
 					free (e->command);
 					e->command = Config_StrDupLen (lastcmd, strlen (lastcmd));
+					if (!e->command)
+						goto failed;
 				}
-				else
-					cfg_orphans = Config_AppendCommentedLine (cfg_orphans, lastcmd ? lastcmd : "", trailing);
+				else if (!Config_AppendCommentedLine (&cfg_orphans, lastcmd ? lastcmd : "", trailing))
+					goto failed;
 			}
 			free (cmd);
+			cmd = NULL;
 		}
 	}
 
 	cfg_tailcomments = pending;
 	free (buf);
-	return true;
+	return CFG_READ_OK;
+
+failed:
+	free (cmd);
+	free (pending);
+	free (buf);
+	Config_FreeComments ();
+	return CFG_READ_FAILED;
 }
 
 // loads comments from the file about to be overwritten, or from config.cfg if it doesn't exist yet
-static void Config_LoadCommentsForWrite (const char *fullpath)
+static qboolean Config_LoadCommentsForWrite (const char *fullpath)
 {
 	char config_name[MAX_QPATH];
+	cfgread_t result = Config_LoadComments (fullpath);
 
-	if (Config_LoadComments (fullpath))
-		return;
+	if (result != CFG_READ_MISSING)
+		return result == CFG_READ_OK;
 	COM_ConfigFileEffectivePath ("config.cfg", config_name, sizeof (config_name));
-	Config_LoadComments (va ("%s/%s", com_gamedir, config_name));
+	return Config_LoadComments (va ("%s/%s", com_gamedir, config_name)) != CFG_READ_FAILED;
 }
 
 /*
@@ -2102,40 +2152,15 @@ static cfgreplace_t Config_ReplaceFile (const char *tmppath, const char *target,
 #endif
 }
 
-// Reads a whole file as raw bytes (the in-place fallback's recovery copy).
-static char *Config_ReadRaw (const char *path, long *outlen)
-{
-	FILE	*f = fopen (path, "rb");
-	char	*buf = NULL;
-	long	len;
-
-	*outlen = 0;
-	if (!f)
-		return NULL;
-	if (fseek (f, 0, SEEK_END) == 0 && (len = ftell (f)) >= 0 && fseek (f, 0, SEEK_SET) == 0)
-	{
-		buf = (char *) malloc ((size_t) len + 1);
-		if (buf && (long) fread (buf, 1, (size_t) len, f) == len && !ferror (f))
-			*outlen = len;
-		else
-		{
-			free (buf);
-			buf = NULL;
-		}
-	}
-	fclose (f);
-	return buf;
-}
-
 // Puts the recovery copy back after a failed in-place rewrite.
-static qboolean Config_RestoreRaw (const char *path, const char *data, long len)
+static qboolean Config_RestoreRaw (const char *path, const char *data, size_t len)
 {
 	FILE	*f = fopen (path, "wb");
 	qboolean ok;
 
 	if (!f)
 		return false;
-	ok = (len == 0 || fwrite (data, 1, (size_t) len, f) == (size_t) len) && Config_SyncFile (f);
+	ok = (len == 0 || fwrite (data, 1, len, f) == len) && Config_SyncFile (f);
 	if (fclose (f) != 0)
 		ok = false;
 	return ok;
@@ -2150,7 +2175,7 @@ static qboolean Config_WriteFile (const char *path)
 	qboolean	ok, preserved = true;
 	qboolean	inplace = false, need_inplace;
 	char		*original = NULL;	// recovery copy, in-place mode only
-	long		originallen = 0;
+	size_t		originallen = 0;
 	cfgorig_t	orig;
 	cfgreplace_t res;
 
@@ -2213,8 +2238,7 @@ static qboolean Config_WriteFile (const char *path)
 		{
 			// The in-place rewrite truncates the config, so keep its bytes
 			// to put back if the write fails (disk full, I/O error...).
-			original = Config_ReadRaw (target, &originallen);
-			if (!original)
+			if (Config_ReadRaw (target, &original, &originallen) != CFG_READ_OK)
 			{
 				Config_FreeComments ();
 				return false;
@@ -2312,8 +2336,7 @@ void Host_WriteConfigurationToFile (const char* name)
 		}
 
 		q_snprintf(fullpath, sizeof(fullpath), "%s/%s", com_gamedir, write_name);
-		Config_LoadCommentsForWrite(fullpath); // woods #cfgcomments -- read before overwriting
-		if (!Config_WriteFile(fullpath))
+		if (!Config_LoadCommentsForWrite(fullpath) || !Config_WriteFile(fullpath))
 		{
 			Con_Printf ("Couldn't write %s.\n", write_name);
 			return;
@@ -2366,8 +2389,6 @@ Host_BackupConfiguration // woods #cfgbackup
 */
 void Host_BackupConfiguration(void)
 {
-	FILE* f;
-
 	char	name[MAX_OSPATH];
 	char	config_name[MAX_QPATH];
 	char	backup_path[MAX_OSPATH];
@@ -2380,24 +2401,23 @@ void Host_BackupConfiguration(void)
 	// config.cfg cvars
 	if (host_initialized && !isDedicated && !host_parms->errstate)
 	{	
+		cfgread_t result;
+
 		strftime(str, 24, "config-%m-%d-%Y", &loct);
 		
 		q_snprintf(name, sizeof(name), "%s/id1", com_basedir); //  make an id1 folder if it doesnt exist already #smartafk
 		Sys_mkdir(name);
 
 		COM_ConfigFileEffectivePath("config.cfg", config_name, sizeof(config_name));
-		f = fopen(va("%s/%s", com_gamedir, config_name), "r");
-
-		if (f)
+		result = Config_LoadComments(va("%s/%s", com_gamedir, config_name));
+		if (result == CFG_READ_OK)
 		{
-			fclose(f);
 			q_snprintf(name, sizeof(name), "%s/backups", com_gamedir); //  create backups folder if not there
 			Sys_mkdir(name);
 		}
 		
-		Config_LoadComments(va("%s/%s", com_gamedir, config_name)); // woods #cfgcomments
 		q_snprintf(backup_path, sizeof(backup_path), "%s/backups/%s.cfg", com_gamedir, str);
-		if (!Config_WriteFile(backup_path))
+		if (result == CFG_READ_FAILED || !Config_WriteFile(backup_path))
 			Con_Printf("Couldn't write backup config.cfg.\n");
 	}
 }
