@@ -415,7 +415,7 @@ void V_ParseDamage (void)
 	{
 		qboolean inhibit;
 		PR_SwitchQCVM(&cl.qcvm);
-		pr_global_struct->time = cl.time;
+		PR_CSQC_SyncGlobals();
 		G_FLOAT(OFS_PARM0) = armor;
 		G_FLOAT(OFS_PARM1) = blood;
 		G_VECTORSET(OFS_PARM2, from[0], from[1], from[2]);

@@ -4278,6 +4278,7 @@ void R_RenderScene (void)
 	{
 		R_DrawEntitiesOnList (true); //johnfitz -- true means this is the pass for alpha entities
 		R_DrawLightningBeamsPolygons();
+		R_DrawCSQCPolygons();
 
 		R_RenderDlights (); //triangle fan dlights -- johnfitz -- moved after water
 
@@ -4294,6 +4295,7 @@ void R_RenderScene (void)
 	{
 		R_DrawEntitiesOnList (true); //johnfitz -- true means this is the pass for alpha entities
 		R_DrawLightningBeamsPolygons();
+		R_DrawCSQCPolygons();
 
 		R_RenderDlights (); //triangle fan dlights -- johnfitz -- moved after water
 

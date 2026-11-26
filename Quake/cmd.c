@@ -1912,6 +1912,7 @@ qboolean	Cmd_ExecuteString (const char *text, cmd_source_t src)
 				if (!ret && cl.qcvm.extfuncs.CSQC_ConsoleCommand)
 				{
 					PR_SwitchQCVM(&cl.qcvm);
+					PR_CSQC_SyncGlobals();
 					G_INT(OFS_PARM0) = PR_MakeTempString(text);
 					PR_ExecuteProgram(cl.qcvm.extfuncs.CSQC_ConsoleCommand);
 					ret = G_FLOAT(OFS_RETURN);

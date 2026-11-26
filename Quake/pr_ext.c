@@ -6418,6 +6418,9 @@ typedef struct
 } csqcfont_t;
 static csqcfont_t csqcfonts[MAX_CSQC_FONTS];
 
+static void PR_CSQC_ClearScenePolygons(void);
+static void PR_CSQC_ResetPolygons(qboolean freebuffers);
+
 void PR_ReloadPics(qboolean purge)
 {
 	size_t i;
@@ -6446,6 +6449,8 @@ void PR_ReloadPics(qboolean purge)
 	else
 		for (i = 0; i < countof(csqcfonts); i++)
 			csqcfonts[i].pic = NULL;
+
+	PR_CSQC_ResetPolygons(purge);
 }
 #define PICFLAG_AUTO		0	//value used when no flags known
 #define PICFLAG_WAD			(1u<<0)	//name matches that of a wad lump
@@ -6479,17 +6484,15 @@ static qpic_t *DrawQC_CachePic(const char *picname, unsigned int flags)
 {	//okay, so this is silly. we've ended up with 3 different cache levels. qcpics, pics, and images.
 	size_t i;
 	unsigned int texflags;
+	unsigned int variant = flags & (PICFLAG_WRAP | PICFLAG_MIPMAP);
 	const char *loadname;
 	for (i = 0; i < numqcpics; i++)
 	{	//binary search? something more sane?
-		if (!strcmp(picname, qcpics[i].name))
+		if (!strcmp(picname, qcpics[i].name) &&
+			(qcpics[i].flags & (PICFLAG_WRAP | PICFLAG_MIPMAP)) == variant)
 		{
 			if (qcpics[i].pic)
-			{	//note that lookups are keyed on the name alone, so the first successful load wins the texflags.
-				if ((flags & (PICFLAG_WRAP|PICFLAG_MIPMAP)) & ~qcpics[i].flags)
-					Con_DPrintf("DrawQC_CachePic: \"%s\" was already cached with different flags, reusing the existing image\n", picname);
 				return qcpics[i].pic;
-			}
 			break;	//known to us, but the load failed. retry it - the file may have appeared since.
 		}
 	}
@@ -7167,12 +7170,13 @@ static void PF_cs_freepic(void)
 	// The renderer owns the backing picture, which may also be used by a HUD or font.
 	const char *name = G_STRING(OFS_PARM0);
 	size_t i;
-	for (i = 0; i < numqcpics; i++)
+	for (i = 0; i < numqcpics; )
+	{
 		if (!strcmp(name, qcpics[i].name))
-		{
 			qcpics[i] = qcpics[--numqcpics];
-			break;
-		}
+		else
+			i++;
+	}
 }
 
 static void PF_cl_iscachedpic(void)
@@ -7382,44 +7386,305 @@ static void PF_cl_drawroundedrect(void)
 	G_FLOAT(OFS_RETURN) = 1;
 }
 
-static qpic_t *polygon_pic;
-static polygonvert_t polygon_verts[256];
-static unsigned int polygon_numverts;
+typedef struct
+{
+	vec3_t xyz;
+	vec_t st[2];
+	vec4_t rgba;
+} csqc_polyvert_t;
+
+typedef struct
+{
+	qpic_t *pic;
+	qboolean untextured;
+	int flags;
+	unsigned int firstvert;
+	unsigned int numverts;
+} csqc_poly_t;
+
+typedef struct
+{
+	qpic_t *pic;
+	qboolean untextured;
+	int flags;
+	qboolean is2d;
+	qboolean active;
+	csqc_polyvert_t verts[256];
+	unsigned int numverts;
+} qc_polystate_t;
+
+#define CSQC_MAX_SCENE_POLYS 16384u
+#define CSQC_MAX_SCENE_POLYVERTS 65536u
+
+static qc_polystate_t polygon_state[2];
+
+static csqc_poly_t *csqc_polys;
+static unsigned int csqc_numpolys;
+static unsigned int csqc_maxpolys;
+static csqc_polyvert_t *csqc_polyverts;
+static unsigned int csqc_numpolyverts;
+static unsigned int csqc_maxpolyverts;
+
+static qc_polystate_t *PR_GetPolygonState(void)
+{
+	return &polygon_state[(qcvm == &cls.menu_qcvm) ? 1 : 0];
+}
+
+static void PR_CSQC_ClearScenePolygons(void)
+{
+	csqc_numpolys = 0;
+	csqc_numpolyverts = 0;
+	polygon_state[0].numverts = 0;
+}
+
+static void PR_CSQC_ResetPolygons(qboolean freebuffers)
+{
+	csqc_numpolys = 0;
+	csqc_numpolyverts = 0;
+	memset(polygon_state, 0, sizeof(polygon_state));
+	if (freebuffers)
+	{
+		free(csqc_polys);
+		csqc_polys = NULL;
+		csqc_maxpolys = 0;
+		free(csqc_polyverts);
+		csqc_polyverts = NULL;
+		csqc_maxpolyverts = 0;
+	}
+}
+
+void R_DrawCSQCPolygons(void)
+{
+	unsigned int i, j;
+	qboolean additive = false;
+	qboolean textured = true;
+
+	if (!csqc_numpolys || skyroom_drawing || !r_refdef.csqc.draw_polygons)
+		return;
+
+	GL_DisableMultitexture();
+	glDisable(GL_CULL_FACE);
+	glEnable(GL_BLEND);
+	glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+	glDepthMask(GL_FALSE);
+	glTexEnvf(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_MODULATE);
+
+	for (i = 0; i < csqc_numpolys; i++)
+	{
+		const csqc_poly_t *poly = &csqc_polys[i];
+		const csqc_polyvert_t *verts = &csqc_polyverts[poly->firstvert];
+		qboolean want_additive = ((poly->flags & 3) == 1);
+
+		if (want_additive != additive)
+		{
+			if (want_additive)
+			{
+				glBlendFunc(GL_SRC_ALPHA, GL_ONE);
+				Fog_StartAdditive();
+			}
+			else
+			{
+				Fog_StopAdditive();
+				glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+			}
+			additive = want_additive;
+		}
+
+		if (poly->untextured)
+		{
+			if (textured)
+			{
+				glDisable(GL_TEXTURE_2D);
+				textured = false;
+			}
+			glBegin(GL_TRIANGLE_FAN);
+			for (j = 0; j < poly->numverts; j++)
+			{
+				glColor4fv(verts[j].rgba);
+				glVertex3fv(verts[j].xyz);
+			}
+			glEnd();
+		}
+		else
+		{
+			float sl, tl, sh, th;
+			if (!textured)
+			{
+				glEnable(GL_TEXTURE_2D);
+				textured = true;
+			}
+			if (!Draw_BindPicTexture(poly->pic, &sl, &tl, &sh, &th))
+				continue;
+			glBegin(GL_TRIANGLE_FAN);
+			for (j = 0; j < poly->numverts; j++)
+			{
+				glColor4fv(verts[j].rgba);
+				glTexCoord2f(sl * (1.0f - verts[j].st[0]) + verts[j].st[0] * sh,
+					tl * (1.0f - verts[j].st[1]) + verts[j].st[1] * th);
+				glVertex3fv(verts[j].xyz);
+			}
+			glEnd();
+		}
+	}
+
+	if (additive)
+		Fog_StopAdditive();
+	if (!textured)
+		glEnable(GL_TEXTURE_2D);
+	glTexEnvf(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_REPLACE);
+	glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+	glDisable(GL_BLEND);
+	glEnable(GL_CULL_FACE);
+	glDepthMask(GL_TRUE);
+	glColor4f(1, 1, 1, 1);
+}
+
 static void PF_R_PolygonBegin(void)
 {
-	qpic_t *pic	= DrawQC_CachePic(G_STRING(OFS_PARM0), PICFLAG_AUTO);
-	int flags = (qcvm->argc>1)?G_FLOAT(OFS_PARM1):0;
-	int is2d = (qcvm->argc>2)?G_FLOAT(OFS_PARM2):0;
+	qc_polystate_t *state = PR_GetPolygonState();
+	const char *texname = G_STRING(OFS_PARM0);
+	float flagsval = (qcvm->argc > 1) ? G_FLOAT(OFS_PARM1) : 0;
+	qboolean is2d = (qcvm->argc > 2) ? (G_FLOAT(OFS_PARM2) != 0) : false;
+	unsigned int picflags = is2d ? PICFLAG_AUTO : (PICFLAG_WRAP | PICFLAG_MIPMAP);
 
-	if (!is2d)
-		PR_RunError ("PF_R_PolygonBegin: scene polygons are not supported");
-	if (flags)
-		PR_RunError ("PF_R_PolygonBegin: modifier flags are not supported");
-
-	polygon_pic = pic;
-	polygon_numverts = 0;
+	state->untextured = (!texname || !*texname);
+	state->pic = state->untextured ? NULL : DrawQC_CachePic(texname, picflags);
+	state->flags = (isfinite(flagsval) && flagsval >= -2147483648.0f && flagsval < 2147483648.0f) ? (int)flagsval : 0;
+	state->is2d = is2d;
+	state->active = true;
+	state->numverts = 0;
 }
 static void PF_R_PolygonVertex(void)
 {
-	polygonvert_t *v = &polygon_verts[polygon_numverts];
-	if (polygon_numverts == countof(polygon_verts))
-		return;	//panic!
-	polygon_numverts++;
+	qc_polystate_t *state = PR_GetPolygonState();
+	csqc_polyvert_t *v;
+	float x, y, z, s, t, r, g, b, a;
 
-	v->xy[0] = G_FLOAT(OFS_PARM0+0);
-	v->xy[1] = G_FLOAT(OFS_PARM0+1);
-	v->st[0] = G_FLOAT(OFS_PARM1+0);
-	v->st[1] = G_FLOAT(OFS_PARM1+1);
-	v->rgba[0] = G_FLOAT(OFS_PARM2+0);
-	v->rgba[1] = G_FLOAT(OFS_PARM2+1);
-	v->rgba[2] = G_FLOAT(OFS_PARM2+2);
-	v->rgba[3] = G_FLOAT(OFS_PARM3);
+	if (!state->active || state->numverts == countof(state->verts))
+		return;
+
+	x = G_FLOAT(OFS_PARM0 + 0);
+	y = G_FLOAT(OFS_PARM0 + 1);
+	z = G_FLOAT(OFS_PARM0 + 2);
+	s = G_FLOAT(OFS_PARM1 + 0);
+	t = G_FLOAT(OFS_PARM1 + 1);
+	r = G_FLOAT(OFS_PARM2 + 0);
+	g = G_FLOAT(OFS_PARM2 + 1);
+	b = G_FLOAT(OFS_PARM2 + 2);
+	a = G_FLOAT(OFS_PARM3);
+
+	if (!isfinite(x) || !isfinite(y) || !isfinite(z) ||
+		!isfinite(s) || !isfinite(t) ||
+		!isfinite(r) || !isfinite(g) || !isfinite(b) || !isfinite(a))
+		return;
+
+	v = &state->verts[state->numverts++];
+	v->xyz[0] = x;
+	v->xyz[1] = y;
+	v->xyz[2] = z;
+	v->st[0] = s;
+	v->st[1] = t;
+	v->rgba[0] = r;
+	v->rgba[1] = g;
+	v->rgba[2] = b;
+	v->rgba[3] = a;
 }
 static void PF_R_PolygonEnd(void)
 {
-	if (polygon_pic)
-		Draw_PicPolygon(polygon_pic, polygon_numverts, polygon_verts);
-	polygon_numverts = 0;
+	qc_polystate_t *state = PR_GetPolygonState();
+	unsigned int i;
+
+	if (!state->active || state->numverts < 3)
+	{
+		state->numverts = 0;
+		return;
+	}
+
+	if (state->is2d)
+	{
+		if (state->untextured)
+		{
+			qboolean additive = DrawQC_BeginBlend((float)state->flags);
+			glDisable(GL_TEXTURE_2D);
+			glBegin(GL_TRIANGLE_FAN);
+			for (i = 0; i < state->numverts; i++)
+			{
+				glColor4fv(state->verts[i].rgba);
+				glVertex2f(state->verts[i].xyz[0], state->verts[i].xyz[1]);
+			}
+			glEnd();
+			glEnable(GL_TEXTURE_2D);
+			DrawQC_EndBlend(additive);
+		}
+		else if (state->pic)
+		{
+			polygonvert_t verts2d[countof(state->verts)];
+			qboolean additive = DrawQC_BeginBlend((float)state->flags);
+			for (i = 0; i < state->numverts; i++)
+			{
+				verts2d[i].xy[0] = state->verts[i].xyz[0];
+				verts2d[i].xy[1] = state->verts[i].xyz[1];
+				verts2d[i].st[0] = state->verts[i].st[0];
+				verts2d[i].st[1] = state->verts[i].st[1];
+				verts2d[i].rgba[0] = state->verts[i].rgba[0];
+				verts2d[i].rgba[1] = state->verts[i].rgba[1];
+				verts2d[i].rgba[2] = state->verts[i].rgba[2];
+				verts2d[i].rgba[3] = state->verts[i].rgba[3];
+			}
+			Draw_PicPolygon(state->pic, state->numverts, verts2d);
+			DrawQC_EndBlend(additive);
+		}
+	}
+	else if (qcvm == &cl.qcvm && cl.qcvm.extfuncs.CSQC_UpdateView && (state->untextured || state->pic))
+	{
+		if (csqc_numpolys < CSQC_MAX_SCENE_POLYS &&
+			csqc_numpolyverts + state->numverts <= CSQC_MAX_SCENE_POLYVERTS)
+		{
+			if (csqc_numpolys + 1 > csqc_maxpolys)
+			{
+				unsigned int newmax = csqc_maxpolys ? csqc_maxpolys * 2 : 64;
+				csqc_poly_t *newpolys;
+				if (newmax > CSQC_MAX_SCENE_POLYS)
+					newmax = CSQC_MAX_SCENE_POLYS;
+				newpolys = (csqc_poly_t *)realloc(csqc_polys, newmax * sizeof(*newpolys));
+				if (!newpolys)
+				{
+					state->numverts = 0;
+					return;
+				}
+				csqc_polys = newpolys;
+				csqc_maxpolys = newmax;
+			}
+			if (csqc_numpolyverts + state->numverts > csqc_maxpolyverts)
+			{
+				unsigned int newmax = csqc_maxpolyverts ? csqc_maxpolyverts * 2 : 256;
+				csqc_polyvert_t *newverts;
+				while (newmax < csqc_numpolyverts + state->numverts)
+					newmax *= 2;
+				if (newmax > CSQC_MAX_SCENE_POLYVERTS)
+					newmax = CSQC_MAX_SCENE_POLYVERTS;
+				newverts = (csqc_polyvert_t *)realloc(csqc_polyverts, newmax * sizeof(*newverts));
+				if (!newverts)
+				{
+					state->numverts = 0;
+					return;
+				}
+				csqc_polyverts = newverts;
+				csqc_maxpolyverts = newmax;
+			}
+
+			memcpy(&csqc_polyverts[csqc_numpolyverts], state->verts, state->numverts * sizeof(*state->verts));
+			csqc_polys[csqc_numpolys].pic = state->pic;
+			csqc_polys[csqc_numpolys].untextured = state->untextured;
+			csqc_polys[csqc_numpolys].flags = state->flags;
+			csqc_polys[csqc_numpolys].firstvert = csqc_numpolyverts;
+			csqc_polys[csqc_numpolys].numverts = state->numverts;
+			csqc_numpolys++;
+			csqc_numpolyverts += state->numverts;
+		}
+	}
+
+	state->numverts = 0;
 }
 
 static void PF_cl_cprint(void)
@@ -9591,6 +9856,22 @@ static qboolean csqc_mainview;
 void PR_CSQC_BeginRenderFrame(void)
 {
 	csqc_mainview = true;
+	PR_CSQC_ClearScenePolygons();
+}
+
+void PR_CSQC_SyncGlobals(void)
+{
+	pr_global_struct->time = cl.time;
+	if (qcvm->extglobals.cltime)
+		*qcvm->extglobals.cltime = realtime;
+	if (qcvm->extglobals.clframetime)
+		*qcvm->extglobals.clframetime = host_frametime;
+	if (qcvm->extglobals.player_localentnum)
+		*qcvm->extglobals.player_localentnum = cl.viewentity;
+	if (qcvm->extglobals.intermission)
+		*qcvm->extglobals.intermission = cl.intermission;
+	if (qcvm->extglobals.intermission_time)
+		*qcvm->extglobals.intermission_time = cl.completed_time;
 }
 
 void V_CalcRefdef (void);
@@ -9642,6 +9923,8 @@ static void PF_cl_clearscene(void)
 	cl_numvisedicts = 0;
 
 	num_temp_entities = 0;
+	if (qcvm == &cl.qcvm)
+		PR_CSQC_ClearScenePolygons();
 
 	//clear any temp dlights too.
 	dl = cl_dlights;
@@ -10179,6 +10462,7 @@ static void PF_cl_renderscene(void)
 	{
 		r_refdef.csqc.hide_default_viewentity = !chase_active.value;
 		r_refdef.csqc.skip_motionblur = !csqc_mainview;
+		r_refdef.csqc.draw_polygons = (cl.qcvm.extfuncs.CSQC_UpdateView != 0);
 		csqc_mainview = false;
 	}
 	R_RenderView();
@@ -11560,7 +11844,7 @@ static struct
 	{"setproperty",		PF_NoSSQC,			PF_cl_setproperty,	303,	PF_cl_setproperty,303, D("#define setviewprop setproperty\nfloat(float property, ...)", "Allows you to override default view properties like viewport, fov, and whether the engine hud will be drawn. Different VF_ values have slightly different arguments, some are vectors, some floats.")},// (EXT_CSQC)
 	{"renderscene",		PF_NoSSQC,			PF_cl_renderscene,	304,	PF_cl_renderscene,304, D("void()", "Draws all entities, polygons, and particles on the rentity list (which were added via addentities or addentity), using the various view properties set via setproperty. There is no ordering dependancy.\nThe scene must generally be cleared again before more entities are added, as entities will persist even over to the next frame.\nYou may call this builtin multiple times per frame, but should only be called from CSQC_UpdateView.")},// (EXT_CSQC)
 	{"dynamiclight_add",PF_NoSSQC,			PF_cs_addlight,		305,	PF_NoMenu, D("float(vector org, float radius, vector lightcolours, optional float style, optional string cubemapname, optional float pflags)", "Adds a temporary dynamic light and returns its handle. QSS-M supports ordinary omnidirectional lights; cubemap and projected-light arguments are accepted but not rendered.")},// (EXT_CSQC)
-	{"R_BeginPolygon",	PF_NoSSQC,			PF_R_PolygonBegin,	306,	PF_R_PolygonBegin,	306, D("void(string texturename, optional float flags, optional float is2d)", "Begins an immediate 2D textured polygon when is2d is nonzero and flags is zero. QSS-M does not currently support modifier flags or queued 3D scene polygons.")},// (EXT_CSQC_???)
+	{"R_BeginPolygon",	PF_NoSSQC,			PF_R_PolygonBegin,	306,	PF_R_PolygonBegin,	306, D("void(string texturename, optional float flags, optional float is2d)", "Begins a 2D immediate polygon (is2d nonzero) or a queued 3D scene polygon (is2d zero, drawn during renderscene and cleared by clearscene). Empty texturename draws an untextured vertex-colored polygon; flags bit 0 selects additive blending.")},// (EXT_CSQC_???)
 	{"R_PolygonVertex",	PF_NoSSQC,			PF_R_PolygonVertex,	307,	PF_R_PolygonVertex,	307, D("void(vector org, vector texcoords, vector rgb, float alpha)", "Specifies a polygon vertex with its various properties.")},// (EXT_CSQC_???)
 	{"R_EndPolygon",	PF_NoSSQC,			PF_R_PolygonEnd,	308,	PF_R_PolygonEnd,	308, D("void()", "Ends the current polygon. At least 3 verticies must have been specified. You do not need to call beginpolygon if you wish to draw another polygon with the same shader.")},
 	{"getproperty",		PF_NoSSQC,			PF_cl_getproperty,	309,	PF_cl_getproperty,	309, D("#define getviewprop getproperty\n__variant(float property)", "Retrieve a currently-set (typically view) property, allowing you to read the current viewport or other things. Due to cheat protection, certain values may be unretrievable.")},// (EXT_CSQC_1)
@@ -12302,7 +12586,10 @@ void PR_ShutdownExtensions(void)
 		PR_ReloadPics(true);
 	}
 	if (qcvm == &cls.menu_qcvm)
+	{
 		PR_MenuModels_Clear();
+		memset(&polygon_state[1], 0, sizeof(polygon_state[1]));
+	}
 
 	pr_ext_warned_particleeffectnum = 0;
 }

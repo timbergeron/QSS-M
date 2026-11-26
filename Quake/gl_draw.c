@@ -222,10 +222,18 @@ qpic_t *Draw_PicFromWad2 (const char *name, unsigned int texflags)
 
 	texflags |= TEXPREF_UI | (premul_hud?TEXPREF_PREMULTIPLY:0);
 
+	char cachename[MAX_QPATH];
+	qboolean wrapmip = !(texflags & TEXPREF_PAD) && (texflags & TEXPREF_MIPMAP);
+
+	if (wrapmip)
+		q_snprintf (cachename, sizeof(cachename), "%s#wrap", name);
+	else
+		q_strlcpy (cachename, name, sizeof(cachename));
+
 	//Spike -- added cachepic stuff here, to avoid glitches if the function is called multiple times with the same image.
 	for (pic=menu_cachepics, i=0 ; i<menu_numcachepics ; pic++, i++)
 	{
-		if (!strcmp (name, pic->name))
+		if (!strcmp (cachename, pic->name))
 			return &pic->pic;
 	}
 	if (menu_numcachepics == MAX_CACHED_PICS)
@@ -244,7 +252,7 @@ qpic_t *Draw_PicFromWad2 (const char *name, unsigned int texflags)
 	if (info->size > sizeof(int)*2+p->width*p->height) Con_DPrintf ("Draw_PicFromWad: pic \"%s\" over-sized (%u*%u requires only %u bytes)\n", name, p->width,p->height, 8+p->width*p->height);
 
 	//Spike -- if we're loading external images, and one exists, then use that instead.
-	if (draw_load24bit && (gl.gltexture=TexMgr_LoadImage (NULL, name, 0, 0, SRC_EXTERNAL, NULL, va("gfx/%s", name), 0, texflags|TEXPREF_MIPMAP|TEXPREF_ALLOWMISSING)))
+	if (draw_load24bit && (gl.gltexture=TexMgr_LoadImage (NULL, cachename, 0, 0, SRC_EXTERNAL, NULL, va("gfx/%s", name), 0, texflags|TEXPREF_MIPMAP|TEXPREF_ALLOWMISSING)))
 	{
 		gl.sl = 0;
 		gl.sh = (texflags&TEXPREF_PAD)?(float)gl.gltexture->source_width/(float)TexMgr_PadConditional(gl.gltexture->source_width):1;
@@ -275,8 +283,8 @@ qpic_t *Draw_PicFromWad2 (const char *name, unsigned int texflags)
 	}
 	else
 	{
-		char texturename[64]; //johnfitz
-		q_snprintf (texturename, sizeof(texturename), "%s:%s", WADFILENAME, name); //johnfitz
+		char texturename[MAX_QPATH]; //johnfitz
+		q_snprintf (texturename, sizeof(texturename), "%s:%s", WADFILENAME, cachename); //johnfitz
 
 		offset = (src_offset_t)p - (src_offset_t)wad_base + sizeof(int)*2; //johnfitz
 
@@ -289,7 +297,7 @@ qpic_t *Draw_PicFromWad2 (const char *name, unsigned int texflags)
 	}
 
 	menu_numcachepics++;
-	strcpy (pic->name, name);
+	q_strlcpy (pic->name, cachename, sizeof(pic->name));
 	pic->pic = *p;
 	memcpy (pic->pic.data, &gl, sizeof(glpic_t));
 
@@ -657,6 +665,8 @@ static qpic_t	*Draw_TryCachePicEx (const char *cachename, const char *path, unsi
 	size_t		file_size = 0;
 	char newname[MAX_QPATH];
 
+	unsigned int clampflag = (texflags & TEXPREF_PAD) ? TEXPREF_CLAMP : 0;
+
 	texflags |= TEXPREF_UI | (premul_hud?TEXPREF_PREMULTIPLY:0);
 
 	for (pic=menu_cachepics, i=0 ; i<menu_numcachepics ; pic++, i++)
@@ -673,7 +683,7 @@ static qpic_t	*Draw_TryCachePicEx (const char *cachename, const char *path, unsi
 	{
 		char npath[MAX_QPATH];
 		COM_StripExtension(path, npath, sizeof(npath));
-		gl.gltexture = TexMgr_LoadImage (NULL, npath, 0, 0, SRC_EXTERNAL, NULL, npath, 0, texflags|TEXPREF_ALLOWMISSING);
+		gl.gltexture = TexMgr_LoadImage (NULL, strcmp(cachename, path) ? cachename : npath, 0, 0, SRC_EXTERNAL, NULL, npath, 0, texflags|TEXPREF_ALLOWMISSING);
 		if (!gl.gltexture)
 		{	//Spike's texmgr builds a real 0x0 texture for a missing external image unless we ask it not to.
 			//caching that would make every later lookup of this name 'succeed' until Draw_NewGame, so drop the slot.
@@ -721,7 +731,7 @@ static qpic_t	*Draw_TryCachePicEx (const char *cachename, const char *path, unsi
 
 	//Spike -- if we're loading external images, and one exists, then use that instead (but with the sizes of the lmp).
 	COM_StripExtension(path, newname, sizeof(newname));
-	if (allow_external && draw_load24bit && (gl.gltexture=TexMgr_LoadImage (NULL, path, 0, 0, SRC_EXTERNAL, NULL, newname, 0, texflags|TEXPREF_MIPMAP|TEXPREF_ALLOWMISSING|TEXPREF_CLAMP))) // woods iw add clamp
+	if (allow_external && draw_load24bit && (gl.gltexture=TexMgr_LoadImage (NULL, cachename, 0, 0, SRC_EXTERNAL, NULL, newname, 0, texflags|TEXPREF_MIPMAP|TEXPREF_ALLOWMISSING|clampflag))) // woods iw add clamp
 	{
 		gl.sl = 0;
 		gl.sh = (texflags&TEXPREF_PAD)?(float)gl.gltexture->source_width/(float)TexMgr_PadConditional(gl.gltexture->source_width):1;
@@ -756,8 +766,8 @@ static qpic_t	*Draw_TryCachePicEx (const char *cachename, const char *path, unsi
 			source_offset = (src_offset_t)indexed_source;
 		}
 
-		gl.gltexture = TexMgr_LoadImage (NULL, packfile ? cachename : path, dat->width, dat->height, SRC_INDEXED, indexed_source, source_file,
-										  source_offset, texflags | TEXPREF_NOPICMIP | TEXPREF_CLAMP | (packfile ? TEXPREF_OWNSOURCE : 0)); //johnfitz -- TexMgr -- woods iw add clamp
+		gl.gltexture = TexMgr_LoadImage (NULL, cachename, dat->width, dat->height, SRC_INDEXED, indexed_source, source_file,
+										  source_offset, texflags | TEXPREF_NOPICMIP | clampflag | (packfile ? TEXPREF_OWNSOURCE : 0)); //johnfitz -- TexMgr -- woods iw add clamp
 		gl.sl = 0;
 		gl.sh = (texflags&TEXPREF_PAD)?(float)dat->width/(float)TexMgr_PadConditional(dat->width):1; //johnfitz
 		gl.tl = 0;
@@ -771,6 +781,12 @@ static qpic_t	*Draw_TryCachePicEx (const char *cachename, const char *path, unsi
 
 qpic_t	*Draw_TryCachePic (const char *path, unsigned int texflags)
 {
+	if (!(texflags & TEXPREF_PAD) && (texflags & TEXPREF_MIPMAP))
+	{
+		char wrapname[MAX_QPATH];
+		q_snprintf (wrapname, sizeof(wrapname), "%s#wrap", path);
+		return Draw_TryCachePicEx(wrapname, path, texflags, true, NULL);
+	}
 	return Draw_TryCachePicEx(path, path, texflags, true, NULL);
 }
 

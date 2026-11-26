@@ -3304,6 +3304,7 @@ static qboolean CL_LoadCSProgs(void)
 	{	//only try to use csqc if qc extensions are enabled.
 		char versionedname[MAX_QPATH];
 		char specifiedname[MAX_QPATH];
+		char sizebuf[32];
 		unsigned int csqchash;
 		size_t csqcsize;
 		const char *val;
@@ -3313,7 +3314,7 @@ static qboolean CL_LoadCSProgs(void)
 			snprintf(versionedname, MAX_QPATH, "csprogsvers/%x.dat", csqchash);
 		else
 			*versionedname = 0;
-		csqcsize = strtoul(Info_GetKey(cl.serverinfo, "*csprogssize", versionedname, sizeof(versionedname)), NULL, 0);
+		csqcsize = strtoul(Info_GetKey(cl.serverinfo, "*csprogssize", sizebuf, sizeof(sizebuf)), NULL, 0);
 
 		val = Info_GetKey(cl.serverinfo, "*csprogsname", specifiedname, sizeof(specifiedname));
 
@@ -3332,7 +3333,7 @@ static qboolean CL_LoadCSProgs(void)
 				EDICT_NUM(i)->baseline = nullentitystate;
 
 			//in terms of exploit protection this is kinda pointless as someone can just strip out this check and compile themselves. oh well.
-			if ((*versionedname && qcvm->progshash == csqchash && qcvm->progssize == csqcsize) || cls.demoplayback)
+			if ((*versionedname && qcvm->progshash == csqchash && (!csqcsize || qcvm->progssize == csqcsize)) || cls.demoplayback)
 				fullcsqc = true;
 			else
 			{	//okay, it doesn't match. full csqc is disallowed to prevent cheats, but we still allow simplecsqc...
@@ -3381,6 +3382,7 @@ static qboolean CL_LoadCSProgs(void)
 			//and call the init function... if it exists.
 			qcvm->worldmodel = cl.worldmodel;
 			SV_ClearWorld();
+			PR_CSQC_SyncGlobals();
 			if (qcvm->extfuncs.CSQC_Init)
 			{
 				int maj = (int)QUAKESPASM_VERSION;
@@ -3390,6 +3392,8 @@ static qboolean CL_LoadCSProgs(void)
 				G_FLOAT(OFS_PARM2) = 10000*maj + 100*(min) + QUAKESPASM_VER_PATCH;
 				PR_ExecuteProgram(qcvm->extfuncs.CSQC_Init);
 			}
+			if (qcvm->extfuncs.CSQC_WorldLoaded)
+				PR_ExecuteProgram(qcvm->extfuncs.CSQC_WorldLoaded);
 			qcvm->worldlocked = true;
 
 			if (fullcsqc)

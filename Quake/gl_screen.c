@@ -89,7 +89,6 @@ double		scr_volume_display_time = 0; // woods
 float		scr_con_current;
 float		scr_conlines;		// lines of console to display
 
-void Sbar_SortFrags(void); // woods #scrping
 void Sbar_SortTeamFrags(void); // woods #matchhud
 int	Sbar_ColorForMap(int m); // woods #matchhud
 void Sbar_DrawCharacter(int x, int y, int num); // woods #matchhud
@@ -1826,7 +1825,7 @@ void SCR_ShowPing(void)
 
 			GL_SetCanvas (CANVAS_BOTTOMLEFT2); //johnfitz woods 9/2/2021
 
-			Sbar_SortFrags ();
+			Sbar_SortFrags (false);
 
 			// draw the text
 			l = scoreboardlines;
@@ -2365,7 +2364,7 @@ void SCR_CalculateTeamScoresForDemo(int* team_colors, int* team_scores, int* num
 	*redteamplayers = 0;
 	*blueteamplayers = 0;
 
-	Sbar_SortFrags();
+	Sbar_SortFrags (true);
 
 	// First pass: identify all team colors
 	for (i = 0; i < scoreboardlines; i++) {
@@ -2660,7 +2659,7 @@ static void SCR_DrawFFADifferential(void) // woods
 	if (!player->name[0] || player->spectator || player->frags == -99)
 		return;
 
-	Sbar_SortFrags();
+	Sbar_SortFrags (false);
 
 	if (!scoreboardlines)
 		return;
@@ -2953,28 +2952,31 @@ void SCR_DrawTeamDifferential(int y, qboolean use_demo_calculation, int redteamp
 
 	// lets get YOUR team color from scoreboard
 	if (!use_demo_calculation) {
-					Sbar_SortFrags();
-					l2 = scoreboardlines;
+		if (cl.viewentity > 0 && cl.viewentity <= cl.maxclients) {
+			s = &cl.scores[cl.viewentity - 1];
+			if (s->name[0]) {
+				sprintf(tcolor, "%u", s->pants.basic);
+			}
+		}
+
+		Sbar_SortFrags (true);
+		l2 = scoreboardlines;
 		redteamplayers = 0;
 		blueteamplayers = 0;
 
-					for (i = 0; i < l2; i++)
-					{
-						k = fragsort[i];
-						s = &cl.scores[k];
-						if (!s->name[0])
-							continue;
+		for (i = 0; i < l2; i++)
+		{
+			k = fragsort[i];
+			s = &cl.scores[k];
+			if (!s->name[0])
+				continue;
 
-						if (fragsort[i] == cl.viewentity - 1) {
-							sprintf(tcolor, "%u", s->pants.basic);
-						}
+			// woods, lets see how many players are on each team #capturediff
+			if (s->pants.basic == 4) // count number of red players
+				redteamplayers += 1;
 
-						// woods, lets see how many players are on each team #capturediff
-						if (s->pants.basic == 4) // count number of red players
-							redteamplayers += 1;
-
-						if (s->pants.basic == 13) // count number of blue players
-							blueteamplayers += 1;
+			if (s->pants.basic == 13) // count number of blue players
+				blueteamplayers += 1;
 		}
 	}
 	else {
@@ -8772,6 +8774,8 @@ needs almost the entire 256k of stack space!
 */
 void SCR_UpdateScreen (void)
 {
+	qboolean csqc_updateview = false;
+
 	SCR_ScreenshotCollectReadbacks (false);
 	SCR_ScreenshotConsumeCompleted ();
 	Sbar_ScoreboardFrame ();
@@ -8823,6 +8827,7 @@ void SCR_UpdateScreen (void)
 	if (cl.worldmodel && cl.qcvm.worldmodel && cl.qcvm.extfuncs.CSQC_UpdateView)
 	{
 		float s = CLAMP (1.0, scr_sbarscale.value, (float)glwidth / 320.0);
+		csqc_updateview = true;
 		SCR_SetUpToDrawConsole ();
 		// Full CSQC may draw its UI before (or without) renderscene. Give it
 		// the same 2D state as CSQC_DrawHud, including translucent primitives.
@@ -8835,29 +8840,20 @@ void SCR_UpdateScreen (void)
 
 		PR_SwitchQCVM(&cl.qcvm);
 
-		if (qcvm->extglobals.cltime)
-			*qcvm->extglobals.cltime = realtime;
-		if (qcvm->extglobals.clframetime)
-			*qcvm->extglobals.clframetime = host_frametime;
-		if (qcvm->extglobals.player_localentnum)
-			*qcvm->extglobals.player_localentnum = cl.viewentity;
-		if (qcvm->extglobals.intermission)
-			*qcvm->extglobals.intermission = cl.intermission;
-		if (qcvm->extglobals.intermission_time)
-			*qcvm->extglobals.intermission_time = cl.completed_time;
+		PR_CSQC_SyncGlobals();
 		if (qcvm->extglobals.view_angles)
 			VectorCopy(cl.viewangles, qcvm->extglobals.view_angles);
 		if (qcvm->extglobals.clientcommandframe)
 			*qcvm->extglobals.clientcommandframe = cl.movemessages;
 		if (qcvm->extglobals.servercommandframe)
 			*qcvm->extglobals.servercommandframe = cl.ackedmovemessages;
-//		Sbar_SortFrags ();
+		Sbar_SortFrags (false);
 
 		pr_global_struct->time = qcvm->time;
 		pr_global_struct->frametime = qcvm->frametime;
 		G_FLOAT(OFS_PARM0) = glwidth/s;
 		G_FLOAT(OFS_PARM1) = glheight/s;
-		G_FLOAT(OFS_PARM2) = true;
+		G_FLOAT(OFS_PARM2) = (key_dest != key_menu);
 
 		if (FXAA_Enabled ()) // woods #fxaa
 			FXAA_BeginFrame();
@@ -8932,12 +8928,14 @@ void SCR_UpdateScreen (void)
 	}
 	else if (cl.intermission == 1 && key_dest == key_game) //end of level
 	{
-		Sbar_IntermissionOverlay ();
+		if (!csqc_updateview)
+			Sbar_IntermissionOverlay ();
 		SCR_DrawDemoControls(); // woods (iw) #democontrols
 	}
 	else if (cl.intermission == 2 && key_dest == key_game) //end of episode
 	{
-		Sbar_FinaleOverlay ();
+		if (!csqc_updateview)
+			Sbar_FinaleOverlay ();
 		SCR_CheckDrawCenterString ();
 		SCR_DrawDemoControls(); // woods (iw) #democontrols
 	}

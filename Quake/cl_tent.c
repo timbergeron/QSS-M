@@ -352,6 +352,7 @@ void CL_ParseTEnt (void)
 		int start = msg_readcount;
 
 		PR_SwitchQCVM(&cl.qcvm);
+		PR_CSQC_SyncGlobals();
 		PR_ExecuteProgram(cl.qcvm.extfuncs.CSQC_Parse_TempEntity);
 		ret = G_FLOAT(OFS_RETURN);
 		PR_SwitchQCVM(NULL);

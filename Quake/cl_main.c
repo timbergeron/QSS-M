@@ -7073,6 +7073,7 @@ void CL_SendCmd (void)
 	if (cl.qcvm.extfuncs.CSQC_Input_Frame && !cl.qcvm.nogameaccess)
 	{
 		PR_SwitchQCVM(&cl.qcvm);
+		PR_CSQC_SyncGlobals();
 		PR_GetSetInputs(&cmd, true);
 		PR_ExecuteProgram(cl.qcvm.extfuncs.CSQC_Input_Frame);
 		PR_GetSetInputs(&cmd, false);

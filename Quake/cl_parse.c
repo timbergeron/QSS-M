@@ -895,6 +895,7 @@ void CLFTE_ParseCSQCEntitiesUpdate(void)
 	{
 		unsigned int entnum;
 		qboolean removeflag;
+		PR_CSQC_SyncGlobals();
 		for(;;)
 		{
 			//replacement deltas now also includes 22bit entity num indicies.
@@ -1298,13 +1299,12 @@ static void CL_ParseStartSoundPacket(void)
 		qboolean ret = false;
 		PR_SwitchQCVM(&cl.qcvm);
 
-		if (qcvm->extglobals.player_localentnum)
-			*qcvm->extglobals.player_localentnum = cl.viewentity;
+		PR_CSQC_SyncGlobals();
 
 		G_FLOAT(OFS_PARM0) = ent;
 		G_FLOAT(OFS_PARM1) = channel;
 		G_INT(OFS_PARM2) = PR_MakeTempString(cl.sound_precache[sound_num]->name);
-		G_FLOAT(OFS_PARM3) = volume;
+		G_FLOAT(OFS_PARM3) = volume / 255.0f;
 		G_FLOAT(OFS_PARM4) = attenuation;
 		VectorCopy(pos, G_VECTOR(OFS_PARM5));
 		G_FLOAT(OFS_PARM6) = 100;
@@ -3851,6 +3851,7 @@ static void CL_ParseStuffText(const char *msg)
 		{
 			char *tmp;
 			PR_SwitchQCVM(&cl.qcvm);
+			PR_CSQC_SyncGlobals();
 			tmp = PR_GetTempString();
 			memcpy(tmp, cl.stuffcmdbuf, str-cl.stuffcmdbuf);
 			tmp[str-cl.stuffcmdbuf-1] = '\n';	//put the terminator back, for lazy localcmds.
@@ -4784,6 +4785,7 @@ static void CL_ParsePrint(const char *msg, const char *original)
 					return;
 			}
 			PR_SwitchQCVM(&cl.qcvm);
+			PR_CSQC_SyncGlobals();
 			tmp = PR_GetTempString();
 			memcpy(tmp, cl.printbuffer, str-cl.printbuffer);
 			tmp[str-cl.printbuffer] = 0;
@@ -4811,6 +4813,7 @@ static void CL_ParseCenterPrint(const char *msg)
 	if (cl.qcvm.extfuncs.CSQC_Parse_CenterPrint)
 	{	//let the csqc do it.
 		PR_SwitchQCVM(&cl.qcvm);
+		PR_CSQC_SyncGlobals();
 		tmp = PR_GetTempString();
 		q_strlcpy(tmp, msg, STRINGTEMP_LENGTH);
 		G_INT(OFS_PARM0) = PR_SetEngineString(tmp);
@@ -5889,6 +5892,7 @@ void CL_ParseServerMessage (void)
 			if (cl.qcvm.extfuncs.CSQC_Parse_Event)
 			{
 				PR_SwitchQCVM(&cl.qcvm);
+				PR_CSQC_SyncGlobals();
 				PR_ExecuteProgram(cl.qcvm.extfuncs.CSQC_Parse_Event);
 				PR_SwitchQCVM(NULL);
 			}

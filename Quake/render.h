@@ -198,6 +198,7 @@ typedef struct
 	vec4_t skyroom_spin;
 	int clearcolor; // 0: engine default, -1: preserve color, 1: clear viewport color
 	qboolean skip_motionblur;
+	qboolean draw_polygons;
 } csqc_render_view_t;
 
 // !!! if this is changed, it must be changed in asm_draw.h too !!!

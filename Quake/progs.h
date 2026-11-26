@@ -234,6 +234,7 @@ struct pr_extfuncs_s
 /*csqc*/
 #define QCEXTFUNCS_CS \
 	QCEXTFUNC(CSQC_Init,				"void(float apilevel, string enginename, float engineversion)")	\
+	QCEXTFUNC(CSQC_WorldLoaded,			"void()")	\
 	QCEXTFUNC(CSQC_Shutdown,			"void()")	\
 	QCEXTFUNC(CSQC_DrawHud,				"void(vector virtsize, float showscores)")							/*simple: for the simple(+limited) hud-only csqc interface.*/	\
 	QCEXTFUNC(CSQC_DrawScores,			"void(vector virtsize, float showscores)")							/*simple: (optional) for the simple hud-only csqc interface.*/		\
@@ -248,7 +249,7 @@ struct pr_extfuncs_s
 	QCEXTFUNC(CSQC_Parse_Print,			"void(string printmsg, float printlvl)")							\
 	QCEXTFUNC(CSQC_Ent_Update,			"void(float isnew)")												/*full: lots of reads needed to interpret the bytestream*/	\
 	QCEXTFUNC(CSQC_Ent_Remove,			"void()")															/*full: basically just remove(self)*/\
-	QCEXTFUNC(CSQC_Event_Sound,			"void(float entnum, float channel, string soundname, float vol, float attenuation, vector pos, float pitchmod, float flags)") /*full: basically just remove(self)*/\
+	QCEXTFUNC(CSQC_Event_Sound,			"float(float entnum, float channel, string soundname, float vol, float attenuation, vector pos, float pitchmod, float flags)") /*full: return true to suppress engine playback*/\
 	QCEXTFUNC(CSQC_Parse_TempEntity,	"float()")															/*full: evil... This is the bane of all protocol compatibility. Die.*/	\
 	QCEXTFUNC(CSQC_Parse_StuffCmd,		"void(string msg)")													/*full only: not in simple. Too easy to make cheats by ignoring server messages.*/	\
 /*menucsqc*/
@@ -581,6 +582,7 @@ void PR_SwitchQCVM(qcvm_t *nvm);
 
 void PR_GetSetInputs(usercmd_t *cmd, qboolean set);
 void PR_CSQC_BeginRenderFrame(void);
+void PR_CSQC_SyncGlobals(void);
 
 extern const builtin_t pr_ssqcbuiltins[];
 extern const int pr_ssqcnumbuiltins;

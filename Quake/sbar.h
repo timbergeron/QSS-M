@@ -55,6 +55,7 @@ void Sbar_FinaleOverlay (void);
 extern int	fragsort[MAX_SCOREBOARD];
 extern int	scoreboardlines;
 extern int	Sbar_ColorForMap (int m);
+void Sbar_SortFrags (qboolean ignorespecs);
 
 #endif	/* _QUAKE_SBAR_H */
 
