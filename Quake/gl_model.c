@@ -5535,6 +5535,7 @@ static void Mod_LoadBrushModel (qmodel_t *mod, void *buffer)
 	mmodel_t 	*bm;
 	float		radius; //johnfitz
 	size_t		filesize; // woods #bsppreflight
+	qboolean	isworld;
 
 	loadmodel->type = mod_brush;
 
@@ -5766,6 +5767,13 @@ visdone:
 
 	mod->submodelof = loadmodel;
 
+	// inline models are named "*N" with no owner, so only the world may register them.
+	// any other bsp (a prefab or pickup with doors, or another map) would overwrite the
+	// world's *1..*N in place, leaving its doors and lifts with the wrong hulls and faces.
+	// both names are set before the world loads; Host_ClearMemory zeroes sv and cl first.
+	isworld = (sv.modelname[0] && !strcmp(mod->name, sv.modelname)) ||
+		(cl.model_name[1][0] && !strcmp(mod->name, cl.model_name[1]));
+
 	// johnfitz -- okay, so that i stop getting confused every time i look at this loop, here's how it works:
 	// we're looping through the submodels starting at 0.  Submodel 0 is the main model, so we don't have to
 	// worry about clobbering data the first time through, since it's the same data.  At the end of the loop,
@@ -5843,6 +5851,11 @@ visdone:
 		//johnfitz
 
 		mod->numleafs = bm->visleafs;
+
+		// the loop rewrites mod in place, so stop after submodel 0 rather than only
+		// skipping the copy, or later passes would clobber it with the last submodel
+		if (!isworld)
+			break;
 
 		if (i < mod->numsubmodels-1)
 		{	// duplicate the basic information
