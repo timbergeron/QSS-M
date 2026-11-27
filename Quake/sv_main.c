@@ -1288,14 +1288,12 @@ static void SVFTE_WriteEntitiesToClient(client_t *client, sizebuf_t *msg, size_t
 	dev_peakstats.packetsize = q_max(msg->cursize, dev_peakstats.packetsize);
 }
 
-static void SVFTE_WriteCSQCEntitiesToClient(client_t *client, sizebuf_t *msg, size_t overflowsize)
+static void SVFTE_WriteCSQCEntitiesToClient(client_t *client, sizebuf_t *msg)
 {
 	edict_t *ed;
 	unsigned int bits, logbits;
 	size_t entnum;
 	int sequence = NET_QSocketGetSequenceOut(client->netconnection);
-	size_t origmaxsize = msg->maxsize;
-	size_t rollbacksize;	//I'm too lazy to figure out sizes (especially if someone updates this for bone states or whatever)
 	struct deltaframe_s *frame = &client->frames[sequence&(client->numframes-1)];
 
 	qboolean wroteheader = false;
@@ -1303,15 +1301,18 @@ static void SVFTE_WriteCSQCEntitiesToClient(client_t *client, sizebuf_t *msg, si
 	if (!GetEdictFieldValid(SendEntity) || !GetEdictFieldValid(SendFlags))
 		return;	//mod does not participate in csqc entity networking.
 
-	msg->maxsize = overflowsize;
-
 	for (entnum = 1; entnum < client->numpendingcsqcentities; entnum++)
 	{
+		int payload_room;
+
 		bits = client->pendingcsqcentities_bits[entnum];
 		if (!(bits & ~SENDFLAG_PRESENT))
 			continue;	//nothing to send (if reset2 is still set, then leave it pending until there's more data
 
-		rollbacksize = msg->cursize;
+		/* Reserve the section header, entity index and terminator. */
+		payload_room = msg->maxsize - msg->cursize - !wroteheader - (entnum >= 0x4000 ? 3 : 2) - 2;
+		if (payload_room < 0)
+			break;
 		logbits = 0;
 		if (bits & SENDFLAG_REMOVE)
 		{
@@ -1353,6 +1354,11 @@ sendremove:
 				PR_ExecuteProgram(GetEdictFieldEval(ed, SendEntity)->function);
 				if (G_FLOAT(OFS_RETURN))
 				{
+					if (sv.multicast.cursize > payload_room)
+					{
+						client->pendingcsqcentities_bits[entnum] = bits;
+						break;
+					}
 					if (!wroteheader)
 					{
 						MSG_WriteByte(msg, svcdp_csqcentities);
@@ -1380,13 +1386,6 @@ sendremove:
 		}
 		client->pendingcsqcentities_bits[entnum] = bits;
 
-		if ((size_t)msg->cursize + 2 > origmaxsize)
-		{
-			msg->cursize = rollbacksize;	//roll back
-			client->pendingcsqcentities_bits[entnum] |= logbits;	//make sure those bits get re-applied later.
-			break;
-		}
-
 		if (logbits)
 		{
 			if (frame->numents == frame->maxents)
@@ -1404,7 +1403,6 @@ sendremove:
 			frame->numents++;
 		}
 	}
-	msg->maxsize = origmaxsize;
 	if (wroteheader)
 		MSG_WriteShort(msg, 0);	//eom
 	sv.multicast.cursize = 0;
@@ -3955,7 +3953,11 @@ SV_SendClientDatagram
 */
 qboolean SV_SendClientDatagram (client_t *client)
 {
-	byte		buf[MAX_DATAGRAM+1000];
+	enum { PACKET_CAPACITY = MAX_DATAGRAM + 1000, ENTITY_DELTA_HEADROOM = 256 };
+	/* The FTE entity writer encodes a whole delta before deciding whether to
+	 * roll it back. Give it scratch space even at the local packet limit;
+	 * one worst-case entity delta is roughly 100 bytes. */
+	byte		buf[PACKET_CAPACITY + ENTITY_DELTA_HEADROOM];
 	sizebuf_t	msg;
 
 	if (!client->netconnection)
@@ -3967,7 +3969,7 @@ qboolean SV_SendClientDatagram (client_t *client)
 
 	msg.allowoverflow = false;
 	msg.data = buf;
-	msg.maxsize = q_min((int)sizeof(buf), (int)client->limit_unreliable);
+	msg.maxsize = q_min(PACKET_CAPACITY, (int)client->limit_unreliable);
 	msg.cursize = 0;
 	if (client->download.file && !client->download.chunked)
 		msg.maxsize /= 2;	//make sure there's space for download data
@@ -3985,7 +3987,7 @@ qboolean SV_SendClientDatagram (client_t *client)
 			else
 				SVFTE_WriteStats(client, &msg);
 			SVFTE_WriteEntitiesToClient(client, &msg, sizeof(buf));	//must always write some data, or the stats will break
-			SVFTE_WriteCSQCEntitiesToClient(client, &msg, sizeof(buf));
+			SVFTE_WriteCSQCEntitiesToClient(client, &msg);
 
 			//this delta protocol doesn't wipe old state just because there's a new packet.
 			//the server isn't required to sync with the client frames either
@@ -3995,7 +3997,7 @@ qboolean SV_SendClientDatagram (client_t *client)
 				NET_SendUnreliableMessage (client->netconnection, &msg);
 				SZ_Clear(&msg);
 				SVFTE_WriteEntitiesToClient(client, &msg, sizeof(buf));
-				SVFTE_WriteCSQCEntitiesToClient(client, &msg, sizeof(buf));
+				SVFTE_WriteCSQCEntitiesToClient(client, &msg);
 			}
 		}
 		else
@@ -4085,7 +4087,7 @@ qboolean SV_SendClientDatagram (client_t *client)
 		{
 			qboolean appended;
 
-			msg.maxsize = q_min((int)sizeof(buf), (int)client->limit_unreliable);
+			msg.maxsize = q_min(PACKET_CAPACITY, (int)client->limit_unreliable);
 			msg.maxsize = q_min(msg.maxsize, allowance);
 			msg.cursize = 0;
 			appended = Host_AppendDownloadData(client, &msg);
@@ -4106,7 +4108,7 @@ qboolean SV_SendClientDatagram (client_t *client)
 		return true;
 	}
 
-	msg.maxsize = q_min((int)sizeof(buf), (int)client->limit_unreliable);
+	msg.maxsize = q_min(PACKET_CAPACITY, (int)client->limit_unreliable);
 	(void)Host_AppendDownloadData(client, &msg);
 
 

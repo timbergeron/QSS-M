@@ -134,11 +134,23 @@ static int IntAlign(int value)
 
 int Loop_GetMessage (qsocket_t *sock)
 {
+	qsocket_t *sender = sock->driverdata;
 	int		ret;
 	int		length;
 
 	if (sock->receiveMessageLength == 0)
-		return 0;
+	{
+		if (!sender || !sender->sendMessageLength)
+			return 0;
+
+		/* The sender's reliable buffer holds a packet that did not fit
+		 * behind the datagrams already queued here. */
+		SZ_Clear (&net_message);
+		SZ_Write (&net_message, sender->sendMessage, sender->sendMessageLength - 1);
+		sender->sendMessageLength = 0;
+		sender->canSend = true;
+		return 1;
+	}
 
 	ret = sock->receiveMessage[0];
 	length = sock->receiveMessage[1] + (sock->receiveMessage[2] << 8);
@@ -146,7 +158,10 @@ int Loop_GetMessage (qsocket_t *sock)
 	SZ_Clear (&net_message);
 	if (ret == 2)
 	{	//unreliables have sequences that we (now) care about so that clients can ack them.
-		sock->unreliableReceiveSequence = sock->receiveMessage[4] | (sock->receiveMessage[5]<<8) | (sock->receiveMessage[6]<<16) | (sock->receiveMessage[7]<<24);
+		sock->unreliableReceiveSequence = sock->receiveMessage[4] |
+			((unsigned int)sock->receiveMessage[5] << 8) |
+			((unsigned int)sock->receiveMessage[6] << 16) |
+			((unsigned int)sock->receiveMessage[7] << 24);
 		sock->unreliableReceiveSequence++;
 		SZ_Write (&net_message, &sock->receiveMessage[8], length);
 		length = IntAlign(length + 8);
@@ -162,36 +177,43 @@ int Loop_GetMessage (qsocket_t *sock)
 	if (sock->receiveMessageLength)
 		memmove (sock->receiveMessage, &sock->receiveMessage[length], sock->receiveMessageLength);
 
-	if (sock->driverdata && ret == 1)
-		((qsocket_t *)sock->driverdata)->canSend = true;
+	if (sender && ret == 1)
+		sender->canSend = true;
 
 	return ret;
 }
 
 void Loop_GetAnyMessages(void(*callback)(qsocket_t *))
 {
-	if (loop_server)
-	{
-		while (Loop_GetMessage(loop_server) > 0)
-			callback(loop_server);
-	}
+	while (loop_server && Loop_GetMessage(loop_server) > 0)
+		callback(loop_server);
 }
 
 
 int Loop_SendMessage (qsocket_t *sock, sizebuf_t *data)
 {
+	qsocket_t *receiver = sock->driverdata;
 	byte *buffer;
-	int  *bufferLength;
+	int queued, end;
 
-	if (!sock->driverdata)
+	if (!receiver || (unsigned int)data->cursize > sizeof(sock->sendMessage))
 		return -1;
+	if (!sock->canSend)
+		return 0;
 
-	bufferLength = &((qsocket_t *)sock->driverdata)->receiveMessageLength;
+	queued = receiver->receiveMessageLength;
+	end = IntAlign(queued + data->cursize + 4);
+	if (end > (int)sizeof(receiver->receiveMessage))
+	{
+		if (data->cursize)
+			Q_memcpy(sock->sendMessage, data->data, data->cursize);
+		/* Zero means no deferred packet. Store length + 1 for an empty packet. */
+		sock->sendMessageLength = data->cursize + 1;
+		sock->canSend = false;
+		return 1;
+	}
 
-	if ((*bufferLength + data->cursize + 4) > NET_MAXMESSAGE)
-		Sys_Error("Loop_SendMessage: overflow");
-
-	buffer = ((qsocket_t *)sock->driverdata)->receiveMessage + *bufferLength;
+	buffer = receiver->receiveMessage + queued;
 
 	// message type
 	*buffer++ = 1;
@@ -205,7 +227,7 @@ int Loop_SendMessage (qsocket_t *sock, sizebuf_t *data)
 
 	// message
 	Q_memcpy(buffer, data->data, data->cursize);
-	*bufferLength = IntAlign(*bufferLength + data->cursize + 4);
+	receiver->receiveMessageLength = end;
 
 	sock->canSend = false;
 	return 1;
@@ -214,21 +236,24 @@ int Loop_SendMessage (qsocket_t *sock, sizebuf_t *data)
 
 int Loop_SendUnreliableMessage (qsocket_t *sock, sizebuf_t *data)
 {
+	qsocket_t *receiver = sock->driverdata;
 	byte *buffer;
-	int  *bufferLength;
-	int   sequence;
+	int queued, end;
+	unsigned int sequence = sock->unreliableSendSequence++;
 
-	sequence = sock->unreliableSendSequence++;
-
-	if (!sock->driverdata)
+	if (!receiver)
 		return -1;
 
-	bufferLength = &((qsocket_t *)sock->driverdata)->receiveMessageLength;
-
-	if ((*bufferLength + data->cursize + sizeof(byte) + sizeof(short)) > NET_MAXMESSAGE)
+	/* Keep later datagrams behind the deferred reliable packet. Unreliable
+	 * sends can be dropped when the receive queue is full. */
+	if (sock->sendMessageLength || (unsigned int)data->cursize > sizeof(receiver->receiveMessage))
+		return 0;
+	queued = receiver->receiveMessageLength;
+	end = IntAlign(queued + data->cursize + 8);
+	if (end > (int)sizeof(receiver->receiveMessage))
 		return 0;
 
-	buffer = ((qsocket_t *)sock->driverdata)->receiveMessage + *bufferLength;
+	buffer = receiver->receiveMessage + queued;
 
 	// message type
 	*buffer++ = 2;
@@ -247,7 +272,7 @@ int Loop_SendUnreliableMessage (qsocket_t *sock, sizebuf_t *data)
 
 	// message
 	Q_memcpy(buffer, data->data, data->cursize);
-	*bufferLength = IntAlign(*bufferLength + data->cursize + 8);
+	receiver->receiveMessageLength = end;
 	return 1;
 }
 

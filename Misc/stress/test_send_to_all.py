@@ -30,7 +30,7 @@ static double Sys_DoubleTime(void){now+=.000001;return now;}
 static void SetNetTime(void){net_time=Sys_DoubleTime();}
 static void SDL_DelayNS(Uint64 ns){assert(ns<=1000000);now+=ns/1e9;sleeps++;}
 static qboolean NET_CanSendMessage(qsocket_t *s){SetNetTime();return s && !s->disconnected && (!s->sent||s->acked);}
-static int NET_SendMessage(qsocket_t *s,sizebuf_t *data){(void)data;sends++;s->sent=1;return s->fail?-1:1;}
+static int NET_SendMessage(qsocket_t *s,sizebuf_t *data){(void)data;sends++;if(!s->driver && s->sent && !s->acked)return 0;s->sent=1;return s->fail?-1:1;}
 static void NET_GetServerMessages(void *cb){
  (void)cb;pumps++;now+=.000001;
  for(int i=0;i<MAX_SCOREBOARD;i++){
@@ -52,6 +52,7 @@ int main(void){sizebuf_t data={0};int result;
  reset(1);socks[0].disconnected=1;result=NET_SendToAll(&data,5);assert(result==1 && now<.001);
  reset(0);result=NET_SendToAll(&data,5);assert(result==0 && pumps==0 && sleeps==0);
  reset(1);socks[0].driver=0;result=NET_SendToAll(&data,5);assert(result==0 && sends==1 && sleeps==0);
+ reset(1);socks[0].driver=0;socks[0].sent=1;result=NET_SendToAll(&data,5);assert(result==1 && sends==1 && sleeps==0);
  reset(1);ack_delay=-1;result=NET_SendToAll(&data,0);assert(result==1 && sends==1 && sleeps==0 && now<.001);
  reset(1);ack_delay=-1;result=NET_SendToAll(&data,.0001);assert(result==1 && now<.0002);
  puts("reliable broadcast: PASS (ACK, timeout, disconnect, failure, loopback)");

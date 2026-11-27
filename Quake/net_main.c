@@ -1430,7 +1430,7 @@ int NET_SendToAll (sizebuf_t *data, double blocktime)
 			continue;
 		if (IS_LOOP_DRIVER(connections[i]->driver))
 		{
-			if (NET_SendMessage (connections[i], data) < 0)
+			if (NET_SendMessage (connections[i], data) != 1)
 				failed++;
 			continue;
 		}
