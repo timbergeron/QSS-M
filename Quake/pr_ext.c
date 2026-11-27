@@ -1811,7 +1811,20 @@ static void PF_cvars_haveunsaved(void)
 
 static void PF_cl_setpause(void)
 {
+	G_FLOAT(OFS_RETURN) = qcvm->implicitpause;
 	qcvm->implicitpause = !!G_FLOAT(OFS_PARM0);
+}
+
+static void PF_sv_setpause(void)
+{
+	qboolean pause = !!G_FLOAT(OFS_PARM0);
+	G_FLOAT(OFS_RETURN) = sv.paused;
+	if (sv.paused != pause)
+	{
+		sv.paused = pause;
+		MSG_WriteByte(&sv.reliable_datagram, svc_setpause);
+		MSG_WriteByte(&sv.reliable_datagram, sv.paused);
+	}
 }
 
 static void PF_strftime(void)
@@ -4162,6 +4175,22 @@ static void PF_cl_te_particlesnow(void)
 }
 #endif
 
+// Returns FTE CONTENTBIT_* flags; worldonly (the default) skips brush entities.
+static void PF_pointcontentsmask(void)
+{
+	float *v = G_VECTOR(OFS_PARM0);
+	int cont;
+
+	G_UINT(OFS_RETURN) = 0;
+	if (!qcvm->worldmodel || !PF_EffectVector(v))
+		return;
+	if (qcvm->argc < 2 || G_FLOAT(OFS_PARM1))
+		cont = SV_HullPointContents(&qcvm->worldmodel->hulls[0], 0, v);
+	else
+		cont = SV_Move(v, vec3_origin, vec3_origin, v, MOVE_NOMONSTERS|MOVE_HITALLCONTENTS, qcvm->edicts).contents;
+	G_UINT(OFS_RETURN) = SV_FTEContents(cont);
+}
+
 static void PF_sv_pointsound(void)
 {
 	float *origin = G_VECTOR(OFS_PARM0);
@@ -4519,6 +4548,65 @@ static void PF_fsize(void)
 	if (qcvm->argc > 1 && G_INT(OFS_PARM1) >= 0)
 		Con_Warning("fsize: resizing stream handles is unsupported\n");
 }
+static struct qcfile_s *PF_FileForHandle(float handle, const char *func)
+{
+	struct qcfile_s *f;
+	if (!(handle >= QC_FILE_BASE && handle - QC_FILE_BASE < qcfiles_max))
+	{
+		Con_Warning("%s: invalid file handle\n", func);
+		return NULL;
+	}
+	f = &qcfiles[(size_t)(handle - QC_FILE_BASE)];
+	if (f->owningvm != qcvm)
+	{
+		Con_Warning("%s: file not open\n", func);
+		return NULL;
+	}
+	return f;
+}
+// FTE_QC_FILE_BINARY 64-bit variants: same behaviour as fseek/fsize, but with __int64 offsets and -1 on error.
+static void PF_fseek64(void)
+{
+	struct qcfile_s *file = PF_FileForHandle(G_FLOAT(OFS_PARM0), "fseek64");
+	qcsint64_t offset = qcvm->argc > 1 ? G_INT64(OFS_PARM1) : -1;
+	G_INT64(OFS_RETURN) = -1;
+	if (!file)
+		return;
+	if (file->mode)
+	{
+		G_INT64(OFS_RETURN) = ftell(file->file);
+		if (offset >= 0 && (sizeof(qofs_t) == sizeof(offset) || offset <= LONG_MAX))
+			fseek(file->file, (qofs_t)offset, SEEK_SET);
+	}
+	else
+	{
+		G_INT64(OFS_RETURN) = FS_ftell(&file->read) - (file->cachesize - file->cacheoffset);
+		if (offset >= 0 && offset <= FS_filelength(&file->read) &&
+			FS_fseek(&file->read, (long)offset, SEEK_SET) == 0)
+			file->cachesize = file->cacheoffset = 0;
+	}
+}
+static void PF_fsize64(void)
+{
+	struct qcfile_s *f = PF_FileForHandle(G_FLOAT(OFS_PARM0), "fsize64");
+	qofs_t end, pos;
+	G_INT64(OFS_RETURN) = -1;
+	if (!f)
+		return;
+	if (!f->mode)
+		G_INT64(OFS_RETURN) = FS_filelength(&f->read);
+	else
+	{
+		pos = ftell(f->file);
+		if (pos < 0 || fseek(f->file, 0, SEEK_END))
+			return;
+		end = ftell(f->file);
+		if (!fseek(f->file, pos, SEEK_SET) && end >= 0)
+			G_INT64(OFS_RETURN) = end;
+	}
+	if (qcvm->argc > 1 && G_INT64(OFS_PARM1) >= 0)
+		Con_Warning("fsize64: resizing stream handles is unsupported\n");
+}
 
 static struct filesearch_s
 {
@@ -4590,29 +4678,34 @@ static void PF_search_begin(void)
 	}
 	G_FLOAT(OFS_RETURN) = -1;
 }
+static struct filesearch_s *PF_SearchForHandle(float value)
+{
+	int handle;
+
+	if (!PR_IndexFromFloat(value, countof(searches), &handle) || searches[handle].owner != qcvm)
+		return NULL;
+	return &searches[handle];
+}
 static void PF_search_end(void)
 {
-	int handle = G_FLOAT(OFS_PARM0);
-	if (handle < 0 || handle >= countof(searches) || searches[handle].owner != qcvm)
-		return; //erk
-	searches[handle].owner = NULL;
-	searches[handle].numfiles = 0;
-	searches[handle].maxfiles = 0;
-	free(searches[handle].file);
-	searches[handle].file = NULL;
+	struct filesearch_s *search = PF_SearchForHandle(G_FLOAT(OFS_PARM0));
+	if (!search)
+		return;
+	search->owner = NULL;
+	search->numfiles = 0;
+	search->maxfiles = 0;
+	free(search->file);
+	search->file = NULL;
 }
 static void PF_search_fopen(void)
 {
-	float handle = G_FLOAT(OFS_PARM0), index = G_FLOAT(OFS_PARM1);
-	struct filesearch_s *search;
+	struct filesearch_s *search = PF_SearchForHandle(G_FLOAT(OFS_PARM0));
+	float index = G_FLOAT(OFS_PARM1);
 	size_t entry, size;
 	fshandle_t file;
 
 	G_FLOAT(OFS_RETURN) = -1;
-	if (!(handle >= 0 && handle < countof(searches)))
-		return;
-	search = &searches[(size_t)handle];
-	if (search->owner != qcvm || !(index >= 0 && index < search->numfiles))
+	if (!search || !(index >= 0 && index < search->numfiles))
 		return;
 	entry = (size_t)index;
 	if (COM_QCOpenSearchFile(search->file[entry].spath, search->file[entry].name,
@@ -4625,70 +4718,57 @@ static void PF_search_fopen(void)
 }
 static void PF_search_getsize(void)
 {
-	size_t handle = G_FLOAT(OFS_PARM0);
-	if (handle >= countof(searches) || searches[handle].owner != qcvm)
-	{
-		G_FLOAT(OFS_RETURN) = 0;
-		return; //erk
-	}
-	G_FLOAT(OFS_RETURN) = searches[handle].numfiles;
+	struct filesearch_s *search = PF_SearchForHandle(G_FLOAT(OFS_PARM0));
+	G_FLOAT(OFS_RETURN) = search ? search->numfiles : 0;
 }
 static void PF_search_getfilename(void)
 {
-	size_t handle = G_FLOAT(OFS_PARM0);
-	size_t index = G_FLOAT(OFS_PARM1);
+	struct filesearch_s *search = PF_SearchForHandle(G_FLOAT(OFS_PARM0));
+	float index = G_FLOAT(OFS_PARM1);
 	G_INT(OFS_RETURN) = 0;
-	if (handle >= countof(searches) || searches[handle].owner != qcvm)
-		return; //erk
-	if (index < 0 || index >= searches[handle].numfiles)
-		return; //erk
-	G_INT(OFS_RETURN) = PR_MakeTempString(searches[handle].file[index].name);
+	if (!search || !(index >= 0 && index < search->numfiles))
+		return;
+	G_INT(OFS_RETURN) = PR_MakeTempString(search->file[(size_t)index].name);
 }
 static void PF_search_getfilesize(void)
 {
-	size_t handle = G_FLOAT(OFS_PARM0);
-	size_t index = G_FLOAT(OFS_PARM1);
+	struct filesearch_s *search = PF_SearchForHandle(G_FLOAT(OFS_PARM0));
+	float index = G_FLOAT(OFS_PARM1);
 	G_FLOAT(OFS_RETURN) = 0;
-	if (handle >= countof(searches) || searches[handle].owner != qcvm)
-		return; //erk
-	if (index < 0 || index >= searches[handle].numfiles)
-		return; //erk
-	G_FLOAT(OFS_RETURN) = searches[handle].file[index].fsize;
+	if (!search || !(index >= 0 && index < search->numfiles))
+		return;
+	G_FLOAT(OFS_RETURN) = search->file[(size_t)index].fsize;
 }
 static void PF_search_getfilemtime(void)
 {
 	char *ret;
-	size_t handle = G_FLOAT(OFS_PARM0);
-	size_t index = G_FLOAT(OFS_PARM1);
+	struct filesearch_s *search = PF_SearchForHandle(G_FLOAT(OFS_PARM0));
+	float index = G_FLOAT(OFS_PARM1);
 	G_INT(OFS_RETURN) = 0;
-	if (handle >= countof(searches) || searches[handle].owner != qcvm)
-		return; //erk
-	if (index < 0 || index >= searches[handle].numfiles)
-		return; //erk
+	if (!search || !(index >= 0 && index < search->numfiles))
+		return;
 
 	ret = PR_GetTempString();
-	strftime(ret, STRINGTEMP_LENGTH, "%Y-%m-%d %H:%M:%S", localtime(&searches[handle].file[index].mtime));
+	strftime(ret, STRINGTEMP_LENGTH, "%Y-%m-%d %H:%M:%S", localtime(&search->file[(size_t)index].mtime));
 	G_INT(OFS_RETURN) = PR_SetEngineString(ret);
 }
 static void PF_search_getpackagename(void)
 {
 	searchpath_t *spath;
 //	char *ret;
-	size_t handle = G_FLOAT(OFS_PARM0);
-	size_t index = G_FLOAT(OFS_PARM1);
+	struct filesearch_s *search = PF_SearchForHandle(G_FLOAT(OFS_PARM0));
+	float index = G_FLOAT(OFS_PARM1);
 	G_INT(OFS_RETURN) = 0;
-	if (handle >= countof(searches) || searches[handle].owner != qcvm)
-		return; //erk
-	if (index < 0 || index >= searches[handle].numfiles)
-		return; //erk
+	if (!search || !(index >= 0 && index < search->numfiles))
+		return;
 
 	for (spath = com_searchpaths; spath; spath = spath->next)
-		if (spath == searches[handle].file[index].spath)
+		if (spath == search->file[(size_t)index].spath)
 			break;
 
 	if (spath)
 	{
-		if (searches[handle].flags & 2)
+		if (search->flags & 2)
 		{	//gamedir/packagename. not necessarily fopenable.
 			G_INT(OFS_RETURN) = PR_MakeTempString(spath->purename);
 		}
@@ -6419,6 +6499,27 @@ static void PF_cl_particleeffectnum(void)
 	if (!G_FLOAT(OFS_RETURN))
 		PR_RunError ("PF_cl_particleeffectnum: overflow");
 }
+// Name lookup only; regenerating an effect's script body from parsed state is not supported, so body queries return null.
+static void PF_cl_particleeffectquery(void)
+{
+	float efnum = G_FLOAT(OFS_PARM0);
+	const char *name = NULL;
+	int i;
+
+	G_INT(OFS_RETURN) = 0;
+	if ((qcvm->argc > 1 && G_FLOAT(OFS_PARM1)) ||
+		!(efnum > -MAX_PARTICLETYPES && efnum < MAX_PARTICLETYPES))
+		return;
+
+	i = (int)efnum;
+	if (i > 0)
+		name = cl.particle_precache[i].name;
+	else if (i < 0)
+		name = cl.local_particle_precache[-i].name;
+	if (name)
+		G_INT(OFS_RETURN) = PR_MakeTempString(name);
+}
+
 static void PF_cl_trailparticles(void)
 {
 	int efnum;
@@ -7428,6 +7529,27 @@ static void PF_cl_drawrotpic(void)
 	DrawQC_RotPic(G_VECTOR(OFS_PARM0), G_VECTOR(OFS_PARM1), G_VECTOR(OFS_PARM2),
 		DrawQC_CachePic(G_STRING(OFS_PARM3), PICFLAG_AUTO), texmins, texsize,
 		G_VECTOR(OFS_PARM4), G_FLOAT(OFS_PARM5), G_FLOAT(OFS_PARM6), 0);
+	G_FLOAT(OFS_RETURN) = 1;
+}
+
+// DarkPlaces treats a positive angle as counterclockwise on screen.
+static void PF_cl_drawrotpic_dp(void)
+{
+	static const float texmins[2] = {0, 0};
+	static const float texsize[2] = {1, 1};
+	const float *size = G_VECTOR(OFS_PARM2), *org = G_VECTOR(OFS_PARM3);
+	qpic_t *pic = DrawQC_CachePic(G_STRING(OFS_PARM1), PICFLAG_AUTO);
+	vec3_t mins, maxs;
+
+	G_FLOAT(OFS_RETURN) = 0;
+	if (!pic)
+		return;
+
+	VectorScale(org, -1, mins);
+	VectorSet(maxs, mins[0] + (size[0] ? size[0] : pic->width),
+		mins[1] + (size[1] ? size[1] : pic->height), 0);
+	DrawQC_RotPic(G_VECTOR(OFS_PARM0), mins, maxs, pic, texmins, texsize,
+		G_VECTOR(OFS_PARM5), G_FLOAT(OFS_PARM6), -G_FLOAT(OFS_PARM4), qcvm->argc > 7 ? G_FLOAT(OFS_PARM7) : 0);
 	G_FLOAT(OFS_RETURN) = 1;
 }
 
@@ -9864,6 +9986,36 @@ static void PF_cs_addlight(void)
 	G_FLOAT(OFS_RETURN) = dl - cl_dlights;
 }
 
+// A light that persists until the map changes (or dynamiclight_set changes its die time). Shares the dynamic light pool.
+static void PF_cs_dynamiclight_spawnstatic(void)
+{
+	float *org = G_VECTOR(OFS_PARM0);
+	float radius = G_FLOAT(OFS_PARM1);
+	float *rgb = G_VECTOR(OFS_PARM2);
+	dlight_t *dl;
+
+	G_FLOAT(OFS_RETURN) = -1;
+	if (!PF_EffectVector(org) || !(radius > 0 && radius <= 65535) ||
+		!isfinite(rgb[0]) || !isfinite(rgb[1]) || !isfinite(rgb[2]))
+		return;
+	dl = CL_AllocStaticDlight ();
+	if (!dl)
+		return;
+	dl->csqc_owned = true;
+	VectorCopy(rgb, dl->color);
+	VectorCopy(org, dl->origin);
+	dl->radius = radius;
+	dl->minlight = 32;
+	dl->die = cl.time + 1e9f;
+	dl->decay = 0;
+	dl->style = 0;
+	G_FLOAT(OFS_RETURN) = dl - cl_dlights;
+}
+
+static void PF_cl_addwantedhostcachekey(void)
+{	//every key the browser knows about is always parsed, so there is nothing to request (fte's version is empty too).
+}
+
 enum
 {
 	QCLFIELD_ORIGIN = 0,
@@ -11850,7 +12002,7 @@ static struct
 	{"cos",				PF_Cos,				PF_Cos,				61,	PF_Cos,39, "float(float angle)"},	//61
 	{"sqrt",			PF_Sqrt,			PF_Sqrt,			62,	PF_Sqrt,40, "float(float value)"},	//62
 	{"anglesub", PF_NoSSQC, PF_cs_anglesub, 0, PF_NoMenu, D("float(float a, float b)", "Returns the signed angle difference in degrees, from -180 to 180.")},
-	{"changepitch", PF_NoSSQC, PF_cs_changepitch, 63, PF_NoMenu, D("void(entity ent)", "Moves self.angles_x towards self.idealpitch by up to self.pitch_speed degrees.")},
+	{"changepitch", PF_cs_changepitch, PF_cs_changepitch, 63, PF_NoMenu, D("void(entity ent)", "Moves self.angles_x towards self.idealpitch by up to self.pitch_speed degrees.")},
 	{"getlocationname", PF_NoSSQC, PF_cs_getlocationname, 0, PF_NoMenu, D("string(vector point)", "Returns the local map location name for the point.")},
 	{"getlocaluserinfo", PF_NoSSQC, PF_cs_getlocaluserinfo, 0, PF_NoMenu, D("string(float seat, string key)", "Reads the local userinfo key for seat zero.")},
 	{"setlocaluserinfo", PF_NoSSQC, PF_cs_setlocaluserinfo, 0, PF_NoMenu, D("void(float seat, string key, string value)", "Sets a local userinfo key for seat zero. The engine owns reserved star keys.")},
@@ -11892,6 +12044,8 @@ static struct
 //		{"fwrite",			PF_fwrite,			PF_fwrite,				0,	 PF_fwrite,0, D("int(filestream fhandle, void *ptr, int size)", "Writes binary data out of the file.")},
 		{"fseek",			PF_fseek,			PF_fseek,				0,	 PF_fseek,0, D("#define ftell fseek //c-compat\nint(filestream fhandle, optional int newoffset)", "Changes the current position of the file, if specified. Returns prior position, in bytes.")},
 		{"fsize",			PF_fsize,			PF_fsize,				0,	 PF_fsize,0, D("int(filestream fhandle, optional int newsize)", "Returns the length of a stream in bytes. This engine does not resize streams.")},
+		{"fseek64",			PF_fseek64,			PF_fseek64,				0,	 PF_fseek64,0, D("__int64(filestream fhandle, optional __int64 newoffset)", "Changes the current position of the file, if specified. Returns prior position, in bytes, or -1 for an invalid handle.")},
+		{"fsize64",			PF_fsize64,			PF_fsize64,				0,	 PF_fsize64,0, D("__int64(filestream fhandle, optional __int64 newsize)", "Returns the length of a stream in bytes, or -1 for an invalid handle. This engine does not resize streams.")},
 	{"strlen",			PF_strlen,			PF_strlen,			114, PF_strlen,52, "float(string s)"},	// (FRIK_FILE)
 	{"strcat",			PF_strcat,			PF_strcat,			115, PF_strcat,53, "string(string s1, optional string s2, optional string s3, optional string s4, optional string s5, optional string s6, optional string s7, optional string s8)"},	// (FRIK_FILE)
 	{"substring",		PF_substring,		PF_substring,		116, PF_substring,54, "string(string s, float start, float length)"},	// (FRIK_FILE)
@@ -12015,6 +12169,7 @@ static struct
 	{"setproperty",		PF_NoSSQC,			PF_cl_setproperty,	303,	PF_cl_setproperty,303, D("#define setviewprop setproperty\nfloat(float property, ...)", "Allows you to override default view properties like viewport, fov, and whether the engine hud will be drawn. Different VF_ values have slightly different arguments, some are vectors, some floats.")},// (EXT_CSQC)
 	{"renderscene",		PF_NoSSQC,			PF_cl_renderscene,	304,	PF_cl_renderscene,304, D("void()", "Draws all entities, polygons, and particles on the rentity list (which were added via addentities or addentity), using the various view properties set via setproperty. There is no ordering dependancy.\nThe scene must generally be cleared again before more entities are added, as entities will persist even over to the next frame.\nYou may call this builtin multiple times per frame, but should only be called from CSQC_UpdateView.")},// (EXT_CSQC)
 	{"dynamiclight_add",PF_NoSSQC,			PF_cs_addlight,		305,	PF_NoMenu, D("float(vector org, float radius, vector lightcolours, optional float style, optional string cubemapname, optional float pflags)", "Adds a temporary dynamic light and returns its handle. QSS-M supports ordinary omnidirectional lights; cubemap and projected-light arguments are accepted but not rendered.")},// (EXT_CSQC)
+	{"dynamiclight_spawnstatic",PF_NoSSQC,	PF_cs_dynamiclight_spawnstatic,0,	PF_NoMenu, D("float(vector org, float radius, vector rgb)", "Creates a persistent light at the given position with the specified colour, lasting until the map changes. Returns -1 if no slots are available. Additional properties can be set via dynamiclight_set.")},
 	{"R_BeginPolygon",	PF_NoSSQC,			PF_R_PolygonBegin,	306,	PF_R_PolygonBegin,	306, D("void(string texturename, optional float flags, optional float is2d)", "Begins a 2D immediate polygon (is2d nonzero) or a queued 3D scene polygon (is2d zero, drawn during renderscene and cleared by clearscene). Empty texturename draws an untextured vertex-colored polygon; flags bit 0 selects additive blending.")},// (EXT_CSQC_???)
 	{"R_PolygonVertex",	PF_NoSSQC,			PF_R_PolygonVertex,	307,	PF_R_PolygonVertex,	307, D("void(vector org, vector texcoords, vector rgb, float alpha)", "Specifies a polygon vertex with its various properties.")},// (EXT_CSQC_???)
 	{"R_EndPolygon",	PF_NoSSQC,			PF_R_PolygonEnd,	308,	PF_R_PolygonEnd,	308, D("void()", "Ends the current polygon. At least 3 verticies must have been specified. You do not need to call beginpolygon if you wish to draw another polygon with the same shader.")},
@@ -12042,6 +12197,7 @@ static struct
 	{"drawsubpic",		PF_NoSSQC,			PF_cl_drawsubpic,	328,	PF_cl_drawsubpic,469,		D("void(vector pos, vector sz, string pic, vector srcpos, vector srcsz, vector rgb, float alpha, optional float drawflag)", "Draws a rescaled subsection of an image to the screen.")},// #328 EXT_CSQC_'DARKPLACES'
 	{"drawsubpic_legacy",PF_NoSSQC,			PF_NoCSQC,			0,	PF_cl_drawsubpic,369, D("void(vector pos, vector sz, string pic, vector srcpos, vector srcsz, vector rgb, float alpha, optional float drawflag)", "alias. superseded qss menuqc slot, kept bound for existing bytecode")},
 	{"drawrotpic",		PF_NoSSQC,			PF_cl_drawrotpic,	0,		PF_cl_drawrotpic,0,		D("void(vector pivot, vector mins, vector maxs, string pic, vector rgb, float alpha, float angle)", "Draws an image rotating at the pivot. To rotate in the center, use mins+maxs of half the size with mins negated. Angle is in degrees.")},
+	{"drawrotpic_dp",	PF_NoSSQC,			PF_cl_drawrotpic_dp,	329,	PF_cl_drawrotpic_dp,470,	D("float(vector center, string pic, vector size, vector org, float angle, vector rgb, float alpha, optional float flag)", "DP-compatible rotated image. Positive angles turn counterclockwise. Zero width or height uses the picture dimension.")},
 	{"drawrotsubpic",	PF_NoSSQC,			PF_cl_drawrotsubpic,	0,		PF_cl_drawrotsubpic,0,	D("void(vector pivot, vector mins, vector maxs, string pic, vector txmin, vector txsize, vector rgb, vector alphaandangles)", "Draws a rotating subsection of an image. Positions follow drawrotpic, texture coordinates follow drawsubpic, and alphaandangles contains alpha, angle, and a draw flag (0 normal, 1 additive).")},
 	{"getstati",		PF_NoSSQC,			PF_cl_getstat_int,	330,	PF_NoMenu, D("#define getstati_punf(stnum) (float)(__variant)getstati(stnum)\nint(float stnum)", "Retrieves the numerical value of the given EV_INTEGER or EV_ENTITY stat. Use getstati_punf if you wish to type-pun a float stat as an int to avoid truncation issues with DP's network protocol.")},// (EXT_CSQC)
 	{"getstatf",		PF_NoSSQC,			PF_cl_getstat_float,331,	PF_NoMenu, D("#define getstatbits getstatf\nfloat(float stnum, optional float firstbit, optional float bitcount)", "Retrieves the numerical value of the given EV_FLOAT stat. If firstbit and bitcount are specified, retrieves the upper bits of the STAT_ITEMS stat (converted into a float, so there are no VM dependancies).")},// (EXT_CSQC)
@@ -12096,7 +12252,8 @@ static struct
 //	{"deltalisten",		NULL,				PF_FullCSQCOnly,	371,	PF_NoMenu, D("float(string modelname, float(float isnew) updatecallback, float flags)", "Specifies a per-modelindex callback to listen for engine-networking entity updates. Such entities are automatically interpolated by the engine (unless flags specifies not to).\nThe various standard entity fields will be overwritten each frame before the updatecallback function is called.")},//  (EXT_CSQC_1)
 	{"dynamiclight_get", PF_NoSSQC, PF_cs_dynamiclight_get, 372, PF_NoMenu, D("__variant(float light, float field)", "Reads an ordinary dynamic light field. Use an invalid light handle and field -1 to query capacity. Unsupported fields return zero.")},
 	{"dynamiclight_set",PF_NoSSQC,			PF_cs_dynamiclight_set,373,	PF_NoMenu, D("void(float lno, float fld, __variant value)", "Changes origin, colour, radius, style, die time, RGB decay, or radius decay on a dynamic light. Projected/RT-light-only fields such as angles and cubemaps are accepted but have no effect.")},
-//	{"particleeffectquery",PF_NoSSQC,		PF_FullCSQCOnly,	374,	PF_NoMenu, D("string(float efnum, float body)", "Retrieves either the name or the body of the effect with the given number. The effect body is regenerated from internal state, and can be changed before being reapplied via the localcmd builtin.")},
+	{"particleeffectquery",PF_NoSSQC,		PF_cl_particleeffectquery,	374,	PF_NoMenu, D("string(float efnum, float body)", "Retrieves the name of the effect with the given number. Body queries return null in this engine, as effect scripts are not regenerated from internal state.")},
+	{"pointcontentsmask",PF_pointcontentsmask,PF_pointcontentsmask,0,	PF_NoMenu, D("__uint(vector pos, optional float worldonly=1)", "Checks the given point to see what is there. Returns a mask of the CONTENTBIT_* constants. Pass worldonly=0 to include brush entities.")},
 //	{"adddecal",		PF_NoSSQC,			PF_FullCSQCOnly,	375,	PF_NoMenu, D("void(string shadername, vector origin, vector up, vector side, vector rgb, float alpha)", "Adds a temporary clipped decal shader to the scene, centered at the given point with given orientation. Will be drawn by the next renderscene call, and freed by the next clearscene call.")},
 //	{"setcustomskin",	PF_NoSSQC,			PF_FullCSQCOnly,	376,	PF_NoMenu, D("void(entity e, string skinfilename, optional string skindata)", "Sets an entity's skin overrides. These are custom per-entity surface->shader lookups. The skinfilename/data should be in .skin format:\nsurfacename,shadername - makes the named surface use the named shader\nreplace \"surfacename\" \"shadername\" - same.\nqwskin \"foo\" - use an unmodified quakeworld player skin (including crop+repalette rules)\nq1lower 0xff0000 - specify an override for the entity's lower colour, in this case to red\nq1upper 0x0000ff - specify an override for the entity's lower colour, in this case to blue\ncompose \"surfacename\" \"shader\" \"imagename@x,y:w,h$s,t,s2,t2?r,g,b,a\" - compose a skin texture from multiple images.\n  The texture is determined to be sufficient to hold the first named image, additional images can be named as extra tokens on the same line.\n  Use a + at the end of the line to continue reading image tokens from the next line also, the named shader must use 'map $diffuse' to read the composed texture (compatible with the defaultskin shader).")},
 //	{"memalloc",		PF_memalloc,		PF_memalloc,		384,	PF_NoMenu, D("__variant*(int size)", "Allocate an arbitary block of memory")},
@@ -12264,7 +12421,7 @@ static struct
 	{"refreshhostcache",		PF_NoSSQC,	PF_refreshhostcache,		620,PF_refreshhostcache,		620, D("void(optional float dopurge)", "Refresh all sources, requery maps, etc.")},
 	{"gethostcachenumber",		PF_NoSSQC,	PF_gethostcachenumber,		621,PF_gethostcachenumber,		621, D("float(float fld, float hostnr)", "Alternative to gethostcachestring, avoiding tempstrings.")},
 	{"gethostcacheindexforkey",	PF_NoSSQC,	PF_gethostcacheindexforkey,	622,PF_gethostcacheindexforkey,	622, D("float(string key)", "Retrieves a field index for the provided name")},
-	{"addwantedhostcachekey",	PF_NoSSQC,	PF_gethostcacheindexforkey,	623,PF_gethostcacheindexforkey,	623, D("void(string key)", "stub.")},
+	{"addwantedhostcachekey",	PF_NoSSQC,	PF_cl_addwantedhostcachekey,	623,PF_cl_addwantedhostcachekey,	623, D("void(string key)", "No-op: every server browser key is always available.")},
 	{"getextresponse", PF_NoSSQC, PF_getextresponse, 624, PF_getextresponse, 624, D("string()", "Returns an empty string. No extResponse queue is available.")},
 	{"netaddress_resolve", PF_NoSSQC, PF_netaddress_resolve, 625, PF_netaddress_resolve, 625, D("string(string host, optional float defaultport)", "Resolves a host or numeric address and returns its numeric address. A port in the address overrides the optional default port.")},
 
@@ -12285,7 +12442,7 @@ static struct
 	{"fexists", PF_fexists, PF_fexists, 653, PF_fexists, 653, D("float(string name)", "Checks for a loose file in the current writable game directory.")},
 	{"clipboard_set", PF_NoSSQC, PF_cl_clipboard_set, 0, PF_cl_clipboard_set, 0, "void(int cliptype, string text)"},
 	{"cvars_haveunsaved", PF_NoSSQC, PF_cvars_haveunsaved, 0, PF_cvars_haveunsaved, 0, "float()"},
-	{"setpause", PF_NoSSQC, PF_cl_setpause, 531, PF_NoMenu, D("void(float pause)", "Pauses local single-player simulation while CSQC requests it.")},
+	{"setpause", PF_sv_setpause, PF_cl_setpause, 531, PF_NoMenu, D("float(float pause)", "SSQC: sets whether the server is paused and returns the previous state. CSQC: pauses local single-player simulation while CSQC requests it.")},
 	{"stopsound", PF_NoSSQC, PF_cs_stopsound, 0, PF_NoMenu, "void(entity ent, float channel)"},
 	{"soundupdate", PF_NoSSQC, PF_cs_soundupdate, 0, PF_NoMenu, D("float(entity ent, float channel, string sample, float volume, float attenuation, optional float pitch, optional float flags, optional float offset)", "Changes the current local entity sound. Only native pitch and zero flags are supported.")},
 	{"getsoundtime", PF_NoSSQC, PF_cs_getsoundtime, 533, PF_NoMenu, "float(entity ent, float channel)"},
@@ -12383,6 +12540,7 @@ static const qcextension_t qcextensions[] =
 	{"DP_CON_SET"},
 	{"DP_CON_SETA"},
 	{"DP_CSQC_QUERYRENDERENTITY"},
+	{"DP_CSQC_ROTATEMOVES",		NULL,	NULL,	QCEVM_CS},
 	{"DP_EF_NOSHADOW"},
 	{"DP_EF_BLUE",				PR_Can_EF_Red_Blue,	PR_Enable_EF_Red_Blue},
 	{"DP_EF_RED",				PR_Can_EF_Red_Blue,	PR_Enable_EF_Red_Blue},
@@ -12396,6 +12554,7 @@ static const qcextension_t qcextensions[] =
 	{"DP_INPUTBUTTONS"},
 	{"DP_QC_AUTOCVARS"},	//they won't update on changes
 	{"DP_QC_ASINACOSATANATAN2TAN"},
+	{"DP_QC_CHANGEPITCH",		PR_NotQEX,	NULL,	QCEVM_SS|QCEVM_CS},
 	{"DP_QC_COPYENTITY"},
 	{"DP_QC_CRC16"},
 	//{"DP_QC_DIGEST"},	//fte doesn't list the generic one either, only the specific algorithms.
@@ -12472,6 +12631,7 @@ static const qcextension_t qcextensions[] =
 	{"EX_MOVETYPE_GIB",			PR_Can_EX_MOVETYPE_GIB},
 //	{"EX_PROMPT",				PR_Can_EX_PROMPT},	//clientside psuedo-centerprint menus to make things more game-controller friendly (FTE servers implement this by intercepting movement and generating centerprints).
 	{"FRIK_FILE",				PR_NotQEX},		//lacks the file part, but does have the strings part.
+	{"FTE_CALLTIMEOFDAY",		NULL,	NULL,	QCEVM_SS|QCEVM_CS},
 	{"FTE_CSQC_SERVERBROWSER"},	//callable from csqc too, for feature parity.
 	{"FTE_CSQC_WINDOWCAPTION",	NULL,	NULL,	QCEVM_CS|QCEVM_MN},
 	{"FTE_ENT_SKIN_CONTENTS"},	//SOLID_BSP&&skin==CONTENTS_FOO changes CONTENTS_SOLID to CONTENTS_FOO, allowing you to swim in moving ents without qc hacks, as well as correcting view cshifts etc.
@@ -12494,6 +12654,7 @@ static const qcextension_t qcextensions[] =
 	{"FTE_QC_INFOKEY",			PR_NotQEX},
 	{"FTE_QC_INTCONV"},
 	{"FTE_QC_MULTICAST",		PR_NotQEX},
+	{"FTE_QC_PAUSED",			NULL,	NULL,	QCEVM_SS|QCEVM_CS},
 	{"FTE_SOLID_BSPTRIGGER"},
 	{"FTE_STRINGS",				PR_NotQEX},
 #ifdef PSET_SCRIPT

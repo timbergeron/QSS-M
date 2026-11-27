@@ -1346,51 +1346,47 @@ CL_AllocDlight
 
 ===============
 */
-dlight_t *CL_AllocDlight (int key)
+static dlight_t *CL_InitDlight (dlight_t *dl, int key)
 {
-	int		i;
-	dlight_t	*dl;
-
-// first look for an exact key match
-	if (key)
-	{
-		dl = cl_dlights;
-		for (i=0 ; i<MAX_DLIGHTS ; i++, dl++)
-		{
-			if (dl->key == key)
-			{
-				memset (dl, 0, sizeof(*dl));
-				dl->key = key;
-				dl->style = -1;
-				dl->color[0] = dl->color[1] = dl->color[2] = 1; //johnfitz -- lit support via lordhavoc
-				dl->spawn = cl.mtime[0] - 0.001; // woods (iw) #democontrols
-				return dl;
-			}
-		}
-	}
-
-// then look for anything else
-	dl = cl_dlights;
-	for (i=0 ; i<MAX_DLIGHTS ; i++, dl++)
-	{
-		if (dl->die < cl.time || (dl->spawn > cl.time && cl.protocol_pext2 && cls.demoplayback)) // woods (iw) #democontrols
-		{
-			memset (dl, 0, sizeof(*dl));
-			dl->key = key;
-			dl->style = -1;
-			dl->color[0] = dl->color[1] = dl->color[2] = 1; //johnfitz -- lit support via lordhavoc
-			dl->spawn = cl.mtime[0] - 0.001; // woods (iw) #democontrols
-			return dl;
-		}
-	}
-
-	dl = &cl_dlights[0];
 	memset (dl, 0, sizeof(*dl));
 	dl->key = key;
 	dl->style = -1;
-	dl->color[0] = dl->color[1] = dl->color[2] = 1; //johnfitz -- lit support via lordhavoc
+	dl->color[0] = dl->color[1] = dl->color[2] = 1;
 	dl->spawn = cl.mtime[0] - 0.001; // woods (iw) #democontrols
 	return dl;
+}
+
+static qboolean CL_DlightExpired (const dlight_t *dl)
+{
+	return dl->die < cl.time || (dl->spawn > cl.time && cl.protocol_pext2 && cls.demoplayback);
+}
+
+dlight_t *CL_AllocDlight (int key)
+{
+	int i;
+
+	if (key)
+		for (i = 0; i < MAX_DLIGHTS; i++)
+			if (cl_dlights[i].key == key)
+				return CL_InitDlight (&cl_dlights[i], key);
+
+	for (i = 0; i < MAX_DLIGHTS; i++)
+		if (CL_DlightExpired (&cl_dlights[i]))
+			return CL_InitDlight (&cl_dlights[i], key);
+
+	return CL_InitDlight (&cl_dlights[0], key);
+}
+
+dlight_t *CL_AllocStaticDlight (void)
+{
+	int i;
+
+	// Slot zero is the dynamic light fallback when the pool is full.
+	for (i = MAX_DLIGHTS - 1; i > 0; i--)
+		if (!cl_dlights[i].radius || CL_DlightExpired (&cl_dlights[i]))
+			return CL_InitDlight (&cl_dlights[i], 0);
+
+	return NULL;
 }
 
 
