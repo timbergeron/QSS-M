@@ -82,11 +82,23 @@ int R_LightstyleValue (int style)
 	return k * 22;
 }
 
+static unsigned int r_lightstyle_gen = 1;
+
 void R_AnimateLight (void)
 {
 	int j;
+	qboolean changed = false;
 	for (j = 0; j < MAX_LIGHTSTYLES; j++)
-		d_lightstylevalue[j] = R_LightstyleValue(j);
+	{
+		int val = R_LightstyleValue(j);
+		if (d_lightstylevalue[j] != val)
+		{
+			d_lightstylevalue[j] = val;
+			changed = true;
+		}
+	}
+	if (changed)
+		r_lightstyle_gen++;
 }
 
 /*
@@ -1064,6 +1076,7 @@ int R_LightPointCachedAlias (entity_t *e, vec3_t p, float raise)
 {
     aliaslight_cache_t *cache;
     int result;
+    float ambient;
 
     if (!R_LightPointCacheEligible (e, p))
         return R_LightPointWithRaise (p, raise);
@@ -1095,7 +1108,20 @@ int R_LightPointCachedAlias (entity_t *e, vec3_t p, float raise)
         }
     }
 
+    ambient = CLAMP(0.0f, r_ambient.value, 255.0f);
+    if (cache->eval_valid
+        && cache->eval_lightstyle_gen == r_lightstyle_gen
+        && cache->eval_ambient == ambient
+        && (cache->eval_raise == raise || (cache->eval_result != 0 && cache->eval_raise == 0.0f)))
+    {
+        VectorCopy (cache->eval_lightcolor, lightcolor);
+        if (cache->eval_spotset)
+            VectorCopy (cache->eval_lightspot, lightspot);
+        return cache->eval_result;
+    }
+
     result = R_LightPointEvaluateCachedSample (&cache->base);
+    cache->eval_spotset = cache->base.spotset;
     if (!result && raise)
     {
         if (!cache->raised_valid)
@@ -1107,7 +1133,17 @@ int R_LightPointCachedAlias (entity_t *e, vec3_t p, float raise)
             cache->raised_valid = true;
         }
         result = R_LightPointEvaluateCachedSample (&cache->raised);
+        // A raised miss leaves the base trace's lightspot in place; keep caching it.
+        cache->eval_spotset = cache->eval_spotset || cache->raised.spotset;
     }
 
+    cache->eval_valid = true;
+    cache->eval_lightstyle_gen = r_lightstyle_gen;
+    cache->eval_ambient = ambient;
+    cache->eval_raise = raise;
+    cache->eval_result = result;
+    VectorCopy (lightcolor, cache->eval_lightcolor);
+    if (cache->eval_spotset)
+        VectorCopy (lightspot, cache->eval_lightspot);
     return result;
 }

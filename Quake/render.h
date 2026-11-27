@@ -76,6 +76,14 @@ typedef struct aliaslight_cache_s
     aliaslight_sample_t        base;
     aliaslight_sample_t        raised;
     qboolean                raised_valid;
+    qboolean                eval_valid;
+    qboolean                eval_spotset;
+    unsigned int            eval_lightstyle_gen;
+    float                   eval_ambient;
+    float                   eval_raise;
+    int                     eval_result;
+    vec3_t                  eval_lightcolor;
+    vec3_t                  eval_lightspot;
 } aliaslight_cache_t;
 
 // Scene-only flags set by CSQC addentity.
