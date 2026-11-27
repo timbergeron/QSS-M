@@ -2617,6 +2617,7 @@ void PR_Init (void)
 	Cmd_AddCommand ("edictfind", ED_FindEdicts_f);
 	Cmd_AddCommand ("edictlinks", ED_EntityLinks_f);
 	Cmd_AddCommand ("profile", PR_Profile_f);
+	Cmd_AddCommand ("disassemble", PR_Disassemble_f);
 	Cmd_AddCommand ("pr_dumpplatform", PR_DumpPlatform_f);
 	Cvar_RegisterVariable (&nomonsters);
 	Cvar_SetCallback (&nomonsters, ED_Nomonsters_f); // woods #nomonsters (ironwail)

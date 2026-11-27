@@ -156,6 +156,80 @@ static void PR_PrintStatement (dstatement_t *s)
 	Con_Printf("\n");
 }
 
+void PR_Disassemble_f (void)
+{
+	const dfunction_t *function;
+	int i, start, end;
+
+	if (Cmd_Argc() != 2 || !*Cmd_Argv(1))
+	{
+		Con_Printf("usage: disassemble <QuakeC function>\n");
+		return;
+	}
+	if (!sv.active)
+	{
+		Con_Printf("disassemble: start a local server first\n");
+		return;
+	}
+
+	PR_SwitchQCVM(&sv.qcvm);
+	function = ED_FindFunction(Cmd_Argv(1));
+	if (!function)
+	{
+		Con_Printf("disassemble: unknown function %s\n", Cmd_Argv(1));
+		goto done;
+	}
+	start = function->first_statement;
+	if (start <= 0)
+	{
+		Con_Printf("%s is builtin #%lld\n", Cmd_Argv(1), -(long long)start);
+		goto done;
+	}
+	end = qcvm->progs->numstatements;
+	if (start >= end)
+	{
+		Con_Printf("disassemble: invalid statement offset %d\n", start);
+		goto done;
+	}
+	/* Explicit RETURNs can occur inside a function. Bound the listing by
+	 * the next function's entry point, regardless of function table order. */
+	for (i = 1; i < qcvm->progs->numfunctions; i++)
+	{
+		int next = qcvm->functions[i].first_statement;
+		if (next > start && next < end)
+			end = next;
+	}
+
+	Con_SafePrintf("%s (%s)\n", Cmd_Argv(1), PR_GetString(function->s_file));
+	for (i = start; i < end; i++)
+	{
+		const dstatement_t *s = &qcvm->statements[i];
+		const char *name = s->op < Q_COUNTOF(pr_opnames) ? pr_opnames[s->op] : va("OP_%u", (unsigned int)s->op);
+
+		Con_SafePrintf("%6d  %-11s ", i, name);
+		if (s->op >= Q_COUNTOF(pr_opnames))
+			Con_SafePrintf("%d %d %d", s->a, s->b, s->c);
+		else if (s->op == OP_GOTO)
+			Con_SafePrintf("-> %d", i + s->a);
+		else if (s->op == OP_IF || s->op == OP_IFNOT)
+			Con_SafePrintf("%s-> %d", PR_GlobalStringNoContents((unsigned short)s->a), i + s->b);
+		else
+		{
+			/* Symbolic operands are independent of the running VM's globals. */
+			if (s->a)
+				Con_SafePrintf("%s", PR_GlobalStringNoContents((unsigned short)s->a));
+			if (s->b)
+				Con_SafePrintf("%s", PR_GlobalStringNoContents((unsigned short)s->b));
+			if (s->c)
+				Con_SafePrintf("%s", PR_GlobalStringNoContents((unsigned short)s->c));
+		}
+		Con_SafePrintf("\n");
+	}
+
+done:
+	PR_SwitchQCVM(NULL);
+}
+
 /*
 ============
 PR_StackTrace

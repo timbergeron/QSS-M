@@ -126,6 +126,7 @@ int PR_AllocString (int bufferlength, char **ptr);
 void PR_ClearEngineString(int num);
 
 void PR_Profile_f (void);
+void PR_Disassemble_f (void);
 
 edict_t *ED_Alloc (void);
 void ED_Free (edict_t *ed);
