@@ -116,6 +116,12 @@ typedef struct
 
 	struct
 	{
+		char name[24];
+		vec3_t origin, angles;
+	} position_marks[8];
+
+	struct
+	{
 		float	secret_boost;
 		float	prev_health;
 		int		prev_secrets;

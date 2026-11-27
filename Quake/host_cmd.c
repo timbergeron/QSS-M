@@ -6314,6 +6314,81 @@ static void Host_SetPosApply(const vec3_t origin, const vec3_t angles, qboolean 
 	SV_LinkEdict(sv_player, false);
 }
 
+static void Host_SetPosMark (const char *action)
+{
+	const char *name = Cmd_Argv(2);
+	qboolean list = !q_strcasecmp(action, "marks");
+	qboolean save = !q_strcasecmp(action, "mark");
+	int i, slot = -1, empty = -1;
+
+	if (isDedicated || svs.maxclients != 1 || !host_client->spawned ||
+		!SV_IsLocalClient(host_client))
+	{
+		SV_ClientPrintf("Position marks require a local single-player game\n");
+		return;
+	}
+	if ((list && Cmd_Argc() != 2) ||
+		(!list && (Cmd_Argc() != 3 || !*name || strlen(name) >= sizeof(sv.position_marks[0].name) ||
+			name[strspn(name, "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-")])))
+	{
+		SV_ClientPrintf("usage: setpos mark <name> | setpos goto <name> | setpos marks\n"
+			"Names may contain up to 23 letters, digits, underscores or hyphens.\n");
+		return;
+	}
+	for (i = 0; i < (int)Q_COUNTOF(sv.position_marks); i++)
+	{
+		if (!sv.position_marks[i].name[0])
+		{
+			if (empty < 0)
+				empty = i;
+			continue;
+		}
+		if (list)
+			SV_ClientPrintf("%s  (%g %g %g)\n", sv.position_marks[i].name,
+				sv.position_marks[i].origin[0], sv.position_marks[i].origin[1],
+				sv.position_marks[i].origin[2]);
+		else if (!q_strcasecmp(name, sv.position_marks[i].name))
+			slot = i;
+	}
+	if (list)
+	{
+		if (empty == 0)
+			SV_ClientPrintf("No position marks on this map\n");
+		return;
+	}
+	if (save)
+	{
+		if (slot < 0)
+			slot = empty;
+		if (slot < 0)
+		{
+			SV_ClientPrintf("Position marks are full. Use an existing name to overwrite a mark.\n");
+			return;
+		}
+		q_strlcpy(sv.position_marks[slot].name, name, sizeof(sv.position_marks[slot].name));
+		VectorCopy(sv_player->v.origin, sv.position_marks[slot].origin);
+		if (sv_player->v.fixangle)
+			VectorCopy(sv_player->v.angles, sv.position_marks[slot].angles);
+		else
+			VectorCopy(sv_player->v.v_angle, sv.position_marks[slot].angles);
+		SV_ClientPrintf("Saved position mark %s\n", name);
+		return;
+	}
+	if (slot < 0)
+	{
+		SV_ClientPrintf("No position mark named %s on this map\n", name);
+		return;
+	}
+	if (sv_player->v.movetype != MOVETYPE_NOCLIP &&
+		!Host_Noclip_TestOrigin(sv_player, sv.position_marks[slot].origin))
+	{
+		SV_ClientPrintf("Position mark %s is blocked\n", name);
+		return;
+	}
+	Host_SetPosApply(sv.position_marks[slot].origin, sv.position_marks[slot].angles, true, false);
+	SV_ClientPrintf("Returned to position mark %s\n", sv.position_marks[slot].name);
+}
+
 /*
 ====================
 Host_SetPos_f
@@ -6340,13 +6415,19 @@ static void Host_SetPos_f(void)
 	if (pr_global_struct->deathmatch)
 		return;
 
+	target = Cmd_Argv(1);
+	if (!q_strcasecmp(target, "mark") || !q_strcasecmp(target, "goto") || !q_strcasecmp(target, "marks"))
+	{
+		Host_SetPosMark(target);
+		return;
+	}
+
 	extern vec3_t last_viewpos; // woods #setlast
 	extern vec3_t last_viewangles; // woods  #setlast
 	extern qboolean has_last_viewpos; // woods #setlast
 
 	if (Cmd_Argc() == 2)
 	{
-		target = Cmd_Argv(1);
 		item_target = NULL;
 		use_angles = false;
 		VectorCopy(sv_player->v.angles, angles);
@@ -6430,6 +6511,7 @@ parse_coords:
 		SV_ClientPrintf("   setpos <x> <y> <z>\n");
 		SV_ClientPrintf("   setpos <x> <y> <z> <pitch> <yaw> <roll>\n");
 		SV_ClientPrintf("   setpos start | end | middle | last\n");
+		SV_ClientPrintf("   setpos mark <name> | goto <name> | marks\n");
 		SV_ClientPrintf("   setpos quad | pent | ring | eyes | suit | mega | rl | gl | lg | sng | ng | ssg | sg\n");
 		SV_ClientPrintf("current values:\n");
 		SV_ClientPrintf("   %i %i %i %i %i %i\n",

@@ -4464,16 +4464,24 @@ static qboolean CompleteViewpos (const char* partial, void* unused) // woods
 
 static qboolean CompleteSetpos(const char* partial, void* unused) // woods
 {
-	if (Cmd_Argc() != 2)
-		return false;
-	
 	extern qboolean has_last_viewpos;
 	static const char* targets[] = {
-		"start", "end", "middle",
+		"start", "end", "middle", "mark", "goto", "marks",
 		"quad", "pent", "ring", "eyes", "suit", "mega",
 		"rl", "gl", "lg", "sng", "ng", "ssg", "sg"
 	};
 	size_t i;
+
+	if (Cmd_Argc() == 3 && (!q_strcasecmp(Cmd_Argv(1), "goto") || !q_strcasecmp(Cmd_Argv(1), "mark")))
+	{
+		if (sv.active && svs.maxclients == 1)
+			for (i = 0; i < Q_COUNTOF(sv.position_marks); i++)
+				if (sv.position_marks[i].name[0])
+					Con_AddToTabList(sv.position_marks[i].name, partial, NULL, NULL);
+		return true;
+	}
+	if (Cmd_Argc() != 2)
+		return false;
 
 	for (i = 0; i < Q_COUNTOF(targets); i++)
 		Con_AddToTabList(targets[i], partial, NULL, NULL);
