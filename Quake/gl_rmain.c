@@ -1108,6 +1108,8 @@ void GLSLGamma_BeginFrame (void)
 	glDepthMask (GL_TRUE);
 	glStencilMask (~0u);
 	glClear (GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT);
+	r_stencil_used_mask = 0;
+	r_alias_stencil_dirty_mask = 0;
 	r_gamma_fbo_active = true;
 	r_scene_fbo_cleared = true;
 }
@@ -1845,6 +1847,10 @@ void R_SetupGL (void)
 R_Clear -- johnfitz -- rewritten and gutted
 =============
 */
+GLuint r_stencil_used_mask = ~0u;
+GLuint r_alias_stencil_dirty_mask = 0;
+qboolean r_stencil_defer_clear = false;
+
 void R_Clear (void)
 {
 	unsigned int clearbits;
@@ -1873,6 +1879,11 @@ void R_Clear (void)
 	if (!r_refdef.csqc.clearcolor && gl_clear.value && !skyroom_drawn && r_refdef.drawworld)
 		clearbits |= GL_COLOR_BUFFER_BIT;
 	glClear (clearbits);
+	if (clearbits & GL_STENCIL_BUFFER_BIT)
+	{
+		r_stencil_used_mask = 0;
+		r_alias_stencil_dirty_mask = 0;
+	}
 
 	if (clearviewport)
 	{
@@ -3525,7 +3536,7 @@ R_DrawShadows
 void R_DrawShadows (void)
 {
 	int i;
-	qboolean use_viewmodel_stencil = false;
+	qboolean restore_stencil_mask = false;
 
 	if (!r_shadows.value || !r_drawentities.value || r_drawflat_cheatsafe || r_lightmap_cheatsafe)
 		return;
@@ -3537,24 +3548,56 @@ void R_DrawShadows (void)
 	{
 		GLuint stencil_mask = (gl_stencilbits > 0 && gl_stencilbits < 32) ? ((1u << gl_stencilbits) - 1u) : 0xFFu;
 		GLuint viewmodel_stencil_bit = GL_VIEWMODEL_STENCIL_BIT();
+		GLuint shadow_bit = 0;
 
 		// Exclude viewmodel bit from shadow stencil writes when laser is active
 		if (viewmodel_stencil_bit && gl_laserpoint.value)
 		{
-			use_viewmodel_stencil = true;
+			restore_stencil_mask = true;
 			stencil_mask &= ~viewmodel_stencil_bit;
 		}
 
-		// woods #powershell -- force a full write-mask so glClear actually wipes every stencil
-		// bit (it honors the mask); otherwise a partial mask left by an earlier pass turns this
-		// clear into a no-op and shadow volumes build on a dirty buffer. Then narrow to the
-		// shadow mask for the INCR writes below.
-		glStencilMask(~0u);
-		glClear(GL_STENCIL_BUFFER_BIT);
-		glStencilMask(stencil_mask);
-		glStencilFunc(GL_EQUAL, 0, ~0);
-		glStencilOp(GL_KEEP, GL_KEEP, GL_INCR);
-		glEnable(GL_STENCIL_TEST);
+		// When R_Clear already wiped stencil this frame, claim a single untouched
+		// bit (0x01 or 0x02 if skybox took 0x01) with GL_INVERT instead of issuing
+		// a mid-frame glClear(GL_STENCIL_BUFFER_BIT) that splits the render pass.
+		if (gl_stencilbits >= 5 && !r_teleport_view && !skyroom_drawing)
+		{
+			if (!(r_stencil_used_mask & 0x01u))
+				shadow_bit = 0x01u;
+			else if (!(r_stencil_used_mask & 0x02u))
+				shadow_bit = 0x02u;
+			if (shadow_bit & viewmodel_stencil_bit)
+				shadow_bit = 0;
+		}
+
+		if (shadow_bit)
+		{
+			restore_stencil_mask = true;
+			glStencilMask(shadow_bit);
+			glStencilFunc(GL_EQUAL, 0, shadow_bit);
+			glStencilOp(GL_KEEP, GL_KEEP, GL_INVERT);
+			glEnable(GL_STENCIL_TEST);
+			r_stencil_used_mask |= shadow_bit;
+			// Shells and inline outlines test the full stencil value against 1, so the
+			// sky and shadow bits left behind here must be wiped before any of them
+			// reads stencil (R_EnsureCleanAliasStencil does it lazily, on demand).
+			r_alias_stencil_dirty_mask |= r_stencil_used_mask;
+		}
+		else
+		{
+			// woods #powershell -- force a full write-mask so glClear actually wipes every stencil
+			// bit (it honors the mask); otherwise a partial mask left by an earlier pass turns this
+			// clear into a no-op and shadow volumes build on a dirty buffer. Then narrow to the
+			// shadow mask for the INCR writes below.
+			glStencilMask(~0u);
+			glClear(GL_STENCIL_BUFFER_BIT);
+			glStencilMask(stencil_mask);
+			glStencilFunc(GL_EQUAL, 0, ~0);
+			glStencilOp(GL_KEEP, GL_KEEP, GL_INCR);
+			glEnable(GL_STENCIL_TEST);
+			r_stencil_used_mask = stencil_mask;
+			r_alias_stencil_dirty_mask = 0;
+		}
 	}
 
 	R_BeginShadowQueue ();
@@ -3586,7 +3629,7 @@ void R_DrawShadows (void)
 
 	if (gl_stencilbits)
 	{
-		if (use_viewmodel_stencil)
+		if (restore_stencil_mask)
 			glStencilMask(~0u);
 		glDisable(GL_STENCIL_TEST);
 	}
@@ -4268,7 +4311,9 @@ void R_RenderScene (void)
 	if (r_refdef.drawworld && !(r_teleport_view && r_telestyle_detail.value < 1))
 		R_DrawParticles (true);
 
+	r_stencil_defer_clear = !r_teleport_view && !skyroom_drawing;
 	R_DrawEntitiesOnList (false); //johnfitz -- false means this is the pass for nonalpha entities
+	r_stencil_defer_clear = false;
 
 #ifdef PSET_SCRIPT
 	if (r_refdef.drawworld)

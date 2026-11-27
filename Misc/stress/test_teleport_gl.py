@@ -57,6 +57,7 @@ mleaf_t *r_viewleaf;
 entity_t *currententity, **cl_visedicts;
 int cl_numvisedicts;
 qboolean r_teleport_view, r_teleport_reflection, skyroom_drawn;
+GLuint r_stencil_used_mask, r_alias_stencil_dirty_mask;
 byte *r_teleport_pvs;
 float r_fovx, r_fovy;
 static int aborted;
@@ -199,7 +200,10 @@ int main(void) {
         teleport_width=teleport_height=64+cycle*32;
         for (int frame=0;frame<8;frame++) for (int p=0;p<3;p++) for (int pass=0;pass<2;pass++) {
             teleport_planes[p].screenmaxs[0]=teleport_planes[p].screenmaxs[1]=1;
+            r_stencil_used_mask=0; r_alias_stencil_dirty_mask=0x7f;
             assert(R_TeleportTarget(&teleport_planes[p],pass));
+            // The target's full clear leaves no lazy clear pending and blocks bit reuse.
+            assert(r_stencil_used_mask==~0u && !r_alias_stencil_dirty_mask);
             assert(real_check_framebuffer(GL_FRAMEBUFFER)==GL_FRAMEBUFFER_COMPLETE);
         }
         assert(framebuffer_checks==(cycle+1)*6);

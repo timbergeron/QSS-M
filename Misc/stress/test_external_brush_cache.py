@@ -30,7 +30,7 @@ typedef struct {int unused;} gltexture_t;
 typedef struct {int materialidx;} texinfo_t;
 typedef struct {int numedges,flags,lightmaptexturenum;texinfo_t *texinfo;} msurface_t;
 typedef struct {int texture;} batch_t;
-typedef struct {int valid,unsupported,has_cached_dlight,numbatches,lightmap_count;unsigned generation;batch_t batches[1];} bmodel_drawcache_t;
+typedef struct {int valid,unsupported,has_cached_dlight,numbatches,lightmap_count;unsigned generation,grass_checked_gen;qboolean has_grass_blades,has_surface_grass;batch_t batches[1];} bmodel_drawcache_t;
 typedef struct qmodel_s {int type,needload,nummodelsurfaces,submodelidx,numtextures;struct qmodel_s *submodelof;texture_t **textures;void *bmodel_drawcache;} qmodel_t;
 typedef struct {qmodel_t *model;float alpha;int effects;} entity_t;
 static struct {qmodel_t *worldmodel;} cl;
@@ -39,7 +39,7 @@ static int gl_bmodel_instancing_able=1,r_world_instanced_program=1,gl_bmodel_vbo
 static int gl_vbo_able=1,GL_GenBuffersFunc=1,GL_BufferDataFunc=1,GL_DeleteBuffersFunc=1;
 static int r_world_program=1,r_drawflat_cheatsafe,r_fullbright_cheatsafe,r_lightmap_cheatsafe,gl_lightmap_format;
 static int lightmap_count=1,lightmaps_latecached,dlights,grass,blades,builds,cleans;
-static unsigned gl_bmodel_vbo_generation=5;
+static unsigned gl_bmodel_vbo_generation=5,r_grass_settings_gen=1;
 static unsigned char skipbits[1],*skipsubmodels=skipbits;
 static bmodel_drawcache_t cache={1,0,0,0,1,5};
 static void R_BModelDrawCache_Cleanup(qmodel_t *m){m->bmodel_drawcache=NULL;cleans++;}
@@ -81,8 +81,8 @@ int main(void){
  dlights=1;CHECK(!R_CanInstanceBrushEntity(&e,&out),"active dynamic light fallback");dlights=0;
  cache.has_cached_dlight=1;CHECK(!R_CanInstanceBrushEntity(&e,&out),"stale dynamic light fallback");cache.has_cached_dlight=0;
  cache.unsupported=1;cache.valid=0;CHECK(!R_CanInstanceBrushEntity(&e,&out)&&!R_DrawBModelDrawCache(&external,&e),"unsupported surface fallback");cache.unsupported=0;cache.valid=1;
- grass=blades=1;CHECK(!R_CanInstanceBrushEntity(&e,&out),"grass blades must retain their renderer");blades=0;cache.numbatches=1;texture.grass=1;
- CHECK(!R_CanInstanceBrushEntity(&e,&out),"shader grass tint fallback");grass=0;texture.grass=0;
+ grass=blades=1;CHECK(!R_CanInstanceBrushEntity(&e,&out),"grass blades must retain their renderer");r_grass_settings_gen++;blades=0;cache.numbatches=1;texture.grass=1;
+ CHECK(!R_CanInstanceBrushEntity(&e,&out),"shader grass tint fallback");r_grass_settings_gen++;grass=0;texture.grass=0;
  gl_bmodel_instancing.value=0;CHECK(!R_CanInstanceBrushEntity(&e,&out)&&R_DrawBModelDrawCache(&external,&e),"disabled instancing must retain cached individual draws");gl_bmodel_instancing.value=1;
  r_bmodelcache.value=0;CHECK(!R_CanInstanceBrushEntity(&e,&out)&&!R_DrawBModelDrawCache(&external,&e),"disabled cache fallback");r_bmodelcache.value=1;
  gl_bmodel_vbo_generation++;CHECK(R_CanInstanceBrushEntity(&e,&out)&&builds==1&&cleans==1,"video restart must invalidate external indices");

@@ -705,10 +705,30 @@ typedef struct
 	float		lheight;
 	float		alpha;
 } brushshadow_rec_t;
+// Brush shadow projection (woods #shadow), shared by the fixed-function draw,
+// the instanced draw and the shadow queue's overlap bounds.
+#define BRUSH_SHADOW_SKEW_X	-0.7f	// skew along x axis. -0.7 to mimic glquake shadows
+#define BRUSH_SHADOW_SKEW_Y	0.2f	// skew along y axis
+#define BRUSH_SHADOW_VSCALE	0.0f	// 0=completely flat
+#define BRUSH_SHADOW_HEIGHT	0.1f	// how far above the floor to render the shadow
+typedef struct bshadow_inst_data_s
+{
+	float		matrix[16];
+	float		alpha;
+} bshadow_inst_data_t;
 qboolean GL_PrepareBrushShadow (entity_t *e, brushshadow_rec_t *rec);
+qboolean GL_BrushShadowCache_Info (qmodel_t *model, GLuint *ebo_out, int *numindexes_out);
 void GL_BrushShadowBeginState (void);
 void GL_BrushShadowEndState (void);
 void GL_DrawBrushShadowPrepared (const brushshadow_rec_t *rec);
+qboolean R_BrushShadowInst_Available (void);
+qboolean R_BrushShadowInst_Upload (const bshadow_inst_data_t *data, int count);
+void R_BrushShadowInst_Begin (void);
+void R_BrushShadowInst_DrawRun (GLuint ebo, int numindexes, int first_inst, int count, GLuint *last_ebo);
+void R_BrushShadowInst_End (void);
+extern GLuint r_stencil_used_mask;
+extern GLuint r_alias_stencil_dirty_mask;
+extern qboolean r_stencil_defer_clear;
 // Shadow queue (r_alias.c): overlapping shadows keep their draw order,
 // isolated ones are batched.
 void R_BeginShadowQueue (void);

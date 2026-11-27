@@ -4176,7 +4176,13 @@ float SCR_GrenadeGlowTimeRemaining(int entnum)
 	if ((int)scr_showgrenadecounter.value != 3 || cls.state != ca_connected ||
 		!sv.active || cls.demoplayback || cl.intermission || qeintermission || crxintermission ||
 		!cl.entities || entnum <= 0 || entnum >= sv.qcvm.num_edicts || entnum >= cl.num_entities ||
-		cl.viewentity <= 0 || cl.viewentity >= sv.qcvm.num_edicts)
+		cl.viewentity <= 0 || cl.viewentity >= sv.qcvm.num_edicts || !sv.qcvm.edicts)
+		return -1.0f;
+
+	// Fast pre-check without switching QCVM: almost all visible entities have no owner.
+	ent = (edict_t *)((unsigned char *)sv.qcvm.edicts + (size_t)entnum * (size_t)sv.qcvm.edict_size);
+	if (ent->free || !ent->v.classname || !ent->v.owner || !ent->v.model ||
+		ent->v.modelindex != cl.entities[entnum].netstate.modelindex)
 		return -1.0f;
 
 	oldvm = qcvm;
@@ -7935,6 +7941,8 @@ static void SCR_DrawScopeOverlay (void)
 	glEnable(GL_STENCIL_TEST);
 	glStencilMask(0xFF);
 	glClear(GL_STENCIL_BUFFER_BIT);
+	r_stencil_used_mask = ~0u;
+	r_alias_stencil_dirty_mask = 0;
 
 	glStencilFunc(GL_ALWAYS, 1, 0xFF);
 	glStencilOp(GL_REPLACE, GL_REPLACE, GL_REPLACE);

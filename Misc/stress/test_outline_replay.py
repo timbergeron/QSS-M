@@ -245,7 +245,14 @@ static void glTexEnvf(int a, int b, int c) { (void)a; (void)b; (void)c; }
 static void glHint(int a, int b) { (void)a; (void)b; }
 static void glShadeModel(int a) { (void)a; }
 static void glColor3f(float r, float g, float b) { (void)r; (void)g; (void)b; }
+static GLuint r_stencil_used_mask = ~0u, r_alias_stencil_dirty_mask = 0;
+static qboolean r_stencil_defer_clear = false;
+ENSURE_CLEAN
+static int R_DrawDeferredAliasOutlinesInstancedRun(int start, int count, GLboolean cull, const GLboolean *colormask, qboolean *lean_bound, GLuint *program) {
+    (void)start; (void)count; (void)cull; (void)colormask; (void)lean_bound; (void)program; return 0;
+}
 '''
+source = source.replace("ENSURE_CLEAN", function("static void R_EnsureCleanAliasStencil(void)\n{"))
 source += lean + "\n"
 source += function("static void R_EndDeferredAliasOutlineLean (void)") + "\n"
 source += function("void R_DrawDeferredAliasOutlines(void)")
@@ -430,6 +437,51 @@ int main(void) {
         state.colorwrite = ring_colormask = 15;
     }
 
+    /* ---- deferred clears: shadows/sky left bits 0x01..0x02 since R_Clear ---- */
+    r_alias_stencil_bit1_dirty = false;
+    r_stencil_defer_clear = true;
+    r_stencil_used_mask = 0x03; r_alias_stencil_dirty_mask = 0x03;
+    reset();
+    r_deferred_alias_outlines[0] = &a;
+    r_deferred_alias_outlines[1] = &b;
+    r_deferred_alias_outlines[2] = &a;
+    r_num_deferred_alias_outlines = 3;
+    R_DrawDeferredAliasOutlines();
+    {
+        const int expected_refs[] = {4,4, 5,5,5,5, 6,6};
+        CHECK(phase_count == 8 && !memcmp(refs, expected_refs, sizeof(expected_refs)),
+              "deferred replay must start its values above every bit already in the buffer");
+        CHECK(clears == 0, "deferred replay must not clear stencil mid-frame");
+        CHECK(r_alias_stencil_dirty_mask == 0x7F && (r_stencil_used_mask & 0x7F) == 0x7F,
+              "deferred replay must leave its bits (and the shadow/sky bits) pending a lazy clear");
+    }
+    check_restored(&original);
+    reset();
+    R_EnsureCleanAliasStencil();
+    CHECK(clears == 1 && clear_masks[0] == 0x7F && !r_alias_stencil_dirty_mask && !r_stencil_used_mask,
+          "the first stencil reader must wipe exactly the pending bits, once");
+    reset();
+    R_EnsureCleanAliasStencil();
+    CHECK(clears == 0, "a clean stencil must not be cleared again");
+
+    /* Empty queue: nothing reads stencil yet, so only mark the leftovers dirty. */
+    reset();
+    r_stencil_used_mask = 0x01; r_alias_stencil_dirty_mask = 0;
+    R_DrawDeferredAliasOutlines();
+    CHECK(clears == 0 && r_alias_stencil_dirty_mask == 0x01, "empty deferred queue must defer its clear");
+    r_alias_stencil_dirty_mask = 0;
+
+    /* Any bit above 0x03 (scope, teleport, unknown writer) falls back to clearing. */
+    reset();
+    r_stencil_used_mask = 0x07;
+    r_deferred_alias_outlines[0] = &a;
+    r_num_deferred_alias_outlines = 1;
+    R_DrawDeferredAliasOutlines();
+    CHECK(clears == 2 && refs[0] == 1, "an unknown stencil writer must take the clearing path");
+    check_restored(&original);
+    r_stencil_defer_clear = false;
+    r_stencil_used_mask = ~0u; r_alias_stencil_dirty_mask = 0;
+
     /* ---- running out of values: 5 bits -> 0x0F usable, 15 values ---- */
     gl_stencilbits = 5; expect_mask = 0x0F;
     reset();
@@ -445,7 +497,7 @@ int main(void) {
           "wrap clear must come after the last use of value 15 and before value 1 is reused");
     check_restored(&original);
 
-    puts("PASS: setup reuse, real GL pass order/state/uniforms/counters, legacy and per-model stencil values, lean replay state/culling/colour mask/holey fallback, wraps, multi-surface and mixed queues, faded rings");
+    puts("PASS: setup reuse, real GL pass order/state/uniforms/counters, legacy and per-model stencil values, lean replay state/culling/colour mask/holey fallback, deferred lazy clears, wraps, multi-surface and mixed queues, faded rings");
     return 0;
 }
 '''

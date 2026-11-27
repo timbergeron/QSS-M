@@ -993,6 +993,8 @@ static qboolean R_TeleportTarget (teleport_plane_t *plane, int image)
 	glStencilMask(~0u);
 	glClearColor(0, 0, 0, 1);
 	glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT);
+	r_stencil_used_mask = ~0u;
+	r_alias_stencil_dirty_mask = 0;
 	return true;
 }
 

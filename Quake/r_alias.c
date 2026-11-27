@@ -321,9 +321,9 @@ void GLAlias_CreateShaders (void)
 		"uniform float shellTime;\n"    // Time for animation
 		"uniform vec4 shellWaveParams;\n" // x=amplitude, y=frequency, z=phase, w=unused
 		"uniform float outlineWidth; // Amount to expand vertices\n" // woods #routline
-		"uniform int isOutlinePass; // Indicates if this is the outline pass\n" // woods #routline
 		"uniform float xrayPull; // world units to slide each vertex toward the eye\n" // woods #routline
 		"#endif\n"
+		"uniform int isOutlinePass; // Indicates if this is the outline pass\n" // woods #routline
 		"\n"
 		"#ifdef INSTANCED\n"
 		"attribute vec4 InstMat0;\n"
@@ -439,6 +439,12 @@ void GLAlias_CreateShaders (void)
 		"		if (isOutlinePass == 1 && outlineWidth > 0.0)\n"
 		"			lerpedVert.xyz += lerpedNormal * outlineWidth;\n"
 		"	}\n"
+		"#else\n"
+		"	if (isOutlinePass == 1 && InstShadeBlend.x > 0.0)\n"
+		"	{\n"
+		"		vec3 lerpedNormal = normalize(mix(Pose1Normal, Pose2Normal, AliasBlend));\n"
+		"		lerpedVert.xyz += lerpedNormal * InstShadeBlend.x;\n"
+		"	}\n"
 		"#endif\n"
 		"\n"
 		"#endif\n"
@@ -476,7 +482,14 @@ void GLAlias_CreateShaders (void)
 		"		gl_Position = gl_ModelViewProjectionMatrix * lerpedVert;\n"
 		"#endif\n"
 		"	FogFragCoord = gl_Position.w;\n"
+		"#ifdef INSTANCED\n"
+		"	if (isOutlinePass != 0)\n"
+		"		gl_FrontColor = AliasLightColor;\n"
+		"	else\n"
+		"		gl_FrontColor = AliasLightColor * vec4(vec3(dot1), 1.0);\n"
+		"#else\n"
 		"	gl_FrontColor = AliasLightColor * vec4(vec3(dot1), 1.0);\n"
+		"#endif\n"
 		"#ifdef SKELETAL\n"
 		"	gl_FrontColor *= VertColours;\n"	//this is basically only useful for vertex alphas.
 		"#endif\n"
@@ -495,12 +508,12 @@ void GLAlias_CreateShaders (void)
 			"uniform vec3 ShellColor;\n" // woods #powershell
 			"uniform float ShellAlpha;\n" // woods #powershell
 			"uniform float shellTime;\n" // woods #powershell
-			"uniform int isOutlinePass;\n" // woods #routline
 			"uniform vec4 outlineColor;\n" // woods #routline
 			"uniform vec4 GrenadeGlow;\n"
 			"varying vec2 ShellCoord;\n" // woods #powershell
 			"varying vec2 ShellCoord2;\n" // woods #powershell
 			"#endif\n"
+			"uniform int isOutlinePass;\n" // woods #routline
 			"uniform sampler2D FullbrightTex;\n"
 			"uniform bool UseFullbrightTex;\n"
 			"uniform bool UseOverbright;\n"
@@ -550,6 +563,12 @@ void GLAlias_CreateShaders (void)
 			"        float pattern = sin(gl_TexCoord[0].x * 10.0 + shellTime) * \n"
 			"                       sin(gl_TexCoord[0].y * 10.0 + shellTime) * 0.25 + 0.75;\n"
 			"        gl_FragColor = vec4(outlineColor.rgb * pattern, outlineColor.a);\n"
+			"        return;\n"
+			"    }\n"
+			"#else\n"
+			"    if (isOutlinePass != 0)\n"
+			"    {\n"
+			"        gl_FragColor = gl_Color;\n"
 			"        return;\n"
 			"    }\n"
 			"#endif\n"
@@ -716,7 +735,7 @@ void GLAlias_CreateShaders (void)
 			glsl->useAlphaTestLoc = GL_GetUniformLocation (&glsl->program, "UseAlphaTest");
 			glsl->colorTintLoc = GL_GetUniformLocation (&glsl->program, "ColourTint");
 			glsl->outlineWidthLoc = -1;
-			glsl->isOutlinePassLoc = -1;
+			glsl->isOutlinePassLoc = GL_GetUniformLocation (&glsl->program, "isOutlinePass");
 			glsl->xrayPullLoc = -1;
 			glsl->outlineColorLoc = -1;
 			glsl->clTimeLoc = -1;
@@ -733,6 +752,8 @@ void GLAlias_CreateShaders (void)
 			GL_UseProgramFunc (glsl->program);
 			GL_Uniform1iFunc (glsl->texLoc, 0);
 			GL_Uniform1iFunc (glsl->fullbrightTexLoc, 1);
+			if (glsl->isOutlinePassLoc != -1)
+				GL_Uniform1iFunc (glsl->isOutlinePassLoc, 0);
 			GL_UseProgramFunc (0);
 		}
 	}
@@ -1515,13 +1536,17 @@ float R_CalculateAliasModelOutlineWidth(aliashdr_t* paliashdr, entity_t* e, lerp
 R_BeginAliasOutlineRendering -- woods #routline
 =============
 */
+static void R_EnsureCleanAliasStencil(void);
+
 void R_BeginAliasOutlineRendering(aliasglsl_t* glsl)
 {
 	GLuint stencil_ref = 1;
 	GLuint stencil_mask = 1;
 	GLuint viewmodel_stencil_bit = GL_VIEWMODEL_STENCIL_BIT();
 
+	R_EnsureCleanAliasStencil();
 	r_alias_stencil_bit1_dirty = true;
+	r_stencil_used_mask |= 0x01u;
 
 	// Save the current OpenGL state that we are going to modify
 	glPushAttrib(GL_ENABLE_BIT | GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT | GL_POLYGON_BIT);
@@ -4805,6 +4830,16 @@ static void R_ClearAliasOutlineStencil(GLuint mask)
 	glPopAttrib();
 }
 
+static void R_EnsureCleanAliasStencil(void)
+{
+	if (r_alias_stencil_dirty_mask && gl_stencilbits)
+	{
+		R_ClearAliasOutlineStencil(r_alias_stencil_dirty_mask);
+		r_stencil_used_mask &= ~r_alias_stencil_dirty_mask;
+		r_alias_stencil_dirty_mask = 0;
+	}
+}
+
 /*
 =============
 R_DrawAliasXray -- woods #routline
@@ -4894,6 +4929,7 @@ static void R_DrawAliasXray (entity_t *e, qboolean clear_bit, const GLboolean *b
 	{
 		extern cvar_t r_stereo;
 
+		R_EnsureCleanAliasStencil();
 		// A stereo eye keeps only its own channels.
 		if (r_stereo.value && !r_teleport_view)
 			glGetBooleanv (GL_COLOR_WRITEMASK, colormask);
@@ -5136,13 +5172,18 @@ static void R_EndDeferredAliasOutlineLean (void)
 	glColor3f (1, 1, 1);
 }
 
+static int R_DrawDeferredAliasOutlinesInstancedRun(int start, int count, GLboolean cull, const GLboolean *colormask, qboolean *lean_bound, GLuint *program);
+
 void R_DrawDeferredAliasOutlines(void)
 {
 	extern cvar_t r_stereo;
 	int i;
 	GLuint uniquemask = 0;
+	GLuint start_ref = 1;
 	GLuint program = 0;
 	qboolean lean_bound = false;
+	qboolean had_xrays = false;
+	qboolean defer_post_clear = false;
 	GLboolean cull = gl_cull.value ? GL_TRUE : GL_FALSE;
 	GLboolean colormask[4] = {GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE};
 
@@ -5154,6 +5195,8 @@ void R_DrawDeferredAliasOutlines(void)
 		glGetBooleanv (GL_COLOR_WRITEMASK, colormask);
 	if (r_num_deferred_xrays)
 	{
+		had_xrays = true;
+		R_EnsureCleanAliasStencil();
 		glPushAttrib (GL_ENABLE_BIT | GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT |
 			GL_STENCIL_BUFFER_BIT | GL_POLYGON_BIT);
 		for (i = 0; i < r_num_deferred_xrays; ++i)
@@ -5171,19 +5214,38 @@ void R_DrawDeferredAliasOutlines(void)
 		uniquemask &= ~GL_VIEWMODEL_STENCIL_BIT();
 	}
 
-	// Normal alias fills only stamp 0x01 when immediate powerup/outline work
-	// needs it; shadows also stamp 0x01 when r_shadows > 0. Skip the full-screen
-	// stencil clear completely when bit 0x01 is clean (or nothing will read it).
-	if (gl_stencilbits && (r_num_deferred_alias_outlines || r_alias_stencil_bit1_dirty ||
-		(r_shadows.value > 0.0f && (r_outline.value > 0.0f || (gl_powerupshells.value > 0.0f && r_coloredpowerupglow.value)))))
-		R_ClearAliasOutlineStencil(uniquemask && r_num_deferred_alias_outlines ? uniquemask : 0x01);
-	r_alias_stencil_bit1_dirty = false;
+	// When skybox/shadows only touched bits 0x01..0x02 since R_Clear and we have
+	// unique per-model stencil values, start refs above the used bits (e.g. 4..127)
+	// and defer the post-clear until a translucent pass actually reads stencil,
+	// avoiding mid-frame glClear(GL_STENCIL_BUFFER_BIT) render-pass breaks.
+	if (r_stencil_defer_clear && uniquemask && !r_alias_stencil_bit1_dirty &&
+		!had_xrays && !(r_stencil_used_mask & ~0x03u) &&
+		(r_stencil_used_mask & uniquemask) + 1u <= uniquemask)
+	{
+		if (!r_num_deferred_alias_outlines)
+		{
+			r_alias_stencil_dirty_mask |= (r_stencil_used_mask & uniquemask);
+			return;
+		}
+		start_ref = (r_stencil_used_mask & uniquemask) + 1u;
+		defer_post_clear = true;
+	}
+	else
+	{
+		// Normal alias fills only stamp 0x01 when immediate powerup/outline work
+		// needs it; shadows also stamp 0x01 when r_shadows > 0. Skip the full-screen
+		// stencil clear completely when bit 0x01 is clean (or nothing will read it).
+		if (gl_stencilbits && (r_num_deferred_alias_outlines || r_alias_stencil_bit1_dirty ||
+			(r_shadows.value > 0.0f && (r_outline.value > 0.0f || (gl_powerupshells.value > 0.0f && r_coloredpowerupglow.value)))))
+			R_ClearAliasOutlineStencil(uniquemask && r_num_deferred_alias_outlines ? uniquemask : 0x01);
+		r_alias_stencil_bit1_dirty = false;
 
-	if (!r_num_deferred_alias_outlines)
-		return;
+		if (!r_num_deferred_alias_outlines)
+			return;
+	}
 
 	r_alias_outline_unique = uniquemask != 0;
-	r_alias_outline_ref = 1;
+	r_alias_outline_ref = start_ref;
 	r_alias_outline_refmask = r_alias_outline_unique ? uniquemask : 0x01;
 
 	// Batched fills finish after individual fills. Keep overlapping colored
@@ -5195,6 +5257,17 @@ void R_DrawDeferredAliasOutlines(void)
 	for (i = 0; i < r_num_deferred_alias_outlines; ++i)
 	{
 		aliashdr_t *paliashdr;
+
+		if (r_alias_outline_unique)
+		{
+			int consumed = R_DrawDeferredAliasOutlinesInstancedRun (i,
+				r_num_deferred_alias_outlines - i, cull, colormask, &lean_bound, &program);
+			if (consumed > 0)
+			{
+				i += consumed - 1;
+				continue;
+			}
+		}
 
 		currententity = r_deferred_alias_outlines[i];
 		paliashdr = (aliashdr_t *)Mod_Extradata(currententity->model);
@@ -5264,9 +5337,17 @@ void R_DrawDeferredAliasOutlines(void)
 		R_EndDeferredAliasOutlineLean ();
 
 	// Leave the stencil as zero as the scrubbed replay did, for the translucent
-	// pass's own outlines.
+	// pass's own outlines — or defer until a translucent pass actually reads it.
 	if (r_alias_outline_unique)
-		R_ClearAliasOutlineStencil(r_alias_outline_refmask);
+	{
+		if (defer_post_clear)
+		{
+			r_alias_stencil_dirty_mask |= r_alias_outline_refmask;
+			r_stencil_used_mask |= r_alias_outline_refmask;
+		}
+		else
+			R_ClearAliasOutlineStencil(r_alias_outline_refmask);
+	}
 
 	r_alias_outline_phase = ALIAS_OUTLINE_PHASE_NORMAL;
 	r_alias_outline_unique = false;
@@ -5762,6 +5843,339 @@ static int R_ShadowAssignLevels (shadowq_entry_t *q, int n)
 	return maxlevel;
 }
 
+typedef struct
+{
+	entity_t	*ent;
+	aliashdr_t	*hdr;
+	lerpdata_t	lerp;
+	float		width;
+	float		color[4];
+} outline_inst_rec_t;
+
+typedef struct
+{
+	int level, first, count, rec;
+} outline_inst_run_t;
+
+static outline_inst_rec_t r_outline_inst_recs[MAX_ALIAS_INSTANCES];
+static outline_inst_run_t r_outline_inst_runs[MAX_ALIAS_INSTANCES];
+
+static int R_CompareOutlineInst (const void *a, const void *b)
+{
+	const outline_inst_rec_t *ra = &r_outline_inst_recs[*(const int *)a];
+	const outline_inst_rec_t *rb = &r_outline_inst_recs[*(const int *)b];
+	if (ra->ent->model != rb->ent->model)
+		return ra->ent->model < rb->ent->model ? -1 : 1;
+	if (ra->lerp.pose1 != rb->lerp.pose1)
+		return ra->lerp.pose1 - rb->lerp.pose1;
+	if (ra->lerp.pose2 != rb->lerp.pose2)
+		return ra->lerp.pose2 - rb->lerp.pose2;
+	return *(const int *)a - *(const int *)b;
+}
+
+static qboolean R_CanInstanceDeferredAliasOutline (entity_t *e)
+{
+	aliashdr_t *hdr;
+
+	if (!e || !e->model || e->model->type != mod_alias ||
+		!e->model->meshvbo || !e->model->meshindexesvbo)
+		return false;
+	if (e->model == cl.viewent.model || (e->model->flags & (MF_HOLEY | MOD_NOOUTLINE)))
+		return false;
+	if (e->netstate.scale != ENTSCALE_DEFAULT)
+		return false;
+	if (e->csqc_renderflags & (CSQC_RENDER_AXIS | CSQC_RENDER_DEPTHHACK | CSQC_RENDER_MIRRORED))
+		return false;
+	if (!strcmp (e->model->name, "progs/eyes.mdl"))
+		return false;
+	hdr = (aliashdr_t *)Mod_Extradata (e->model);
+	if (!hdr || hdr->nextsurface || hdr->poseverttype != PV_QUAKE1 ||
+		hdr->numbones > 0 || hdr->numindexes <= 0)
+		return false;
+	return true;
+}
+
+// Wave-batched instanced replay for contiguous runs of plain MDL deferred
+// outlines. Overlapping entities land in strictly ordered waves (each with its
+// own stencil ref) via conservative view-cone overlap, while disjoint entities
+// in the same wave share one stencil ref, one MASK/RING state switch, and
+// instance identical (model, pose1, pose2) draws together.
+static int R_DrawDeferredAliasOutlinesInstancedRun (int start, int count, GLboolean cull, const GLboolean *colormask, qboolean *lean_bound, GLuint *program)
+{
+	const aliasglsl_t *glsl = &r_alias_inst_glsl;
+	int consumed, i, j, k, m = 0, maxlevel, level, nruns = 0, ndata = 0;
+	int wave_start[MAX_ALIAS_INSTANCES], wave_end[MAX_ALIAS_INSTANCES];
+	float tanHalfFov = 0.0f;
+	qboolean use_minpx = r_outline_minpixels.value > 0.0f;
+	qboolean use_bounds_fade = R_IsOutlineBoundsFadeEnabled ();
+	GLuint last_ebo = 0;
+
+	if (!r_alias_outline_unique || !gl_alias_instancing.value || !glsl->program ||
+		glsl->isOutlinePassLoc == -1 || !gl_bmodel_instancing_able ||
+		r_outline.value <= 0.0f || (r_teleport_view && r_telestyle_detail.value < 2))
+		return 0;
+
+	if (count > MAX_ALIAS_INSTANCES)
+		count = MAX_ALIAS_INSTANCES;
+	for (consumed = 0; consumed < count; ++consumed)
+	{
+		if (!R_CanInstanceDeferredAliasOutline (r_deferred_alias_outlines[start + consumed]))
+			break;
+	}
+	if (!consumed)
+		return 0;
+
+	if (use_minpx)
+		tanHalfFov = tan (DEG2RAD (r_refdef.fov_y) * 0.5f);
+
+	for (i = 0; i < consumed; ++i)
+	{
+		entity_t *e = r_deferred_alias_outlines[start + i];
+		aliashdr_t *hdr = (aliashdr_t *)Mod_Extradata (e->model);
+		lerpdata_t lerpdata;
+		float width, distfade = 1.0f, boundsfade = 1.0f, alpha, maxscale, rad;
+		outline_inst_rec_t *rec;
+
+		currententity = e;
+		R_SetupAliasFrame (hdr, e, &lerpdata);
+		R_SetupEntityTransform (e, &lerpdata);
+		if (R_CullModelForEntityTransform (e, lerpdata.origin, lerpdata.angles))
+			continue;
+
+		width = R_CalculateAliasModelOutlineWidth (hdr, e, &lerpdata, false, false);
+		if (width <= 0.0f)
+			continue;
+
+		if (use_minpx)
+		{
+			vec3_t delta;
+			float depth;
+			VectorSubtract (lerpdata.origin, r_refdef.vieworg, delta);
+			depth = DotProduct (delta, vpn);
+			if (depth > 1.0f && tanHalfFov > 0.0f)
+			{
+				float px = width * (float)r_refdef.vrect.height / (2.0f * depth * tanHalfFov);
+				if (px <= r_outline_minpixels.value)
+					continue;
+				distfade = CLAMP (0.0f,
+					(px - r_outline_minpixels.value) / (3.0f * r_outline_minpixels.value), 1.0f);
+				distfade = distfade * distfade * distfade *
+					(distfade * (distfade * 6.0f - 15.0f) + 10.0f);
+			}
+		}
+
+		if (use_bounds_fade)
+		{
+			boundsfade = R_GetEntityBoundsFadeFactor (e);
+			if (boundsfade <= 0.0f)
+				continue;
+		}
+
+		alpha = (r_drawflat_cheatsafe || r_lightmap_cheatsafe) ? 1.0f : ENTALPHA_DECODE(e->alpha);
+		rec = &r_outline_inst_recs[m];
+		rec->ent = e;
+		rec->hdr = hdr;
+		rec->lerp = lerpdata;
+		rec->width = width;
+		rec->color[0] = 0.0f;
+		rec->color[1] = 0.0f;
+		rec->color[2] = 0.0f;
+		rec->color[3] = alpha;
+
+		if (!strcmp (e->model->name, "progs/flag.mdl") && e->skinnum == 0)
+		{
+			rec->color[0] = 1.0f;
+			rec->color[3] = 0.2f;
+		}
+		else if (!strcmp (e->model->name, "progs/flag.mdl") && e->skinnum == 1)
+		{
+			rec->color[2] = 1.0f;
+			rec->color[3] = 0.2f;
+		}
+		else if (!strcmp (e->model->name, "progs/quaddama.mdl"))
+		{
+			rec->color[2] = 1.0f;
+			rec->color[3] = 0.2f;
+		}
+		else if (!strcmp (e->model->name, "progs/invulner.mdl"))
+		{
+			rec->color[0] = 1.0f;
+			rec->color[3] = 0.2f;
+		}
+		else if (!strcmp (e->model->name, "progs/invisibl.mdl"))
+		{
+			rec->color[0] = 191.0f / 255.0f;
+			rec->color[1] = 160.0f / 255.0f;
+			rec->color[2] = 2.0f / 255.0f;
+			rec->color[3] = 0.2f;
+		}
+		rec->color[3] *= distfade * boundsfade;
+
+		maxscale = q_max (hdr->scale[0], q_max (hdr->scale[1], hdr->scale[2]));
+		rad = R_ShadowModelRadius (e->model) + width * maxscale + 2.0f;
+		r_shadowq[m].index = m;
+		R_ShadowConeFromSphere (&r_shadowq[m], lerpdata.origin, rad);
+		m++;
+	}
+
+	if (!m)
+		return consumed;
+
+	maxlevel = R_ShadowAssignLevels (r_shadowq, m);
+
+	for (level = 0; level <= maxlevel; ++level)
+	{
+		int wm = 0;
+
+		wave_start[level] = nruns;
+		for (i = 0; i < m; ++i)
+			if (r_shadowq[i].level == level)
+				r_shadowq_sorted[wm++] = i;
+		if (wm > 1)
+			qsort (r_shadowq_sorted, wm, sizeof(r_shadowq_sorted[0]), R_CompareOutlineInst);
+
+		for (i = 0; i < wm; i = j)
+		{
+			const outline_inst_rec_t *first = &r_outline_inst_recs[r_shadowq_sorted[i]];
+			outline_inst_run_t *run;
+
+			for (j = i + 1; j < wm; ++j)
+			{
+				const outline_inst_rec_t *cur = &r_outline_inst_recs[r_shadowq_sorted[j]];
+				if (cur->ent->model != first->ent->model ||
+					cur->lerp.pose1 != first->lerp.pose1 ||
+					cur->lerp.pose2 != first->lerp.pose2)
+					break;
+			}
+			run = &r_outline_inst_runs[nruns++];
+			run->level = level;
+			run->first = ndata;
+			run->count = j - i;
+			run->rec = r_shadowq_sorted[i];
+			for (k = i; k < j; ++k)
+			{
+				const outline_inst_rec_t *rec = &r_outline_inst_recs[r_shadowq_sorted[k]];
+				alias_inst_data_t *dst = &r_alias_inst_data[ndata++];
+				alias_inst_rec_t fill;
+
+				fill.lerp = rec->lerp;
+				VectorCopy (rec->hdr->scale, fill.scale);
+				VectorCopy (rec->hdr->scale_origin, fill.scale_origin);
+				R_AliasInst_BuildMatrix (&fill, dst->matrix);
+				dst->light[0] = rec->color[0];
+				dst->light[1] = rec->color[1];
+				dst->light[2] = rec->color[2];
+				dst->light[3] = rec->color[3];
+				dst->shade_blend[0] = rec->width;
+				dst->shade_blend[1] = 0.0f;
+				dst->shade_blend[2] = 0.0f;
+				dst->shade_blend[3] = rec->lerp.pose1 == rec->lerp.pose2 ? 0.0f : rec->lerp.blend;
+			}
+		}
+		wave_end[level] = nruns;
+	}
+
+	if (!R_AliasInst_Upload (ndata))
+		return 0;
+
+	if (*lean_bound)
+	{
+		R_EndDeferredAliasOutlineLean ();
+		*lean_bound = false;
+		*program = 0;
+	}
+
+	glPushAttrib (GL_ENABLE_BIT | GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT |
+		GL_STENCIL_BUFFER_BIT | GL_POLYGON_BIT);
+	glEnable (GL_DEPTH_TEST);
+	glEnable (GL_STENCIL_TEST);
+	glDepthFunc (GL_LEQUAL);
+	glDepthMask (GL_FALSE);
+	glBlendFunc (GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+
+	GL_UseProgramFunc (glsl->program);
+	R_AliasInst_BeginAttribs ();
+
+	for (level = 0; level <= maxlevel; ++level)
+	{
+		int rs = wave_start[level], re = wave_end[level];
+		if (rs >= re)
+			continue;
+
+		if (level > 0 || start > 0)
+		{
+			if (++r_alias_outline_ref > r_alias_outline_refmask)
+			{
+				R_ClearAliasOutlineStencil (r_alias_outline_refmask);
+				r_alias_outline_ref = 1;
+			}
+		}
+
+		// MASK pass for the entire non-overlapping wave
+		if (cull)
+			glEnable (GL_CULL_FACE);
+		else
+			glDisable (GL_CULL_FACE);
+		glCullFace (GL_BACK);
+		glDisable (GL_BLEND);
+		glColorMask (GL_FALSE, GL_FALSE, GL_FALSE, GL_FALSE);
+		glStencilFunc (GL_ALWAYS, (GLint)r_alias_outline_ref, (GLint)r_alias_outline_refmask);
+		glStencilOp (GL_KEEP, GL_KEEP, GL_REPLACE);
+		glStencilMask (r_alias_outline_refmask);
+		GL_Uniform1iFunc (glsl->isOutlinePassLoc, 2);
+
+		for (i = rs; i < re; ++i)
+		{
+			const outline_inst_run_t *run = &r_outline_inst_runs[i];
+			const outline_inst_rec_t *rec = &r_outline_inst_recs[run->rec];
+
+			R_AliasInst_BindAttribs (rec->ent->model, rec->hdr, &rec->lerp, run->first, &last_ebo);
+			GL_DrawElementsInstancedFunc (GL_TRIANGLES, rec->hdr->numindexes, GL_UNSIGNED_SHORT,
+				rec->ent->model->meshindexesvboptr + rec->hdr->eboofs, run->count);
+			rs_aliaspolys += rec->hdr->numtris * run->count;
+			rs_aliaspasses += rec->hdr->numtris * run->count;
+		}
+
+		// RING pass for the entire non-overlapping wave
+		glColorMask (colormask[0], colormask[1], colormask[2], colormask[3]);
+		glStencilFunc (GL_NOTEQUAL, (GLint)r_alias_outline_ref, (GLint)r_alias_outline_refmask);
+		glStencilOp (GL_KEEP, GL_KEEP, GL_KEEP);
+		glStencilMask (0x00);
+		glEnable (GL_BLEND);
+		glEnable (GL_CULL_FACE);
+		glCullFace (GL_FRONT);
+		GL_Uniform1iFunc (glsl->isOutlinePassLoc, 1);
+
+		for (i = rs; i < re; ++i)
+		{
+			const outline_inst_run_t *run = &r_outline_inst_runs[i];
+			const outline_inst_rec_t *rec = &r_outline_inst_recs[run->rec];
+
+			if (re - rs > 1)
+				R_AliasInst_BindAttribs (rec->ent->model, rec->hdr, &rec->lerp, run->first, &last_ebo);
+			GL_DrawElementsInstancedFunc (GL_TRIANGLES, rec->hdr->numindexes, GL_UNSIGNED_SHORT,
+				rec->ent->model->meshindexesvboptr + rec->hdr->eboofs, run->count);
+			rs_aliaspolys += rec->hdr->numtris * run->count;
+			rs_aliaspasses += rec->hdr->numtris * run->count;
+		}
+	}
+
+	GL_Uniform1iFunc (glsl->isOutlinePassLoc, 0);
+	R_AliasInst_Unbind ();
+	glCullFace (GL_BACK);
+	glPopAttrib ();
+
+	// Match R_EndDeferredAliasOutlineLean cleanup for later passes.
+	glTexEnvf (GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_REPLACE);
+	glHint (GL_PERSPECTIVE_CORRECTION_HINT, GL_NICEST);
+	glShadeModel (GL_FLAT);
+	glDepthMask (GL_TRUE);
+	glDisable (GL_BLEND);
+	glColor3f (1, 1, 1);
+
+	return consumed;
+}
+
 // Footprint cone for a queued alias shadow. T(o) T(0,0,-lh) S T(0,0,lh) R v
 // squashes after rotating, in world axes, so bound the turned model box. The
 // model bounds span every pose, so any frame of the animation fits.
@@ -5810,7 +6224,7 @@ static void R_BrushShadowCone (shadowq_entry_t *q, const brushshadow_rec_t *rec)
 	else if (!e->angles[0] && !e->angles[2])
 	{	// T(o) Rz(yaw) T(0,0,-lh) S T(0,0,lh): squash the model-space bounds
 		// about z = -lh, then turn the flat footprint by yaw
-		const float skx = SHADOW_SKEW_X, sky = SHADOW_SKEW_Y;
+		const float skx = BRUSH_SHADOW_SKEW_X, sky = BRUSH_SHADOW_SKEW_Y;
 		const float *mn = e->model->mins, *mx = e->model->maxs;
 		float zlo = mn[2] + rec->lheight, zhi = mx[2] + rec->lheight;
 		float x0 = mn[0] + q_min (skx * zlo, skx * zhi), x1 = mx[0] + q_max (skx * zlo, skx * zhi);
@@ -5821,16 +6235,16 @@ static void R_BrushShadowCone (shadowq_entry_t *q, const brushshadow_rec_t *rec)
 
 		wc[0] = e->origin[0] + c * cx - s * cy;
 		wc[1] = e->origin[1] + s * cx + c * cy;
-		wc[2] = e->origin[2] - rec->lheight + SHADOW_HEIGHT;
+		wc[2] = e->origin[2] - rec->lheight + BRUSH_SHADOW_HEIGHT;
 		R_ShadowConeFromSphere (q, wc, sqrt (hx * hx + hy * hy) + 1.0f);
 	}
 	else
 	{	// rotated: T(o) R T(0,0,-lh) S T(0,0,lh) squashes inside the rotated
 		// frame, so bound the squashed model by a sphere around the origin
 		float r = R_ShadowModelRadius (e->model), lh = fabs (rec->lheight);
-		float hx = r * (1.0f + fabs (SHADOW_SKEW_X)) + fabs (SHADOW_SKEW_X) * lh;
-		float hy = r * (1.0f + fabs (SHADOW_SKEW_Y)) + fabs (SHADOW_SKEW_Y) * lh;
-		float hz = lh + SHADOW_HEIGHT;
+		float hx = r * (1.0f + fabs (BRUSH_SHADOW_SKEW_X)) + fabs (BRUSH_SHADOW_SKEW_X) * lh;
+		float hy = r * (1.0f + fabs (BRUSH_SHADOW_SKEW_Y)) + fabs (BRUSH_SHADOW_SKEW_Y) * lh;
+		float hz = lh + BRUSH_SHADOW_HEIGHT;
 
 		R_ShadowConeFromSphere (q, e->origin, sqrt (hx * hx + hy * hy + hz * hz) + 1.0f);
 	}
@@ -5893,8 +6307,8 @@ void R_BeginShadowQueue (void)
 {
 	r_num_shadowq = r_num_alias_shadows = r_num_brush_shadows = 0;
 	r_shadowq_collecting = true;
-	r_shadowq_instancing = gl_alias_instancing.value && r_alias_inst_glsl.program &&
-		gl_bmodel_instancing_able;
+	r_shadowq_instancing = (gl_alias_instancing.value && r_alias_inst_glsl.program &&
+		gl_bmodel_instancing_able) || R_BrushShadowInst_Available ();
 }
 
 // Instance matrix for one shadow: the fill matrix squashed by the same
@@ -5955,17 +6369,164 @@ typedef struct
 	int level, first, count, entry;	// entry: shadowq index of the run's first shadow
 } shadowq_run_t;
 
+typedef struct
+{
+	int level, first, count, entry;	// entry: shadowq index of the run's first shadow
+	GLuint ebo;
+	int numindexes;
+} bshadowq_run_t;
+
 static shadowq_run_t r_shadowq_runs[MAX_SHADOWQ];
+static bshadowq_run_t r_bshadowq_runs[MAX_SHADOWQ];
+static bshadow_inst_data_t r_bshadow_inst_data[MAX_SHADOWQ];
+static int r_num_bshadowq_runs;
+static qboolean r_bshadowq_keep_open[MAX_SHADOWQ];
+static qboolean r_bshadowq_bound;
+static GLuint r_bshadowq_last_ebo;
 static qboolean r_shadowq_batched[MAX_SHADOWQ];
 
-// Group each wave's plain MDL shadows into runs and pack their instance data,
-// in the order the draw loop will consume it. Returns the number of runs.
+static int R_CompareBrushShadows (const void *a, const void *b)
+{
+	const brushshadow_rec_t *ra = &r_brush_shadow_recs[r_shadowq[*(const int *)a].index];
+	const brushshadow_rec_t *rb = &r_brush_shadow_recs[r_shadowq[*(const int *)b].index];
+	if (ra->e->model != rb->e->model)
+		return ra->e->model < rb->e->model ? -1 : 1;
+	return *(const int *)a - *(const int *)b;
+}
+
+// Instance matrix for one brush shadow: exact match to GL_DrawBrushShadowPrepared's
+// R_RotateForEntity * T(0,0,-lheight) * r_brush_shadowmatrix * T(0,0,lheight).
+static void GL_BrushShadowInstanceMatrix (const brushshadow_rec_t *rec, float *out)
+{
+	entity_t *e = rec->e;
+	vec3_t forward, right, up, origin;
+	float scale = 1.0f, zofs = 0.0f;
+	float model[16], sx, sy, vs, h, L, tx, ty, tz;
+	int r;
+
+	VectorCopy (e->origin, origin);
+	if (e->angles[0] || e->angles[1] || e->angles[2])
+	{
+		vec3_t angles;
+		VectorCopy (e->angles, angles);
+		angles[PITCH] = -angles[PITCH];
+		AngleVectors (angles, forward, right, up);
+	}
+	else
+	{
+		forward[0] = 1; forward[1] = 0; forward[2] = 0;
+		right[0]   = 0; right[1]  = -1; right[2]   = 0;
+		up[0]      = 0; up[1]     =  0; up[2]      = 1;
+	}
+
+	if (e->netstate.scale != ENTSCALE_DEFAULT)
+	{
+		scale = ENTSCALE_DECODE(e->netstate.scale);
+		switch ((e->netstate.drawflags >> 5) & 3)
+		{
+		case 0: zofs = (e->model->mins[2] + e->model->maxs[2]) * 0.5f * (1.0f - scale); break;
+		case 1: zofs = e->model->mins[2] * (1.0f - scale); break;
+		case 2: zofs = e->model->maxs[2] * (1.0f - scale); break;
+		default: break;
+		}
+		if (zofs != 0.0f)
+		{
+			origin[0] += up[0] * zofs;
+			origin[1] += up[1] * zofs;
+			origin[2] += up[2] * zofs;
+		}
+	}
+
+	model[0]  =  forward[0] * scale; model[1]  =  forward[1] * scale; model[2]  =  forward[2] * scale; model[3]  = 0.0f;
+	model[4]  =   -right[0] * scale; model[5]  =   -right[1] * scale; model[6]  =   -right[2] * scale; model[7]  = 0.0f;
+	model[8]  =       up[0] * scale; model[9]  =       up[1] * scale; model[10] =       up[2] * scale; model[11] = 0.0f;
+	model[12] =  origin[0];          model[13] =  origin[1];          model[14] =  origin[2];          model[15] = 1.0f;
+
+	// P = T(0,0,-L) * S * T(0,0,L): col0=(1,0,0,0), col1=(0,1,0,0),
+	// col2=(sx, sy, vs, 0), col3=(sx*L, sy*L, (vs-1)*L + h, 1).
+	L = rec->lheight;
+	sx = BRUSH_SHADOW_SKEW_X;
+	sy = BRUSH_SHADOW_SKEW_Y;
+	vs = BRUSH_SHADOW_VSCALE;
+	h = BRUSH_SHADOW_HEIGHT;
+	tx = sx * L;
+	ty = sy * L;
+	tz = (vs - 1.0f) * L + h;
+
+	for (r = 0; r < 4; ++r)
+	{
+		out[0*4 + r] = model[0*4 + r];
+		out[1*4 + r] = model[1*4 + r];
+		out[2*4 + r] = model[0*4 + r]*sx + model[1*4 + r]*sy + model[2*4 + r]*vs;
+		out[3*4 + r] = model[0*4 + r]*tx + model[1*4 + r]*ty + model[2*4 + r]*tz + model[3*4 + r];
+	}
+}
+
+// Group each wave's plain MDL shadows (and buffered brush shadows) into runs and
+// pack their instance data in wave order. Returns the number of alias runs.
 static int R_PackShadowQueueRuns (int n, int maxlevel, int *ndata_out)
 {
 	int level, i, j, k, m, nruns = 0, ndata = 0;
+	int nbruns = 0, nbdata = 0;
+	qboolean alias_inst = gl_alias_instancing.value && r_alias_inst_glsl.program &&
+		gl_bmodel_instancing_able;
+	qboolean brush_inst = R_BrushShadowInst_Available ();
 
+	r_num_bshadowq_runs = 0;
+	r_bshadowq_bound = false;
+	r_bshadowq_last_ebo = 0;
+	for (level = 0; level <= maxlevel; ++level)
+		r_bshadowq_keep_open[level] = false;
 	for (level = 0; level <= maxlevel; ++level)
 	{
+		if (brush_inst)
+		{
+			for (i = 0, m = 0; i < n; ++i)
+			{
+				if (r_shadowq[i].level == level && r_shadowq[i].kind == SHADOWQ_BRUSH)
+				{
+					const entity_t *e = r_brush_shadow_recs[r_shadowq[i].index].e;
+					if (!(e->csqc_renderflags & CSQC_RENDER_AXIS))
+						r_shadowq_sorted[m++] = i;
+				}
+			}
+			if (m > 0)
+			{
+				if (m > 1)
+					qsort (r_shadowq_sorted, m, sizeof(r_shadowq_sorted[0]), R_CompareBrushShadows);
+				for (i = 0; i < m; i = j)
+				{
+					qmodel_t *mod = r_brush_shadow_recs[r_shadowq[r_shadowq_sorted[i]].index].e->model;
+					GLuint ebo = 0;
+					int numidx = 0;
+					bshadowq_run_t *brun;
+
+					for (j = i + 1; j < m && r_brush_shadow_recs[r_shadowq[r_shadowq_sorted[j]].index].e->model == mod; ++j)
+						;
+					if (!GL_BrushShadowCache_Info (mod, &ebo, &numidx))
+						continue;
+					brun = &r_bshadowq_runs[nbruns++];
+					brun->level = level;
+					brun->first = nbdata;
+					brun->count = j - i;
+					brun->entry = r_shadowq_sorted[i];
+					brun->ebo = ebo;
+					brun->numindexes = numidx;
+					for (k = i; k < j; ++k)
+					{
+						int qidx = r_shadowq_sorted[k];
+						const brushshadow_rec_t *rec = &r_brush_shadow_recs[r_shadowq[qidx].index];
+						bshadow_inst_data_t *dst = &r_bshadow_inst_data[nbdata++];
+						GL_BrushShadowInstanceMatrix (rec, dst->matrix);
+						dst->alpha = rec->alpha;
+						r_shadowq_batched[qidx] = true;
+					}
+				}
+			}
+		}
+
+		if (!alias_inst)
+			continue;
 		for (i = 0, m = 0; i < n; ++i)
 			if (r_shadowq[i].level == level && r_shadowq[i].kind == SHADOWQ_ALIAS_INST)
 				r_shadowq_sorted[m++] = i;
@@ -5999,6 +6560,34 @@ static int R_PackShadowQueueRuns (int n, int maxlevel, int *ndata_out)
 			}
 		}
 	}
+	if (nbruns)
+	{
+		if (R_BrushShadowInst_Upload (r_bshadow_inst_data, nbdata))
+		{
+			qboolean has_unbatched[MAX_SHADOWQ];
+			qboolean has_alias_run[MAX_SHADOWQ];
+
+			r_num_bshadowq_runs = nbruns;
+			for (level = 0; level <= maxlevel; ++level)
+			{
+				has_unbatched[level] = false;
+				has_alias_run[level] = false;
+			}
+			for (i = 0; i < n; ++i)
+				if (!r_shadowq_batched[i])
+					has_unbatched[r_shadowq[i].level] = true;
+			for (i = 0; i < nruns; ++i)
+				has_alias_run[r_shadowq_runs[i].level] = true;
+			for (level = 0; level < maxlevel; ++level)
+				r_bshadowq_keep_open[level] = !has_alias_run[level] && !has_unbatched[level + 1];
+		}
+		else
+		{
+			for (i = 0; i < n; ++i)
+				if (r_shadowq[i].kind == SHADOWQ_BRUSH)
+					r_shadowq_batched[i] = false;
+		}
+	}
 	*ndata_out = ndata;
 	return nruns;
 }
@@ -6011,6 +6600,29 @@ static void R_DrawShadowQueueRuns (int level, int nruns)
 	GLuint last_ebo = 0;
 	int last_use_at = -1;
 	int i;
+
+	if (r_num_bshadowq_runs)
+	{
+		for (i = 0; i < r_num_bshadowq_runs; ++i)
+		{
+			const bshadowq_run_t *brun = &r_bshadowq_runs[i];
+			if (brun->level != level || !r_shadowq_batched[brun->entry])
+				continue;
+			if (!r_bshadowq_bound)
+			{
+				R_BrushShadowInst_Begin ();
+				r_bshadowq_bound = true;
+				r_bshadowq_last_ebo = 0;
+			}
+			R_BrushShadowInst_DrawRun (brun->ebo, brun->numindexes, brun->first, brun->count, &r_bshadowq_last_ebo);
+		}
+		if (r_bshadowq_bound && !r_bshadowq_keep_open[level])
+		{
+			R_BrushShadowInst_End ();
+			r_bshadowq_bound = false;
+			r_bshadowq_last_ebo = 0;
+		}
+	}
 
 	for (i = 0; i < nruns; ++i)
 	{
@@ -6081,7 +6693,7 @@ static void R_FlushShadowQueue (void)
 	for (level = 0; level <= maxlevel; ++level)
 	{
 		for (i = 0; i < n; ++i)
-			if (r_shadowq[i].level == level && r_shadowq[i].kind == SHADOWQ_BRUSH)
+			if (r_shadowq[i].level == level && r_shadowq[i].kind == SHADOWQ_BRUSH && !r_shadowq_batched[i])
 				R_DrawShadowQueueEntry (&r_shadowq[i], &brushstate);
 		for (i = 0; i < n; ++i)
 			if (r_shadowq[i].level == level && r_shadowq[i].kind != SHADOWQ_BRUSH && !r_shadowq_batched[i])

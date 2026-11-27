@@ -594,6 +594,10 @@ R_FlushBatch
 Draw the current batch if non-empty and clears it, ready for more R_BatchSurface calls.
 ================
 */
+#define R_BATCH_EBO_RING 32
+static GLuint gl_batch_ebos[R_BATCH_EBO_RING];
+static unsigned int gl_batch_ebo_slot;
+
 static void R_FlushBatch (surfacetype surftype) // woods #caustics
 {
 	if (num_vbo_indices > 0)
@@ -606,7 +610,26 @@ static void R_FlushBatch (surfacetype surftype) // woods #caustics
 		}
 		else if (surftype != IS_WATER) // the water programs don't have this uniform
 			GL_Uniform1iFunc(useCausticsTexLoc, 0);
-		
+
+		if (gl_vbo_able && GL_GenBuffersFunc && GL_BufferDataFunc)
+		{
+			unsigned int slot = gl_batch_ebo_slot;
+			gl_batch_ebo_slot = (slot + 1u) & (R_BATCH_EBO_RING - 1u);
+			if (!gl_batch_ebos[slot])
+				GL_GenBuffersFunc (1, &gl_batch_ebos[slot]);
+			if (gl_batch_ebos[slot])
+			{
+				GL_BindBuffer (GL_ELEMENT_ARRAY_BUFFER, gl_batch_ebos[slot]);
+				GL_BufferDataFunc (GL_ELEMENT_ARRAY_BUFFER,
+					(GLsizeiptr)((size_t)num_vbo_indices * sizeof(vbo_indices[0])),
+					vbo_indices, GL_STREAM_DRAW);
+				glDrawElements (GL_TRIANGLES, num_vbo_indices, GL_UNSIGNED_INT, (void *)0);
+				GL_BindBuffer (GL_ELEMENT_ARRAY_BUFFER, 0);
+				num_vbo_indices = 0;
+				return;
+			}
+		}
+
 		glDrawElements (GL_TRIANGLES, num_vbo_indices, GL_UNSIGNED_INT, vbo_indices);
 		num_vbo_indices = 0;
 	}
@@ -874,6 +897,9 @@ static GLint instGrassTipColorLoc;
 static GLint instGrassMovementLoc;
 static GLint instGrassGustScaleLoc;
 static GLint instFogModeLoc;
+static GLuint r_brush_shadow_inst_program;
+static GLint shadowInstFogModeLoc = -1;
+static GLuint gl_bshadow_instance_vbo;
 static GLuint r_grass_program; // woods #grass
 static GLint grassGeomTimeLoc; // woods #grass
 static GLint grassGeomMovementLoc; // woods #grass
@@ -959,6 +985,7 @@ static void R_SetLightmapBandingUniform (GLint loc)
 #define instMat1AttrIndex 4
 #define instMat2AttrIndex 5
 #define instMat3AttrIndex 6
+#define instShadowAlphaAttrIndex 1
 #endif
 
 static qboolean R_LightmapExtra4BoundsEnabled (void)
@@ -1016,7 +1043,12 @@ typedef struct bmodel_drawcache_s
 	int					num_used_lightstyles;
 	int					lightstyle_values[MAX_LIGHTSTYLES];
 	qboolean			has_cached_dlight;
+	unsigned int		grass_checked_gen;
+	qboolean			has_grass_blades;
+	qboolean			has_surface_grass;
 } bmodel_drawcache_t;
+
+static unsigned int r_grass_settings_gen = 1;
 
 extern unsigned int gl_bmodel_vbo_generation;
 
@@ -1790,6 +1822,29 @@ void R_DeleteBrushModelInstancingBuffers (void)
 		gl_bmodel_instance_vbo = 0;
 		GL_ClearBufferBindings ();
 	}
+	if (gl_bshadow_instance_vbo && GL_DeleteBuffersFunc)
+	{
+		GL_DeleteBuffersFunc (1, &gl_bshadow_instance_vbo);
+		gl_bshadow_instance_vbo = 0;
+		GL_ClearBufferBindings ();
+	}
+	if (GL_DeleteBuffersFunc)
+	{
+		int bi;
+		qboolean deleted_batch = false;
+		for (bi = 0; bi < R_BATCH_EBO_RING; bi++)
+		{
+			if (gl_batch_ebos[bi])
+			{
+				GL_DeleteBuffersFunc (1, &gl_batch_ebos[bi]);
+				gl_batch_ebos[bi] = 0;
+				deleted_batch = true;
+			}
+		}
+		gl_batch_ebo_slot = 0;
+		if (deleted_batch)
+			GL_ClearBufferBindings ();
+	}
 
 	free (r_bmodel_instance_data);
 	free (r_bmodel_group_ents);
@@ -1818,6 +1873,100 @@ static qboolean R_ReserveBModelInstancingBuffers (int count)
 	r_bmodel_group_ents = new_ents;
 	r_bmodel_instancing_capacity = count;
 	return true;
+}
+
+qboolean R_BrushShadowInst_Available (void)
+{
+	return gl_bmodel_instancing.value && gl_bmodel_instancing_able &&
+		r_brush_shadow_inst_program && r_shadows_buffered.value &&
+		gl_vbo_able && gl_bmodel_vbo &&
+		GL_DrawElementsInstancedFunc && GL_VertexAttribDivisorFunc;
+}
+
+qboolean R_BrushShadowInst_Upload (const bshadow_inst_data_t *data, int count)
+{
+	if (count <= 0 || !data || !GL_GenBuffersFunc || !GL_BufferDataFunc)
+		return false;
+	if (!gl_bshadow_instance_vbo)
+		GL_GenBuffersFunc (1, &gl_bshadow_instance_vbo);
+	if (!gl_bshadow_instance_vbo)
+		return false;
+	GL_BindBuffer (GL_ARRAY_BUFFER, gl_bshadow_instance_vbo);
+	GL_BufferDataFunc (GL_ARRAY_BUFFER, (GLsizeiptr)((size_t)count * sizeof(*data)), data, GL_STREAM_DRAW);
+	GL_BindBuffer (GL_ARRAY_BUFFER, 0);
+	return true;
+}
+
+void R_BrushShadowInst_Begin (void)
+{
+	glDepthMask (GL_FALSE);
+	glEnable (GL_BLEND);
+	glDisable (GL_CULL_FACE);
+	glEnable (GL_POLYGON_OFFSET_FILL);
+	glPolygonOffset (-1, -2);
+
+	GL_UseProgramFunc (r_brush_shadow_inst_program);
+	GL_Uniform1iFunc (shadowInstFogModeLoc, Fog_GetMode());
+	GL_BindBuffer (GL_ARRAY_BUFFER, gl_bmodel_vbo);
+	GL_EnableVertexAttribArrayFunc (vertAttrIndex);
+	GL_VertexAttribPointerFunc (vertAttrIndex, 3, GL_FLOAT, GL_FALSE, VERTEXSIZE * sizeof(float), (void *)0);
+
+	GL_BindBuffer (GL_ARRAY_BUFFER, gl_bshadow_instance_vbo);
+	GL_EnableVertexAttribArrayFunc (instMat0AttrIndex);
+	GL_EnableVertexAttribArrayFunc (instMat1AttrIndex);
+	GL_EnableVertexAttribArrayFunc (instMat2AttrIndex);
+	GL_EnableVertexAttribArrayFunc (instMat3AttrIndex);
+	GL_EnableVertexAttribArrayFunc (instShadowAlphaAttrIndex);
+	GL_VertexAttribDivisorFunc (instMat0AttrIndex, 1);
+	GL_VertexAttribDivisorFunc (instMat1AttrIndex, 1);
+	GL_VertexAttribDivisorFunc (instMat2AttrIndex, 1);
+	GL_VertexAttribDivisorFunc (instMat3AttrIndex, 1);
+	GL_VertexAttribDivisorFunc (instShadowAlphaAttrIndex, 1);
+}
+
+void R_BrushShadowInst_DrawRun (GLuint ebo, int numindexes, int first_inst, int count, GLuint *last_ebo)
+{
+	const size_t base = (size_t)first_inst * sizeof(bshadow_inst_data_t);
+	const GLsizei stride = (GLsizei)sizeof(bshadow_inst_data_t);
+
+	GL_VertexAttribPointerFunc (instMat0AttrIndex, 4, GL_FLOAT, GL_FALSE, stride, (void *)(base + sizeof(float) * 0));
+	GL_VertexAttribPointerFunc (instMat1AttrIndex, 4, GL_FLOAT, GL_FALSE, stride, (void *)(base + sizeof(float) * 4));
+	GL_VertexAttribPointerFunc (instMat2AttrIndex, 4, GL_FLOAT, GL_FALSE, stride, (void *)(base + sizeof(float) * 8));
+	GL_VertexAttribPointerFunc (instMat3AttrIndex, 4, GL_FLOAT, GL_FALSE, stride, (void *)(base + sizeof(float) * 12));
+	GL_VertexAttribPointerFunc (instShadowAlphaAttrIndex, 1, GL_FLOAT, GL_FALSE, stride, (void *)(base + sizeof(float) * 16));
+
+	if (*last_ebo != ebo)
+	{
+		GL_BindBuffer (GL_ELEMENT_ARRAY_BUFFER, ebo);
+		*last_ebo = ebo;
+	}
+	GL_DrawElementsInstancedFunc (GL_TRIANGLES, numindexes, GL_UNSIGNED_INT, (void *)0, count);
+}
+
+void R_BrushShadowInst_End (void)
+{
+	GL_VertexAttribDivisorFunc (instMat0AttrIndex, 0);
+	GL_VertexAttribDivisorFunc (instMat1AttrIndex, 0);
+	GL_VertexAttribDivisorFunc (instMat2AttrIndex, 0);
+	GL_VertexAttribDivisorFunc (instMat3AttrIndex, 0);
+	GL_VertexAttribDivisorFunc (instShadowAlphaAttrIndex, 0);
+	GL_DisableVertexAttribArrayFunc (instShadowAlphaAttrIndex);
+	GL_DisableVertexAttribArrayFunc (instMat3AttrIndex);
+	GL_DisableVertexAttribArrayFunc (instMat2AttrIndex);
+	GL_DisableVertexAttribArrayFunc (instMat1AttrIndex);
+	GL_DisableVertexAttribArrayFunc (instMat0AttrIndex);
+	GL_DisableVertexAttribArrayFunc (vertAttrIndex);
+	GL_UseProgramFunc (0);
+	GL_BindBuffer (GL_ARRAY_BUFFER, 0);
+	GL_BindBuffer (GL_ELEMENT_ARRAY_BUFFER, 0);
+
+	glDisable (GL_BLEND);
+	glDepthMask (GL_TRUE);
+	if (gl_cull.value)
+		glEnable (GL_CULL_FACE);
+	else
+		glDisable (GL_CULL_FACE);
+	glDisable (GL_POLYGON_OFFSET_FILL);
 }
 
 static qboolean R_ModelHasActiveGrassBlades (qmodel_t *model)
@@ -1859,16 +2008,27 @@ static qboolean R_CanInstanceBrushEntity (entity_t *ent, bmodel_drawcache_t **ca
 
 	if (R_GrassEntityAllowsGrass(ent))
 	{
-		int i;
-
-		if (R_ModelHasActiveGrassBlades(model))
-			return false;
-		for (i = 0; i < cache->numbatches; i++)	//the instanced program doesn't implement the shader-grass tint
+		if (cache->grass_checked_gen != r_grass_settings_gen)
 		{
-			texture_t *t = model->textures[cache->batches[i].texture];
-			if (t && R_TextureUsesSurfaceGrass(t))
-				return false;
+			int i;
+			cache->has_grass_blades = R_ModelHasActiveGrassBlades(model);
+			cache->has_surface_grass = false;
+			if (!cache->has_grass_blades)
+			{
+				for (i = 0; i < cache->numbatches; i++) // the instanced program doesn't implement the shader-grass tint
+				{
+					texture_t *t = model->textures[cache->batches[i].texture];
+					if (t && R_TextureUsesSurfaceGrass(t))
+					{
+						cache->has_surface_grass = true;
+						break;
+					}
+				}
+			}
+			cache->grass_checked_gen = r_grass_settings_gen;
 		}
+		if (cache->has_grass_blades || cache->has_surface_grass)
+			return false;
 	}
 
 	if (cache_out)
@@ -2219,6 +2379,7 @@ static void GLWorld_DeleteShaderPrograms (void)
 	GL_DeleteProgramTracked(&r_world_program);
 	GL_DeleteProgramTracked(&r_world_opaque_program);
 	GL_DeleteProgramTracked(&r_world_instanced_program);
+	GL_DeleteProgramTracked(&r_brush_shadow_inst_program);
 	GL_DeleteProgramTracked(&r_grass_program);
 	for (i = 0; i < countof(r_water); i++)
 		GL_DeleteProgramTracked(&r_water[i].program);
@@ -2226,6 +2387,8 @@ static void GLWorld_DeleteShaderPrograms (void)
 	r_world_program = 0;
 	r_world_opaque_program = 0;
 	r_world_instanced_program = 0;
+	r_brush_shadow_inst_program = 0;
+	shadowInstFogModeLoc = -1;
 	texLoc = 0;
 	LMTexLoc = 0;
 	fullbrightTexLoc = 0;
@@ -2641,16 +2804,31 @@ static void R_GrassSettingsDefaults (grass_settings_t *settings)
 	settings->gustscale = GRASS_DEFAULT_GUSTSCALE;
 }
 
+static qboolean r_grass_callbacks_registered;
+
+static void R_GrassSettings_OnChange (cvar_t *var)
+{
+	(void)var;
+	grass_settings_valid = false;
+	r_grass_settings_gen++;
+}
+
 static const grass_settings_t *R_GrassSettings (void)
 {
 	const char *s;
 	float values[GRASS_CUSTOM_VALUE_MAX];
 	int count;
 
-	s = r_grass.string ? r_grass.string : "";
-	if (grass_settings_valid && !strcmp(grass_settings_string, s))
+	if (!r_grass_callbacks_registered && r_grass.name && r_grass_tex.name)
+	{
+		Cvar_SetCallback (&r_grass, R_GrassSettings_OnChange);
+		Cvar_SetCallback (&r_grass_tex, R_GrassSettings_OnChange);
+		r_grass_callbacks_registered = true;
+	}
+	if (grass_settings_valid)
 		return &grass_settings;
 
+	s = r_grass.string ? r_grass.string : "";
 	R_GrassSettingsDefaults(&grass_settings);
 	count = R_GrassParseValues(s, values, countof(values));
 
@@ -4868,7 +5046,26 @@ static qboolean R_GrassEnsureSurfaceShaderVBO (qmodel_t *model, const msurface_t
 	return true;
 }
 
-static void R_GrassUploadShaderDlights (const msurface_t *s, const entity_t *ent, qboolean force_scan_dlights)
+typedef struct
+{
+	qboolean	bound;
+	qboolean	has_basis;
+	vec3_t		normal;
+	vec3_t		tangent;
+	int			cellstep;
+	int			dlight_count;
+} grass_static_batch_state_t;
+
+typedef struct
+{
+	msurface_t			*surf;
+	grass_surface_cache_t *surfacecache;
+	float				density_scale;
+	vec3_t				basecolor;
+	vec3_t				tipcolor;
+} grass_deferred_surf_t;
+
+static void R_GrassUploadShaderDlights (const msurface_t *s, const entity_t *ent, qboolean force_scan_dlights, int *last_count)
 {
 	grass_dlight_list_t list;
 	float posradius[GRASS_SHADER_DLIGHTS * 4];
@@ -4882,6 +5079,11 @@ static void R_GrassUploadShaderDlights (const msurface_t *s, const entity_t *ent
 	count = list.count;
 	if (count > GRASS_SHADER_DLIGHTS)
 		count = GRASS_SHADER_DLIGHTS;
+
+	if (count == 0 && last_count && *last_count == 0)
+		return;
+	if (last_count)
+		*last_count = count;
 
 	for (i = 0; i < count; i++)
 	{
@@ -4906,7 +5108,7 @@ static void R_GrassUploadShaderDlights (const msurface_t *s, const entity_t *ent
 	}
 }
 
-static qboolean R_DrawGrassSurfaceShaderVBO (qmodel_t *model, const entity_t *ent, const msurface_t *s, grass_surface_cache_t *cache, int cellstep, float baseheight, const vec3_t basecolor, const vec3_t tipcolor, qboolean force_scan_dlights, qboolean *batch_bound)
+static qboolean R_DrawGrassSurfaceShaderVBO (qmodel_t *model, const entity_t *ent, const msurface_t *s, grass_surface_cache_t *cache, int cellstep, float baseheight, const vec3_t basecolor, const vec3_t tipcolor, qboolean force_scan_dlights, grass_static_batch_state_t *st)
 {
 	int lodindex, drawcount;
 	vec3_t normal, tangent, bitangent;
@@ -4921,15 +5123,28 @@ static qboolean R_DrawGrassSurfaceShaderVBO (qmodel_t *model, const entity_t *en
 
 	R_GrassSurfaceNormal(s, normal);
 	R_GrassBasisForSurface(s, normal, tangent, bitangent);
-	if (grassGeomStaticNormalLoc >= 0)
-		GL_Uniform3fFunc(grassGeomStaticNormalLoc, normal[0], normal[1], normal[2]);
-	if (grassGeomStaticTangentLoc >= 0)
-		GL_Uniform3fFunc(grassGeomStaticTangentLoc, tangent[0], tangent[1], tangent[2]);
-	if (grassGeomStaticCellWeightLoc >= 0)
-		GL_Uniform1fFunc(grassGeomStaticCellWeightLoc, (float)(cellstep * cellstep));
-	R_GrassUploadShaderDlights(s, ent, force_scan_dlights);
+	if (!st->has_basis || normal[0] != st->normal[0] || normal[1] != st->normal[1] || normal[2] != st->normal[2])
+	{
+		if (grassGeomStaticNormalLoc >= 0)
+			GL_Uniform3fFunc(grassGeomStaticNormalLoc, normal[0], normal[1], normal[2]);
+		VectorCopy(normal, st->normal);
+	}
+	if (!st->has_basis || tangent[0] != st->tangent[0] || tangent[1] != st->tangent[1] || tangent[2] != st->tangent[2])
+	{
+		if (grassGeomStaticTangentLoc >= 0)
+			GL_Uniform3fFunc(grassGeomStaticTangentLoc, tangent[0], tangent[1], tangent[2]);
+		VectorCopy(tangent, st->tangent);
+	}
+	st->has_basis = true;
+	if (st->cellstep != cellstep)
+	{
+		if (grassGeomStaticCellWeightLoc >= 0)
+			GL_Uniform1fFunc(grassGeomStaticCellWeightLoc, (float)(cellstep * cellstep));
+		st->cellstep = cellstep;
+	}
+	R_GrassUploadShaderDlights(s, ent, force_scan_dlights, &st->dlight_count);
 
-	if (!*batch_bound)
+	if (!st->bound)
 	{
 		GL_BindBuffer(GL_ELEMENT_ARRAY_BUFFER, 0);
 		glEnableClientState(GL_VERTEX_ARRAY);
@@ -4938,7 +5153,7 @@ static qboolean R_DrawGrassSurfaceShaderVBO (qmodel_t *model, const entity_t *en
 		glEnableClientState(GL_TEXTURE_COORD_ARRAY);
 		GL_ClientActiveTextureFunc(GL_TEXTURE0);
 		glEnableClientState(GL_TEXTURE_COORD_ARRAY);
-		*batch_bound = true;
+		st->bound = true;
 	}
 	GL_BindBuffer(GL_ARRAY_BUFFER, cache->shader_vbo[lodindex]);
 	glVertexPointer(3, GL_FLOAT, sizeof(grass_shader_vertex_t), (const GLvoid *)offsetof(grass_shader_vertex_t, base));
@@ -4953,9 +5168,9 @@ static qboolean R_DrawGrassSurfaceShaderVBO (qmodel_t *model, const entity_t *en
 	return true;
 }
 
-static void R_GrassEndStaticBatch (qboolean *batch_bound)
+static void R_GrassEndStaticBatch (grass_static_batch_state_t *st)
 {
-	if (!*batch_bound)
+	if (!st->bound)
 		return;
 	GL_ClientActiveTextureFunc(GL_TEXTURE1);
 	glDisableClientState(GL_TEXTURE_COORD_ARRAY);
@@ -4964,7 +5179,7 @@ static void R_GrassEndStaticBatch (qboolean *batch_bound)
 	glDisableClientState(GL_COLOR_ARRAY);
 	glDisableClientState(GL_VERTEX_ARRAY);
 	GL_BindBuffer(GL_ARRAY_BUFFER, 0);
-	*batch_bound = false;
+	st->bound = false;
 }
 
 static void R_DrawGrassSurfaceBlades (qmodel_t *model, const entity_t *ent, const msurface_t *s, const grass_surface_cache_t *cache, float grassamount, float baseheight, float movement, float gustscale, const vec3_t vieworg, const grass_lod_params_t *lodparams, float surface_density_scale, const vec3_t basecolor, const vec3_t tipcolor, int mode, qboolean force_scan_dlights)
@@ -5089,7 +5304,13 @@ static void R_DrawGrassBlades (qmodel_t *model, entity_t *ent, texchain_t chain)
 	msurface_t *s;
 	vec3_t grass_vieworg;
 	qboolean use_static_shader, use_scenecache_visibility, force_scan_dlights;
-	qboolean static_batch_bound = false;
+	grass_static_batch_state_t static_batch_state;
+	grass_deferred_surf_t deferred_surfs[256];
+	int num_deferred = 0;
+
+	memset(&static_batch_state, 0, sizeof(static_batch_state));
+	static_batch_state.cellstep = -1;
+	static_batch_state.dlight_count = -1;
 
 	if (!R_GrassBladesActive() || r_drawflat_cheatsafe || r_lightmap_cheatsafe)
 		return;
@@ -5201,26 +5422,60 @@ static void R_DrawGrassBlades (qmodel_t *model, entity_t *ent, texchain_t chain)
 		{
 			surface_cellstep = R_GrassCellStepForScale(surface_density_scale);
 			if (!R_GrassSurfaceHasAnimatedLightstyles(s) &&
-				R_DrawGrassSurfaceShaderVBO(model, ent, s, surfacecache, surface_cellstep, baseheight, basecolor, tipcolor, force_scan_dlights, &static_batch_bound))
+				R_DrawGrassSurfaceShaderVBO(model, ent, s, surfacecache, surface_cellstep, baseheight, basecolor, tipcolor, force_scan_dlights, &static_batch_state))
 				continue;
 
-			R_GrassEndStaticBatch(&static_batch_bound);
-			if (grassGeomStaticModeLoc >= 0)
-				GL_Uniform1iFunc(grassGeomStaticModeLoc, 0);
-			if (R_GrassEnsureVertexBatch())
+			// Defer animated-lightstyle / non-static grass surfaces so all static
+			// VBOs draw without toggling pipeline state, then batch all dynamic
+			// surfaces in one vertex batch (grass blades are opaque alpha-tested).
+			if (num_deferred < (int)countof(deferred_surfs))
 			{
-				R_GrassBeginVertexBatch();
-				R_DrawGrassSurfaceBlades(model, ent, s, surfacecache, grassamount, baseheight, movement, gustscale, grass_vieworg, &lodparams, surface_density_scale, basecolor, tipcolor, mode, force_scan_dlights);
-				R_GrassEndVertexBatch();
+				grass_deferred_surf_t *ds = &deferred_surfs[num_deferred++];
+				ds->surf = s;
+				ds->surfacecache = surfacecache;
+				ds->density_scale = surface_density_scale;
+				VectorCopy(basecolor, ds->basecolor);
+				VectorCopy(tipcolor, ds->tipcolor);
 			}
-			if (grassGeomStaticModeLoc >= 0)
-				GL_Uniform1iFunc(grassGeomStaticModeLoc, 1);
+			else
+			{
+				int d;
+				R_GrassEndStaticBatch(&static_batch_state);
+				if (grassGeomStaticModeLoc >= 0)
+					GL_Uniform1iFunc(grassGeomStaticModeLoc, 0);
+				if (R_GrassEnsureVertexBatch())
+				{
+					R_GrassBeginVertexBatch();
+					for (d = 0; d < num_deferred; d++)
+						R_DrawGrassSurfaceBlades(model, ent, deferred_surfs[d].surf, deferred_surfs[d].surfacecache, grassamount, baseheight, movement, gustscale, grass_vieworg, &lodparams, deferred_surfs[d].density_scale, deferred_surfs[d].basecolor, deferred_surfs[d].tipcolor, mode, force_scan_dlights);
+					R_DrawGrassSurfaceBlades(model, ent, s, surfacecache, grassamount, baseheight, movement, gustscale, grass_vieworg, &lodparams, surface_density_scale, basecolor, tipcolor, mode, force_scan_dlights);
+					R_GrassEndVertexBatch();
+				}
+				num_deferred = 0;
+				if (grassGeomStaticModeLoc >= 0)
+					GL_Uniform1iFunc(grassGeomStaticModeLoc, 1);
+			}
 		}
 		else
 			R_DrawGrassSurfaceBlades(model, ent, s, surfacecache, grassamount, baseheight, movement, gustscale, grass_vieworg, &lodparams, surface_density_scale, basecolor, tipcolor, mode, force_scan_dlights);
 	}
 	if (use_static_shader)
-		R_GrassEndStaticBatch(&static_batch_bound);
+	{
+		R_GrassEndStaticBatch(&static_batch_state);
+		if (num_deferred > 0)
+		{
+			int d;
+			if (grassGeomStaticModeLoc >= 0)
+				GL_Uniform1iFunc(grassGeomStaticModeLoc, 0);
+			if (R_GrassEnsureVertexBatch())
+			{
+				R_GrassBeginVertexBatch();
+				for (d = 0; d < num_deferred; d++)
+					R_DrawGrassSurfaceBlades(model, ent, deferred_surfs[d].surf, deferred_surfs[d].surfacecache, grassamount, baseheight, movement, gustscale, grass_vieworg, &lodparams, deferred_surfs[d].density_scale, deferred_surfs[d].basecolor, deferred_surfs[d].tipcolor, mode, force_scan_dlights);
+				R_GrassEndVertexBatch();
+			}
+		}
+	}
 	else
 		R_GrassEndVertexBatch();
 
@@ -6975,6 +7230,61 @@ void GLWorld_CreateShaders (void)
 			GL_Uniform3fFunc (instGrassBaseColorLoc, 0.18f, 0.32f, 0.09f);
 			GL_Uniform3fFunc (instGrassTipColorLoc, 0.55f, 0.74f, 0.28f);
 			GL_UseProgramFunc (0);
+		}
+
+		{
+			const glsl_attrib_binding_t shadowInstBindings[] = {
+				{ "Vert", vertAttrIndex },
+				{ "InstanceAlpha", instShadowAlphaAttrIndex },
+				{ "InstanceMat0", instMat0AttrIndex },
+				{ "InstanceMat1", instMat1AttrIndex },
+				{ "InstanceMat2", instMat2AttrIndex },
+				{ "InstanceMat3", instMat3AttrIndex }
+			};
+			const GLchar *vertSourceShadowInst =
+				"#version 110\n"
+				"attribute vec4 Vert;\n"
+				"attribute float InstanceAlpha;\n"
+				"attribute vec4 InstanceMat0;\n"
+				"attribute vec4 InstanceMat1;\n"
+				"attribute vec4 InstanceMat2;\n"
+				"attribute vec4 InstanceMat3;\n"
+				"varying float vAlpha;\n"
+				"varying float FogFragCoord;\n"
+				"void main()\n"
+				"{\n"
+				"	mat4 instMat = mat4(InstanceMat0, InstanceMat1, InstanceMat2, InstanceMat3);\n"
+				"	gl_Position = gl_ModelViewProjectionMatrix * (instMat * vec4(Vert.xyz, 1.0));\n"
+				"	vAlpha = InstanceAlpha;\n"
+				"	FogFragCoord = gl_Position.w;\n"
+				"}\n";
+			const GLchar *fragSourceShadowInst =
+				"#version 110\n"
+				"uniform int FogMode;\n"
+				"varying float vAlpha;\n"
+				"varying float FogFragCoord;\n"
+				"float FogFactor(float dist)\n"
+				"{\n"
+				"	if (FogMode == 1)\n"
+				"		return (gl_Fog.end - dist) / (gl_Fog.end - gl_Fog.start);\n"
+				"	if (FogMode == 2)\n"
+				"		return exp(-gl_Fog.density * dist);\n"
+				"	return exp(-gl_Fog.density * gl_Fog.density * dist * dist);\n"
+				"}\n"
+				"void main()\n"
+				"{\n"
+				"	vec3 rgb = vec3(0.0);\n"
+				"	if (FogMode == 1 || gl_Fog.density > 0.0 || gl_Fog.color.a < 1.0)\n"
+				"	{\n"
+				"		float fog = clamp(FogFactor(FogFragCoord), 0.0, 1.0) * gl_Fog.color.a;\n"
+				"		rgb = mix(gl_Fog.color.rgb, rgb, fog);\n"
+				"	}\n"
+				"	gl_FragColor = vec4(rgb, vAlpha);\n"
+				"}\n";
+			r_brush_shadow_inst_program = GL_CreateProgram (vertSourceShadowInst, fragSourceShadowInst,
+				sizeof(shadowInstBindings) / sizeof(shadowInstBindings[0]), shadowInstBindings);
+			if (r_brush_shadow_inst_program != 0)
+				shadowInstFogModeLoc = GL_GetUniformLocation (&r_brush_shadow_inst_program, "FogMode");
 		}
 	}
 

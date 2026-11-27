@@ -4082,6 +4082,8 @@ void Sky_DrawSky (void)
 		glStencilFunc (GL_ALWAYS, 1, 1);
 		glStencilOp (GL_KEEP, GL_KEEP, GL_REPLACE);
 		stencil_skybox = true;
+		r_stencil_used_mask |= 0x01u;
+		r_alias_stencil_dirty_mask |= 0x01u;
 	}
 #ifndef SDL_THREADS_DISABLED
 	if (skybox_name[0] &&

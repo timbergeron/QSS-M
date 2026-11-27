@@ -26,7 +26,7 @@ source = r'''
 #define CLAMP(a,x,b) fminf(b,fmaxf(a,x))
 typedef struct {float value;} cvar_t;
 typedef struct {int free;struct {int classname,owner,model,modelindex,touch;float nextthink;} v;} edict_t;
-typedef struct {edict_t edicts[8];int num_edicts;} qcvm_t;
+typedef struct {edict_t *edicts;int num_edicts,edict_size;} qcvm_t;
 typedef struct {int fromrl;} qmodel_t;
 typedef struct {struct {int modelindex;} netstate;qmodel_t *model;} entity_t;
 static cvar_t scr_showgrenadecounter={3};
@@ -52,8 +52,8 @@ source += function('Quake/r_alias.c', 'static float R_GrenadeGlowHaloWidth(float
 source += r'''
 static float luma(const float c[4]) {return 0.2126f*c[0]+0.7152f*c[1]+0.0722f*c[2];}
 int main(void) {
- entity_t entities[8]={0},temp={0};qcvm_t csqc={0};grenade_glow_t a,b;
- sv.active=1;sv.qcvm.num_edicts=8;cl.entities=entities;cl.num_entities=8;cl.viewentity=1;cl.time=10;
+ entity_t entities[8]={0},temp={0};edict_t sv_edicts[8]={0};qcvm_t csqc={0};grenade_glow_t a,b;
+ sv.active=1;sv.qcvm.edicts=sv_edicts;sv.qcvm.num_edicts=8;sv.qcvm.edict_size=(int)sizeof(edict_t);cl.entities=entities;cl.num_entities=8;cl.viewentity=1;cl.time=10;
  edict_t *g=&sv.qcvm.edicts[2];
  g->v.classname=1;g->v.owner=1;g->v.model=2;g->v.modelindex=4;g->v.touch=1;g->v.nextthink=12;
  entities[2].netstate.modelindex=4;

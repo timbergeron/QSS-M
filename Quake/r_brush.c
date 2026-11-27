@@ -2520,8 +2520,11 @@ static qboolean R_UploadLightmapScratch (const struct lightmap_s *lm, const glRe
 			const byte *src = lm->pbodata + rect->t * stride + rect->l * lightmap_bytes;
 			int row;
 
-			for (row = 0; row < rect->h; row++, src += stride)
-				memcpy(dst + offsets[i] + row * rowbytes, src, rowbytes);
+			if (rect->l == 0 && rect->w == LMBLOCK_WIDTH)
+				memcpy(dst + offsets[i], src, (size_t)rect->h * stride);
+			else
+				for (row = 0; row < rect->h; row++, src += stride)
+					memcpy(dst + offsets[i] + row * rowbytes, src, rowbytes);
 		}
 		if (GL_UnmapBufferFunc(GL_PIXEL_UNPACK_BUFFER_ARB))
 		{
@@ -2595,41 +2598,75 @@ static void R_UploadLightmap(int lmap)
 	if (lo > hi)
 		return;
 
-	// woods #lmtiles -- bands with an identical column mask merge vertically,
-	// then each run of set columns becomes one rect
+	// woods #lmtiles -- coalesce dirty tile bands into a small number of rects
+	// to minimize glTexSubImage2D overhead on drivers with high per-call cost.
 	tiles = lm_upload_tiles;
 	valid = 0;
-	for (i = lo; i <= hi; i++)
 	{
-		unsigned int m = tiles[i - lo];
-		int j, c;
+		qboolean open = false;
+		int r0 = 0, r1 = 0, sc0 = 0, sc1 = 0;
+		size_t dirty_texels = 0;
 
-		if (!m)
-			continue;
-		for (j = i; j < hi && tiles[j + 1 - lo] == m; j++)
-			;
-		for (c = 0; c < 32; )
+		for (i = lo; i <= hi; i++)
 		{
-			int c0, x, y, w, h;
+			unsigned int m = tiles[i - lo];
+			int c0, c1, rw, rh;
 
-			if (!(m & (1u << c))) { c++; continue; }
-			c0 = c;
-			while (c < 32 && (m & (1u << c)))
-				c++;
-			x = c0 * lm_tilew;
-			y = i * LM_TILE_H;
-			w = q_min (c * lm_tilew, LMBLOCK_WIDTH) - x;
-			h = q_min ((j + 1) * LM_TILE_H, LMBLOCK_HEIGHT) - y;
-			if (w <= 0 || h <= 0)
+			if (!m)
 				continue;
+			c0 = 0;
+			while (!(m & (1u << c0)))
+				c0++;
+			c1 = 31;
+			while (!(m & (1u << c1)))
+				c1--;
+			rw = q_min ((c1 + 1) * lm_tilew, LMBLOCK_WIDTH) - c0 * lm_tilew;
+			rh = q_min ((i + 1) * LM_TILE_H, LMBLOCK_HEIGHT) - i * LM_TILE_H;
+			if (rw <= 0 || rh <= 0)
+				continue;
+
+			if (open)
+			{
+				int nc0 = q_min (sc0, c0);
+				int nc1 = q_max (sc1, c1);
+				int mw = q_min ((nc1 + 1) * lm_tilew, LMBLOCK_WIDTH) - nc0 * lm_tilew;
+				int mh = q_min ((i + 1) * LM_TILE_H, LMBLOCK_HEIGHT) - r0 * LM_TILE_H;
+				size_t merged_area = (size_t)mw * (size_t)mh;
+				size_t new_dirty = dirty_texels + (size_t)rw * (size_t)rh;
+				size_t waste = merged_area > new_dirty ? merged_area - new_dirty : 0;
+
+				if (waste <= 32768 || waste * 2 <= merged_area)
+				{
+					sc0 = nc0;
+					sc1 = nc1;
+					r1 = i;
+					dirty_texels = new_dirty;
+					continue;
+				}
+
+				LM_ReserveUpload (valid + 1, 0);
+				lm_upload_rects[valid].l = sc0 * lm_tilew;
+				lm_upload_rects[valid].t = r0 * LM_TILE_H;
+				lm_upload_rects[valid].w = q_min ((sc1 + 1) * lm_tilew, LMBLOCK_WIDTH) - lm_upload_rects[valid].l;
+				lm_upload_rects[valid].h = q_min ((r1 + 1) * LM_TILE_H, LMBLOCK_HEIGHT) - lm_upload_rects[valid].t;
+				valid++;
+			}
+
+			open = true;
+			r0 = r1 = i;
+			sc0 = c0;
+			sc1 = c1;
+			dirty_texels = (size_t)rw * (size_t)rh;
+		}
+		if (open)
+		{
 			LM_ReserveUpload (valid + 1, 0);
-			lm_upload_rects[valid].l = x;
-			lm_upload_rects[valid].t = y;
-			lm_upload_rects[valid].w = w;
-			lm_upload_rects[valid].h = h;
+			lm_upload_rects[valid].l = sc0 * lm_tilew;
+			lm_upload_rects[valid].t = r0 * LM_TILE_H;
+			lm_upload_rects[valid].w = q_min ((sc1 + 1) * lm_tilew, LMBLOCK_WIDTH) - lm_upload_rects[valid].l;
+			lm_upload_rects[valid].h = q_min ((r1 + 1) * LM_TILE_H, LMBLOCK_HEIGHT) - lm_upload_rects[valid].t;
 			valid++;
 		}
-		i = j;
 	}
 	rects = lm_upload_rects;
 
@@ -2873,10 +2910,7 @@ extern vec3_t	lightcolor; // woods #shadow
 extern	vec3_t	lightspot; // woods #shadow
 extern qboolean GL_DrawAliasShadowCheck (entity_t* e); // woods #shadow
 
-#define SHADOW_SKEW_X -0.7 //skew along x axis. -0.7 to mimic glquake shadows -- woods #shadow
-#define SHADOW_SKEW_Y 0.2 //skew along y axis. 0 to mimic glquake shadows -- woods #shadow
-#define SHADOW_VSCALE 0 //0=completely flat -- woods #shadow
-#define SHADOW_HEIGHT 0.1 //how far above the floor to render the shadow -- woods #shadow
+// brush shadow projection: BRUSH_SHADOW_* in glquake.h -- woods #shadow
 
 #define SHADOW_COMPUTED (1 << 0) // woods #shadow
 #define SHADOW_VALID    (1 << 1) // woods #shadow
@@ -3020,6 +3054,22 @@ static bshadowcache_t *GL_BrushShadowCache_Get (qmodel_t *model)
 	return c->numindexes ? c : NULL;
 }
 
+qboolean GL_BrushShadowCache_Info (qmodel_t *model, GLuint *ebo_out, int *numindexes_out)
+{
+	bshadowcache_t *c;
+
+	if (!r_shadows_buffered.value || !gl_vbo_able || !gl_bmodel_vbo || !model)
+		return false;
+	c = GL_BrushShadowCache_Get (model);
+	if (!c || !c->ebo || c->numindexes <= 0)
+		return false;
+	if (ebo_out)
+		*ebo_out = c->ebo;
+	if (numindexes_out)
+		*numindexes_out = c->numindexes;
+	return true;
+}
+
 /*
 GL_DrawBrushShadow -- woods #shadow
 
@@ -3031,8 +3081,8 @@ calls around every entity's single draw.
 static const float r_brush_shadowmatrix[16] = {
 	1,              0,              0,              0,
 	0,              1,              0,              0,
-	SHADOW_SKEW_X,  SHADOW_SKEW_Y,  SHADOW_VSCALE,  0,
-	0,              0,              SHADOW_HEIGHT,  1
+	BRUSH_SHADOW_SKEW_X,  BRUSH_SHADOW_SKEW_Y,  BRUSH_SHADOW_VSCALE,  0,
+	0,                    0,                    BRUSH_SHADOW_HEIGHT,  1
 };
 
 qboolean GL_PrepareBrushShadow (entity_t *e, brushshadow_rec_t *rec)

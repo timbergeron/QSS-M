@@ -31,6 +31,10 @@ def function(declaration):
 
 
 defines = "\n".join(re.findall(r"^#define SHADOW_(?:SKEW_X|SKEW_Y|VSCALE|HEIGHT)\b.*$", renderer, re.M))
+# The brush projection is shared with r_brush.c through glquake.h.
+glquake = (ROOT / "Quake/glquake.h").read_text()
+defines += "\n" + "\n".join(re.findall(r"^#define BRUSH_SHADOW_(?:SKEW_X|SKEW_Y|VSCALE|HEIGHT)\b.*$", glquake, re.M))
+assert "BRUSH_SHADOW_SKEW_Y" in defines
 entry_type = renderer[renderer.index("enum { SHADOWQ_ALIAS"):renderer.index("#define MAX_SHADOWQ")]
 
 source = r'''
@@ -162,7 +166,7 @@ static void footprint_containment(void) {
             for (k = 0; k < 3; ++k)
                 v[k] = s < 8 ? ((s >> k) & 1 ? m.maxs[k] : m.mins[k]) : frand(m.mins[k], m.maxs[k]);
             if (brush) {   /* T(o) R T(0,0,-lh) S T(0,0,lh) v */
-                double sq[3] = {v[0] + SHADOW_SKEW_X*(v[2] + lh), v[1] + SHADOW_SKEW_Y*(v[2] + lh), SHADOW_HEIGHT - lh};
+                double sq[3] = {v[0] + BRUSH_SHADOW_SKEW_X*(v[2] + lh), v[1] + BRUSH_SHADOW_SKEW_Y*(v[2] + lh), BRUSH_SHADOW_HEIGHT - lh};
                 rotate(rot, sq, w);
                 for (k = 0; k < 3; ++k) p[k] = e.origin[k] + w[k];
             } else {       /* T(o) T(0,0,-lh) S T(0,0,lh) R v */
