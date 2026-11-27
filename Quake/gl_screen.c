@@ -7979,13 +7979,6 @@ static void SCR_DrawScopeOverlay (void)
 #define SHOWFIELDS_MAX_LABEL_CHARS 32
 #define SHOWFIELDS_MAX_VALUE_CHARS 40
 
-typedef enum
-{
-	SHOWFIELDS_LINK_NONE = 0,
-	SHOWFIELDS_LINK_OUTGOING = 1 << 0,
-	SHOWFIELDS_LINK_INCOMING = 1 << 1
-} scr_showfields_link_t;
-
 typedef struct
 {
 	float x;
@@ -8222,59 +8215,6 @@ static void SCR_SmoothShowFieldsPosition(int entnum, float *x, float *y)
 	*y = track->y;
 }
 
-static int SCR_GetShowFieldsLinkFlags(edict_t *focus, edict_t *ed, const char *focus_target, const char *focus_targetname, ddef_t *target_field, ddef_t *targetname_field)
-{
-	int i;
-	int link_flags = SHOWFIELDS_LINK_NONE;
-	int focus_prog;
-	int ed_prog;
-
-	if (!focus || ed == focus)
-		return SHOWFIELDS_LINK_NONE;
-
-	if (*focus_target)
-	{
-		const char *ed_targetname = SCR_GetEdictStringField(ed, targetname_field);
-		if (*ed_targetname && !strcmp(ed_targetname, focus_target))
-			link_flags |= SHOWFIELDS_LINK_OUTGOING;
-	}
-
-	if (*focus_targetname)
-	{
-		const char *ed_target = SCR_GetEdictStringField(ed, target_field);
-		if (*ed_target && !strcmp(ed_target, focus_targetname))
-			link_flags |= SHOWFIELDS_LINK_INCOMING;
-	}
-
-	focus_prog = EDICT_TO_PROG(focus);
-	ed_prog = EDICT_TO_PROG(ed);
-
-	for (i = 1; i < qcvm->progs->numfielddefs; i++)
-	{
-		ddef_t *d = &qcvm->fielddefs[i];
-		eval_t *focus_val;
-		eval_t *ed_val;
-
-		if ((d->type & ~DEF_SAVEGLOBAL) != ev_entity)
-			continue;
-		if (d->ofs * 4 == offsetof(entvars_t, chain))
-			continue;
-
-		focus_val = (eval_t *)((char *)&focus->v + d->ofs * 4);
-		ed_val = (eval_t *)((char *)&ed->v + d->ofs * 4);
-
-		if (focus_val->edict == ed_prog)
-			link_flags |= SHOWFIELDS_LINK_OUTGOING;
-		if (ed_val->edict == focus_prog)
-			link_flags |= SHOWFIELDS_LINK_INCOMING;
-
-		if (link_flags == (SHOWFIELDS_LINK_OUTGOING | SHOWFIELDS_LINK_INCOMING))
-			break;
-	}
-
-	return link_flags;
-}
-
 static void SCR_DrawEdictInfo (void)
 {
 	extern edict_t *bbox_focus;
@@ -8292,14 +8232,10 @@ static void SCR_DrawEdictInfo (void)
 
 	qcvm_t *oldvm;
 	ddef_t *classname_field;
-	ddef_t *target_field;
-	ddef_t *targetname_field;
 	float scale;
 	float vwidth, vheight;
 	float focus_x = 0.0f, focus_y = 0.0f;
 	qboolean focus_on_screen = false;
-	const char *focus_target;
-	const char *focus_targetname;
 	char header[32];
 	int e;
 	int showfields_mode;
@@ -8354,10 +8290,6 @@ static void SCR_DrawEdictInfo (void)
 	}
 
 	classname_field = ED_FindField("classname");
-	target_field = ED_FindField("target");
-	targetname_field = ED_FindField("targetname");
-	focus_target = bbox_focus ? SCR_GetEdictStringField(bbox_focus, target_field) : "";
-	focus_targetname = bbox_focus ? SCR_GetEdictStringField(bbox_focus, targetname_field) : "";
 
 	if (bbox_focus)
 	{
@@ -8374,7 +8306,7 @@ static void SCR_DrawEdictInfo (void)
 		const char *ed_classname;
 		vec3_t center;
 		float x, y;
-		int link_flags = SHOWFIELDS_LINK_NONE;
+		int link_flags = 0;
 		float sx, sy;
 		int box_w, box_h;
 		char label[SHOWFIELDS_MAX_LABEL_CHARS + 1];
@@ -8384,7 +8316,7 @@ static void SCR_DrawEdictInfo (void)
 			continue;
 
 		if (bbox_focus && ed != bbox_focus)
-			link_flags = SCR_GetShowFieldsLinkFlags(bbox_focus, ed, focus_target, focus_targetname, target_field, targetname_field);
+			link_flags = ED_EntityLinks(bbox_focus, ed, ED_LINK_OUT | ED_LINK_IN);
 
 		if (showfields_mode == 2 && ed == bbox_focus)
 			continue;
@@ -8398,11 +8330,11 @@ static void SCR_DrawEdictInfo (void)
 
 		if (focus_on_screen && ed != bbox_focus)
 		{
-			if (link_flags == (SHOWFIELDS_LINK_OUTGOING | SHOWFIELDS_LINK_INCOMING))
+			if (link_flags == (ED_LINK_OUT | ED_LINK_IN))
 				SCR_DrawDebugLine(focus_x, focus_y, x, y, linked_line, 0.95f);
-			else if (link_flags & SHOWFIELDS_LINK_OUTGOING)
+			else if (link_flags & ED_LINK_OUT)
 				SCR_DrawDebugLine(focus_x, focus_y, x, y, outgoing_line, 0.95f);
-			else if (link_flags & SHOWFIELDS_LINK_INCOMING)
+			else if (link_flags & ED_LINK_IN)
 				SCR_DrawDebugLine(x, y, focus_x, focus_y, incoming_line, 0.95f);
 		}
 
@@ -8429,9 +8361,9 @@ static void SCR_DrawEdictInfo (void)
 
 		if (ed == bbox_focus)
 			bg_color = focus_bg;
-		else if (link_flags == (SHOWFIELDS_LINK_OUTGOING | SHOWFIELDS_LINK_INCOMING))
+		else if (link_flags == (ED_LINK_OUT | ED_LINK_IN))
 			bg_color = linked_bg;
-		else if (link_flags & SHOWFIELDS_LINK_OUTGOING)
+		else if (link_flags & ED_LINK_OUT)
 			bg_color = outgoing_bg;
 		else
 			bg_color = incoming_bg;

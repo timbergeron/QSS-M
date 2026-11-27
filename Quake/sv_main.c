@@ -2340,9 +2340,10 @@ CLIENT SPAWNING
 ==============================================================================
 */
 
-static qboolean SV_IsLocalClient (client_t *client)
+qboolean SV_IsLocalClient (const client_t *client)
 {
-	return Q_strcmp (NET_QSocketGetTrueAddressString (client->netconnection), "LOCAL") == 0;
+	return client->netconnection &&
+		Q_strcmp (NET_QSocketGetTrueAddressString (client->netconnection), "LOCAL") == 0;
 }
 
 /*

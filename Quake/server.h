@@ -459,6 +459,7 @@ void SV_AntilagTrackPlayerLifetimes(void);
 void SVFTE_DestroyFrames(client_t *client);
 void SV_BuildEntityState(client_t *client, edict_t *ent, entity_state_t *state);
 void SV_ClearClientSignonMessages(client_t *client);
+qboolean SV_IsLocalClient(const client_t *client);
 qboolean SV_ClientHasPendingReliable(client_t *client);
 int SV_SendClientReliable(client_t *client, qboolean *completed_signon);
 void SV_SendClientMessages (void);

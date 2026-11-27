@@ -22,6 +22,7 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 // sv_edict.c -- entity dictionary
 
 #include "quakedef.h"
+#include <errno.h>
 
 const int	type_size[ev_ext_double + 1] = {
 	1,					// ev_void
@@ -1009,6 +1010,370 @@ static void ED_PrintEdict_f (void)
 
 	}
 	PR_SwitchQCVM(NULL);
+}
+
+static qboolean ED_FieldMatches (const edict_t *ed, const ddef_t *field,
+	const char *wanted, const vec3_t number, double precise)
+{
+	eval_t value = {0};
+	int type = field->type & ~DEF_SAVEGLOBAL;
+	ddef_t *definition;
+
+	/* QuakeC fields use four-byte offsets, including 64-bit values. */
+	memcpy(&value, (const byte *)&ed->v + field->ofs * 4, type_size[type] * 4);
+	switch (type)
+	{
+	case ev_string:
+		return !strcmp(PR_GetString(value.string), wanted);
+	case ev_float:
+		return value._float == number[0];
+	case ev_vector:
+		return VectorCompare(value.vector, number);
+	case ev_ext_double:
+		return value._double == precise;
+	case ev_entity:
+		if (value.edict < 0 || value.edict % qcvm->edict_size ||
+			value.edict / qcvm->edict_size >= qcvm->num_edicts)
+			return false;
+		break;
+	case ev_function:
+		if (value.function < 0 || value.function >= qcvm->progs->numfunctions)
+			return false;
+		break;
+	case ev_field:
+		definition = ED_FieldAtOfs(value._int);
+		return definition && !strcmp(PR_GetString(definition->s_name), wanted);
+	case ev_ext_integer:
+	case ev_ext_uint32:
+	case ev_ext_sint64:
+	case ev_ext_uint64:
+		break;
+	default:
+		return false;
+	}
+	return !strcmp(PR_UglyValueString(type, &value), wanted);
+}
+
+static qboolean ED_ParseFieldVector (const char *text, vec3_t vector)
+{
+	int i;
+	char *end;
+
+	for (i = 0; i < 3; i++)
+	{
+		errno = 0;
+		vector[i] = strtof(text, &end);
+		if (end == text || !isfinite(vector[i]) || (errno == ERANGE && vector[i] == 0) ||
+			(*end && !isspace((unsigned char)*end)))
+			return false;
+		text = end;
+	}
+	while (isspace((unsigned char)*text))
+		text++;
+	return !*text;
+}
+
+static void ED_FindEdicts_f (void)
+{
+	const char *classname = NULL, *fieldname = NULL, *wanted = NULL;
+	ddef_t *field = NULL;
+	edict_t *player = NULL;
+	vec3_t number = {0, 0, 0};
+	double radius = 0, precise = 0;
+	char *end;
+	int i, matches = 0;
+	qboolean near = false;
+
+	for (i = 1; i < Cmd_Argc();)
+	{
+		const char *option = Cmd_Argv(i++);
+		if (!strcmp(option, "class") && !classname && i < Cmd_Argc())
+			classname = Cmd_Argv(i++);
+		else if (!strcmp(option, "field") && !fieldname && i + 1 < Cmd_Argc())
+		{
+			fieldname = Cmd_Argv(i++);
+			wanted = Cmd_Argv(i++);
+		}
+		else if (!strcmp(option, "near") && !near && i < Cmd_Argc())
+		{
+			const char *distance = Cmd_Argv(i++);
+			errno = 0;
+			radius = strtod(distance, &end);
+			if (end == distance || *end || !isfinite(radius) || radius < 0 ||
+				(errno == ERANGE && radius == 0))
+			{
+				Con_Printf("edictfind: near requires a nonnegative distance\n");
+				goto usage;
+			}
+			near = true;
+		}
+		else
+			goto usage;
+	}
+	if (!classname && !fieldname && !near)
+		goto usage;
+	if (!sv.active)
+	{
+		Con_Printf("edictfind: start a local server first\n");
+		return;
+	}
+	if (near)
+	{
+		for (i = 0; !isDedicated && i < svs.maxclients; i++)
+		{
+			const client_t *client = &svs.clients[i];
+			if (client->active && client->spawned && SV_IsLocalClient(client))
+			{
+				player = client->edict;
+				break;
+			}
+		}
+		if (!player)
+		{
+			Con_Printf("edictfind: near requires a spawned local player\n");
+			return;
+		}
+	}
+
+	PR_SwitchQCVM(&sv.qcvm);
+	if (fieldname)
+	{
+		unsigned int type;
+		field = ED_FindField(fieldname);
+		if (!field)
+		{
+			Con_Printf("edictfind: unknown field %s\n", fieldname);
+			goto done;
+		}
+		type = field->type & ~DEF_SAVEGLOBAL;
+		if (type >= Q_COUNTOF(type_size) || type == ev_void || type == ev_pointer ||
+			field->ofs + type_size[type] > qcvm->progs->entityfields)
+		{
+			Con_Printf("edictfind: cannot compare field %s\n", fieldname);
+			goto done;
+		}
+		switch (type)
+		{
+		case ev_float:
+		case ev_ext_double:
+			errno = 0;
+			if (type == ev_float)
+				number[0] = strtof(wanted, &end);
+			else
+				precise = strtod(wanted, &end);
+			if (end == wanted || *end || !isfinite(number[0]) || !isfinite(precise) ||
+				(errno == ERANGE && number[0] == 0 && precise == 0))
+			{
+				Con_Printf("edictfind: %s requires a finite number\n", fieldname);
+				goto field_usage;
+			}
+			break;
+		case ev_vector:
+			if (!ED_ParseFieldVector(wanted, number))
+			{
+				Con_Printf("edictfind: %s requires a quoted vector, e.g. \"0 0 0\"\n", fieldname);
+				goto field_usage;
+			}
+			break;
+		default:
+			break;
+		}
+	}
+	for (i = 0; i < qcvm->num_edicts; i++)
+	{
+		edict_t *ed = EDICT_NUM(i);
+		const char *name;
+
+		if (ed->free)
+			continue;
+		name = PR_GetString(ed->v.classname);
+		if (classname && q_strcasecmp(name, classname))
+			continue;
+		if (player)
+		{
+			double x = (double)ed->v.origin[0] - player->v.origin[0];
+			double y = (double)ed->v.origin[1] - player->v.origin[1];
+			double z = (double)ed->v.origin[2] - player->v.origin[2];
+			if (i == 0 || ed == player || x*x + y*y + z*z > radius*radius)
+				continue;
+		}
+		if (field && !ED_FieldMatches(ed, field, wanted, number, precise))
+			continue;
+		Con_SafePrintf("%5d  %-24s  %g %g %g\n", i, name,
+			ed->v.origin[0], ed->v.origin[1], ed->v.origin[2]);
+		matches++;
+	}
+	Con_Printf("%d matching edict%s\n", matches, matches == 1 ? "" : "s");
+
+done:
+	PR_SwitchQCVM(NULL);
+	return;
+
+field_usage:
+	PR_SwitchQCVM(NULL);
+usage:
+	Con_Printf("usage: edictfind [class <classname>] [field <name> <value>] [near <units>]\n");
+}
+
+static void ED_PrintEntityLink (edict_t *from, edict_t *to, const char *field, int *remaining)
+{
+	if (!remaining || !*remaining)
+		return;
+	--*remaining;
+	Con_SafePrintf("%d %s --%s--> %d %s\n",
+		NUM_FOR_EDICT(from), PR_GetString(from->v.classname), field,
+		NUM_FOR_EDICT(to), PR_GetString(to->v.classname));
+}
+
+static int ED_EntityLinkFlags (edict_t *focus, edict_t *other, int directions, int *remaining)
+{
+	int links = 0;
+	int focus_prog = EDICT_TO_PROG(focus);
+	int other_prog = EDICT_TO_PROG(other);
+	const char *target;
+	int i;
+
+	if (focus == other)
+		return 0;
+
+	if (directions & ED_LINK_OUT)
+	{
+		target = PR_GetString(focus->v.target);
+		if (*target && !strcmp(target, PR_GetString(other->v.targetname)))
+		{
+			links |= ED_LINK_OUT;
+			ED_PrintEntityLink(focus, other, "target", remaining);
+		}
+	}
+	if (directions & ED_LINK_IN)
+	{
+		target = PR_GetString(other->v.target);
+		if (*target && !strcmp(target, PR_GetString(focus->v.targetname)))
+		{
+			links |= ED_LINK_IN;
+			ED_PrintEntityLink(other, focus, "target", remaining);
+		}
+	}
+	for (i = 1; i < qcvm->progs->numfielddefs && (remaining ? *remaining > 0 : links != directions); i++)
+	{
+		const ddef_t *field = &qcvm->fielddefs[i];
+		int ofs = field->ofs * 4;
+		int a, b;
+
+		/* chain is temporary scratch space for QuakeC findradius. */
+		if ((field->type & ~DEF_SAVEGLOBAL) != ev_entity || field->ofs >= qcvm->progs->entityfields ||
+			ofs == offsetof(entvars_t, chain))
+			continue;
+		a = *(const int *)((const byte *)&focus->v + ofs);
+		b = *(const int *)((const byte *)&other->v + ofs);
+		/* Zero is also the default value of every unset entity field. */
+		if ((directions & ED_LINK_OUT) && other_prog && a == other_prog)
+		{
+			links |= ED_LINK_OUT;
+			if (remaining)
+				ED_PrintEntityLink(focus, other, PR_GetString(field->s_name), remaining);
+		}
+		if ((directions & ED_LINK_IN) && focus_prog && b == focus_prog)
+		{
+			links |= ED_LINK_IN;
+			if (remaining)
+				ED_PrintEntityLink(other, focus, PR_GetString(field->s_name), remaining);
+		}
+	}
+	return links;
+}
+
+int ED_EntityLinks (edict_t *focus, edict_t *other, int directions)
+{
+	return ED_EntityLinkFlags(focus, other, directions, NULL);
+}
+
+static void ED_EntityLinks_f (void)
+{
+	extern edict_t *bbox_focus;
+	enum { LINK_LIMIT = 128 };
+	struct { int entity, depth; } queue[LINK_LIMIT];
+	byte visited[MAX_EDICTS] = {0};
+	const char *start = Cmd_Argv(1);
+	const char *direction = Cmd_Argv(2);
+	const char *depth_arg = Cmd_Argv(3);
+	int directions = ED_LINK_OUT, head, tail = 1, remaining = LINK_LIMIT;
+	long root = 0, depth = 4;
+	char *end;
+	qboolean use_focus = Cmd_Argc() == 1 || !strcmp(start, "look");
+
+	if (Cmd_Argc() > 4)
+		goto usage;
+	if (!use_focus)
+	{
+		root = strtol(start, &end, 10);
+		if (end == start || *end || root < 0 || root >= MAX_EDICTS)
+			goto usage;
+	}
+	if (Cmd_Argc() >= 3)
+	{
+		if (!strcmp(direction, "in"))
+			directions = ED_LINK_IN;
+		else if (strcmp(direction, "out"))
+			goto usage;
+	}
+	if (Cmd_Argc() >= 4)
+	{
+		depth = strtol(depth_arg, &end, 10);
+		if (end == depth_arg || *end || depth < 1 || depth > 8)
+			goto usage;
+	}
+	if (!sv.active)
+	{
+		Con_Printf("edictlinks: start a local server first\n");
+		return;
+	}
+	PR_SwitchQCVM(&sv.qcvm);
+	if (use_focus)
+		root = bbox_focus ? NUM_FOR_EDICT(bbox_focus) : -1;
+	if (root < 0 || root >= qcvm->num_edicts || EDICT_NUM(root)->free)
+	{
+		Con_Printf("edictlinks: no live edict selected (enable r_showfields or supply an edict number)\n");
+		goto done;
+	}
+
+	queue[0].entity = (int)root;
+	queue[0].depth = 0;
+	visited[root] = true;
+	for (head = 0; head < tail; head++)
+	{
+		edict_t *from = EDICT_NUM(queue[head].entity);
+		int next_depth = queue[head].depth + 1;
+		int i;
+
+		for (i = 0; i < qcvm->num_edicts; i++)
+		{
+			edict_t *other = EDICT_NUM(i);
+			if (other->free || !ED_EntityLinkFlags(from, other, directions, &remaining))
+				continue;
+			if (!remaining)
+			{
+				Con_Printf("edictlinks: reached the %d-link output limit\n", LINK_LIMIT);
+				goto done;
+			}
+			if (!visited[i] && next_depth < depth)
+			{
+				visited[i] = true;
+				queue[tail].entity = i;
+				queue[tail++].depth = next_depth;
+			}
+		}
+	}
+	if (remaining == LINK_LIMIT)
+		Con_Printf("edictlinks: no %s links from edict %ld\n",
+			directions == ED_LINK_OUT ? "outgoing" : "incoming", root);
+
+done:
+	PR_SwitchQCVM(NULL);
+	return;
+
+usage:
+	Con_Printf("usage: edictlinks [<edict number>|look] [out|in] [<depth>] (depth 1-8)\n");
 }
 
 /*
@@ -2249,6 +2614,8 @@ void PR_Init (void)
 		cmd->completion = ED_PrintEdict_Completion_f; // woods #iwtabcomplete
 	Cmd_AddCommand ("edicts", ED_PrintEdicts);
 	Cmd_AddCommand ("edictcount", ED_Count);
+	Cmd_AddCommand ("edictfind", ED_FindEdicts_f);
+	Cmd_AddCommand ("edictlinks", ED_EntityLinks_f);
 	Cmd_AddCommand ("profile", PR_Profile_f);
 	Cmd_AddCommand ("pr_dumpplatform", PR_DumpPlatform_f);
 	Cvar_RegisterVariable (&nomonsters);
