@@ -488,7 +488,7 @@ static cvar_t r_part_density = {"r_part_density", "1"};
 static cvar_t r_part_maxparticles = {"r_part_maxparticles", "65536"};
 static cvar_t r_part_maxdecals = {"r_part_maxdecals", "8192"};
 static cvar_t r_part_vbo = {"r_part_vbo", "1"};
-static cvar_t r_part_cullbehind = {"r_part_cullbehind", "1"};
+static cvar_t r_part_cullbehind = {"r_part_cullbehind", "1"}; // cull particles behind the view or outside the view frustum
 static cvar_t r_lightflicker = {"r_lightflicker", "1"};
 extern cvar_t r_particles; // woods (vk)
 
@@ -3789,10 +3789,14 @@ void PScript_InitParticles (void)
 //#endif
 }
 
+static int r_skytris_models;
+
 static void P_RainVis_Forget(qmodel_t *mod);
 void PScript_ClearSurfaceParticles(qmodel_t *mod)
 {
 	P_RainVis_Forget(mod);
+	if (mod->skytris && r_skytris_models > 0)
+		r_skytris_models--;
 	mod->skytime = 0;
 	mod->skytris = NULL;
 	while(mod->skytrimem)
@@ -3805,6 +3809,7 @@ void PScript_ClearSurfaceParticles(qmodel_t *mod)
 static void PScript_ClearAllSurfaceParticles(void)
 {	//make sure we hit all models, even ones from the previous map. maybe this is overkill
 	Mod_ForEachModel(PScript_ClearSurfaceParticles);
+	r_skytris_models = 0;
 }
 
 void PScript_Shutdown (void)
@@ -5485,6 +5490,8 @@ static void R_Part_SkyTri(qmodel_t *mod, float *v1, float *v2, float *v3, msurfa
 		return;//bummer.
 	mem->count++;
 
+	if (!mod->skytris)
+		r_skytris_models++;
 	st->next = mod->skytris;
 	mod->skytris = st;
 }
@@ -8641,41 +8648,74 @@ static qboolean PScript_IsParticleDead(const particle_t *p)
 	return p->die < particletime || (cls.demoplayback && cls.demospeed < 0.f && p->spawn > cl.mtime[0]);
 }
 
-static qboolean PScript_CullParticleDrawBehindView(const particle_t *p, const plooks_t *type)
+static FUNC_ALWAYSINLINE qboolean PScript_CullParticleDraw(const particle_t *p, const plooks_t *type,
+	qboolean cull_frustum, float org_dot_vpn, int nplanes)
 {
 	float viewdist, radius, velradius;
+	int i;
 
-	if (!r_part_cullbehind.value)
-		return false;
+	viewdist = p->org[0]*vpn[0] + p->org[1]*vpn[1] + p->org[2]*vpn[2] - org_dot_vpn;
 
-	viewdist = (p->org[0] - r_origin[0])*vpn[0] + (p->org[1] - r_origin[1])*vpn[1]
-		+ (p->org[2] - r_origin[2])*vpn[2];
-
-	radius = p->scale;
-	if (radius < 0)
-		radius = -radius;
-
+	radius = fabsf(p->scale);
 	switch (type->type)
 	{
+	case PT_NORMAL:
+		if (type->scalefactor == 1)
+			radius *= 0.4f; // exact half-extent is 0.25 * 1.5 = 0.375 even when rotated
+		else
+		{
+			float s = (viewdist * p->scale) * type->invscalefactor + p->scale * (type->scalefactor * 250.0f);
+			float sc = (s < 20.0f) ? 0.25f : (0.25f + s * 0.001f);
+			radius = fabsf(sc) * 1.55f; // |pup| = |pright| = 1.5
+		}
+		break;
 	case PT_SPARK:
 		radius += (fabsf(p->vel[0]) + fabsf(p->vel[1]) + fabsf(p->vel[2])) * 0.1f;
 		break;
 	case PT_SPARKFAN:
+		{
+			// Match R_AddFanSparkParticle: tail extends -scale*vel and width +-p->scale.
+			float s = (viewdist * p->scale) * type->invscalefactor + p->scale * (type->scalefactor * 250.0f);
+			float sc = (s < 20.0f) ? 0.05f : (0.05f + s * 0.0001f);
+			velradius = fabsf(p->vel[0]) + fabsf(p->vel[1]) + fabsf(p->vel[2]);
+			radius += fabsf(sc) * velradius;
+		}
+		break;
 	case PT_TEXTUREDSPARK:
 		velradius = fabsf(p->vel[0]) + fabsf(p->vel[1]) + fabsf(p->vel[2]);
 		if (type->stretch > 0)
-			radius += velradius * type->stretch;
+			velradius *= type->stretch;
 		else if (type->stretch < 0)
-			radius += -type->stretch;
+			velradius = -type->stretch;
 		else
-			radius += velradius * 0.05f;
+			velradius *= 0.05f;
+		if (type->minstretch > 0)
+		{
+			float minlen = radius * 0.5f * type->minstretch;
+			if (velradius < minlen)
+				velradius = minlen;
+		}
+		radius += velradius;
 		break;
 	default:
 		radius *= 2.0f;
 		break;
 	}
 
-	return viewdist < -(radius + 1.0f);
+	if (viewdist < -(radius + 1.0f))
+		return true;
+
+	if (cull_frustum)
+	{
+		float margin = radius + 1.0f;
+		for (i = 0; i < nplanes; i++)
+		{
+			if (DotProduct(p->org, frustum[i].normal) < frustum[i].dist - margin)
+				return true;
+		}
+	}
+
+	return false;
 }
 
 static qboolean PScript_IsDecalDead(const clippeddecal_t *d)
@@ -8815,6 +8855,11 @@ static void PScript_DrawParticleTypes (float pframetime)
 	qboolean doflurry;
 	int batchflags;
 	unsigned int i, o;
+	extern cvar_t r_stereo;
+	const qboolean cull_behind = (r_part_cullbehind.value != 0.0f);
+	const qboolean cull_frustum = cull_behind && !r_stereo.value;
+	const float org_dot_vpn = DotProduct(r_origin, vpn);
+	const int nplanes = r_frustumplanes;
 
 	if (r_plooksdirty)
 	{
@@ -9008,7 +9053,7 @@ static void PScript_DrawParticleTypes (float pframetime)
 		{
 			while ((p=type->particles))
 			{
-				if (tdraw && !PScript_CullParticleDrawBehindView(p, type->slooks))
+				if (tdraw && (!cull_behind || !PScript_CullParticleDraw(p, type->slooks, cull_frustum, org_dot_vpn, nplanes)))
 				{
 					scenetri = PScript_EnsureSceneTri(scenetri, type->looks.texture, type->looks.blendmode, batchflags);
 					tdraw(scenetri, p, type->slooks);
@@ -9389,7 +9434,7 @@ static void PScript_DrawParticleTypes (float pframetime)
 			}
 #endif
 
-			if (tdraw && !PScript_CullParticleDrawBehindView(p, type->slooks))
+			if (tdraw && (!cull_behind || !PScript_CullParticleDraw(p, type->slooks, cull_frustum, org_dot_vpn, nplanes)))
 			{
 				scenetri = PScript_EnsureSceneTri(scenetri, type->looks.texture, type->looks.blendmode, batchflags);
 				tdraw(scenetri, p, type->slooks);
@@ -9653,7 +9698,8 @@ endtype:
 	glDisable(GL_BLEND);
 	glShadeModel(GL_FLAT);
 	glDepthMask(GL_TRUE);
-	glEnable(GL_CULL_FACE);
+	if (gl_cull.value)
+		glEnable(GL_CULL_FACE);
 	glBlendFunc (GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
 	GL_PolygonOffset (OFFSET_NONE);
 	GL_BindBuffer (GL_ARRAY_BUFFER, 0);
@@ -9691,7 +9737,7 @@ void PScript_DrawParticles (void)
 	if (!r_particles.value) // woodd (vk)
 		return;
 
-	if (r_part_rain.value && !r_teleport_view)
+	if (r_part_rain.value && !r_teleport_view && r_skytris_models > 0)
 	{
 		for (i = 0; i < cl.num_entities; i++)
 		{
