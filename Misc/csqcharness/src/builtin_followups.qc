@@ -3,7 +3,9 @@
 float cq_timeofday_called;
 void(float seconds, float minutes, float hours, float day, float month, float year, string text) timeofday =
 {
-	cq_timeofday_called = seconds >= 0 && seconds < 61 && year >= 2000 && strlen(text) > 0;
+	cq_timeofday_called = seconds >= 0 && seconds <= 60 && minutes >= 0 && minutes < 60 &&
+		hours >= 0 && hours < 24 && day >= 1 && day <= 31 && month >= 0 && month < 12 &&
+		year >= 2000 && text != "";
 };
 
 void() cq_followup_files =
@@ -27,6 +29,8 @@ void() cq_followup_files =
 	if (file >= 0)
 	{
 		st_ok("filesystem/pk3-large-size", fsize(file) == 131077i);
+		fseek64(file, fsize64(file));
+		st_ok("filesystem/pk3-eof-64-bit-seek", fseek(file) == 131077i);
 		fseek(file, 131072i);
 		st_eqs("filesystem/pk3-large-seek", fgets(file), "tail");
 		fclose(file);
@@ -269,4 +273,128 @@ void() st_followup_client_builtins =
 	st_eqs("resolver/explicit-v6-port", netaddress_resolve("[::1]:27500"), "[::1]:27500");
 	st_eqs("resolver/malformed", netaddress_resolve("[::1"), "");
 	st_eqs("extresponse/empty", getextresponse(), "");
+};
+
+// csqc-parity-gaps: advertised extensions, digest variants and the small builtins/globals/entrypoints that closed the FTE gaps.
+#ifdef CSQC
+float cq_playerinfo_calls, cq_serverinfo_calls;
+void(float playernum) CSQC_PlayerInfoChanged =
+{
+	if (playernum >= 0 && playernum < maxclients)
+		cq_playerinfo_calls = cq_playerinfo_calls + 1;
+};
+void() CSQC_ServerInfoChanged =
+{
+	cq_serverinfo_calls = cq_serverinfo_calls + 1;
+};
+
+void() cq_parity_gaps =
+{
+	local float light, efnum, slot, i, capacity, nan = stof("nan");
+	local float light_slots[64];
+	local entity oldself;
+
+	st_eqf("gaps/ext-rotatemoves", checkextension("DP_CSQC_ROTATEMOVES"), 1);
+	st_eqf("gaps/ext-changepitch", checkextension("DP_QC_CHANGEPITCH"), 1);
+	st_eqf("gaps/ext-sv-effect", checkextension("DP_SV_EFFECT"), 1);
+	st_eqf("gaps/ext-te-blood", checkextension("DP_TE_BLOOD"), 1);
+	st_eqf("gaps/ext-te-spark", checkextension("DP_TE_SPARK"), 1);
+	st_eqf("gaps/ext-te-smallflash", checkextension("DP_TE_SMALLFLASH"), 1);
+	st_eqf("gaps/ext-te-customflash", checkextension("DP_TE_CUSTOMFLASH"), 1);
+	st_eqf("gaps/ext-te-explosionrgb", checkextension("DP_TE_EXPLOSIONRGB"), 1);
+	st_eqf("gaps/ext-calltimeofday", checkextension("FTE_CALLTIMEOFDAY"), 1);
+	st_eqf("gaps/ext-paused", checkextension("FTE_QC_PAUSED"), 1);
+	st_eqf("gaps/ext-fte-te-standard", checkextension("FTE_TE_STANDARDEFFECTBUILTINS"), 1);
+	st_eqf("gaps/ext-bloodshower-unadvertised", checkextension("DP_TE_BLOODSHOWER"), 0);
+	st_eqf("gaps/ext-mvd-playerstats-unadvertised", checkextension("FTE_MVD_PLAYERSTATS"), 0);
+
+	st_eqf("gaps/pointcontentsmask-outside-solid", utof(pointcontentsmask('0 0 -60000')), utof(CONTENTBIT_SOLID));
+	st_eqf("gaps/pointcontentsmask-allbsps-outside-solid", utof(pointcontentsmask('0 0 -60000', 0)), utof(CONTENTBIT_SOLID));
+
+	efnum = particleeffectnum("TE_EXPLOSION");
+	st_eqs("gaps/particleeffectquery-name", particleeffectquery(efnum, 0), "TE_EXPLOSION");
+	st_eqs("gaps/particleeffectquery-body-null", particleeffectquery(efnum, 1), "");
+	st_eqs("gaps/particleeffectquery-unknown", particleeffectquery(0, 0), "");
+	st_eqs("gaps/particleeffectquery-out-of-range", particleeffectquery(-3000000000, 0), "");
+	st_eqs("gaps/particleeffectquery-nan", particleeffectquery(nan, 0), "");
+	st_eqf("gaps/pointcontentsmask-nan", utof(pointcontentsmask([nan, 0, 0])), 0);
+
+	light = dynamiclight_spawnstatic('1 2 3', 50, '1 0.5 0.25');
+	st_ok("gaps/staticlight-allocated", light >= 0);
+	st_eqv("gaps/staticlight-origin", (vector)dynamiclight_get(light, LFIELD_ORIGIN), '1 2 3');
+	st_ok("gaps/staticlight-persistent", (float)dynamiclight_get(light, LFIELD_DIETIME) > time + 100000);
+	dynamiclight_set(light, LFIELD_RADIUS, 0);
+	st_poisonf();
+	st_eqf("gaps/staticlight-rejects-zero-radius", dynamiclight_spawnstatic('1 2 3', 0, '1 1 1'), -1);
+	st_eqf("gaps/staticlight-rejects-nan-origin", dynamiclight_spawnstatic([nan, 0, 0], 20, '1 1 1'), -1);
+
+	capacity = min(64, (float)dynamiclight_get(-1, -1));
+	light = dynamiclight_spawnstatic('1 2 3', 50, '1 1 1');
+	slot = light;
+	for (i = 0; i < capacity && slot >= 0; i = i + 1)
+	{
+		light_slots[i] = slot;
+		slot = dynamiclight_spawnstatic('1 2 3', 20, '1 1 1');
+	}
+	st_eqf("gaps/staticlight-pool-full", slot, -1);
+	te_smallflash('10 20 30');
+	st_eqf("gaps/staticlight-survives-full-pool", (float)dynamiclight_get(light, LFIELD_RADIUS), 50);
+	while (i > 0)
+	{
+		i = i - 1;
+		dynamiclight_set(light_slots[i], LFIELD_RADIUS, 0);
+	}
+
+	st_eqf("gaps/setpause-returns-previous-off", setpause(1), 0);
+	st_eqf("gaps/setpause-returns-previous-on", setpause(0), 1);
+
+	oldself = self;
+	self = spawn();
+	self.angles = '0 0 0';
+	self.idealpitch = 30;
+	self.pitch_speed = 10;
+	changepitch(self);
+	st_ok("gaps/changepitch-step", fabs(self.angles_x - 10) < 0.01);	// anglemod quantises to 360/65536, like fte
+	remove(self);
+	self = oldself;
+
+	st_eqf("gaps/numclientseats", numclientseats, 1);
+	st_eqf("gaps/gamespeed", gamespeed, 1);
+	st_ok("gaps/servertime-set", servertime > 0 && servertime >= serverprevtime);
+	st_ok("gaps/serverdeltatime", serverdeltatime == servertime - serverprevtime);
+	st_ok("gaps/playerinfochanged-called", cq_playerinfo_calls > 0);
+	st_ok("gaps/serverinfochanged-called", cq_serverinfo_calls > 0);	// full.qc flips the samelevel serverinfo cvar at frame 30
+	localcmd("samelevel 0\n");
+
+	te_spark('0 0 0', '0 0 100', 10);
+	te_smallflash('0 0 0');
+	te_explosionrgb('0 0 0', '1 0 0');
+	effect('0 0 0', "progs/s_explod.spr", 0, 0, 10);
+};
+#endif
+
+void() st_parity_gaps =
+{
+	st_eqs("gaps/sha224", digest_hex("SHA224", "abc"), "23097d223405d8228642a477bda255b32aadbce4bda0b3f7e36c9da7");
+	st_eqs("gaps/sha384", digest_hex("SHA384", "abc"), "cb00753f45a35e8bb5a03d699ac65007272c32ab0eded1631a8b605a43ff5bed8086072ba1e7cc2358baeca134c825a7");
+	st_eqs("gaps/sha512", digest_hex("SHA512", "abc"), "ddaf35a193617abacc417349ae20413112e6fa4e89a97ea20a9eeee64b55d39a2192992a274fc1a836ba3c23a3feebbd454d4423643ce80e2a9ac94fa54ca49f");
+	st_eqf("gaps/ext-digest-sha256", checkextension("DP_QC_DIGEST_SHA256"), 1);
+	st_eqf("gaps/ext-digest-sha1", checkextension("FTE_QC_DIGEST_SHA1"), 1);
+	st_eqf("gaps/ext-digest-sha224", checkextension("FTE_QC_DIGEST_SHA224"), 1);
+	st_eqf("gaps/ext-digest-sha384", checkextension("FTE_QC_DIGEST_SHA384"), 1);
+	st_eqf("gaps/ext-digest-sha512", checkextension("FTE_QC_DIGEST_SHA512"), 1);
+	st_ok("gaps/fseek64-registered", checkbuiltin(fseek64));
+	st_ok("gaps/fsize64-registered", checkbuiltin(fsize64));
+	st_ok("gaps/drawrotpic_dp-registered", checkbuiltin(drawrotpic_dp));
+	st_ok("gaps/addwantedhostcachekey-registered", checkbuiltin(addwantedhostcachekey));
+	addwantedhostcachekey("ping");
+#ifdef CSQC
+	st_eqf("gaps/drawrotpic_dp-slot", builtin_find("drawrotpic_dp"), 329);
+#else
+	st_eqf("gaps/menu-no-rotatemoves", checkextension("DP_CSQC_ROTATEMOVES"), 0);
+	st_eqf("gaps/menu-no-paused", checkextension("FTE_QC_PAUSED"), 0);
+	st_eqf("gaps/menu-no-te-spark", checkextension("DP_TE_SPARK"), 0);
+#endif
+	st_eqf("gaps/drawrotpic-dp-return",
+		drawrotpic_dp('100 100 0', "gfx/hq_grid.tga", '32 32 0', '16 16 0', 45, '1 1 1', 1), 1);
 };

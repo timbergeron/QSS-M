@@ -211,11 +211,31 @@ void() cq_legacy_pmove =
 	remove(mover);
 };
 
+float full_reload_light, full_startframes;
+
+void() StartFrame =
+{
+	if (self == world && other == world)
+		full_startframes = full_startframes + 1;
+};
+
+void() CSQC_Shutdown =
+{
+	if (autocvar_hq_vm_restart && autocvar_hq_restart_stage == 1)
+	{
+		if (full_reload_light >= 0 && (float)dynamiclight_get(full_reload_light, LFIELD_RADIUS) == 73)
+			print("csqcharness: reload shutdown with static light\n");
+	}
+};
+
 void(float apilevel, string enginename, float engineversion) CSQC_Init =
 {
 	full_api = apilevel;
 	if (autocvar_hq_vm_restart && autocvar_hq_restart_stage == 1)
+	{
 		st_eqs("token/vm-reload-clears-input", getentitytoken(), "");
+		st_eqf("light/vm-reload-clears-static-light", (float)dynamiclight_get(cvar("hq_reload_light"), LFIELD_RADIUS), 0);
+	}
 	print("csqcharness: full CSQC loaded on ", enginename, "\n");
 };
 void(float width, float height, float focus) CSQC_UpdateView =
@@ -234,6 +254,8 @@ void(float width, float height, float focus) CSQC_UpdateView =
 		localcmd("con_notifytime 0;crosshair 0;scr_showfps 0;vid_gamma 1\n");
 	if (!autocvar_hq_vm_restart && (full_frames == 44 || full_frames == 45))
 		localcmd("screenshot tga\n");
+	if (full_frames == 30)
+		localcmd(strcat("samelevel ", ftos(!cvar("samelevel")), "\n"));	// toggle a serverinfo cvar: the server's //svi broadcast drives CSQC_ServerInfoChanged
 	if (full_frames == 40) cprint("STATE");
 	if (full_frames == 50)
 		cq_setup_entity_physics();
@@ -242,6 +264,8 @@ void(float width, float height, float focus) CSQC_UpdateView =
 		if (autocvar_hq_vm_restart && autocvar_hq_restart_stage == 0)
 		{
 			getentitytoken("owned input before VM reload");
+			full_reload_light = dynamiclight_spawnstatic('1 2 3', 73, '1 1 1');
+			cvar_set("hq_reload_light", ftos(full_reload_light));
 			cvar_set("hq_restart_stage", "1");
 			print("csqcharness: restarting with owned token input\n");
 			localcmd(strcat("map ", mapname, "\n"));
@@ -249,6 +273,7 @@ void(float width, float height, float focus) CSQC_UpdateView =
 		}
 		st_eqf("full/server-approved-api", full_api, 1);
 		st_ok("full/updateview-ran", TRUE);
+		st_ok("full/startframe-with-world-context", full_startframes > 0);
 		st_ok("full/renderscene-survives", full_scenes > 0);
 		st_client_ui_globals([width, height, 0]);
 		st_bufstr_find();
@@ -263,6 +288,8 @@ void(float width, float height, float focus) CSQC_UpdateView =
 		cq_check_entity_physics();
 		cq_followup_builtins();
 		cq_followup_resources();
+		cq_parity_gaps();
+		st_parity_gaps();
 		st_report("fullcsqc");
 		localcmd("quit\n");
 	}

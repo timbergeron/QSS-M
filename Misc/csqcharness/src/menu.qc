@@ -249,6 +249,7 @@ void() mq_selftest =
 	st_eqf("ext/menu-fte-csqc-windowcaption", checkextension("FTE_CSQC_WINDOWCAPTION"), 1);
 	st_eqf("ext/menu-fte-qc-checkpvs-false", checkextension("FTE_QC_CHECKPVS"), 0);
 	st_followup_client_builtins();
+	st_parity_gaps();
 	st_report("menuqc");
 	localcmd("quit\n");
 };

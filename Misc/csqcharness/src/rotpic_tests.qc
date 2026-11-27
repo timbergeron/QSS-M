@@ -14,6 +14,7 @@
 	  row 1:  [E] drawrotpic 90    [F] drawrotpic 180   [G] drawrotpic 270   [H] drawrotpic -90
 	  row 2:  [I] drawsubpic q0    [J] drawrotsubpic 0  [K] drawrotsubpic 90 [L] drawrotsubpic q3
 	  row 3:  [M] drawpic tinted   [N] drawrotpic tint  [O] pivot offset     [P] free spinner
+	  row 4:  [Q] DP rotation 90   [R] DP native size
 
 	A==B==C==D, E==rot90(A), F==rot180(A), G==rot270(A), H==G,
 	I==J, K==rot90(I), M==N.
@@ -92,7 +93,7 @@ void(vector screensize) RotPic_DrawTests =
 
 	// opaque backdrop: the tint/alpha cells must composite over a known colour
 	drawfill([GX - 8, GY - 16, 0],
-		[4 * (CELL + GAP) + 8, 4 * (CELL + GAP) + 16, 0], '0 0 0', 1, 0);
+		[4 * (CELL + GAP) + 8, 5 * (CELL + GAP) + 16, 0], '0 0 0', 1, 0);
 
 	ang = rotpic_freeze ? 0 : (time * 60);
 
@@ -140,7 +141,12 @@ void(vector screensize) RotPic_DrawTests =
 	rp_label(2, 3, "corner");
 	rp_label(3, 3, "spin");
 
-	drawstring([GX, GY + 4 * (CELL + GAP) + 4, 0],
+	drawrotpic_dp(rp_pivot(0, 4), TESTPIC, [CELL, CELL, 0], half, 90, WHITE, 1, 0);
+	drawrotpic_dp(rp_pivot(1, 4), TESTPIC, '0 0 0', half, 0, WHITE, 1, 0);
+	rp_label(0, 4, "DP 90");
+	rp_label(1, 4, "DP auto");
+
+	drawstring([GX, GY + 5 * (CELL + GAP) + 4, 0],
 		"drawrotpic / drawrotsubpic test - \"rotpic_freeze 1\" stops the animation",
 		'8 8 0', '1 1 0.4', 1, 0);
 

@@ -8,6 +8,7 @@
 #
 #   pr_dumpplatform -Tcs   -O qscsextensions
 #   pr_dumpplatform -Tmenu -O qsmenuextensions
+#   pr_dumpplatform -Tss   -O qsssextensions
 #
 # (run those from the console with -game rotpic active; they land in
 # rotpic/src/).  Note the engine's argv parser swallows anything starting with
@@ -20,3 +21,5 @@ FTEQCC=${1:-fteqcc}
 "$FTEQCC" -srcfile csprogs.src
 "$FTEQCC" -srcfile menu.src
 "$FTEQCC" -srcfile csfull.src
+"$FTEQCC" -srcfile ssprogs.src
+"$FTEQCC" -srcfile cssv.src

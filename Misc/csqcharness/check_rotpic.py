@@ -128,6 +128,8 @@ def main():
         ("drawrotsubpic q0 at 90  == rot90(subref)",  c(2, 2), rot90(sub_ref)),
         ("drawrotpic tint/alpha   == drawpic same",   c(1, 3), tint_ref),
         ("drawrotpic corner pivot == drawpic",        c(2, 3), ref),
+        ("drawrotpic_dp 90        == rot270(ref)",     c(0, 4), rot270(ref)),
+        ("drawrotpic_dp zero size == drawpic",        c(1, 4), ref),
     ]
 
     failed = 0

@@ -144,9 +144,14 @@ def check_process(tag, r, results):
         results.append(('%s/no "%s"' % (tag, bad), bad not in r.stdout))
 
 
-def parse_selftest(r, module, tag, results):
+def parse_selftest(r, module, tag, results, prefix=None):
+    """prefix: only count checks whose names start with it, for runs where two
+    modules (server and client progs) report into the same log."""
     passes = re.findall(r'^SELFTEST PASS (.*)$', r.stdout, re.M)
     fails = re.findall(r'^SELFTEST FAIL (.*)$', r.stdout, re.M)
+    if prefix:
+        passes = [n for n in passes if n.startswith(prefix)]
+        fails = [n for n in fails if n.startswith(prefix)]
     done = re.search(r'^SELFTEST DONE %s pass=(\d+) fail=(\d+)$' % module,
                      r.stdout, re.M)
 
@@ -429,7 +434,7 @@ def main():
                    args.timeout, os.path.join(art, log))
 
     # ---- 1. generate the headers with the binary under test
-    for stale in ('qscsextensions.qc', 'qsmenuextensions.qc', 'qsextensions.qc'):
+    for stale in ('qscsextensions.qc', 'qsmenuextensions.qc', 'qsssextensions.qc', 'qsextensions.qc'):
         p = os.path.join(srcdir, stale)
         if os.path.exists(p):
             os.remove(p)
@@ -437,6 +442,7 @@ def main():
     with open(cfg, 'w') as f:
         f.write('pr_dumpplatform -Tcs -O qscsextensions\n'
                 'pr_dumpplatform -Tmenu -O qsmenuextensions\n'
+                'pr_dumpplatform -Tss -O qsssextensions\n'
                 'pr_dumpplatform -Tcs -Tmenu -O hq_mixed\n'
                 'pr_dumpplatform -Tmenu\n'
                 'quit\n')
@@ -457,9 +463,9 @@ def main():
         b = run([os.path.join(srcdir, 'build.sh'), args.fteqcc], args.timeout,
                 os.path.join(art, 'build.log'), cwd=srcdir)
         results.append(('build/fteqcc-exit-zero', b.returncode == 0))
-        results.append(('build/all-three-progs-written',
-                        b.stdout.count('Compile finished') == 3))
-        results.append(('build/no-warnings', b.stdout.count('Done. 0 warnings') == 3))
+        results.append(('build/all-five-progs-written',
+                        b.stdout.count('Compile finished') == 5))
+        results.append(('build/no-warnings', b.stdout.count('Done. 0 warnings') == 5))
         results.append(('build/no-errors', 'error' not in b.stdout.lower()))
     else:
         results.append(('build/progs-rebuilt-this-run (pass --fteqcc)', False))
@@ -490,7 +496,8 @@ def main():
     with open(os.path.join(gamedir, 'config.cfg'), 'ab') as f:
         f.write(b'\nseta hq_startup_archive "37"\n')
     r = engine(['+scr_menuscale', '1', '+con_notifytime', '0',
-                '+cl_demoreel', '0', '+hq_menu_selftest', '1', '+togglemenu', '1'],
+                '+cl_demoreel', '0', '+rotpic_freeze', '1',
+                '+hq_menu_selftest', '1', '+togglemenu', '1'],
                'menu-disconnected.log')
     check_process('menu-disconnected', r, results)
     parse_selftest(r, 'menuqc', 'menu-disconnected', results)
@@ -585,14 +592,64 @@ def main():
             for mode, path in zip(('rendered', 'ui-only'), created):
                 full_shots.append((tag + '-' + mode, path, scale))
         r = engine(['+hq_vm_restart', '1', '+hq_restart_stage', '0',
-                    '+scr_sbarscale', '1', '+map', args.map], 'vm-reload.log')
+                    '+set', 'hq_reload_light', '-1', '+scr_sbarscale', '1',
+                    '+map', args.map], 'vm-reload.log')
         check_process('vm-reload', r, results)
         parse_selftest(r, 'fullcsqc', 'vm-reload', results)
         results.append(('vm-reload/restart-triggered',
                         'restarting with owned token input' in r.stdout))
+        results.append(('vm-reload/shutdown-with-static-light',
+                        r.stdout.count('reload shutdown with static light') == 1))
     finally:
         with open(cs_path, 'wb') as f:
             f.write(hud_program)
+
+    # ---- 4f. SSQC lane: a test game progs fires every server-side temp entity
+    # and effect (well-formed and hostile) followed by markers the observer CSQC
+    # checks, then setangle and vid_restart. The second run repeats the server
+    # half against a client with protocol extensions disabled, so the vanilla
+    # fallbacks are written to a client that cannot load csqc at all.
+    ss_installed = os.path.join(gamedir, 'progs.dat')
+    cfg_path = os.path.join(gamedir, 'config.cfg')
+    saved_cfg = open(cfg_path, 'rb').read() if os.path.exists(cfg_path) else None
+    saved_ss_program = open(ss_installed, 'rb').read() if os.path.exists(ss_installed) else None
+    try:
+        with open(ss_installed, 'wb') as f:
+            f.write(open(os.path.join(gamedir, 'ssprogs.dat'), 'rb').read())
+        with open(cs_path, 'wb') as f:
+            f.write(open(os.path.join(gamedir, 'cssv.dat'), 'rb').read())
+        r = engine(['+cl_shownet', '2', '+map', args.map], 'ssqc.log')
+        check_process('ssqc', r, results)
+        parse_selftest(r, 'ssqc', 'ssqc', results, prefix='ss/')
+        parse_selftest(r, 'sscsqc', 'ssqc-client', results, prefix='sscl/')
+        results.append(('ssqc/no-client-tent-warnings', 'CL_ParseTEnt' not in r.stdout))
+        for opcode in ('52 svc_effect_dp', '53 svc_effect2_dp'):
+            results.append(('ssqc/received-' + opcode, r.stdout.count(':' + opcode + '/') == 1))
+        results.append(('ssqc/no-renderer-callback-after-disconnect',
+                        r.stdout.count('csqcharness: renderer callback') == 2))
+
+        os.remove(cs_path)
+        r = engine(['+cl_nopext', '1', '+cl_shownet', '2', '+set', 'hq_ss_quit_server', '1',
+                    '+map', args.map], 'ssqc-nopext.log')
+        check_process('ssqc-nopext', r, results)
+        parse_selftest(r, 'ssqc', 'ssqc-nopext', results, prefix='ss/')
+        results.append(('ssqc-nopext/no-client-tent-warnings', 'CL_ParseTEnt' not in r.stdout))
+        results.append(('ssqc-nopext/no-dp-effect-opcodes',
+                        not re.search(r'^\s*\d+:5[23] svc_effect2?_dp/', r.stdout, re.M)))
+        # 25 step markers, one final marker, and five vanilla fallbacks.
+        results.append(('ssqc-nopext/only-markers-and-vanilla-fallbacks',
+                        len(re.findall(r'^\s*\d+:svc_temp_entity$', r.stdout, re.M)) == 31))
+    finally:
+        if saved_ss_program is not None:
+            with open(ss_installed, 'wb') as f:
+                f.write(saved_ss_program)
+        elif os.path.exists(ss_installed):
+            os.remove(ss_installed)
+        with open(cs_path, 'wb') as f:
+            f.write(hud_program)
+        if saved_cfg is not None:	# the observer's vid_restart persists vid_width/height
+            with open(cfg_path, 'wb') as f:
+                f.write(saved_cfg)
 
     for p in fixtures + [late, late_model, os.path.join(gamedir, 'data', 'hq_copy.txt'),
                          os.path.join(gamedir, 'data', 'hq_append.txt')]:
@@ -603,16 +660,17 @@ def main():
 
     # ---- 5. pixels
     if not args.skip_pixels:
-        if shot:
-            rc = run([sys.executable, os.path.join(HERE, 'check_rotpic.py'), shot],
-                     args.timeout, os.path.join(art, 'pixels.log'))
+        for tag, path in (('hud', shot), ('menu', menu_shot)):
+            if not path:
+                results.append(('pixels/rotpic-' + tag + '-screenshot-produced', False))
+                continue
+            rc = run([sys.executable, os.path.join(HERE, 'check_rotpic.py'), path],
+                     args.timeout, os.path.join(art, 'pixels-rotpic-%s.log' % tag))
             m = re.search(r'(\d+)/(\d+) checks passed', rc.stdout)
             ok = rc.returncode == 0 and not rc.timed_out and bool(m) and m.group(1) == m.group(2)
-            results.append(('pixels/rotpic-grid', ok))
+            results.append(('pixels/rotpic-' + tag, ok))
             if not ok:
                 print(rc.stdout)
-        else:
-            results.append(('pixels/screenshot-produced', False))
 
     if not args.skip_pixels:
         cases = [('hud', shot, (360,72), 1), ('menu', menu_shot, (360,72), 1)]
@@ -649,6 +707,8 @@ def main():
             'qsmenuextensions.qc': sha256(os.path.join(srcdir, 'qsmenuextensions.qc')),
             'csprogs.dat': sha256(os.path.join(gamedir, 'csprogs.dat')),
             'csfull.dat': sha256(os.path.join(gamedir, 'csfull.dat')),
+            'ssprogs.dat': sha256(os.path.join(gamedir, 'ssprogs.dat')),
+            'cssv.dat': sha256(os.path.join(gamedir, 'cssv.dat')),
             'menu.dat': sha256(os.path.join(gamedir, 'menu.dat')),
         },
     }

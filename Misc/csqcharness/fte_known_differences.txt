@@ -1,0 +1,6 @@
+# check name                       # why QSS-M intentionally differs from FTEQW
+ext/DP_GFX_FONTS                   # loadfont is bitmap-only (no TrueType), so not advertised
+ext/DP_QC_URI_GET                  # uri_get callback passes the raw HTTP status, not DP's 0-for-200
+ext/FTE_MVD_PLAYERSTATS            # no MVD playback; getplayerstat only reports the local view player
+str/vtos                           # QSS trims trailing zeros (Q_ftoa); FTE prints %f. Both round-trip through stov
+world/particleeffectquery-name     # FTE's classic particle system cannot answer; QSS returns the precache name
