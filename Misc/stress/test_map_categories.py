@@ -114,12 +114,18 @@ for declaration in (
 ):
     source += function(host, declaration)
 
+# Menu bounds state and layout macros (m_left/m_width, M_EXTRA_ROWS, ...) come
+# from menu.c itself; the bounds stay at the classic 320x200 slot because
+# M_UpdateBounds needs the renderer's canvas and is stubbed out here.
+start = menu.index("static int m_left = 0")
+source += menu[start:menu.index("extern cvar_t net_master_ignore", start)]
+source += "static void M_UpdateBounds (void) { (void)m_left; (void)m_top; (void)m_width; }\n"
 start = menu.index("typedef struct", menu.index("/* Scrolling ticker"))
 source += menu[start:menu.index("static void M_Ticker_Update", start)]
 start = menu.index("typedef struct", menu.index("/* Listbox */"))
 source += menu[start:menu.index("void M_List_CheckIntegrity", start)]
 for declaration in (
-    "void M_List_AutoScroll(", "void M_List_CenterCursor(",
+    "void M_List_AutoScroll(", "static void M_List_SetViewsize (", "void M_List_CenterCursor(",
     "void M_List_GetVisibleRange(", "qboolean M_List_SelectNextMatch(",
     "qboolean M_List_SelectNextActive(", "void M_List_UpdateMouseSelection(",
     "qboolean M_List_Key(", "void M_List_Mousemove(",

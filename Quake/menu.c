@@ -2627,6 +2627,27 @@ qboolean M_TextField_IsDraggingAny(void)
 	return textfield_mouse_dragging;
 }
 
+void M_List_AutoScroll(menulist_t* list)
+{
+	if (list->numitems <= list->viewsize)
+		return;
+	if (list->cursor < list->scroll)
+	{
+		list->scroll = list->cursor;
+		if (list->isactive_fn)
+		{
+			while (list->scroll > 0 &&
+				list->scroll > list->cursor - list->viewsize + 1 &&
+				!list->isactive_fn(list->scroll - 1))
+			{
+				--list->scroll;
+			}
+		}
+	}
+	else if (list->cursor >= list->scroll + list->viewsize)
+		list->scroll = list->cursor - list->viewsize + 1;
+}
+
 /*
 ================
 M_UpdateBounds -- woods (iw)
@@ -2657,8 +2678,6 @@ static void M_UpdateBounds (void)
 	m_top = (int)floor (mc.top + (height - m_height) * 0.5f + 0.5f);
 }
 
-void M_List_AutoScroll(menulist_t* list);
-
 /* Resize a list's visible window, keeping scroll in range and the cursor shown. */
 static void M_List_SetViewsize (menulist_t *list, int viewsize)
 {
@@ -2669,27 +2688,6 @@ static void M_List_SetViewsize (menulist_t *list, int viewsize)
 	list->scroll = CLAMP (0, list->scroll, q_max (0, list->numitems - viewsize));
 	if (list->cursor >= 0)
 		M_List_AutoScroll (list);
-}
-
-void M_List_AutoScroll(menulist_t* list)
-{
-	if (list->numitems <= list->viewsize)
-		return;
-	if (list->cursor < list->scroll)
-	{
-		list->scroll = list->cursor;
-		if (list->isactive_fn)
-		{
-			while (list->scroll > 0 &&
-				list->scroll > list->cursor - list->viewsize + 1 &&
-				!list->isactive_fn(list->scroll - 1))
-			{
-				--list->scroll;
-			}
-		}
-	}
-	else if (list->cursor >= list->scroll + list->viewsize)
-		list->scroll = list->cursor - list->viewsize + 1;
 }
 
 void M_List_CenterCursor(menulist_t* list)
