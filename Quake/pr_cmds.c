@@ -1134,39 +1134,74 @@ static void PF_Remove (void)
 
 static void PF_Find (void)
 {
-	int		e;
-	int		f;
-	const char	*s, *t;
-	edict_t	*ed;
+	qcvm_t		*vm = qcvm;
+	int			e, f, s_num, num_edicts, stringssize;
+	const char	*s, *t, *strings;
+	char		s0;
+	qboolean	zero_is_empty;
+	size_t		edict_size;
+	byte		*ptr, *end;
 
 	e = G_EDICTNUM(OFS_PARM0);
 	f = G_INT(OFS_PARM1);
-	s = G_STRING(OFS_PARM2);
+	s_num = G_INT(OFS_PARM2);
+	s = PR_GetString(s_num);
 	if (!s)
 		PR_RunError ("PF_Find: bad search string");
 
-	for (e++ ; e < qcvm->num_edicts ; e++)
+	num_edicts = vm->num_edicts;
+	e++;
+	if (e >= num_edicts)
 	{
-		ed = EDICT_NUM(e);
-		if (e + PF_FIND_PREFETCH < qcvm->num_edicts)
+		RETURN_EDICT(vm->edicts);
+		return;
+	}
+
+	edict_size = (size_t)vm->edict_size;
+	strings = vm->strings;
+	stringssize = vm->stringssize;
+	s0 = s[0];
+	zero_is_empty = (stringssize > 0 && strings[0] == '\0');
+	ptr = (byte *)vm->edicts + (size_t)e * edict_size;
+	end = (byte *)vm->edicts + (size_t)num_edicts * edict_size;
+
+	for (; ptr < end; ptr += edict_size)
+	{
+		edict_t *ed = (edict_t *)ptr;
+		int strnum;
+
+		if (ptr + PF_FIND_PREFETCH * edict_size < end)
 		{	//a scan walks every edict, a cache miss or two apiece on big maps
-			edict_t *ahead = EDICT_NUM(e + PF_FIND_PREFETCH);
+			edict_t *ahead = (edict_t *)(ptr + PF_FIND_PREFETCH * edict_size);
 			Q_PREFETCH (&ahead->free);
 			Q_PREFETCH ((int *)&ahead->v + f);
 		}
 		if (ed->free)
 			continue;
-		t = E_STRING(ed,f);
-		if (!t)
+		strnum = ((const int *)&ed->v)[f];
+		if (strnum == s_num)
+		{
+			RETURN_EDICT(ed);
+			return;
+		}
+		if (!strnum && s0 && zero_is_empty)
 			continue;
-		if (!strcmp(t,s))
+		if (strnum >= 0 && strnum < stringssize)
+			t = strings + strnum;
+		else
+		{
+			t = PR_GetString(strnum);
+			if (!t)
+				continue;
+		}
+		if (t[0] == s0 && !strcmp(t, s))
 		{
 			RETURN_EDICT(ed);
 			return;
 		}
 	}
 
-	RETURN_EDICT(qcvm->edicts);
+	RETURN_EDICT(vm->edicts);
 }
 
 static void PR_CheckEmptyString (const char *s)
