@@ -337,6 +337,11 @@ void CL_SpawnSpriteEffect(vec3_t org, vec3_t dir, vec3_t orientationup, qmodel_t
 CL_ParseTEnt
 =================
 */
+static qboolean CL_TEntValidVector(const vec3_t v)
+{
+	return fabsf(v[0]) <= 8388608 && fabsf(v[1]) <= 8388608 && fabsf(v[2]) <= 8388608;
+}
+
 void CL_ParseTEnt (void)
 {
 	int		type;
@@ -446,20 +451,28 @@ void CL_ParseTEnt (void)
 		pos[0] = MSG_ReadCoord (cl.protocolflags);
 		pos[1] = MSG_ReadCoord (cl.protocolflags);
 		pos[2] = MSG_ReadCoord (cl.protocolflags);
-		if (PScript_RunParticleEffectTypeString(pos, NULL, 1, (type==TEDP_EXPLOSIONQUAD)?"TE_EXPLOSIONQUAD":"TE_EXPLOSION"))
-			R_ParticleExplosion (pos);
-		if (r_explosionlight.value) // woods #explosionlight
 		{
-			dl = CL_AllocDlight (0);
-			VectorCopy (pos, dl->origin);
-			dl->radius = 150 + 200 * bound(0, r_explosionlight.value, 1);
-			dl->die = cl.time + 0.5;
-			dl->decay = 300;
+			vec3_t col = {0, 0, 0};
 			if (type == TENEH_EXPLOSION3)
-			{	//the *2 is to match dp's expectations, for some reason.
-				dl->color[0] = MSG_ReadCoord(cl.protocolflags)*2.0;
-				dl->color[1] = MSG_ReadCoord(cl.protocolflags)*2.0;
-				dl->color[2] = MSG_ReadCoord(cl.protocolflags)*2.0;
+			{	//always consume the colour, even with the light disabled, or the rest of the message is misread.
+				//the *2 is to match dp's expectations, for some reason.
+				col[0] = MSG_ReadCoord(cl.protocolflags)*2.0;
+				col[1] = MSG_ReadCoord(cl.protocolflags)*2.0;
+				col[2] = MSG_ReadCoord(cl.protocolflags)*2.0;
+			}
+			if (!CL_TEntValidVector(pos) || !CL_TEntValidVector(col))
+				break;
+			if (PScript_RunParticleEffectTypeString(pos, NULL, 1, (type==TEDP_EXPLOSIONQUAD)?"TE_EXPLOSIONQUAD":"TE_EXPLOSION"))
+				R_ParticleExplosion (pos);
+			if (r_explosionlight.value) // woods #explosionlight
+			{
+				dl = CL_AllocDlight (0);
+				VectorCopy (pos, dl->origin);
+				dl->radius = 150 + 200 * bound(0, r_explosionlight.value, 1);
+				dl->die = cl.time + 0.5;
+				dl->decay = 300;
+				if (type == TENEH_EXPLOSION3)
+					VectorCopy (col, dl->color);
 			}
 		}
 		S_StartSound (-1, 0, CL_TEntSound (&cl_sfx_r_exp3, "weapons/r_exp3.wav"), pos, 1, 1);
