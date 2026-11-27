@@ -369,6 +369,10 @@ typedef struct
 	entity_t	*entities;	//spike -- moved into here
 	int			max_edicts;
 	int			num_entities;
+	int			*active_entities;
+	int			max_active_entities;
+	int			num_active_entities;
+	qboolean	active_entities_valid;
 
 	struct cl_static_entities_s
 	{

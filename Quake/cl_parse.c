@@ -5295,6 +5295,7 @@ void CL_ParseServerMessage (void)
 	int			lastcmd; //johnfitz
 	const char*		s;	// woods #pqteam
 	qboolean		saw_setangle = false;	// woods #smoothcam
+	cl.active_entities_valid = false;
 //
 // if recording demos, copy the message out
 //

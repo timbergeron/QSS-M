@@ -282,6 +282,7 @@ static void CL_DemoRewindApplyEntity(const demoentitystate_t *src, entity_t *ent
 	else
 		ent->model = NULL;
 
+	cl.active_entities_valid = false;
 	InvalidateTraceLineCache();
 }
 

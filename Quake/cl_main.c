@@ -352,6 +352,7 @@ void CL_FreeState(void)
 	PR_ClearProgs(&cl.qcvm);
 	free(cl.static_entities);
 	free(cl.ssqc_to_csqc);
+	free(cl.active_entities);
 	memset (&cl, 0, sizeof(cl));
 }
 
@@ -2429,7 +2430,7 @@ static qboolean CL_SmoothcamCubic (vec3_t out, float frac)
 void CL_RelinkEntities (void)
 {
 	entity_t	*ent;
-	int			i, j;
+	int			i, j, active_idx;
 	float		frac, d;
 	float		bobjrotate;
 	vec3_t		oldorg;
@@ -2495,9 +2496,34 @@ void CL_RelinkEntities (void)
 
 	bobjrotate = anglemod(100*cl.time);
 
-// start on the entity after the world
-	for (i=1,ent=cl.entities+1 ; i<cl.num_entities ; i++,ent++)
+	if (!cl.active_entities_valid)
 	{
+		if (cl.num_entities > cl.max_active_entities)
+		{
+			int *grown = (int *)realloc (cl.active_entities, sizeof(*cl.active_entities) * cl.num_entities);
+			if (grown)
+			{
+				cl.active_entities = grown;
+				cl.max_active_entities = cl.num_entities;
+			}
+		}
+		if (cl.active_entities && cl.max_active_entities >= cl.num_entities)
+		{
+			cl.num_active_entities = 0;
+			for (i = 1, ent = cl.entities + 1; i < cl.num_entities; i++, ent++)
+			{
+				if (ent->model)
+					cl.active_entities[cl.num_active_entities++] = i;
+			}
+			cl.active_entities_valid = true;
+		}
+	}
+
+// start on the entity after the world
+	for (active_idx = 0; active_idx < (cl.active_entities_valid ? cl.num_active_entities : cl.num_entities - 1); active_idx++)
+	{
+		i = cl.active_entities_valid ? cl.active_entities[active_idx] : (active_idx + 1);
+		ent = cl.entities + i;
 		if (!ent->model)
 		{	// empty slot, ish.
 			
