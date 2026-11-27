@@ -1577,7 +1577,10 @@ qboolean R_DrawBModelDrawCache (qmodel_t *model, entity_t *ent)
 		{
 			glDepthMask (GL_TRUE);
 			glDisable (GL_BLEND);
-			glEnable (GL_CULL_FACE);
+			if (gl_cull.value)
+				glEnable (GL_CULL_FACE);
+			else
+				glDisable (GL_CULL_FACE);
 			GL_BindBuffer (GL_ARRAY_BUFFER, gl_bmodel_vbo);
 			GL_EnableVertexAttribArrayFunc (vertAttrIndex);
 			GL_EnableVertexAttribArrayFunc (texCoordsAttrIndex);
@@ -2027,7 +2030,10 @@ static void R_DrawBrushModelInstancedGroup (entity_t **ents, int count)
 
 	glDepthMask(GL_TRUE);
 	glDisable(GL_BLEND);
-	glEnable(GL_CULL_FACE);
+	if (gl_cull.value)
+		glEnable(GL_CULL_FACE);
+	else
+		glDisable(GL_CULL_FACE);
 	GL_UseProgramFunc(r_world_instanced_program);
 
 	GL_BindBuffer(GL_ARRAY_BUFFER, gl_bmodel_vbo);

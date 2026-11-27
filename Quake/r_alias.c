@@ -5142,8 +5142,8 @@ void R_DrawDeferredAliasOutlines(void)
 	int i;
 	GLuint uniquemask = 0;
 	GLuint program = 0;
-	qboolean lean_bound = false, have_cull = false;
-	GLboolean cull = GL_FALSE;
+	qboolean lean_bound = false;
+	GLboolean cull = gl_cull.value ? GL_TRUE : GL_FALSE;
 	GLboolean colormask[4] = {GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE};
 
 	r_alias_outline_collecting = false;
@@ -5217,11 +5217,6 @@ void R_DrawDeferredAliasOutlines(void)
 		{
 			if (!lean_bound)
 			{
-				if (!have_cull)
-				{
-					cull = glIsEnabled (GL_CULL_FACE);
-					have_cull = true;
-				}
 				glPushAttrib (GL_ENABLE_BIT | GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT |
 					GL_STENCIL_BUFFER_BIT | GL_POLYGON_BIT);
 				glEnable (GL_DEPTH_TEST);

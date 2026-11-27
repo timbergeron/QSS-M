@@ -98,6 +98,7 @@ typedef unsigned char GLboolean;
 typedef int qboolean;
 typedef struct {float value;} cvar_t;
 cvar_t r_stereo;
+static cvar_t gl_cull = {1};
 static cvar_t r_shadows, r_outline, gl_powerupshells, r_coloredpowerupglow;
 static qboolean r_teleport_view;
 typedef unsigned int GLuint;
@@ -228,7 +229,6 @@ static void glGetBooleanv(int pname, GLboolean *v) {
     CHECK(pname == GL_COLOR_WRITEMASK, "unexpected boolean query");
     for (int i = 0; i < 4; i++) v[i] = (GLboolean)((state.colorwrite >> i) & 1);
 }
-static GLboolean glIsEnabled(int cap) { CHECK(cap == GL_CULL_FACE, "unexpected query"); return (GLboolean)state.cull; }
 static void GL_UseProgramFunc(int program) { current_program = program; if (program) program_binds++; }
 static void GL_EnableVertexAttribArrayFunc(int i) { attrib_mask |= 1 << i; }
 static void GL_DisableVertexAttribArrayFunc(int i) { attrib_mask &= ~(1 << i); }
@@ -403,7 +403,7 @@ int main(void) {
     /* The mask culls like the fill even when culling is off and every ring turned it on. */
     {
         glstate_t uncull;
-        state.cull = 0; ambient_cull = 0; uncull = state;
+        gl_cull.value = 0; state.cull = 0; ambient_cull = 0; uncull = state;
         reset();
         r_deferred_alias_outlines[0] = &b;
         r_deferred_alias_outlines[1] = &a;
@@ -411,7 +411,7 @@ int main(void) {
         R_DrawDeferredAliasOutlines();
         CHECK(lean_setups == 2 && phase_count == 6, "unculled lean replay lost passes");
         check_restored(&uncull);
-        state.cull = 1; ambient_cull = 1;
+        gl_cull.value = 1; state.cull = 1; ambient_cull = 1;
     }
 
     /* A stereo eye's colour mask survives the ring: the red eye stays red. */

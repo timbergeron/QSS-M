@@ -3115,7 +3115,10 @@ void GL_BrushShadowEndState (void)
 	glEnable(GL_TEXTURE_2D);
 	glDisable(GL_BLEND);
 	glDepthMask(GL_TRUE);
-	glEnable(GL_CULL_FACE);
+	if (gl_cull.value)
+		glEnable(GL_CULL_FACE);
+	else
+		glDisable(GL_CULL_FACE);
 	glDisable(GL_POLYGON_OFFSET_FILL);
 }
 

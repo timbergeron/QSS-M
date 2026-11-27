@@ -4225,7 +4225,10 @@ static void R_DrawItemTimers (void)
 	{
 		GL_PolygonOffset(OFFSET_NONE);
 		GL_UseProgramFunc(0);
-		glEnable(GL_CULL_FACE);
+		if (gl_cull.value)
+			glEnable(GL_CULL_FACE);
+		else
+			glDisable(GL_CULL_FACE);
 		glDepthMask(GL_TRUE);
 		glDisable(GL_BLEND);
 		glColor4f(1, 1, 1, 1);
