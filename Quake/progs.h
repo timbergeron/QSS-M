@@ -49,6 +49,14 @@ typedef struct edict_s
 
 	unsigned int		num_leafs;
 	int		leafnums[MAX_ENT_LEAFS];
+	const struct qmodel_s	*leafs_model;
+	int		leafs_modgen;
+	float	leafs_absmin[3];
+	float	leafs_absmax[3];
+	const struct qmodel_s	*water_model;
+	int		water_modgen;
+	int		water_cont;
+	float	water_origin[3];
 
 	entity_state_t	baseline;
 	unsigned char	alpha;			/* johnfitz -- hack to support alpha since it's not part of entvars_t */
@@ -70,6 +78,14 @@ typedef struct edict_s
 
 typedef void (*builtin_t) (void);
 typedef struct qcvm_s qcvm_t;
+
+typedef struct pushcache_entry_s
+{
+	int		e;
+	int		groundentity;	// ent->v.groundentity if FL_ONGROUND, else -1
+	float	absmin[3];
+	float	absmax[3];
+} pushcache_entry_t;
 
 void PR_Init (void);
 
@@ -539,15 +555,18 @@ struct qcvm_s
 	int			reserved_edicts;
 	int			max_edicts;
 
-	//pusher candidate cache (sv_phys.c). holds edict numbers, ascending, and is a
-	//*superset* of the entities a pusher may move -- both pusher loops still apply
-	//the real movetype/free tests, so a list that is stale in the too-large
-	//direction changes nothing. pushcache_valid is cleared by everything that could
-	//turn a non-candidate into a candidate: QC execution, ED_ClearEdict, ED_Free,
-	//and the top of every SV_Physics frame.
-	int			*pushcache;
+	//pusher candidate cache (sv_phys.c). holds compact 32-byte candidate records
+	//(edict number, onground groundentity, absmin/absmax) in ascending edict order
+	//so pusher scans stay L2-resident instead of chasing scattered edict_t memory.
+	//pushcache_map[e] maps edict index -> slot (or -1) for O(1) sync on movement.
+	//pushcache_valid is cleared by QC execution, ED_ClearEdict, ED_Free, and the
+	//top of every SV_Physics frame.
+	pushcache_entry_t *pushcache;
+	int			*pushcache_map;
 	int			pushcache_count;
 	int			pushcache_max;
+	int			pushcache_map_max;
+	int			pushcache_map_edicts;
 	qboolean	pushcache_valid;
 	edict_t		*edicts;			// can NOT be array indexed, because edict_t is variable sized, but can be used to reference the world ent
 	qboolean	worldlocked;

@@ -373,6 +373,30 @@ typedef struct client_s
 #define	FL_JUMPRELEASED			4096	// for jump debouncing
 #define	FL_MOVECHAIN_ANGLE		(1<<15)
 
+static inline void SV_PushCache_RefreshEdict (const edict_t *ent)
+{
+	qcvm_t	*vm = qcvm;
+	ptrdiff_t ofs;
+	int		e, slot;
+	pushcache_entry_t *c;
+
+	if (!vm || !vm->pushcache_valid || !ent)
+		return;
+	ofs = (const byte *)ent - (const byte *)vm->edicts;
+	if (ofs <= 0)
+		return;
+	e = (int)(ofs / vm->edict_size);
+	if (e <= 0 || e >= vm->pushcache_map_edicts)
+		return;
+	slot = vm->pushcache_map[e];
+	if (slot < 0)
+		return;
+	c = &vm->pushcache[slot];
+	c->groundentity = ((int)ent->v.flags & FL_ONGROUND) ? ent->v.groundentity : -1;
+	VectorCopy (ent->v.absmin, c->absmin);
+	VectorCopy (ent->v.absmax, c->absmax);
+}
+
 #define	SPAWNFLAG_NOT_EASY			256
 #define	SPAWNFLAG_NOT_MEDIUM		512
 #define	SPAWNFLAG_NOT_HARD			1024

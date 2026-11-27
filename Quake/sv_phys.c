@@ -401,6 +401,7 @@ int SV_FlyMove (edict_t *ent, float time, trace_t *steptrace)
 			{
 				ent->v.flags =	(int)ent->v.flags | FL_ONGROUND;
 				ent->v.groundentity = EDICT_TO_PROG(trace.ent);
+				SV_PushCache_RefreshEdict (ent);
 			}
 		}
 		if (!trace.plane.normal[2])
@@ -599,38 +600,73 @@ Returns true if qcvm->pushcache is usable for this scan.
 */
 static qboolean SV_UpdatePushCandidates (void)
 {
-	edict_t	*check;
-	int		e;
+	qcvm_t	*vm = qcvm;
+	byte	*ptr;
+	size_t	edict_size;
+	int		e, num_edicts, count;
+	pushcache_entry_t *cache;
+	int		*map;
 
 	if (!sv_pushcache.value)
 		return false;
 
-	if (qcvm->pushcache_valid)
+	if (vm->pushcache_valid)
 		return true;
 
-	if (qcvm->pushcache_max < qcvm->num_edicts)
+	num_edicts = vm->num_edicts;
+	if (vm->pushcache_max < num_edicts)
 	{
-		int		newmax = qcvm->max_edicts;
-		int		*grown;
+		int		newmax = vm->max_edicts;
+		pushcache_entry_t *grown;
 
-		if (newmax < qcvm->num_edicts)
-			newmax = qcvm->num_edicts;
-		grown = (int *) realloc (qcvm->pushcache, sizeof(int) * newmax);
+		if (newmax < num_edicts)
+			newmax = num_edicts;
+		grown = (pushcache_entry_t *) realloc (vm->pushcache, sizeof(*grown) * (size_t)newmax);
 		if (!grown)
 			return false;	//just keep using the plain scan
-		qcvm->pushcache = grown;
-		qcvm->pushcache_max = newmax;
+		vm->pushcache = grown;
+		vm->pushcache_max = newmax;
 	}
-
-	qcvm->pushcache_count = 0;
-	check = NEXT_EDICT(qcvm->edicts);
-	for (e = 1; e < qcvm->num_edicts; e++, check = NEXT_EDICT(check))
+	if (vm->pushcache_map_max < num_edicts)
 	{
-		if (SV_IsPushCandidate (check))
-			qcvm->pushcache[qcvm->pushcache_count++] = e;
+		int		newmax = vm->max_edicts;
+		int		*grown;
+
+		if (newmax < num_edicts)
+			newmax = num_edicts;
+		grown = (int *) realloc (vm->pushcache_map, sizeof(*grown) * (size_t)newmax);
+		if (!grown)
+			return false;
+		vm->pushcache_map = grown;
+		vm->pushcache_map_max = newmax;
 	}
 
-	qcvm->pushcache_valid = true;
+	edict_size = (size_t)vm->edict_size;
+	cache = vm->pushcache;
+	map = vm->pushcache_map;
+	if (num_edicts > 0)
+		map[0] = -1;
+	count = 0;
+	ptr = (byte *)vm->edicts + edict_size;
+	for (e = 1; e < num_edicts; e++, ptr += edict_size)
+	{
+		const edict_t *check = (const edict_t *)ptr;
+		if (SV_IsPushCandidate (check))
+		{
+			pushcache_entry_t *dst = &cache[count];
+			dst->e = e;
+			dst->groundentity = ((int)check->v.flags & FL_ONGROUND) ? check->v.groundentity : -1;
+			VectorCopy (check->v.absmin, dst->absmin);
+			VectorCopy (check->v.absmax, dst->absmax);
+			map[e] = count++;
+		}
+		else
+			map[e] = -1;
+	}
+
+	vm->pushcache_count = count;
+	vm->pushcache_map_edicts = num_edicts;
+	vm->pushcache_valid = true;
 	return true;
 }
 
@@ -638,6 +674,11 @@ typedef struct
 {
 	qboolean	uselist;
 	int			listpos;
+	int			count;
+	const pushcache_entry_t *entries;
+	float		mins[3];
+	float		maxs[3];
+	int			pusher_prog;
 	int			e;			//edict number most recently returned
 	edict_t		*cur;		//plain-scan cursor, so that path stays a pointer walk
 	byte		*base;		//qcvm->edicts and edict_size are fixed for the level, so
@@ -649,19 +690,25 @@ typedef struct
 	int			limit;		//cached qcvm->num_edicts; see SV_PushIter_Next
 } pushiter_t;
 
-static FUNC_ALWAYSINLINE void SV_PushIter_Begin (pushiter_t *it)
+static FUNC_ALWAYSINLINE void SV_PushIter_Begin (pushiter_t *it, const vec3_t mins, const vec3_t maxs, int pusher_prog)
 {
+	qcvm_t *vm = qcvm;
 	it->uselist = SV_UpdatePushCandidates ();
 	it->listpos = 0;
+	it->count = vm->pushcache_count;
+	it->entries = vm->pushcache;
+	VectorCopy (mins, it->mins);
+	VectorCopy (maxs, it->maxs);
+	it->pusher_prog = pusher_prog;
 	it->e = 0;
-	it->base = (byte *)qcvm->edicts;
-	it->size = qcvm->edict_size;
+	it->base = (byte *)vm->edicts;
+	it->size = vm->edict_size;
 	it->cur = (edict_t *)it->base;			//edict 0; the first step lands on 1
 	it->verifying = (sv_pushcache.value >= 2);
 	it->shadow = 0;
 	it->torture = (sv_pushcache.value >= 3);
 	it->yields = 0;
-	it->limit = qcvm->num_edicts;
+	it->limit = vm->num_edicts;
 }
 
 /*
@@ -730,6 +777,14 @@ static FUNC_ALWAYSINLINE void SV_PushIter_Prefetch (const edict_t *check)
 	Q_PREFETCH (&check->v.flags);
 }
 
+static FUNC_ALWAYSINLINE qboolean SV_PushCache_EntryMayInteract (const pushcache_entry_t *c, int pusher_prog,
+	float min0, float min1, float min2, float max0, float max1, float max2)
+{
+	return (c->groundentity == pusher_prog ||
+		(c->absmin[0] < max0 && c->absmin[1] < max1 && c->absmin[2] < max2 &&
+		 c->absmax[0] > min0 && c->absmax[1] > min1 && c->absmax[2] > min2));
+}
+
 /*
 ============
 SV_PushIter_Next
@@ -749,14 +804,61 @@ static FUNC_ALWAYSINLINE edict_t *SV_PushIter_Next (pushiter_t *it, int *out_e)
 			it->uselist = false;
 			it->cur = (edict_t *)(it->base + (size_t)it->e * it->size);
 		}
-		else if (it->listpos < qcvm->pushcache_count)
+		else if (!it->verifying && !it->torture)
 		{
-			it->e = qcvm->pushcache[it->listpos++];
-			check = (edict_t *)(it->base + (size_t)it->e * it->size);
-			//candidates are an edict apart and SV_PushMove reads four cache lines
-			//of each, so fetch a few ahead
-			if (it->listpos + SV_PUSH_PREFETCH < qcvm->pushcache_count)
-				SV_PushIter_Prefetch ((const edict_t *)(it->base + (size_t)qcvm->pushcache[it->listpos + SV_PUSH_PREFETCH] * it->size));
+			// Fast L2-resident linear filter: skip candidates that neither ride
+			// this pusher nor overlap its destination box without touching edict_t.
+			const pushcache_entry_t *entries = it->entries;
+			const int count = it->count;
+			const int pusher_prog = it->pusher_prog;
+			const float min0 = it->mins[0], min1 = it->mins[1], min2 = it->mins[2];
+			const float max0 = it->maxs[0], max1 = it->maxs[1], max2 = it->maxs[2];
+			int pos = it->listpos;
+
+			while (pos < count)
+			{
+				const pushcache_entry_t *c = &entries[pos++];
+				if (!SV_PushCache_EntryMayInteract (c, pusher_prog, min0, min1, min2, max0, max1, max2))
+					continue;
+				it->listpos = pos;
+				it->e = c->e;
+				*out_e = c->e;
+				return (edict_t *)(it->base + (size_t)c->e * it->size);
+			}
+			it->listpos = pos;
+			return NULL;
+		}
+		else if (it->listpos < it->count)
+		{
+			const pushcache_entry_t *c = &it->entries[it->listpos++];
+			int want_ground;
+			it->e = c->e;
+			check = (edict_t *)(it->base + (size_t)c->e * it->size);
+			want_ground = ((int)check->v.flags & FL_ONGROUND) ? check->v.groundentity : -1;
+			if (it->verifying)
+			{
+				qboolean fast_keep = SV_PushCache_EntryMayInteract (c, it->pusher_prog,
+					it->mins[0], it->mins[1], it->mins[2], it->maxs[0], it->maxs[1], it->maxs[2]);
+				qboolean live_keep = (want_ground == it->pusher_prog ||
+					(check->v.absmin[0] < it->maxs[0] && check->v.absmin[1] < it->maxs[1] && check->v.absmin[2] < it->maxs[2] &&
+					 check->v.absmax[0] > it->mins[0] && check->v.absmax[1] > it->mins[1] && check->v.absmax[2] > it->mins[2]));
+				if (c->groundentity != want_ground ||
+					memcmp (c->absmin, check->v.absmin, sizeof(c->absmin)) ||
+					memcmp (c->absmax, check->v.absmax, sizeof(c->absmax)))
+				{
+					Con_Warning ("sv_pushcache: stale cached geometry/ground on edict %i (%s)\n",
+						c->e, PR_GetString (check->v.classname));
+					qcvm->pushcache_valid = false;
+				}
+				else if (!fast_keep && live_keep)
+				{
+					Con_Warning ("sv_pushcache: fast filter falsely skipped edict %i (%s)\n",
+						c->e, PR_GetString (check->v.classname));
+					qcvm->pushcache_valid = false;
+				}
+			}
+			if (it->listpos + SV_PUSH_PREFETCH < it->count)
+				SV_PushIter_Prefetch ((const edict_t *)(it->base + (size_t)it->entries[it->listpos + SV_PUSH_PREFETCH].e * it->size));
 		}
 		//else: still valid, so num_edicts has not grown and the list covered everything
 	}
@@ -865,6 +967,7 @@ static qboolean SV_PushMoveAngles (edict_t *pusher, vec3_t move, const vec3_t am
 		vec3_t origin;
 		vec3_t angles;
 	} *pushed, *pushed_p, *p;
+	const int	pusher_prog = EDICT_TO_PROG(pusher);
 
 	//using johnfitz's dynamic alloc strategy, consistent with SV_PushMove
 	//sized for max_edicts: touch callbacks during the scan can spawn edicts, and the
@@ -894,7 +997,7 @@ static qboolean SV_PushMoveAngles (edict_t *pusher, vec3_t move, const vec3_t am
 	SV_LinkEdict (pusher, false);
 
 // see if any solid entities are inside the final position
-	SV_PushIter_Begin (&iter);
+	SV_PushIter_Begin (&iter, mins, maxs, pusher_prog);
 	while ((check = SV_PushIter_Next (&iter, &e)) != NULL)
 	{
 		if (check->v.movetype == MOVETYPE_PUSH
@@ -914,7 +1017,7 @@ static qboolean SV_PushMoveAngles (edict_t *pusher, vec3_t move, const vec3_t am
 */
 	// if the entity is standing on the pusher, it will definitely be moved
 		if ( ! ( ((int)check->v.flags & FL_ONGROUND)
-			&& PROG_TO_EDICT(check->v.groundentity) == pusher) )
+			&& check->v.groundentity == pusher_prog) )
 		{
 			// see if the ent needs to be tested
 			if ( check->v.absmin[0] >= maxs[0]
@@ -931,7 +1034,7 @@ static qboolean SV_PushMoveAngles (edict_t *pusher, vec3_t move, const vec3_t am
 				continue;
 		}
 
-		if ((pusher->v.movetype == MOVETYPE_PUSH) || (PROG_TO_EDICT(check->v.groundentity) == pusher))
+		if ((pusher->v.movetype == MOVETYPE_PUSH) || (check->v.groundentity == pusher_prog))
 		{
 			// move this entity
 			pushed_p->ent = check;
@@ -955,8 +1058,9 @@ static qboolean SV_PushMoveAngles (edict_t *pusher, vec3_t move, const vec3_t am
 				check->v.flags = (int)check->v.flags & ~FL_ONGROUND;
 
 			// may have pushed them off an edge
-			if (PROG_TO_EDICT(check->v.groundentity) != pusher)
+			if (check->v.groundentity != pusher_prog)
 				check->v.groundentity = 0;
+			SV_PushCache_RefreshEdict (check);
 
 			block = SV_TestEntityPosition (check);
 			if (!block)
@@ -1062,6 +1166,7 @@ static qboolean SV_PushMoveLinear (edict_t *pusher, vec3_t move, float movetime)
 	edict_t		**moved_edict; //johnfitz -- dynamically allocate
 	vec3_t		*moved_from; //johnfitz -- dynamically allocate
 	float	solid_backup;
+	const int	pusher_prog = EDICT_TO_PROG(pusher);
 
 	for (i=0 ; i<3 ; i++)
 	{
@@ -1085,7 +1190,7 @@ static qboolean SV_PushMoveLinear (edict_t *pusher, vec3_t move, float movetime)
 
 // see if any solid entities are inside the final position
 	num_moved = 0;
-	SV_PushIter_Begin (&iter);
+	SV_PushIter_Begin (&iter, mins, maxs, pusher_prog);
 	while ((check = SV_PushIter_Next (&iter, &e)) != NULL)
 	{
 		qboolean riding;
@@ -1098,7 +1203,7 @@ static qboolean SV_PushMoveLinear (edict_t *pusher, vec3_t move, float movetime)
 
 	// if the entity is standing on the pusher, it will definately be moved
 		if ( ! ( ((int)check->v.flags & FL_ONGROUND)
-		&& PROG_TO_EDICT(check->v.groundentity) == pusher) )
+		&& check->v.groundentity == pusher_prog) )
 		{
 			if ( check->v.absmin[0] >= maxs[0]
 			|| check->v.absmin[1] >= maxs[1]
@@ -1127,8 +1232,11 @@ static qboolean SV_PushMoveLinear (edict_t *pusher, vec3_t move, float movetime)
 
 	// remove the onground flag for non-players
 		if (check->v.movetype != MOVETYPE_WALK)
-			if (!pr_checkextension.value || PROG_TO_EDICT(check->v.groundentity) != pusher) //unless they're already riding us (prevents grenade sound spam)
+			if (!pr_checkextension.value || check->v.groundentity != pusher_prog) //unless they're already riding us (prevents grenade sound spam)
+			{
 				check->v.flags = (int)check->v.flags & ~FL_ONGROUND;
+				SV_PushCache_RefreshEdict (check);
+			}
 
 		VectorCopy (check->v.origin, entorig);
 		VectorCopy (check->v.origin, moved_from[num_moved]);
@@ -1546,6 +1654,7 @@ void SV_WalkMove (edict_t *ent)
 //
 	oldonground = (int)ent->v.flags & FL_ONGROUND;
 	ent->v.flags = (int)ent->v.flags & ~FL_ONGROUND;
+	SV_PushCache_RefreshEdict (ent);
 
 	VectorCopy (ent->v.origin, oldorg);
 	VectorCopy (ent->v.velocity, oldvel);
@@ -1613,6 +1722,7 @@ void SV_WalkMove (edict_t *ent)
 		{
 			ent->v.flags =	(int)ent->v.flags | FL_ONGROUND;
 			ent->v.groundentity = EDICT_TO_PROG(downtrace.ent);
+			SV_PushCache_RefreshEdict (ent);
 		}
 	}
 	else
@@ -1779,10 +1889,28 @@ void SV_CheckWaterTransition (edict_t *ent)
 {
 	int		cont;
 	const eval_t *event;
+	qcvm_t	*vm;
+	const qmodel_t *wm;
 
 	if (ent->free)
 		return;
-	cont = SV_PointContents (ent->v.origin);
+	vm = qcvm;
+	wm = vm->worldmodel;
+	if (ent->water_model == wm && ent->water_modgen == mod_generation &&
+		ent->water_origin[0] == ent->v.origin[0] &&
+		ent->water_origin[1] == ent->v.origin[1] &&
+		ent->water_origin[2] == ent->v.origin[2])
+	{
+		cont = ent->water_cont;
+	}
+	else
+	{
+		cont = SV_PointContents (ent->v.origin);
+		ent->water_model = wm;
+		ent->water_modgen = mod_generation;
+		ent->water_cont = cont;
+		VectorCopy (ent->v.origin, ent->water_origin);
+	}
 
 	if (!ent->v.watertype)
 	{	// just spawned here
@@ -1791,7 +1919,7 @@ void SV_CheckWaterTransition (edict_t *ent)
 		return;
 	}
 
-	event = GetEdictFieldValue(ent, qcvm->extfields.contentstransition);
+	event = (vm->extfields.contentstransition >= 0) ? GetEdictFieldValue(ent, vm->extfields.contentstransition) : NULL;
 	if (event && event->function)
 	{
 		int newcontents = (cont == CONTENTS_WATER || cont == CONTENTS_SLIME || cont == CONTENTS_LAVA) ? cont : CONTENTS_EMPTY;
@@ -1895,6 +2023,7 @@ void SV_Physics_Toss (edict_t *ent)
 		{
 			ent->v.flags = (int)ent->v.flags | FL_ONGROUND;
 			ent->v.groundentity = EDICT_TO_PROG(trace.ent);
+			SV_PushCache_RefreshEdict (ent);
 			VectorCopy (vec3_origin, ent->v.velocity);
 			VectorCopy (vec3_origin, ent->v.avelocity);
 		}
@@ -2130,39 +2259,55 @@ void SV_Physics (double frametime)
 	else
 		entity_cap = qcvm->num_edicts;
 
-	//for (i=0 ; i<sv.num_edicts ; i++, ent = NEXT_EDICT(ent))
-	for (i=0 ; i<entity_cap ; i++, ent = NEXT_EDICT(ent))
+	{
+		qcvm_t *const vm = qcvm;
+		globalvars_t *const globals = (globalvars_t *)vm->globals;
+		const size_t edict_size = (size_t)vm->edict_size;
+		const int fld_movechain = vm->extfields.movechain;
+		const int fld_customphysics = vm->extfields.customphysics;
+		const int maxclients = (vm == &sv.qcvm) ? svs.maxclients : 0;
+		const double vm_time = vm->time;
+		const double think_limit = vm_time + vm->frametime;
+
+	for (i=0 ; i<entity_cap ; i++, ent = (edict_t *)((byte *)ent + edict_size))
 	{
 		vec3_t oldorigin, oldangles;
-		int movechain;
+		int movechain = 0;
 		if (ent->free)
 			continue;
 
-		if (pr_global_struct->force_retouch)
+		if (globals->force_retouch)
 		{
 			SV_LinkEdict (ent, true);	// force retouch even for stationary
 		}
 
-		val = GetEdictFieldValue(ent, qcvm->extfields.movechain);
-		movechain = val ? val->edict : 0;
-		if (movechain)
+		if (fld_movechain >= 0)
 		{
-			VectorCopy(ent->v.origin, oldorigin);
-			VectorCopy(ent->v.angles, oldangles);
+			val = GetEdictFieldValue(ent, fld_movechain);
+			movechain = val ? val->edict : 0;
+			if (movechain)
+			{
+				VectorCopy(ent->v.origin, oldorigin);
+				VectorCopy(ent->v.angles, oldangles);
+			}
 		}
 
-		if (i > 0 && i <= svs.maxclients && qcvm == &sv.qcvm)
+		if (i > 0 && i <= maxclients)
 			SV_Physics_Client (ent, i);
-		else if ((val = GetEdictFieldValue(ent, qcvm->extfields.customphysics)) && val->function)
+		else if (fld_customphysics >= 0 && (val = GetEdictFieldValue(ent, fld_customphysics)) && val->function)
 		{
-			pr_global_struct->time = qcvm->time;
-			pr_global_struct->self = EDICT_TO_PROG(ent);
+			globals->time = vm_time;
+			globals->self = EDICT_TO_PROG(ent);
 			PR_ExecuteProgram (val->function);
+		}
+		else if (ent->v.movetype == MOVETYPE_NONE)
+		{
+			float thinktime = ent->v.nextthink;
+			if (thinktime > 0 && thinktime <= think_limit)
+				SV_RunThink (ent);
 		}
 		else if (ent->v.movetype == MOVETYPE_PUSH)
 			SV_Physics_Pusher (ent);
-		else if (ent->v.movetype == MOVETYPE_NONE)
-			SV_Physics_None (ent);
 		else if (ent->v.movetype == MOVETYPE_NOCLIP)
 			SV_Physics_Noclip (ent);
 		else if (ent->v.movetype == MOVETYPE_STEP)
@@ -2195,13 +2340,14 @@ void SV_Physics (double frametime)
 	//capture interval to nextthink here and send it to client for better
 	//lerp timing, but only if interval is not 0.1 (which client assumes)
 		ent->sendinterval = false;
-		if (!ent->free && ent->v.nextthink > qcvm->time && (ent->v.movetype == MOVETYPE_STEP || ent->v.movetype == MOVETYPE_WALK || ent->v.frame != ent->oldframe))
+		if (!ent->free && ent->v.nextthink > vm_time && (ent->v.movetype == MOVETYPE_STEP || ent->v.movetype == MOVETYPE_WALK || ent->v.frame != ent->oldframe))
 		{
 			int j = Q_rint((ent->v.nextthink - ent->oldthinktime) * 255);
 			if (j >= 0 && j < 256 && j != 25 && j != 26) //25 and 26 are close enough to 0.1 to not send
 				ent->sendinterval = true;
 		}
 	//johnfitz
+	}
 	}
 
 	if (pr_global_struct->force_retouch)

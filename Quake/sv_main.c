@@ -1526,12 +1526,29 @@ void SV_BuildEntityState(client_t *client, edict_t *ent, entity_state_t *state)
 
 byte *SV_FatPVS (vec3_t org, qmodel_t *worldmodel);
 static byte *SV_ClientFatPVS (client_t *client, vec3_t org, qmodel_t *worldmodel);
+static unsigned int SV_ClientFatPVSSerial (void);
 static void SVFTE_BuildSnapshotForClient (client_t *client)
 {
 	unsigned int	e, i;
 	byte			*pvs;
+	unsigned int	pvs_serial = 0;
 	vec3_t			org;
 	edict_t			*ent, *parent;
+	qcvm_t			*vm = qcvm;
+	const size_t	edict_size = (size_t)vm->edict_size;
+	const qmodel_t	*worldmodel = vm->worldmodel;
+	const char		*strings = vm->strings;
+	const int		stringssize = vm->stringssize;
+	const int		fld_customize = vm->extfields.customizeentityforclient;
+	const int		fld_emiteffect = vm->extfields.emiteffectnum;
+	const int		fld_sendentity = vm->extfields.SendEntity;
+	const int		fld_sendflags = vm->extfields.SendFlags;
+	const int		fld_viewmodel = vm->extfields.viewmodelforclient;
+	const int		fld_pvsflags = vm->extfields.pvsflags;
+	const int		fld_tag_entity = vm->extfields.tag_entity;
+	const int		fld_nodraw = vm->extfields.nodrawtoclient;
+	const int		fld_drawonly = vm->extfields.drawonlytoclient;
+	const int		fld_exterior = vm->extfields.exteriormodeltoclient;
 	unsigned int	maxentities = client->limit_entities;
 	edict_t			*clent = client->edict;
 	eval_t			*val;
@@ -1543,14 +1560,16 @@ static void SVFTE_BuildSnapshotForClient (client_t *client)
 	size_t maxents = snapshot_maxents;
 	int emiteffect;
 	int iscsqc;
-	qboolean cancsqc = GetEdictFieldValid(SendEntity) && GetEdictFieldValid(SendFlags) && client->csqcactive;
+	qboolean cancsqc = fld_sendentity >= 0 && fld_sendflags >= 0 && client->csqcactive;
+	unsigned int *pendingcsqc;
 
 // find the client's PVS
 	VectorAdd (clent->v.origin, clent->v.view_ofs, org);
-	pvs = SV_ClientFatPVS (client, org, qcvm->worldmodel);
+	pvs = SV_ClientFatPVS (client, org, vm->worldmodel);
+	pvs_serial = SV_ClientFatPVSSerial ();
 
-	if (maxentities > (unsigned int)qcvm->num_edicts)
-		maxentities = (unsigned int)qcvm->num_edicts;
+	if (maxentities > (unsigned int)vm->num_edicts)
+		maxentities = (unsigned int)vm->num_edicts;
 
 	if ((int)client->numpendingcsqcentities < maxentities)
 	{	//this is the problem with dynamic memory allocations.
@@ -1562,57 +1581,79 @@ static void SVFTE_BuildSnapshotForClient (client_t *client)
 		memset(client->pendingcsqcentities_bits+client->numpendingcsqcentities, 0, sizeof(*client->pendingcsqcentities_bits)*(newmax-client->numpendingcsqcentities));
 		client->numpendingcsqcentities = newmax;
 	}
+	pendingcsqc = client->pendingcsqcentities_bits;
 	
 // send over all entities (excpet the client) that touch the pvs
-	ent = NEXT_EDICT(qcvm->edicts);
-	for (e=1 ; e<maxentities ; e++, ent = NEXT_EDICT(ent))
+	ent = (edict_t *)((byte *)vm->edicts + edict_size);
+	for (e=1 ; e<maxentities ; e++, ent = (edict_t *)((byte *)ent + edict_size))
 	{
 		if (ent->free)
 			goto invisible;
-		val = GetEdictFieldValue(ent, qcvm->extfields.customizeentityforclient);
-		if (val && val->function)
+		if (fld_customize >= 0)
 		{
-			pr_global_struct->self = EDICT_TO_PROG(ent);	//ent being customised
-			pr_global_struct->other = proged;				//player they're being customised for
-			PR_ExecuteProgram(val->function);
-			if (!G_FLOAT(OFS_RETURN))
-				goto invisible;
+			val = (eval_t *)((float *)&ent->v + fld_customize);
+			if (val->function)
+			{
+				pr_global_struct->self = EDICT_TO_PROG(ent);	//ent being customised
+				pr_global_struct->other = proged;				//player they're being customised for
+				PR_ExecuteProgram(val->function);
+				if (!G_FLOAT(OFS_RETURN))
+					goto invisible;
+			}
 		}
 
 		eflags = 0;
-		emiteffect = GetEdictFieldEval(ent, emiteffectnum)->_float;
-		iscsqc = cancsqc && GetEdictFieldEval(ent, SendEntity)->function;
+		emiteffect = fld_emiteffect >= 0 ? (int)((eval_t *)((float *)&ent->v + fld_emiteffect))->_float : 0;
+		iscsqc = cancsqc && ((eval_t *)((float *)&ent->v + fld_sendentity))->function;
 		if (ent != clent)	// clent is ALLWAYS sent
 		{
 			// ignore ents without visible models
-			if ((!ent->v.modelindex || !PR_GetString(ent->v.model)[0]) && !emiteffect && !iscsqc)
+			qboolean has_model = false;
+			if (ent->v.modelindex)
+			{
+				int mstr = ent->v.model;
+				if (mstr >= 0 && mstr < stringssize)
+					has_model = strings[mstr] != '\0';
+				else
+					has_model = PR_GetString(mstr)[0] != '\0';
+			}
+			if (!has_model && !emiteffect && !iscsqc)
 			{
 invisible:
-				if (client->pendingcsqcentities_bits[e] && !((int)GetEdictFieldEval(ent, pvsflags)->_float & PVSF_NOREMOVE))
-					client->pendingcsqcentities_bits[e] |= SENDFLAG_REMOVE;
+				if (pendingcsqc[e] && !(fld_pvsflags >= 0 && ((int)((eval_t *)((float *)&ent->v + fld_pvsflags))->_float & PVSF_NOREMOVE)))
+					pendingcsqc[e] |= SENDFLAG_REMOVE;
 				continue;
 			}
 
-			val = GetEdictFieldValue(ent, qcvm->extfields.viewmodelforclient);
-			if (val && val->edict == proged)
-				eflags |= EFLAGS_VIEWMODEL;
-			else if (val && val->edict)
-				goto invisible;
-			else switch((int)GetEdictFieldEval(ent, pvsflags)->_float&PVSF_MODE_MASK)
+			if (fld_viewmodel >= 0)
+			{
+				val = (eval_t *)((float *)&ent->v + fld_viewmodel);
+				if (val->edict == proged)
+				{
+					eflags |= EFLAGS_VIEWMODEL;
+					goto viewmodel_done;
+				}
+				else if (val->edict)
+					goto invisible;
+			}
+			switch((fld_pvsflags >= 0 ? (int)((eval_t *)((float *)&ent->v + fld_pvsflags))->_float : 0) & PVSF_MODE_MASK)
 			{
 			case PVSF_NOTRACECHECK:	//we don't do trace checks anyway, oh well.
 			case PVSF_NORMALPVS:
 				//attached entities should use the pvs of the parent rather than the child (because the child will typically be bugging out around '0 0 0', so won't be useful)
 				parent = ent;
-				while (GetEdictFieldEval(parent, tag_entity)->edict)
-					parent = PROG_TO_EDICT(GetEdictFieldEval(parent, tag_entity)->edict);
+				if (fld_tag_entity >= 0)
+				{
+					while (((eval_t *)((float *)&parent->v + fld_tag_entity))->edict)
+						parent = PROG_TO_EDICT(((eval_t *)((float *)&parent->v + fld_tag_entity))->edict);
+				}
 				{
 					// ignore if not touching a PV leaf
 					for (i=0 ; i < parent->num_leafs ; i++)
 						if (pvs[parent->leafnums[i] >> 3] & (1 << (parent->leafnums[i]&7) ))
 							break;
 					// woods #pvsoverflow -- leaf list overflowed and the first MAX_ENT_LEAFS missed, so test the whole box
-					if (i == parent->num_leafs && (parent->num_leafs < MAX_ENT_LEAFS || !SV_BoxInPVS(parent->v.absmin, parent->v.absmax, pvs, qcvm->worldmodel->nodes)))
+					if (i == parent->num_leafs && (parent->num_leafs < MAX_ENT_LEAFS || !SV_BoxInPVSWithSerial(parent->v.absmin, parent->v.absmax, pvs, pvs_serial, worldmodel, worldmodel->nodes)))
 						goto invisible;		// not visible
 				}
 				break;
@@ -1620,14 +1661,17 @@ invisible:
 			case PVSF_IGNOREPVS:
 				break;
 			}
+viewmodel_done:;
 		}
 
-		val = GetEdictFieldValue(ent, qcvm->extfields.nodrawtoclient);
-		if (val && val->edict == proged)
+		if (fld_nodraw >= 0 && ((eval_t *)((float *)&ent->v + fld_nodraw))->edict == proged)
 			goto invisible;
-		val = GetEdictFieldValue(ent, qcvm->extfields.drawonlytoclient);
-		if (val && val->edict && val->edict != proged)
-			goto invisible;
+		if (fld_drawonly >= 0)
+		{
+			int d = ((eval_t *)((float *)&ent->v + fld_drawonly))->edict;
+			if (d && d != proged)
+				goto invisible;
+		}
 
 		//okay, we care about this entity.
 
@@ -1679,8 +1723,7 @@ invisible:
 		else if (ents[numents].state.alpha == ENTALPHA_ZERO && !ent->v.effects &&
 			!ents[numents].state.traileffectnum && !ents[numents].state.emiteffectnum)
 			continue;
-		val = GetEdictFieldValue(ent, qcvm->extfields.exteriormodeltoclient);
-		if (val && val->edict == proged)
+		if (fld_exterior >= 0 && ((eval_t *)((float *)&ent->v + fld_exterior))->edict == proged)
 			eflags |= EFLAGS_EXTERIORMODEL;
 		//EFLAGS_VIEWMODEL was handled above
 		ents[numents].state.eflags |= eflags;
@@ -3105,12 +3148,32 @@ typedef struct
 	qmodel_t *keymodel;
 	int keygeneration;
 	qboolean keyvalid;
+	unsigned int pvs_serial;
+	byte *sky_pvs;
+	int sky_capacity;
+	mleaf_t *sky_keyleafs[FATPVS_MAX_KEY_LEAFS];
+	int sky_numkeyleafs;
+	unsigned int sky_base_serial;
+	unsigned int sky_pvs_serial;
+	qboolean sky_keyvalid;
 } fatpvs_cache_t;
+
+static unsigned int sv_fatpvs_next_serial = 1;
+static unsigned int sv_client_fatpvs_serial;
+static unsigned int SV_ClientFatPVSSerial (void)
+{
+	return sv_client_fatpvs_serial;
+}
+static unsigned int SV_NextFatPVSSerial (void)
+{
+	unsigned int s = sv_fatpvs_next_serial++;
+	if (!s)
+		s = sv_fatpvs_next_serial++;
+	return s;
+}
 
 static fatpvs_cache_t fatpvs_cache; // renderer and general QC visibility queries
 static fatpvs_cache_t client_fatpvs[MAX_SCOREBOARD];
-static byte *snapshot_pvs;
-static int snapshot_pvs_capacity;
 
 static qboolean SV_AddToFatPVS (vec3_t org, mnode_t *node, qmodel_t *worldmodel, byte *out, int bytes)
 {
@@ -3237,6 +3300,7 @@ static byte *SV_FatPVSForCache (fatpvs_cache_t *cache, vec3_t org, qmodel_t *wor
 	if (!any)
 		memset (cache->pvs, 0xff, cache->bytes);
 
+	cache->pvs_serial = SV_NextFatPVSSerial ();
 	cache->keyvalid = numleafs >= 0;
 	if (cache->keyvalid)
 	{
@@ -3257,24 +3321,61 @@ static byte *SV_ClientFatPVS (client_t *client, vec3_t org, qmodel_t *worldmodel
 {
 	fatpvs_cache_t *cache = &client_fatpvs[client - svs.clients];
 	byte *pvs = SV_FatPVSForCache (cache, org, worldmodel);
+	mleaf_t *skyleafs[FATPVS_MAX_KEY_LEAFS];
+	int numskyleafs, i;
 	vec3_t skyorg;
 
 	if (!sv.skyroom_pos_known)
+	{
+		sv_client_fatpvs_serial = cache->pvs_serial;
 		return pvs;
+	}
 
 	// The union must not change the cached base, or a previous skyroom view
-	// can leak into subsequent snapshots. QC uses the separate public cache.
-	if (snapshot_pvs_capacity < cache->bytes)
-	{
-		snapshot_pvs_capacity = cache->bytes;
-		snapshot_pvs = (byte *) realloc (snapshot_pvs, snapshot_pvs_capacity);
-		if (!snapshot_pvs)
-			Sys_Error ("SV_ClientFatPVS: realloc() failed on %d bytes", snapshot_pvs_capacity);
-	}
-	memcpy (snapshot_pvs, pvs, cache->bytes);
+	// can leak into subsequent snapshots. Cache the merged result per client
+	// keyed on (base pvs_serial, skyroom leaf set) so stationary skyroom
+	// snapshots keep a stable serial without rebuilding box-PVS bitsets.
 	VectorMA (sv.skyroom_pos, sv.skyroom_pos[3], org, skyorg);
-	SV_AddToFatPVS (skyorg, worldmodel->nodes, worldmodel, snapshot_pvs, cache->bytes);
-	return snapshot_pvs;
+	numskyleafs = SV_FindFatPVSLeafs (skyorg, worldmodel->nodes, skyleafs, 0);
+	if (cache->sky_keyvalid && cache->sky_base_serial == cache->pvs_serial &&
+		cache->sky_capacity >= cache->bytes &&
+		numskyleafs >= 0 && numskyleafs == cache->sky_numkeyleafs &&
+		!memcmp (skyleafs, cache->sky_keyleafs, numskyleafs * sizeof(skyleafs[0])))
+	{
+		sv_client_fatpvs_serial = cache->sky_pvs_serial;
+		return cache->sky_pvs;
+	}
+
+	if (cache->sky_capacity < cache->bytes)
+	{
+		cache->sky_capacity = cache->bytes;
+		cache->sky_pvs = (byte *) realloc (cache->sky_pvs, cache->sky_capacity);
+		if (!cache->sky_pvs)
+			Sys_Error ("SV_ClientFatPVS: realloc() failed on %d bytes", cache->sky_capacity);
+	}
+	memcpy (cache->sky_pvs, pvs, cache->bytes);
+	if (numskyleafs >= 0)
+	{
+		for (i = 0; i < numskyleafs; i++)
+		{
+			byte *spvs = Mod_LeafPVS (skyleafs[i], worldmodel);
+			int j;
+			for (j = 0; j < cache->bytes - 3; j += 4)
+				*(uint32_t *)&cache->sky_pvs[j] |= *(uint32_t *)&spvs[j];
+		}
+		memcpy (cache->sky_keyleafs, skyleafs, numskyleafs * sizeof(skyleafs[0]));
+		cache->sky_numkeyleafs = numskyleafs;
+		cache->sky_base_serial = cache->pvs_serial;
+		cache->sky_keyvalid = true;
+	}
+	else
+	{
+		SV_AddToFatPVS (skyorg, worldmodel->nodes, worldmodel, cache->sky_pvs, cache->bytes);
+		cache->sky_keyvalid = false;
+	}
+	cache->sky_pvs_serial = SV_NextFatPVSSerial ();
+	sv_client_fatpvs_serial = cache->sky_pvs_serial;
+	return cache->sky_pvs;
 }
 
 /*
@@ -3303,6 +3404,7 @@ void SV_WriteEntitiesToClient (client_t *client, sizebuf_t *msg)
 {
 	edict_t	*clent = client->edict;
 	unsigned int		e, i, maxedict=qcvm->num_edicts;
+	unsigned int		pvs_serial = 0;
 	int		bits;
 	byte	*pvs;
 	vec3_t	org;
@@ -3325,6 +3427,7 @@ void SV_WriteEntitiesToClient (client_t *client, sizebuf_t *msg)
 // find the client's PVS
 	VectorAdd (clent->v.origin, clent->v.view_ofs, org);
 	pvs = SV_ClientFatPVS (client, org, qcvm->worldmodel);
+	pvs_serial = sv_client_fatpvs_serial;
 
 // send over all entities (excpet the client) that touch the pvs
 	ent = NEXT_EDICT(qcvm->edicts);
@@ -3364,7 +3467,7 @@ void SV_WriteEntitiesToClient (client_t *client, sizebuf_t *msg)
 			// this commonly happens with rotators, because they often have huge bboxes
 			// spanning the entire map, or really tall lifts, etc.
 			// woods #pvsoverflow -- on overflow, fall back to testing the whole box against the pvs
-			if (i == ent->num_leafs && (ent->num_leafs < MAX_ENT_LEAFS || !SV_BoxInPVS(ent->v.absmin, ent->v.absmax, pvs, qcvm->worldmodel->nodes)))
+			if (i == ent->num_leafs && (ent->num_leafs < MAX_ENT_LEAFS || !SV_BoxInPVSWithSerial(ent->v.absmin, ent->v.absmax, pvs, pvs_serial, qcvm->worldmodel, qcvm->worldmodel->nodes)))
 				continue;		// not visible
 		}
 

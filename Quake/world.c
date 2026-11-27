@@ -249,9 +249,12 @@ SV_ClearWorld
 
 ===============
 */
+static void SV_ClearBoxPVSCache (void);
+
 void SV_ClearWorld (void)
 {
 	SV_InitBoxHull ();
+	SV_ClearBoxPVSCache ();
 
 	memset (qcvm->areanodes, 0, sizeof(qcvm->areanodes));
 	qcvm->numareanodes = 0;
@@ -525,76 +528,400 @@ SV_FindTouchedLeafs
 
 ===============
 */
+static void SV_FindTouchedLeafs_Walk (edict_t *ent, vec_t *mins, vec_t *maxs, const mleaf_t *leafs_base, const mnode_t *node)
+{
+	for (;;)
+	{
+		mplane_t	*splitplane;
+		int			sides;
+
+		if (node->contents == CONTENTS_SOLID)
+			return;
+
+		if (ent->num_leafs == MAX_ENT_LEAFS)
+			return;
+
+	// add an efrag if the node is a leaf
+		if (node->contents < 0)
+		{
+			ent->leafnums[ent->num_leafs++] = (int)((const mleaf_t *)node - leafs_base) - 1;
+			return;
+		}
+
+	// NODE_MIXED
+		splitplane = node->plane;
+		sides = BOX_ON_PLANE_SIDE(mins, maxs, splitplane);
+
+	// recurse down the contacted sides (tail-iterate the single/second child)
+		if (sides == 1)
+			node = node->children[0];
+		else if (sides == 2)
+			node = node->children[1];
+		else
+		{
+			SV_FindTouchedLeafs_Walk (ent, mins, maxs, leafs_base, node->children[0]);
+			if (ent->num_leafs == MAX_ENT_LEAFS)
+				return;
+			node = node->children[1];
+		}
+	}
+}
+
 void SV_FindTouchedLeafs (edict_t *ent, mnode_t *node)
 {
-	mplane_t	*splitplane;
-	mleaf_t		*leaf;
-	int			sides;
-	int			leafnum;
-
-	if (node->contents == CONTENTS_SOLID)
-		return;
-
-	if (ent->num_leafs == MAX_ENT_LEAFS)
-		return;
-
-// add an efrag if the node is a leaf
-
-	if ( node->contents < 0)
-	{
-		leaf = (mleaf_t *)node;
-		leafnum = leaf - qcvm->worldmodel->leafs - 1;
-
-		ent->leafnums[ent->num_leafs] = leafnum;
-		ent->num_leafs++;
-		return;
-	}
-
-// NODE_MIXED
-
-	splitplane = node->plane;
-	sides = BOX_ON_PLANE_SIDE(ent->v.absmin, ent->v.absmax, splitplane);
-
-// recurse down the contacted sides
-	if (sides & 1)
-		SV_FindTouchedLeafs (ent, node->children[0]);
-
-	if (sides & 2)
-		SV_FindTouchedLeafs (ent, node->children[1]);
+	SV_FindTouchedLeafs_Walk (ent, ent->v.absmin, ent->v.absmax, qcvm->worldmodel->leafs, node);
 }
 
 /*
 ===============
 SV_BoxInPVS -- woods #iwshowbboxes
+
+Exact subtree-pruned PVS box test. A 1-bit-per-node bitset marks every BSP
+node whose subtree contains at least one non-solid leaf in the active PVS,
+rebuilt lazily once per distinct PVS serial. Off-PVS subtrees prune immediately
+at the first unmarked node without descending into them.
 ===============
 */
-qboolean SV_BoxInPVS (vec3_t mins, vec3_t maxs, byte* pvs, mnode_t* node)
-{
-	mplane_t* splitplane;
-	mleaf_t* leaf;
-	int			sides;
-	int			leafnum;
+#define SV_PVSBOX_SLOTS 32
 
-	if (node->contents == CONTENTS_SOLID)
+typedef struct sv_pvsbox_slot_s
+{
+	unsigned int	pvs_serial;
+	unsigned int	last_used;
+	byte			*node_bits;
+} sv_pvsbox_slot_t;
+
+typedef struct sv_pvsbox_cache_s
+{
+	const qmodel_t	*model;
+	int				modgen;
+	int				numnodes;
+	int				numleafs;
+	qboolean		topology_ok;
+	int				*node_parent;
+	int				*leaf_parent;
+	size_t			node_bits_bytes;
+	unsigned int	use_clock;
+	sv_pvsbox_slot_t slots[SV_PVSBOX_SLOTS];
+} sv_pvsbox_cache_t;
+
+static sv_pvsbox_cache_t sv_pvsbox;
+
+static void SV_ClearBoxPVSCache (void)
+{
+	int i;
+	free (sv_pvsbox.node_parent);
+	free (sv_pvsbox.leaf_parent);
+	for (i = 0; i < SV_PVSBOX_SLOTS; i++)
+		free (sv_pvsbox.slots[i].node_bits);
+	memset (&sv_pvsbox, 0, sizeof(sv_pvsbox));
+}
+
+static FUNC_ALWAYSINLINE unsigned int SV_CTZ32 (uint32_t v)
+{
+#if defined(__GNUC__) || defined(__clang__)
+	return (unsigned int)__builtin_ctz (v);
+#else
+	unsigned int n = 0;
+	while ((v & 1u) == 0u)
+	{
+		v >>= 1;
+		n++;
+	}
+	return n;
+#endif
+}
+
+static const byte *SV_PrepareBoxPVS (const qmodel_t *worldmodel, const byte *pvs, unsigned int pvs_serial)
+{
+	int i, numnodes, numleafs;
+	sv_pvsbox_slot_t *slot = NULL;
+
+	if (!worldmodel || !pvs || !pvs_serial || !worldmodel->nodes || !worldmodel->leafs)
+		return NULL;
+
+	numnodes = worldmodel->numnodes;
+	numleafs = worldmodel->numleafs;
+	if (numnodes <= 0 || numleafs <= 0)
+		return NULL;
+
+	if (sv_pvsbox.model != worldmodel || sv_pvsbox.modgen != mod_generation ||
+		sv_pvsbox.numnodes != numnodes || sv_pvsbox.numleafs != numleafs)
+	{
+		size_t bits_bytes = ((size_t)numnodes + 7u) >> 3;
+		int *np, *lp, *stack;
+		int sp;
+		const mnode_t *nodes = worldmodel->nodes;
+		const mleaf_t *leafs = worldmodel->leafs;
+		qboolean ok = true;
+
+		SV_ClearBoxPVSCache ();
+		sv_pvsbox.model = worldmodel;
+		sv_pvsbox.modgen = mod_generation;
+		sv_pvsbox.numnodes = numnodes;
+		sv_pvsbox.numleafs = numleafs;
+		sv_pvsbox.topology_ok = false;
+
+		np = (int *) malloc ((size_t)numnodes * sizeof(*np));
+		lp = (int *) malloc ((size_t)numleafs * sizeof(*lp));
+		stack = (int *) malloc ((size_t)numnodes * sizeof(*stack));
+		if (!np || !lp || !stack)
+		{
+			free (np);
+			free (lp);
+			free (stack);
+			return NULL;
+		}
+
+		for (i = 0; i < numnodes; i++)
+			np[i] = -1;
+		for (i = 0; i < numleafs; i++)
+			lp[i] = -1;
+
+		// Walk only the world BSP tree rooted at nodes[0], skipping submodel trees
+		// stored later in worldmodel->nodes that may share leaf references.
+		sp = 0;
+		if (nodes[0].contents >= 0)
+			stack[sp++] = 0;
+		while (sp > 0 && ok)
+		{
+			int ni = stack[--sp];
+			const mnode_t *n = &nodes[ni];
+			int c;
+			for (c = 0; c < 2; c++)
+			{
+				const mnode_t *ch = n->children[c];
+				if (!ch)
+					continue;
+				if (ch->contents < 0)
+				{
+					ptrdiff_t idx;
+					if (ch->contents == CONTENTS_SOLID)
+						continue;
+					idx = (const mleaf_t *)ch - leafs - 1;
+					if (idx < 0 || idx >= numleafs || lp[idx] != -1)
+					{
+						ok = false;
+						break;
+					}
+					lp[idx] = ni;
+				}
+				else
+				{
+					ptrdiff_t idx = ch - nodes;
+					if (idx <= 0 || idx >= numnodes || np[idx] != -1)
+					{
+						ok = false;
+						break;
+					}
+					np[idx] = ni;
+					if (sp >= numnodes)
+					{
+						ok = false;
+						break;
+					}
+					stack[sp++] = (int)idx;
+				}
+			}
+		}
+		free (stack);
+
+		if (!ok)
+		{
+			free (np);
+			free (lp);
+			return NULL;
+		}
+
+		sv_pvsbox.node_parent = np;
+		sv_pvsbox.leaf_parent = lp;
+		sv_pvsbox.node_bits_bytes = bits_bytes;
+		sv_pvsbox.topology_ok = true;
+	}
+
+	if (!sv_pvsbox.topology_ok)
+		return NULL;
+
+	// Fast hit: check existing LRU slots for this pvs_serial (slot 0 hits immediately in SP).
+	for (i = 0; i < SV_PVSBOX_SLOTS; i++)
+	{
+		if (sv_pvsbox.slots[i].pvs_serial == pvs_serial && sv_pvsbox.slots[i].node_bits)
+		{
+			sv_pvsbox.slots[i].last_used = ++sv_pvsbox.use_clock;
+			return sv_pvsbox.slots[i].node_bits;
+		}
+		if (!slot)
+		{
+			if (!sv_pvsbox.slots[i].node_bits)
+				slot = &sv_pvsbox.slots[i];
+		}
+	}
+
+	// On miss, use first unallocated slot or evict least-recently-used slot.
+	if (!slot)
+	{
+		slot = &sv_pvsbox.slots[0];
+		for (i = 1; i < SV_PVSBOX_SLOTS; i++)
+		{
+			if (sv_pvsbox.slots[i].last_used < slot->last_used)
+				slot = &sv_pvsbox.slots[i];
+		}
+	}
+	if (!slot->node_bits)
+	{
+		slot->node_bits = (byte *) malloc (sv_pvsbox.node_bits_bytes);
+		if (!slot->node_bits)
+			return NULL;
+	}
+
+	{
+		const mleaf_t *leafs = worldmodel->leafs;
+		const int *node_parent = sv_pvsbox.node_parent;
+		const int *leaf_parent = sv_pvsbox.leaf_parent;
+		byte *node_bits = slot->node_bits;
+		int full_words = numleafs >> 5;
+		int w, leafnum, p;
+
+		memset (node_bits, 0, sv_pvsbox.node_bits_bytes);
+		for (w = 0; w < full_words; w++)
+		{
+			uint32_t bits;
+			memcpy (&bits, pvs + (w << 2), sizeof(bits));
+			while (bits)
+			{
+				unsigned int bit = SV_CTZ32 (bits);
+				leafnum = (w << 5) + (int)bit;
+				bits &= bits - 1u;
+				if (leafs[leafnum + 1].contents == CONTENTS_SOLID)
+					continue;
+				for (p = leaf_parent[leafnum]; p >= 0; p = node_parent[p])
+				{
+					byte mask = (byte)(1u << (p & 7));
+					if (node_bits[p >> 3] & mask)
+						break;
+					node_bits[p >> 3] |= mask;
+				}
+			}
+		}
+		for (leafnum = full_words << 5; leafnum < numleafs; leafnum++)
+		{
+			if (!(pvs[leafnum >> 3] & (1u << (leafnum & 7))))
+				continue;
+			if (leafs[leafnum + 1].contents == CONTENTS_SOLID)
+				continue;
+			for (p = leaf_parent[leafnum]; p >= 0; p = node_parent[p])
+			{
+				byte mask = (byte)(1u << (p & 7));
+				if (node_bits[p >> 3] & mask)
+					break;
+				node_bits[p >> 3] |= mask;
+			}
+		}
+		slot->pvs_serial = pvs_serial;
+		slot->last_used = ++sv_pvsbox.use_clock;
+		return node_bits;
+	}
+}
+
+static qboolean SV_BoxInPVS_Scan (vec_t *mins, vec_t *maxs, const byte *pvs, const mnode_t *node, const mleaf_t *leafs_base)
+{
+	for (;;)
+	{
+		mplane_t	*splitplane;
+		int			sides;
+
+		if (node->contents == CONTENTS_SOLID)
+			return false;
+
+		if (node->contents < 0)
+		{
+			int leafnum = (int)((const mleaf_t *)node - leafs_base) - 1;
+			return (pvs[leafnum >> 3] & (1 << (leafnum & 7))) != 0;
+		}
+
+		splitplane = node->plane;
+		sides = BOX_ON_PLANE_SIDE(mins, maxs, splitplane);
+
+		if (sides == 1)
+			node = node->children[0];
+		else if (sides == 2)
+			node = node->children[1];
+		else
+		{
+			if (SV_BoxInPVS_Scan (mins, maxs, pvs, node->children[0], leafs_base))
+				return true;
+			node = node->children[1];
+		}
+	}
+}
+
+static qboolean SV_BoxInPVS_Prepared (vec_t *mins, vec_t *maxs, const byte *pvs, const mnode_t *node,
+	const mnode_t *nodes_base, const mleaf_t *leafs_base, const byte *node_bits)
+{
+	for (;;)
+	{
+		mplane_t	*splitplane;
+		int			sides;
+		size_t		nidx;
+
+		if (node->contents < 0)
+		{
+			if (node->contents == CONTENTS_SOLID)
+				return false;
+			{
+				int leafnum = (int)((const mleaf_t *)node - leafs_base) - 1;
+				return (pvs[leafnum >> 3] & (1 << (leafnum & 7))) != 0;
+			}
+		}
+
+		nidx = (size_t)(node - nodes_base);
+		if (!(node_bits[nidx >> 3] & (1u << (nidx & 7))))
+			return false;
+
+		splitplane = node->plane;
+		sides = BOX_ON_PLANE_SIDE(mins, maxs, splitplane);
+
+		if (sides == 1)
+			node = node->children[0];
+		else if (sides == 2)
+			node = node->children[1];
+		else
+		{
+			if (SV_BoxInPVS_Prepared (mins, maxs, pvs, node->children[0], nodes_base, leafs_base, node_bits))
+				return true;
+			node = node->children[1];
+		}
+	}
+}
+
+qboolean SV_BoxInPVSWithSerial (vec3_t mins, vec3_t maxs, const byte *pvs, unsigned int pvs_serial, const qmodel_t *worldmodel, const mnode_t *node)
+{
+	if (!node || !worldmodel || !worldmodel->leafs)
 		return false;
 
 	if (node->contents < 0)
 	{
-		leaf = (mleaf_t*)node;
-		leafnum = leaf - qcvm->worldmodel->leafs - 1;
-		return pvs[leafnum >> 3] & (1 << (leafnum & 7));
+		if (node->contents == CONTENTS_SOLID)
+			return false;
+		{
+			int leafnum = (int)((const mleaf_t *)node - worldmodel->leafs) - 1;
+			return (pvs[leafnum >> 3] & (1 << (leafnum & 7))) != 0;
+		}
 	}
 
-	splitplane = node->plane;
-	sides = BOX_ON_PLANE_SIDE(mins, maxs, splitplane);
+	if (pvs_serial && worldmodel->nodes && node == worldmodel->nodes)
+	{
+		const byte *node_bits = SV_PrepareBoxPVS (worldmodel, pvs, pvs_serial);
+		if (node_bits)
+			return SV_BoxInPVS_Prepared (mins, maxs, pvs, node, worldmodel->nodes, worldmodel->leafs, node_bits);
+	}
 
-	if (sides & 1 && SV_BoxInPVS(mins, maxs, pvs, node->children[0]))
-		return true;
+	return SV_BoxInPVS_Scan (mins, maxs, pvs, node, worldmodel->leafs);
+}
 
-	if (sides & 2 && SV_BoxInPVS(mins, maxs, pvs, node->children[1]))
-		return true;
-
-	return false;
+qboolean SV_BoxInPVS (vec3_t mins, vec3_t maxs, byte* pvs, mnode_t* node)
+{
+	return SV_BoxInPVS_Scan (mins, maxs, pvs, node, qcvm->worldmodel->leafs);
 }
 
 /*
@@ -669,10 +996,33 @@ void SV_LinkEdict (edict_t *ent, qboolean touch_triggers)
 		ent->v.absmax[2] += 1;
 	}
 
-// link to PVS leafs
-	ent->num_leafs = 0;
+	SV_PushCache_RefreshEdict (ent);
+
+// link to PVS leafs (reuse cached leafs when worldmodel and absbox are unchanged)
 	if (ent->v.modelindex)
-		SV_FindTouchedLeafs (ent, qcvm->worldmodel->nodes);
+	{
+		const qmodel_t *wm = qcvm->worldmodel;
+		if (ent->leafs_model != wm || ent->leafs_modgen != mod_generation ||
+			ent->leafs_absmin[0] != ent->v.absmin[0] ||
+			ent->leafs_absmin[1] != ent->v.absmin[1] ||
+			ent->leafs_absmin[2] != ent->v.absmin[2] ||
+			ent->leafs_absmax[0] != ent->v.absmax[0] ||
+			ent->leafs_absmax[1] != ent->v.absmax[1] ||
+			ent->leafs_absmax[2] != ent->v.absmax[2])
+		{
+			ent->num_leafs = 0;
+			SV_FindTouchedLeafs_Walk (ent, ent->v.absmin, ent->v.absmax, wm->leafs, wm->nodes);
+			ent->leafs_model = wm;
+			ent->leafs_modgen = mod_generation;
+			VectorCopy (ent->v.absmin, ent->leafs_absmin);
+			VectorCopy (ent->v.absmax, ent->leafs_absmax);
+		}
+	}
+	else
+	{
+		ent->num_leafs = 0;
+		ent->leafs_model = NULL;
+	}
 
 	if (ent->v.solid == SOLID_NOT)
 		return;

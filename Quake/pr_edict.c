@@ -1824,6 +1824,7 @@ void PR_ClearProgs(qcvm_t *vm)
 	if (qcvm->knownstrings)
 		Z_Free ((void *)qcvm->knownstrings);
 	free(qcvm->pushcache);
+	free(qcvm->pushcache_map);
 	free(qcvm->edicts); // ericw -- sv.edicts switched to use malloc()
 	free(qcvm->savefield_words);
 	if (qcvm->fielddefs != (ddef_t *)((byte *)qcvm->progs + qcvm->progs->ofs_fielddefs))

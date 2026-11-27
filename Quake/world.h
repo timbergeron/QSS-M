@@ -66,6 +66,7 @@ void SV_UnlinkEdict (edict_t *ent);
 // flags ent->v.modified
 
 qboolean SV_BoxInPVS (vec3_t mins, vec3_t maxs, byte* pvs, mnode_t* node); // woods #pvsoverflow
+qboolean SV_BoxInPVSWithSerial (vec3_t mins, vec3_t maxs, const byte *pvs, unsigned int pvs_serial, const qmodel_t *worldmodel, const mnode_t *node);
 
 void SV_LinkEdict (edict_t *ent, qboolean touch_triggers);
 // Needs to be called any time an entity changes origin, mins, maxs, or solid
