@@ -263,10 +263,15 @@ struct pr_extfuncs_s
 	QCEXTFUNC(CSQC_Input_Frame,			"void()")															/*full only: input angles stuff.*/	\
 	QCEXTFUNC(CSQC_Parse_CenterPrint,	"float(string msg)")												\
 	QCEXTFUNC(CSQC_Parse_Print,			"void(string printmsg, float printlvl)")							\
+	QCEXTFUNC(CSQC_Ent_Spawn,			"void(float entnum)")											/*full: spawn an entity and leave it in self*/\
 	QCEXTFUNC(CSQC_Ent_Update,			"void(float isnew)")												/*full: lots of reads needed to interpret the bytestream*/	\
 	QCEXTFUNC(CSQC_Ent_Remove,			"void()")															/*full: basically just remove(self)*/\
 	QCEXTFUNC(CSQC_Event_Sound,			"float(float entnum, float channel, string soundname, float vol, float attenuation, vector pos, float pitchmod, float flags)") /*full: return true to suppress engine playback*/\
 	QCEXTFUNC(CSQC_Parse_TempEntity,	"float()")															/*full: evil... This is the bane of all protocol compatibility. Die.*/	\
+	QCEXTFUNC(CSQC_Parse_SetAngles,		"float(vector angles, float isdelta)")								/*full: return true to stop the engine changing the view angles*/	\
+	QCEXTFUNC(CSQC_PlayerInfoChanged,	"void(float playernum)")											\
+	QCEXTFUNC(CSQC_ServerInfoChanged,	"void()")															\
+	QCEXTFUNC(CSQC_RendererRestarted,	"void(string rendererdescription)")									/*textures/shaders were reloaded*/	\
 	QCEXTFUNC(CSQC_Parse_StuffCmd,		"void(string msg)")													/*full only: not in simple. Too easy to make cheats by ignoring server messages.*/	\
 /*menucsqc*/
 #define QCEXTFUNCS_MENU \
@@ -350,6 +355,11 @@ struct pr_extglobals_s
 	QCEXTGLOBAL_FLOAT(pmove_jump_held)\
 	QCEXTGLOBAL_FLOAT(pmove_waterjumptime)\
 	QCEXTGLOBAL_FLOAT(pmove_onground)\
+	QCEXTGLOBAL_FLOAT(servertime)\
+	QCEXTGLOBAL_FLOAT(serverprevtime)\
+	QCEXTGLOBAL_FLOAT(serverdeltatime)\
+	QCEXTGLOBAL_FLOAT(gamespeed)\
+	QCEXTGLOBAL_FLOAT(numclientseats)\
 	//end
 #define QCEXTGLOBALS_CLIENT_UI \
 	QCEXTGLOBAL_FLOAT(autocvar_vid_conwidth)\
@@ -602,6 +612,10 @@ void PR_SwitchQCVM(qcvm_t *nvm);
 void PR_GetSetInputs(usercmd_t *cmd, qboolean set);
 void PR_CSQC_BeginRenderFrame(void);
 void PR_CSQC_SyncGlobals(void);
+qboolean PR_CSQC_Parse_SetAngles(const vec3_t angles, qboolean isdelta);
+void PR_CSQC_PlayerInfoChanged(int player);
+void PR_CSQC_ServerInfoChanged(void);
+void PR_CSQC_RendererRestarted(qboolean initializing);
 
 extern const builtin_t pr_ssqcbuiltins[];
 extern const int pr_ssqcnumbuiltins;

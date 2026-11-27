@@ -2222,6 +2222,17 @@ void SV_Physics (double frametime)
 	//and can assign movetype directly, so never trust a cache built before now.
 	qcvm->pushcache_valid = false;
 
+	// Full CSQC still gets StartFrame when its entity physics is disabled.
+	if (pr_global_struct->StartFrame &&
+		(qcvm == &cl.qcvm ? !qcvm->nogameaccess && cls.signon == SIGNONS
+		                  : physics_mode != 0 && physics_mode != 1))
+	{
+		pr_global_struct->self = EDICT_TO_PROG(qcvm->edicts);
+		pr_global_struct->other = EDICT_TO_PROG(qcvm->edicts);
+		pr_global_struct->time = qcvm->time;
+		PR_ExecuteProgram (pr_global_struct->StartFrame);
+	}
+
 	if (!physics_mode)
 	{
 		qcvm->time += frametime;
@@ -2239,15 +2250,6 @@ void SV_Physics (double frametime)
 		return;
 	}
 //	else if (physics_mode==2) standard quake physics
-
-// let the progs know that a new frame has started
-	if (pr_global_struct->StartFrame)
-	{
-		pr_global_struct->self = EDICT_TO_PROG(qcvm->edicts);
-		pr_global_struct->other = EDICT_TO_PROG(qcvm->edicts);
-		pr_global_struct->time = qcvm->time;
-		PR_ExecuteProgram (pr_global_struct->StartFrame);
-	}
 
 //
 // treat each object in turn

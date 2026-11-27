@@ -1849,6 +1849,8 @@ static void VID_Restart (void)
 		S_UnblockSound ();
 
 	scr_disabled_for_loading = scr_was_disabled;
+
+	PR_CSQC_RendererRestarted (false); // textures were purged and reloaded; let csqc re-create any it generated
 }
 
 /*

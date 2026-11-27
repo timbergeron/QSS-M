@@ -849,6 +849,17 @@ static void CSQC_ClearCsEdictForSSQC(size_t entnum)
 			ED_Free(ed);
 	}
 }
+static edict_t *CSQC_EntityFromSelf(void)
+{
+	unsigned int offset = pr_global_struct->self;
+	edict_t *ed;
+
+	if (!offset || offset % qcvm->edict_size || offset / qcvm->edict_size >= (unsigned int)qcvm->num_edicts)
+		return NULL;
+	ed = PROG_TO_EDICT(offset);
+	return ed->free ? NULL : ed;
+}
+
 static void CSQC_UpdateCsEdictForSSQC(size_t entnum)
 {
 	edict_t *ed;
@@ -871,8 +882,22 @@ static void CSQC_UpdateCsEdictForSSQC(size_t entnum)
 	ed = cl.ssqc_to_csqc[entnum];
 	if (!ed)
 	{
-		//allocate our new ent.
-		ed = cl.ssqc_to_csqc[entnum] = ED_Alloc();
+		if (qcvm->extfuncs.CSQC_Ent_Spawn)
+		{
+			int start = msg_readcount;
+			qboolean badread = msg_badread;
+
+			pr_global_struct->self = 0;
+			G_FLOAT(OFS_PARM0) = entnum;
+			PR_ExecuteProgram(qcvm->extfuncs.CSQC_Ent_Spawn);
+			// Only Ent_Update reads the entity payload.
+			msg_readcount = start;
+			msg_badread = badread;
+			ed = CSQC_EntityFromSelf();
+		}
+		if (!ed)
+			ed = ED_Alloc();
+		cl.ssqc_to_csqc[entnum] = ed;
 
 		//fill its entnum field too.
 		ev = GetEdictFieldValue(ed, qcvm->extfields.entnum);
@@ -886,6 +911,8 @@ static void CSQC_UpdateCsEdictForSSQC(size_t entnum)
 	G_FLOAT(OFS_PARM0) = isnew;
 	pr_global_struct->self = EDICT_TO_PROG(ed);
 	PR_ExecuteProgram(cl.qcvm.extfuncs.CSQC_Ent_Update);
+	if (qcvm->extfuncs.CSQC_Ent_Spawn)
+		cl.ssqc_to_csqc[entnum] = CSQC_EntityFromSelf();
 }
 
 //csqc entities protocol, payload is identical in both fte+dp. just the svcs differ.
@@ -5496,8 +5523,14 @@ void CL_ParseServerMessage (void)
 			break;
 
 		case svc_setangle:
-			for (i=0 ; i<3 ; i++)
-				cl.viewangles[i] = MSG_ReadAngle (cl.protocolflags);
+			{
+				vec3_t newangles;
+				for (i=0 ; i<3 ; i++)
+					newangles[i] = MSG_ReadAngle (cl.protocolflags);
+				if (PR_CSQC_Parse_SetAngles(newangles, false))
+					break;	//csqc took it
+				VectorCopy (newangles, cl.viewangles);
+			}
 
 			if (!cls.demoplayback) // woods #smoothcam
 			{
@@ -5518,8 +5551,13 @@ void CL_ParseServerMessage (void)
 
 			break;
 		case svcfte_setangledelta:
-			for (i=0 ; i<3 ; i++)
-				cl.viewangles[i] += MSG_ReadAngle16 (cl.protocolflags);
+			{
+				vec3_t delta;
+				for (i=0 ; i<3 ; i++)
+					delta[i] = MSG_ReadAngle16 (cl.protocolflags);
+				if (!PR_CSQC_Parse_SetAngles(delta, true))
+					VectorAdd (cl.viewangles, delta, cl.viewangles);
+			}
 			break;
 
 		case svc_setview:
@@ -5573,6 +5611,7 @@ void CL_ParseServerMessage (void)
 			}
 			CL_UpdateIgnoredChatSlot(i, cl.scores[i].name);
 			CL_Translate_PlayerChanged(i, cl.scores[i].name);
+			PR_CSQC_PlayerInfoChanged(i);
 			break;
 
 		case svc_updatefrags:
@@ -5609,6 +5648,7 @@ void CL_ParseServerMessage (void)
 			CL_NewTranslation (i, j);
 			Info_SetKey(cl.scores[i].userinfo, sizeof(cl.scores[i].userinfo), "topcolor", va("%d", cl.scores[i].shirt.basic));
 			Info_SetKey(cl.scores[i].userinfo, sizeof(cl.scores[i].userinfo), "bottomcolor", va("%d", cl.scores[i].pants.basic));
+			PR_CSQC_PlayerInfoChanged(i);
 			break;
 
 		case svc_particle:

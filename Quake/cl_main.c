@@ -7637,6 +7637,7 @@ static void CL_ServerExtension_FullServerinfo_f(void)
 
 	CL_UpdatePlaymodeFromServerinfo ();
 	PMCL_ServerinfoUpdated();
+	PR_CSQC_ServerInfoChanged();
 }
 static void CL_ServerExtension_ServerinfoUpdate_f(void)
 {
@@ -7646,6 +7647,7 @@ static void CL_ServerExtension_ServerinfoUpdate_f(void)
 
 	CL_UpdatePlaymodeFromServerinfo ();
 	PMCL_ServerinfoUpdated();
+	PR_CSQC_ServerInfoChanged();
 }
 
 int	Sbar_ColorForMap (int m);
@@ -7724,6 +7726,7 @@ static void CL_ServerExtension_FullUserinfo_f(void)
 		scoreboard_t *sb = &cl.scores[slot];
 		Q_strncpy(sb->userinfo, newserverinfo, sizeof(sb->userinfo));	//just replace it
 		CL_UserinfoChanged(sb);
+		PR_CSQC_PlayerInfoChanged((int)slot);
 	}
 }
 static void CL_ServerExtension_UserinfoUpdate_f(void)
@@ -7736,6 +7739,7 @@ static void CL_ServerExtension_UserinfoUpdate_f(void)
 		scoreboard_t *sb = &cl.scores[slot];
 		Info_SetKey(sb->userinfo, sizeof(sb->userinfo), newserverkey, newservervalue);
 		CL_UserinfoChanged(sb);
+		PR_CSQC_PlayerInfoChanged((int)slot);
 	}
 }
 static void SV_DecodeUserInfo(client_t *client)

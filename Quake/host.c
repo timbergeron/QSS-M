@@ -3348,6 +3348,7 @@ static qboolean CL_LoadCSProgs(void)
 
 				qcvm->extfuncs.CSQC_Input_Frame = 0;		//prevent reading/writing input frames (no wallhacks please).
 				qcvm->extfuncs.CSQC_UpdateView = 0;		//will probably bug out. block it.
+				qcvm->extfuncs.CSQC_Ent_Spawn = 0;
 				qcvm->extfuncs.CSQC_Ent_Update = 0;		//don't let the qc know where ents are... the server should prevent this, but make sure the user didn't cheese a 'cmd enablecsqc'
 				qcvm->extfuncs.CSQC_Ent_Remove = 0;
 				qcvm->extfuncs.CSQC_Parse_StuffCmd = 0;	//don't allow blocking stuffcmds... though we can't prevent cvar queries+sets, so this is probably futile...
@@ -3392,6 +3393,7 @@ static qboolean CL_LoadCSProgs(void)
 				G_FLOAT(OFS_PARM2) = 10000*maj + 100*(min) + QUAKESPASM_VER_PATCH;
 				PR_ExecuteProgram(qcvm->extfuncs.CSQC_Init);
 			}
+			PR_CSQC_RendererRestarted(true);
 			if (qcvm->extfuncs.CSQC_WorldLoaded)
 				PR_ExecuteProgram(qcvm->extfuncs.CSQC_WorldLoaded);
 			qcvm->worldlocked = true;

@@ -10195,6 +10195,69 @@ void PR_CSQC_SyncGlobals(void)
 		*qcvm->extglobals.intermission = cl.intermission;
 	if (qcvm->extglobals.intermission_time)
 		*qcvm->extglobals.intermission_time = cl.completed_time;
+	if (qcvm->extglobals.servertime)
+		*qcvm->extglobals.servertime = cl.mtime[0];
+	if (qcvm->extglobals.serverprevtime)
+		*qcvm->extglobals.serverprevtime = cl.mtime[1];
+	if (qcvm->extglobals.serverdeltatime)
+		*qcvm->extglobals.serverdeltatime = cl.mtime[0] - cl.mtime[1];
+	if (qcvm->extglobals.gamespeed)
+		*qcvm->extglobals.gamespeed = cl.paused ? 0 : 1;	//like fte: 0 while paused, no timescale support
+	if (qcvm->extglobals.numclientseats)
+		*qcvm->extglobals.numclientseats = 1;	//no splitscreen
+}
+
+// FTE-compatible notification entrypoints. These run from network parsing / stuffcmd execution, never from inside a qc call.
+static qboolean PR_CSQC_Enter(func_t *fn)
+{
+	if (!cl.qcvm.progs || !*fn || qcvm)
+		return false;
+	PR_SwitchQCVM(&cl.qcvm);
+	PR_CSQC_SyncGlobals();
+	return true;
+}
+qboolean PR_CSQC_Parse_SetAngles(const vec3_t angles, qboolean isdelta)
+{
+	qboolean handled;
+	if (cl.qcvm.nogameaccess || !PR_CSQC_Enter(&cl.qcvm.extfuncs.CSQC_Parse_SetAngles))
+		return false;
+	G_VECTORSET(OFS_PARM0, angles[0], angles[1], angles[2]);
+	G_FLOAT(OFS_PARM1) = isdelta;
+	PR_ExecuteProgram(cl.qcvm.extfuncs.CSQC_Parse_SetAngles);
+	handled = !!G_FLOAT(OFS_RETURN);
+	PR_SwitchQCVM(NULL);
+	return handled;
+}
+void PR_CSQC_PlayerInfoChanged(int player)
+{
+	if (!PR_CSQC_Enter(&cl.qcvm.extfuncs.CSQC_PlayerInfoChanged))
+		return;
+	G_FLOAT(OFS_PARM0) = player;
+	PR_ExecuteProgram(cl.qcvm.extfuncs.CSQC_PlayerInfoChanged);
+	PR_SwitchQCVM(NULL);
+}
+void PR_CSQC_ServerInfoChanged(void)
+{
+	if (!PR_CSQC_Enter(&cl.qcvm.extfuncs.CSQC_ServerInfoChanged))
+		return;
+	PR_ExecuteProgram(cl.qcvm.extfuncs.CSQC_ServerInfoChanged);
+	PR_SwitchQCVM(NULL);
+}
+void PR_CSQC_RendererRestarted(qboolean initializing)
+{
+	if (initializing)
+	{
+		if (!qcvm->extfuncs.CSQC_RendererRestarted)
+			return;
+	}
+	else if (cls.state != ca_connected || !cl.worldmodel ||
+		!PR_CSQC_Enter(&cl.qcvm.extfuncs.CSQC_RendererRestarted))
+		return;
+
+	G_INT(OFS_PARM0) = PR_MakeTempString("OpenGL");
+	PR_ExecuteProgram(cl.qcvm.extfuncs.CSQC_RendererRestarted);
+	if (!initializing)
+		PR_SwitchQCVM(NULL);
 }
 
 void V_CalcRefdef (void);
