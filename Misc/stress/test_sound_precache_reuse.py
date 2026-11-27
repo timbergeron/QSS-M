@@ -17,6 +17,7 @@ import tempfile
 ROOT = Path(__file__).resolve().parents[2]
 dma = (ROOT / "Quake/snd_dma.c").read_text(encoding="utf-8")
 mem = (ROOT / "Quake/snd_mem.c").read_text(encoding="utf-8")
+header = (ROOT / "Quake/q_sound.h").read_text(encoding="utf-8")
 
 
 def function(text, signature):
@@ -45,7 +46,7 @@ typedef unsigned char byte;
 #define false 0
 #define CHECK(x,m) do { if (!(x)) { puts("FAIL: " m); exit(1); } } while (0)
 typedef struct { void *data; } cache_user_t;
-typedef struct { char name[MAX_QPATH]; cache_user_t cache; unsigned int generation; const void *source; } sfx_t;
+''' + header[header.index("typedef struct sfx_s"):header.index("} sfx_t;") + len("} sfx_t;")] + r'''
 typedef struct { int length, loopstart, speed, width, stereo; byte data[1]; } sfxcache_t;
 typedef struct { int speed; } dma_t;
 typedef struct { int rate, width, channels, loopstart, samples, dataofs; } wavinfo_t;
@@ -57,6 +58,9 @@ static sfx_t storage[MAX_SFX], *known_sfx = storage, *ambient_sfx[NUM_AMBIENTS];
 static int num_sfx, snd_initialized = 1, file_from_pak, loads, frees;
 static qofs_t com_filesize;
 static unsigned int sfx_generation;
+static char muted_sounds[1][MAX_QPATH] = {"weapons/rocket.wav"};
+static int num_muted_sounds = 1;
+#define q_strcasecmp strcmp
 static int pak_a, pak_b, *provider = &pak_a;   /* which PACK currently provides sound/ files */
 static int loose;                               /* files come from a loose directory */
 static void Sys_Error (const char *s, ...) { printf ("FAIL: %s\n", s); exit (1); }
@@ -79,7 +83,7 @@ static void *Cache_Check (cache_user_t *c) { return c->data; }
 static void Cache_Free (cache_user_t *c) { free (c->data); c->data = NULL; frees++; }
 static void *Cache_Alloc (cache_user_t *c, int size, const char *n, void *x) { (void)n; (void)x; return c->data = calloc (1, size); }
 static void ResampleSfx (sfx_t *s, int rate, int width, byte *data) { sfxcache_t *sc = (sfxcache_t *)s->cache.data; (void)rate; (void)width; (void)data; sc->speed = shm->speed; }
-''' + function(dma, "static sfx_t *S_FindName (const char *name)") + function(dma, "void S_ClearPrecache (void)") + function(mem, "sfxcache_t *S_LoadSound (sfx_t *s)") + r'''
+''' + function(dma, "static int S_MutedSoundIndex (const char *name)") + function(dma, "static sfx_t *S_FindName (const char *name)") + function(dma, "void S_ClearPrecache (void)") + function(mem, "sfxcache_t *S_LoadSound (sfx_t *s)") + r'''
 int main (void)
 {
 	sfx_t *a, *b, *keep;
@@ -87,6 +91,7 @@ int main (void)
 	int i;
 
 	a = S_FindName ("weapons/rocket.wav");
+	CHECK (a->muted, "a sound named before precache starts muted");
 	CHECK (S_LoadSound (a) && loads == 1 && a->source == &pak_a, "first load records its PACK");
 	ambient_sfx[0] = a;
 	S_ClearPrecache ();
@@ -131,6 +136,8 @@ int main (void)
 	CHECK (!strcmp (keep->name, "weapons/rocket.wav"), "long-lived pointer still names its sound");
 	S_ClearPrecache ();                                  /* over a map's worth: start over */
 	CHECK (num_sfx == 0 && keep->name[0] == 0, "table resets like the original code");
+	CHECK (!S_FindName ("other.wav")->muted && S_FindName ("weapons/rocket.wav")->muted,
+		"mute survives the cache reset and follows the name, not the slot");
 	puts ("PASS: PACK samples reused, shadowed and loose sounds reload, wrong-rate samples rebuilt, no slot reuse, reset past a map's worth");
 	return 0;
 }

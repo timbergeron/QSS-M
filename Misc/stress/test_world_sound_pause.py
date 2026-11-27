@@ -170,8 +170,26 @@ int main(void) {
     S_Update_();
     assert(snd_channels[1].pos == pos + 100);
     assert(snd_channels[1].end - paintedtime == remaining - 100);
+    /* A named mute skips samples but advances only that sound's timeline. */
+    memset(snd_channels, 0, sizeof(snd_channels));
+    sfx_t other = effect;
+    effect.muted = true;
+    start(0, SND_LOOP_DEFAULT);
+    start(1, SND_LOOP_DEFAULT);
+    snd_channels[1].sfx = &other;
+    snd_channels[0].pos = 9998;
+    snd_channels[0].end = paintedtime + 2;
+    snd_channels[0].leftvol = snd_channels[0].rightvol = 0;
+    S_PaintChannels(paintedtime + 4);
+    int audible = captured[captured_count - 1];
+    assert(audible > 0 && snd_channels[0].pos == 2 && snd_channels[1].pos == 4);
+    effect.muted = false;
+    snd_channels[0].leftvol = snd_channels[1].leftvol;
+    snd_channels[0].rightvol = snd_channels[1].rightvol;
+    S_PaintChannels(paintedtime + 4);
+    assert(captured[captured_count - 1] == audible * 2 && snd_channels[0].pos == 6);
     free(cache);
-    puts("world sound pause: PASS");
+    puts("world sound pause and per-sound mute: PASS");
 }
 '''
 

@@ -44,6 +44,7 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 static void S_Play (void);
 static void S_PlayVol (void);
 static void S_SoundList (void);
+static void S_SetSoundMuted_f (void);
 static void S_Update_ (void);
 static void GetSoundtime (void);
 static void S_CompleteStartup (void);
@@ -118,6 +119,17 @@ static int SND_DeterministicSkip (int maxskip, int entnum, int entchannel,
 static sfx_t	*known_sfx = NULL;	// hunk allocated [MAX_SFX]
 static int	num_sfx;
 static unsigned int	sfx_generation;	// bumped per map; marks entries kept from earlier maps
+static char muted_sounds[64][MAX_QPATH];
+static int num_muted_sounds;
+
+static int S_MutedSoundIndex (const char *name)
+{
+	int i;
+	for (i = 0; i < num_muted_sounds; i++)
+		if (!q_strcasecmp(muted_sounds[i], name))
+			return i;
+	return -1;
+}
 
 static sfx_t	*ambient_sfx[NUM_AMBIENTS];
 
@@ -263,6 +275,7 @@ qboolean S_SoundPreview_Play(const char *name, float gain, qboolean loop)
 	}
 
 	q_strlcpy(sound_preview_sfx.name, name, sizeof(sound_preview_sfx.name));
+	sound_preview_sfx.muted = S_MutedSoundIndex(name) >= 0;
 	q_strlcpy(sound_preview.name, name, sizeof(sound_preview.name));
 	cache = S_LoadSound(&sound_preview_sfx);
 	if (!cache)
@@ -786,6 +799,8 @@ void S_Init (void)
 	Cmd_AddCommand("playvol", S_PlayVol);
 	Cmd_AddCommand("stopsound", S_StopAllSoundsC);
 	Cmd_AddCommand("soundlist", S_SoundList);
+	Cmd_AddCommand("snd_mute", S_SetSoundMuted_f);
+	Cmd_AddCommand("snd_unmute", S_SetSoundMuted_f);
 	Cmd_AddCommand("soundinfo", S_SoundInfo_f);
 	Cmd_AddCommand("sfx_preview", S_SoundPreview_f);
 	Cmd_AddCommand("snd_restart", S_Restart_f);
@@ -911,6 +926,7 @@ static sfx_t *S_FindName (const char *name)
 	sfx = &known_sfx[i];
 	q_strlcpy (sfx->name, name, sizeof(sfx->name));
 	sfx->generation = sfx_generation;
+	sfx->muted = S_MutedSoundIndex(name) >= 0;
 
 	num_sfx++;
 
@@ -1878,6 +1894,73 @@ static void S_SoundList (void)
 		Con_SafePrintf("(%2db) %6i : %s\n", sc->width*8, size, sfx->name); //johnfitz -- was Con_Printf
 	}
 	Con_Printf ("%i sounds, %i bytes\n", num_sfx, total); //johnfitz -- added count
+}
+
+static void S_SetSoundMuted_f (void)
+{
+	const qboolean mute = !q_strcasecmp(Cmd_Argv(0), "snd_mute");
+	const char *arg = Cmd_Argv(1);
+	char name[MAX_QPATH];
+	int i, slot;
+
+	if (mute && Cmd_Argc() == 1)
+	{
+		if (!num_muted_sounds)
+			Con_Printf("No individual sounds are muted\n");
+		for (i = 0; i < num_muted_sounds; i++)
+			Con_SafePrintf("%s\n", muted_sounds[i]);
+		return;
+	}
+	if (!q_strncasecmp(arg, "sound/", 6) || !q_strncasecmp(arg, "sound\\", 6))
+		arg += 6;
+	if (Cmd_Argc() != 2 || !*arg || q_strlcpy(name, arg, sizeof(name)) >= sizeof(name))
+	{
+		Con_Printf("usage: snd_mute [path] | snd_unmute <path>\n");
+		return;
+	}
+	for (i = 0; name[i]; i++)
+		if (name[i] == '\\')
+			name[i] = '/';
+
+	slot = S_MutedSoundIndex(name);
+	if (mute && slot < 0)
+	{
+		if (num_muted_sounds == (int)Q_COUNTOF(muted_sounds))
+		{
+			Con_Printf("Muted sound list is full. Unmute a sound first.\n");
+			return;
+		}
+		q_strlcpy(muted_sounds[num_muted_sounds++], name, sizeof(name));
+	}
+	else if (!mute)
+	{
+		if (slot < 0)
+		{
+			Con_Printf("%s is not muted\n", name);
+			return;
+		}
+		--num_muted_sounds;
+		if (slot < num_muted_sounds)
+			memmove(muted_sounds[slot], muted_sounds[slot + 1],
+				(num_muted_sounds - slot) * sizeof(muted_sounds[0]));
+	}
+	for (i = 0; i < num_sfx; i++)
+		if (!q_strcasecmp(known_sfx[i].name, name))
+			known_sfx[i].muted = mute;
+	if (!q_strcasecmp(sound_preview_sfx.name, name))
+		sound_preview_sfx.muted = mute;
+	Con_Printf("%s %s\n", mute ? "Muted" : "Unmuted", name);
+}
+
+qboolean CompleteMutedSoundList (const char* partial, void* unused)
+{
+	int i;
+
+	if (Cmd_Argc() != 2)
+		return false;
+	for (i = 0; i < num_muted_sounds; i++)
+		Con_AddToTabList(muted_sounds[i], partial, NULL, NULL);
+	return true;
 }
 
 qboolean CompleteSoundList (const char* partial, void* unused) // woods #iwtabcomplete

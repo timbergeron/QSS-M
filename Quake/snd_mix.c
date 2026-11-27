@@ -511,7 +511,7 @@ void S_PaintChannels (int endtime)
 					continue;
 				if (!ch->sfx)
 					continue;
-				if (!ch->leftvol && !ch->rightvol && !ch->advance_silently)
+				if (!ch->leftvol && !ch->rightvol && !ch->advance_silently && !ch->sfx->muted)
 					continue;
 				sc = S_LoadSound (ch->sfx);
 				if (!sc)
@@ -530,7 +530,9 @@ void S_PaintChannels (int endtime)
 					{
 						// the last param to SND_PaintChannelFrom is the index
 						// to start painting to in the paintbuffer, usually 0.
-						if (sc->width == 1)
+						if (ch->sfx->muted)
+							ch->pos += count;
+						else if (sc->width == 1)
 							SND_PaintChannelFrom8(ch, sc, count, ltime - paintedtime);
 						else
 							SND_PaintChannelFrom16(ch, sc, count, ltime - paintedtime);

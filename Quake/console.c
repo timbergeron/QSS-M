@@ -6953,6 +6953,7 @@ extern qboolean CompletePAKList(const char* partial, void* unused); // woods #un
 qboolean CompleteImageList (const char* partial, void* unused); // woods
 qboolean CompleteImageDump (const char* partial, void* unused); // woods
 qboolean CompleteSoundList (const char* partial, void* unused); // woods
+qboolean CompleteMutedSoundList (const char* partial, void* unused);
 qboolean CompleteGive (const char* partial, void* unused); // woods #give+
 qboolean CompleteMapSize (const char *partial, void *unused);
 qboolean CompleteRotateModel (const char* partial, void* unused); // woods #clmrotate
@@ -7008,6 +7009,8 @@ static const arg_completion_type_t arg_completion_types[] =
 	{ "play",					CompleteSoundList,		NULL },
 	{ "play2",					CompleteSoundList,		NULL },
 	{ "playvol",				CompleteSoundList,		NULL },
+	{ "snd_mute",				CompleteSoundList,		NULL },
+	{ "snd_unmute",				CompleteMutedSoundList,	NULL },
 	{ "screenshot",				CompleteScreenshotList,	NULL },
 	{ "writeconfig",			CompleteWriteCfg,		NULL },
 	{ "sv_protocol",			CompleteProtocols,		NULL },
