@@ -554,6 +554,11 @@ typedef struct
 } strisvert_t;
 static strisvert_t *cl_strispacked;
 static unsigned int cl_maxstrispacked;
+static unsigned short *cl_strisidxpacked;
+static unsigned int cl_maxstrisidxpacked;
+static scenetris_t *cl_strismerged;
+static byte *cl_strisemitted;
+static unsigned int cl_maxstrismerged;
 static GLuint cl_strisarrayvbo[PSCRIPT_VBO_RING];
 static GLuint cl_strisidxvbo[PSCRIPT_VBO_RING];
 static unsigned int cl_strisvboslot;
@@ -9571,8 +9576,26 @@ endtype:
 	GL_PolygonOffset (OFFSET_DECAL);
 	glDisable(GL_CULL_FACE);
 
+	static const struct
+	{
+		unsigned int order;
+		GLenum srcf;
+		GLenum dstf;
+	} factors[] = {
+		{1, GL_SRC_ALPHA,	GL_ONE_MINUS_SRC_ALPHA},	//BM_BLEND
+		{1, GL_SRC_COLOR,	GL_ONE_MINUS_SRC_COLOR},	//BM_BLENDCOLOUR
+		{2, GL_SRC_ALPHA,	GL_ONE},					//BM_ADDA
+		{2, GL_SRC_COLOR,	GL_ONE},					//BM_ADDC	sort-additive
+		{0, GL_SRC_ALPHA,	GL_ONE_MINUS_SRC_COLOR},	//BM_SUBTRACT
+		{0, GL_ZERO,		GL_ONE_MINUS_SRC_ALPHA},	//BM_INVMODA	sort-decal
+		{0, GL_ZERO,		GL_ONE_MINUS_SRC_COLOR},	//BM_INVMODC	sort-decal
+		{2, GL_ONE,			GL_ONE_MINUS_SRC_ALPHA}		//BM_PREMUL	sort-additive
+	};
+
 	//mess around with where glDrawElements gets its data from
 	qboolean usevbo = PScript_EnsureParticleVBOs();
+	qboolean merged_vbo = false;
+	unsigned int num_merged = 0;
 	if (usevbo)
 	{
 		unsigned int slot = cl_strisvboslot;
@@ -9592,7 +9615,88 @@ endtype:
 		GL_BindBuffer(GL_ARRAY_BUFFER, cl_strisarrayvbo[slot]);
 		GL_BufferDataFunc(GL_ARRAY_BUFFER, (GLsizeiptr)(sizeof(*cl_strispacked) * (size_t)cl_numstrisvert), cl_strispacked, GL_STREAM_DRAW);
 		GL_BindBuffer(GL_ELEMENT_ARRAY_BUFFER, cl_strisidxvbo[slot]);
-		GL_BufferDataFunc(GL_ELEMENT_ARRAY_BUFFER, (GLsizeiptr)(sizeof(*cl_strisidx) * (size_t)cl_numstrisidx), cl_strisidx, GL_STREAM_DRAW);
+
+		if (cl_numstrisvert <= 0xffffu)
+		{
+			unsigned int outidx = 0, k, m;
+
+			if (cl_numstrisidx > cl_maxstrisidxpacked)
+			{
+				cl_maxstrisidxpacked = (cl_numstrisidx + 255u) & ~255u;
+				cl_strisidxpacked = Z_Realloc(cl_strisidxpacked, sizeof(*cl_strisidxpacked) * cl_maxstrisidxpacked);
+			}
+			if (cl_numstris > cl_maxstrismerged)
+			{
+				cl_maxstrismerged = (cl_numstris + 15u) & ~15u;
+				cl_strismerged = Z_Realloc(cl_strismerged, sizeof(*cl_strismerged) * cl_maxstrismerged);
+				cl_strisemitted = Z_Realloc(cl_strisemitted, cl_maxstrismerged);
+			}
+			memset(cl_strisemitted, 0, cl_numstris);
+
+			for (o = 0; o < 3; o++)
+			{
+				for (i = 0; i < cl_numstris; i++)
+				{
+					scenetris_t *mr;
+					qboolean commutative;
+
+					if (cl_strisemitted[i] || factors[cl_stris[i].blendmode].order != o || !cl_stris[i].numidx)
+						continue;
+					mr = &cl_strismerged[num_merged++];
+					mr->texture = cl_stris[i].texture;
+					mr->blendmode = cl_stris[i].blendmode;
+					mr->beflags = cl_stris[i].beflags;
+					mr->firstidx = (int)outidx;
+					mr->firstvert = 0;
+					mr->numvert = 0;
+					mr->numidx = 0;
+
+					commutative = (mr->blendmode == BM_ADDA || mr->blendmode == BM_ADDC);
+					for (k = i; k < cl_numstris; k++)
+					{
+						unsigned short vbase;
+						const unsigned short *src;
+						unsigned int nidx;
+
+						if (cl_strisemitted[k] || !cl_stris[k].numidx)
+							continue;
+						if (factors[cl_stris[k].blendmode].order != o)
+							continue;
+						if (cl_stris[k].texture != mr->texture ||
+							cl_stris[k].blendmode != mr->blendmode ||
+							cl_stris[k].beflags != mr->beflags)
+						{
+							// Additive batches commute only with each other: a premultiplied
+							// (or any other) batch attenuates what is already drawn, so a later
+							// additive batch must not jump ahead of it.
+							if (!commutative ||
+								(cl_stris[k].blendmode != BM_ADDA && cl_stris[k].blendmode != BM_ADDC))
+								break;
+							continue;
+						}
+						cl_strisemitted[k] = 1;
+						vbase = (unsigned short)cl_stris[k].firstvert;
+						src = cl_strisidx + cl_stris[k].firstidx;
+						nidx = (unsigned int)cl_stris[k].numidx;
+						if (vbase == 0)
+						{
+							memcpy(cl_strisidxpacked + outidx, src, nidx * sizeof(*src));
+							outidx += nidx;
+						}
+						else
+						{
+							for (m = 0; m < nidx; m++)
+								cl_strisidxpacked[outidx++] = (unsigned short)(src[m] + vbase);
+						}
+						mr->numidx += (int)nidx;
+					}
+				}
+			}
+			GL_BufferDataFunc(GL_ELEMENT_ARRAY_BUFFER, (GLsizeiptr)(sizeof(*cl_strisidxpacked) * (size_t)outidx), cl_strisidxpacked, GL_STREAM_DRAW);
+			merged_vbo = true;
+		}
+		else
+			GL_BufferDataFunc(GL_ELEMENT_ARRAY_BUFFER, (GLsizeiptr)(sizeof(*cl_strisidx) * (size_t)cl_numstrisidx), cl_strisidx, GL_STREAM_DRAW);
 	}
 	else
 	{
@@ -9610,24 +9714,52 @@ endtype:
 	qboolean smoothlines = false;
 	unsigned int last_firstvert = ~0u;
 
+	if (merged_vbo)
+	{
+		glVertexPointer(3, GL_FLOAT, sizeof(*cl_strispacked), (const GLvoid *)(uintptr_t)offsetof(strisvert_t, xyz));
+		glTexCoordPointer(2, GL_FLOAT, sizeof(*cl_strispacked), (const GLvoid *)(uintptr_t)offsetof(strisvert_t, st));
+		glColorPointer(4, GL_FLOAT, sizeof(*cl_strispacked), (const GLvoid *)(uintptr_t)offsetof(strisvert_t, rgba));
+
+		for (i = 0; i < num_merged; i++)
+		{
+			const scenetris_t *mr = &cl_strismerged[i];
+			const GLvoid *indices = (const GLvoid *)(uintptr_t)((size_t)mr->firstidx * sizeof(*cl_strisidxpacked));
+
+			if (lastsrcf != factors[mr->blendmode].srcf || lastdstf != factors[mr->blendmode].dstf)
+			{
+				lastsrcf = factors[mr->blendmode].srcf;
+				lastdstf = factors[mr->blendmode].dstf;
+				glBlendFunc(lastsrcf, lastdstf);
+			}
+			if (mr->beflags & BEF_LINES)
+			{
+				if (textureenabled)
+				{
+					glDisable(GL_TEXTURE_2D);
+					textureenabled = false;
+				}
+				if (!smoothlines)
+				{
+					glShadeModel(GL_SMOOTH);
+					smoothlines = true;
+				}
+				glDrawElements(GL_LINES, mr->numidx, GL_UNSIGNED_SHORT, indices);
+			}
+			else
+			{
+				if (!textureenabled)
+				{
+					glEnable(GL_TEXTURE_2D);
+					textureenabled = true;
+				}
+				GL_Bind(mr->texture);
+				glDrawElements(GL_TRIANGLES, mr->numidx, GL_UNSIGNED_SHORT, indices);
+			}
+		}
+	}
+	else
 	for (o = 0; o < 3; o++)
 	{
-		static const struct
-		{
-			unsigned int order;
-			GLenum srcf;
-			GLenum dstf;
-		} factors[] = {
-			{1, GL_SRC_ALPHA,	GL_ONE_MINUS_SRC_ALPHA},	//BM_BLEND
-			{1, GL_SRC_COLOR,	GL_ONE_MINUS_SRC_COLOR},	//BM_BLENDCOLOUR
-			{2, GL_SRC_ALPHA,	GL_ONE},					//BM_ADDA
-			{2, GL_SRC_COLOR,	GL_ONE},					//BM_ADDC	sort-additive
-			{0, GL_SRC_ALPHA,	GL_ONE_MINUS_SRC_COLOR},	//BM_SUBTRACT
-			{0, GL_ZERO,		GL_ONE_MINUS_SRC_ALPHA},	//BM_INVMODA	sort-decal
-			{0, GL_ZERO,		GL_ONE_MINUS_SRC_COLOR},	//BM_INVMODC	sort-decal
-			{2, GL_ONE,			GL_ONE_MINUS_SRC_ALPHA}		//BM_PREMUL	sort-additive
-		};
-
 		for (i = 0; i < cl_numstris; i++)
 		{
 			const GLvoid *indices;
