@@ -8854,7 +8854,7 @@ static void PScript_DrawParticleTypes (float pframetime)
 										//remember that they're not drawn instantly either.
 	beamseg_t *b, *bkill;
 
-	int traces=r_particle_tracelimit.value;
+	int traces = (int)fmin(fmax(r_particle_tracelimit.value, 0.0), INT_MAX);
 	int rampind;
 	static float flurrytime;
 	qboolean doflurry;

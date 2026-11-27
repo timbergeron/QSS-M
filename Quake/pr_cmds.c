@@ -1077,7 +1077,7 @@ static void PF_ftos (void)
 
 	v = G_FLOAT(OFS_PARM0);
 	s = PR_GetTempString();
-	if (v == (int)v)
+	if ((double)v >= INT_MIN && (double)v <= INT_MAX && v == (int)v)
 		sprintf (s, "%d",(int)v);
 	else if (!pr_checkextension.value)
 		sprintf (s, "%5.1f",v);	//dodgy path

@@ -66,7 +66,7 @@ md5_init( void *context)
 #define FI(b, c, d) (c ^ (b | ~d))
 
 #define buf_put_le32(b,d) ((b)[0]=(d)&0xff, (b)[1]=((d)>>8)&0xff, (b)[2]=((d)>>16)&0xff, (b)[3]=((d)>>24)&0xff)
-#define buf_get_le32(b) ((b)[0]|((b)[1]<<8)|((b)[2]<<16)|((b)[3]<<24))
+#define buf_get_le32(b) ((b)[0]|((uint32_t)(b)[1]<<8)|((uint32_t)(b)[2]<<16)|((uint32_t)(b)[3]<<24))
 #define rol(value, bits) (((value) << (bits)) | ((value) >> (32 - (bits))))
 
 

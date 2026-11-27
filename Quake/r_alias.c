@@ -215,6 +215,12 @@ qboolean gl_alias_shaders_compiling_disconnected_restart = false;
 #define ALIAS_UPPER_TEXTURE_UNIT_INDEX 3
 #define ALIAS_EXTRA_SHELL_TEXTURE_UNIT_INDEX 4
 
+// OpenGL takes a byte offset for bound VBOs and a real pointer for client arrays.
+static inline const void *GL_AliasVertexOffset (const qmodel_t *model, size_t offset)
+{
+	return model->meshvboptr ? model->meshvboptr + offset : (const void *)(uintptr_t)offset;
+}
+
 /*
 =============
 GLARB_GetXYZOffset
@@ -223,20 +229,20 @@ Returns the offset of the first vertex's meshxyz_t.xyz in the vbo for the given
 model and pose.
 =============
 */
-static void *GLARB_GetXYZOffset_MDL (aliashdr_t *hdr, int pose)
+static const void *GLARB_GetXYZOffset_MDL (aliashdr_t *hdr, int pose)
 {
 	const size_t xyzoffs = offsetof (meshxyz_mdl_t, xyz);
-	return currententity->model->meshvboptr+(hdr->vbovertofs + (hdr->numverts_vbo * pose * sizeof (meshxyz_mdl_t)) + xyzoffs);
+	return GL_AliasVertexOffset (currententity->model, hdr->vbovertofs + (hdr->numverts_vbo * pose * sizeof (meshxyz_mdl_t)) + xyzoffs);
 }
-static void *GLARB_GetXYZOffset_MDLQF (aliashdr_t *hdr, int pose)
+static const void *GLARB_GetXYZOffset_MDLQF (aliashdr_t *hdr, int pose)
 {
 	const size_t xyzoffs = offsetof (meshxyz_mdl16_t, xyz);
-	return currententity->model->meshvboptr+(hdr->vbovertofs + (hdr->numverts_vbo * pose * sizeof (meshxyz_mdl16_t)) + xyzoffs);
+	return GL_AliasVertexOffset (currententity->model, hdr->vbovertofs + (hdr->numverts_vbo * pose * sizeof (meshxyz_mdl16_t)) + xyzoffs);
 }
-static void *GLARB_GetXYZOffset_MD3 (aliashdr_t *hdr, int pose)
+static const void *GLARB_GetXYZOffset_MD3 (aliashdr_t *hdr, int pose)
 {
 	const size_t xyzoffs = offsetof (meshxyz_md3_t, xyz);
-	return currententity->model->meshvboptr+(hdr->vbovertofs + (hdr->numverts_vbo * pose * sizeof (meshxyz_md3_t)) + xyzoffs);
+	return GL_AliasVertexOffset (currententity->model, hdr->vbovertofs + (hdr->numverts_vbo * pose * sizeof (meshxyz_md3_t)) + xyzoffs);
 }
 
 /*
@@ -247,20 +253,20 @@ Returns the offset of the first vertex's meshxyz_t.normal in the vbo for the
 given model and pose.
 =============
 */
-static void *GLARB_GetNormalOffset_MDL (aliashdr_t *hdr, int pose)
+static const void *GLARB_GetNormalOffset_MDL (aliashdr_t *hdr, int pose)
 {
 	const size_t normaloffs = offsetof (meshxyz_mdl_t, normal);
-	return currententity->model->meshvboptr+(hdr->vbovertofs + (hdr->numverts_vbo * pose * sizeof (meshxyz_mdl_t)) + normaloffs);
+	return GL_AliasVertexOffset (currententity->model, hdr->vbovertofs + (hdr->numverts_vbo * pose * sizeof (meshxyz_mdl_t)) + normaloffs);
 }
-static void *GLARB_GetNormalOffset_MDLQF (aliashdr_t *hdr, int pose)
+static const void *GLARB_GetNormalOffset_MDLQF (aliashdr_t *hdr, int pose)
 {
 	const size_t normaloffs = offsetof (meshxyz_mdl16_t, normal);
-	return currententity->model->meshvboptr+(hdr->vbovertofs + (hdr->numverts_vbo * pose * sizeof (meshxyz_mdl16_t)) + normaloffs);
+	return GL_AliasVertexOffset (currententity->model, hdr->vbovertofs + (hdr->numverts_vbo * pose * sizeof (meshxyz_mdl16_t)) + normaloffs);
 }
-static void *GLARB_GetNormalOffset_MD3 (aliashdr_t *hdr, int pose)
+static const void *GLARB_GetNormalOffset_MD3 (aliashdr_t *hdr, int pose)
 {
 	const size_t normaloffs = offsetof (meshxyz_md3_t, normal);
-	return currententity->model->meshvboptr+(hdr->vbovertofs + (hdr->numverts_vbo * pose * sizeof (meshxyz_md3_t)) + normaloffs);
+	return GL_AliasVertexOffset (currententity->model, hdr->vbovertofs + (hdr->numverts_vbo * pose * sizeof (meshxyz_md3_t)) + normaloffs);
 }
 
 /*
@@ -2257,7 +2263,7 @@ static void GL_BindAliasPose (aliashdr_t *paliashdr, const lerpdata_t *lerpdata)
 	switch(paliashdr->poseverttype)
 	{
 	case PV_QUAKE1:
-		GL_VertexAttribPointerFunc (texCoordsAttrIndex, 2, GL_FLOAT, GL_FALSE, 0, currententity->model->meshvboptr+paliashdr->vbostofs);
+		GL_VertexAttribPointerFunc (texCoordsAttrIndex, 2, GL_FLOAT, GL_FALSE, 0, GL_AliasVertexOffset (currententity->model, paliashdr->vbostofs));
 
 		GL_VertexAttribPointerFunc (pose1VertexAttrIndex, 4, GL_UNSIGNED_BYTE, GL_FALSE, sizeof (meshxyz_mdl_t), GLARB_GetXYZOffset_MDL (paliashdr, lerpdata->pose1));
 		GL_VertexAttribPointerFunc (pose2VertexAttrIndex, 4, GL_UNSIGNED_BYTE, GL_FALSE, sizeof (meshxyz_mdl_t), GLARB_GetXYZOffset_MDL (paliashdr, lerpdata->pose2));
@@ -2266,7 +2272,7 @@ static void GL_BindAliasPose (aliashdr_t *paliashdr, const lerpdata_t *lerpdata)
 		GL_VertexAttribPointerFunc (pose2NormalAttrIndex, 4, GL_BYTE, GL_TRUE, sizeof (meshxyz_mdl_t), GLARB_GetNormalOffset_MDL (paliashdr, lerpdata->pose2));
 		break;
 	case PV_QUAKEFORGE:
-		GL_VertexAttribPointerFunc (texCoordsAttrIndex, 2, GL_FLOAT, GL_FALSE, 0, currententity->model->meshvboptr+paliashdr->vbostofs);
+		GL_VertexAttribPointerFunc (texCoordsAttrIndex, 2, GL_FLOAT, GL_FALSE, 0, GL_AliasVertexOffset (currententity->model, paliashdr->vbostofs));
 
 		GL_VertexAttribPointerFunc (pose1VertexAttrIndex, 4, GL_UNSIGNED_SHORT, GL_FALSE, sizeof (meshxyz_mdl16_t), GLARB_GetXYZOffset_MDLQF (paliashdr, lerpdata->pose1));
 		GL_VertexAttribPointerFunc (pose2VertexAttrIndex, 4, GL_UNSIGNED_SHORT, GL_FALSE, sizeof (meshxyz_mdl16_t), GLARB_GetXYZOffset_MDLQF (paliashdr, lerpdata->pose2));
@@ -2275,7 +2281,7 @@ static void GL_BindAliasPose (aliashdr_t *paliashdr, const lerpdata_t *lerpdata)
 		GL_VertexAttribPointerFunc (pose2NormalAttrIndex, 4, GL_BYTE, GL_TRUE, sizeof (meshxyz_mdl16_t), GLARB_GetNormalOffset_MDLQF (paliashdr, lerpdata->pose2));
 		break;
 	case PV_QUAKE3:
-		GL_VertexAttribPointerFunc (texCoordsAttrIndex, 2, GL_FLOAT, GL_FALSE, 0, currententity->model->meshvboptr+paliashdr->vbostofs);
+		GL_VertexAttribPointerFunc (texCoordsAttrIndex, 2, GL_FLOAT, GL_FALSE, 0, GL_AliasVertexOffset (currententity->model, paliashdr->vbostofs));
 
 		GL_VertexAttribPointerFunc (pose1VertexAttrIndex, 4, GL_SHORT, GL_FALSE, sizeof (meshxyz_md3_t), GLARB_GetXYZOffset_MD3 (paliashdr, lerpdata->pose1));
 		GL_VertexAttribPointerFunc (pose2VertexAttrIndex, 4, GL_SHORT, GL_FALSE, sizeof (meshxyz_md3_t), GLARB_GetXYZOffset_MD3 (paliashdr, lerpdata->pose2));
@@ -2285,16 +2291,22 @@ static void GL_BindAliasPose (aliashdr_t *paliashdr, const lerpdata_t *lerpdata)
 		break;
 	case PV_IQM:
 		{
-			const iqmvert_t *pose = (const iqmvert_t*)(currententity->model->meshvboptr+paliashdr->vbovertofs + (paliashdr->numverts_vbo * 0 * sizeof (iqmvert_t)));
+			size_t offset = paliashdr->vbovertofs;
 
-			GL_VertexAttribPointerFunc (pose1VertexAttrIndex, 3, GL_FLOAT, GL_FALSE, sizeof (iqmvert_t), pose->xyz);
-			GL_VertexAttribPointerFunc (pose1NormalAttrIndex, 3, GL_FLOAT, GL_FALSE, sizeof (iqmvert_t), pose->norm);
-			GL_VertexAttribPointerFunc (boneWeightAttrIndex, 4, GL_FLOAT, GL_FALSE, sizeof (iqmvert_t), pose->weight);
-			GL_VertexAttribPointerFunc (boneIndexAttrIndex, 4, GL_UNSIGNED_BYTE, GL_FALSE, sizeof (iqmvert_t), pose->idx);
-			GL_VertexAttribPointerFunc (texCoordsAttrIndex, 2, GL_FLOAT, GL_FALSE, sizeof (iqmvert_t), pose->st);
+			GL_VertexAttribPointerFunc (pose1VertexAttrIndex, 3, GL_FLOAT, GL_FALSE, sizeof (iqmvert_t),
+				GL_AliasVertexOffset (currententity->model, offset + offsetof(iqmvert_t, xyz)));
+			GL_VertexAttribPointerFunc (pose1NormalAttrIndex, 3, GL_FLOAT, GL_FALSE, sizeof (iqmvert_t),
+				GL_AliasVertexOffset (currententity->model, offset + offsetof(iqmvert_t, norm)));
+			GL_VertexAttribPointerFunc (boneWeightAttrIndex, 4, GL_FLOAT, GL_FALSE, sizeof (iqmvert_t),
+				GL_AliasVertexOffset (currententity->model, offset + offsetof(iqmvert_t, weight)));
+			GL_VertexAttribPointerFunc (boneIndexAttrIndex, 4, GL_UNSIGNED_BYTE, GL_FALSE, sizeof (iqmvert_t),
+				GL_AliasVertexOffset (currententity->model, offset + offsetof(iqmvert_t, idx)));
+			GL_VertexAttribPointerFunc (texCoordsAttrIndex, 2, GL_FLOAT, GL_FALSE, sizeof (iqmvert_t),
+				GL_AliasVertexOffset (currententity->model, offset + offsetof(iqmvert_t, st)));
 
 			GL_EnableVertexAttribArrayFunc (vertColoursAttrIndex);
-			GL_VertexAttribPointerFunc (vertColoursAttrIndex, 4, GL_FLOAT, GL_FALSE, sizeof (iqmvert_t), pose->rgba);
+			GL_VertexAttribPointerFunc (vertColoursAttrIndex, 4, GL_FLOAT, GL_FALSE, sizeof (iqmvert_t),
+				GL_AliasVertexOffset (currententity->model, offset + offsetof(iqmvert_t, rgba)));
 		}
 		break;
 	}
@@ -2786,7 +2798,7 @@ void GL_DrawAliasFrame (aliashdr_t *paliashdr, lerpdata_t lerpdata)
 	static	vec4_t vc[65536];
 	int i;
 	float	blend, iblend;
-	const float *texcoords = (const float *)(currententity->model->meshvboptr+paliashdr->vbostofs);
+	const float *texcoords = (const float *)GL_AliasVertexOffset (currententity->model, paliashdr->vbostofs);
 	int texcoordstride = 0;
 	qboolean use_viewmodel_stencil = false;
 	GLuint viewmodel_stencil_bit = GL_VIEWMODEL_STENCIL_BIT();
@@ -3991,7 +4003,7 @@ static void R_AliasInst_BindAttribs (qmodel_t *model, aliashdr_t *hdr,
 			*last_ebo = model->meshindexesvbo;
 	}
 	GL_VertexAttribPointerFunc (texCoordsAttrIndex, 2, GL_FLOAT, GL_FALSE, 0,
-		model->meshvboptr + hdr->vbostofs);
+		GL_AliasVertexOffset (model, hdr->vbostofs));
 	GL_VertexAttribPointerFunc (pose1VertexAttrIndex, 4, GL_UNSIGNED_BYTE, GL_FALSE,
 		sizeof(meshxyz_mdl_t), GLARB_GetXYZOffset_MDL(hdr, lerp->pose1));
 	GL_VertexAttribPointerFunc (pose2VertexAttrIndex, 4, GL_UNSIGNED_BYTE, GL_FALSE,
@@ -5471,7 +5483,7 @@ static void GL_DrawAliasShadow_GLSL (aliasglsl_t *glsl, aliashdr_t *paliashdr, l
 	switch(paliashdr->poseverttype)
 	{
 	case PV_QUAKE1:
-		GL_VertexAttribPointerFunc (texCoordsAttrIndex, 2, GL_FLOAT, GL_FALSE, 0, e->model->meshvboptr+paliashdr->vbostofs);
+		GL_VertexAttribPointerFunc (texCoordsAttrIndex, 2, GL_FLOAT, GL_FALSE, 0, GL_AliasVertexOffset (e->model, paliashdr->vbostofs));
 
 		GL_VertexAttribPointerFunc (pose1VertexAttrIndex, 4, GL_UNSIGNED_BYTE, GL_FALSE, sizeof (meshxyz_mdl_t), GLARB_GetXYZOffset_MDL (paliashdr, lerpdata.pose1));
 		GL_VertexAttribPointerFunc (pose2VertexAttrIndex, 4, GL_UNSIGNED_BYTE, GL_FALSE, sizeof (meshxyz_mdl_t), GLARB_GetXYZOffset_MDL (paliashdr, lerpdata.pose2));
@@ -5480,7 +5492,7 @@ static void GL_DrawAliasShadow_GLSL (aliasglsl_t *glsl, aliashdr_t *paliashdr, l
 		GL_VertexAttribPointerFunc (pose2NormalAttrIndex, 4, GL_BYTE, GL_TRUE, sizeof (meshxyz_mdl_t), GLARB_GetNormalOffset_MDL (paliashdr, lerpdata.pose2));
 		break;
 	case PV_QUAKEFORGE:
-		GL_VertexAttribPointerFunc (texCoordsAttrIndex, 2, GL_FLOAT, GL_FALSE, 0, e->model->meshvboptr+paliashdr->vbostofs);
+		GL_VertexAttribPointerFunc (texCoordsAttrIndex, 2, GL_FLOAT, GL_FALSE, 0, GL_AliasVertexOffset (e->model, paliashdr->vbostofs));
 
 		GL_VertexAttribPointerFunc (pose1VertexAttrIndex, 4, GL_UNSIGNED_SHORT, GL_FALSE, sizeof (meshxyz_mdl16_t), GLARB_GetXYZOffset_MDLQF (paliashdr, lerpdata.pose1));
 		GL_VertexAttribPointerFunc (pose2VertexAttrIndex, 4, GL_UNSIGNED_SHORT, GL_FALSE, sizeof (meshxyz_mdl16_t), GLARB_GetXYZOffset_MDLQF (paliashdr, lerpdata.pose2));
@@ -5488,7 +5500,7 @@ static void GL_DrawAliasShadow_GLSL (aliasglsl_t *glsl, aliashdr_t *paliashdr, l
 		GL_VertexAttribPointerFunc (pose2NormalAttrIndex, 4, GL_BYTE, GL_TRUE, sizeof (meshxyz_mdl16_t), GLARB_GetNormalOffset_MDLQF (paliashdr, lerpdata.pose2));
 		break;
 	case PV_QUAKE3:
-		GL_VertexAttribPointerFunc (texCoordsAttrIndex, 2, GL_FLOAT, GL_FALSE, 0, e->model->meshvboptr+paliashdr->vbostofs);
+		GL_VertexAttribPointerFunc (texCoordsAttrIndex, 2, GL_FLOAT, GL_FALSE, 0, GL_AliasVertexOffset (e->model, paliashdr->vbostofs));
 
 		GL_VertexAttribPointerFunc (pose1VertexAttrIndex, 4, GL_SHORT, GL_FALSE, sizeof (meshxyz_md3_t), GLARB_GetXYZOffset_MD3 (paliashdr, lerpdata.pose1));
 		GL_VertexAttribPointerFunc (pose2VertexAttrIndex, 4, GL_SHORT, GL_FALSE, sizeof (meshxyz_md3_t), GLARB_GetXYZOffset_MD3 (paliashdr, lerpdata.pose2));
@@ -5497,16 +5509,22 @@ static void GL_DrawAliasShadow_GLSL (aliasglsl_t *glsl, aliashdr_t *paliashdr, l
 		break;
 	case PV_IQM:
 		{
-			const iqmvert_t *pose = (const iqmvert_t*)(e->model->meshvboptr+paliashdr->vbovertofs + (paliashdr->numverts_vbo * 0 * sizeof (iqmvert_t)));
+			size_t offset = paliashdr->vbovertofs;
 
-			GL_VertexAttribPointerFunc (pose1VertexAttrIndex, 3, GL_FLOAT, GL_FALSE, sizeof (iqmvert_t), pose->xyz);
-			GL_VertexAttribPointerFunc (pose1NormalAttrIndex, 3, GL_FLOAT, GL_FALSE, sizeof (iqmvert_t), pose->norm);
-			GL_VertexAttribPointerFunc (boneWeightAttrIndex, 4, GL_FLOAT, GL_FALSE, sizeof (iqmvert_t), pose->weight);
-			GL_VertexAttribPointerFunc (boneIndexAttrIndex, 4, GL_UNSIGNED_BYTE, GL_FALSE, sizeof (iqmvert_t), pose->idx);
-			GL_VertexAttribPointerFunc (texCoordsAttrIndex, 2, GL_FLOAT, GL_FALSE, sizeof (iqmvert_t), pose->st);
+			GL_VertexAttribPointerFunc (pose1VertexAttrIndex, 3, GL_FLOAT, GL_FALSE, sizeof (iqmvert_t),
+				GL_AliasVertexOffset (e->model, offset + offsetof(iqmvert_t, xyz)));
+			GL_VertexAttribPointerFunc (pose1NormalAttrIndex, 3, GL_FLOAT, GL_FALSE, sizeof (iqmvert_t),
+				GL_AliasVertexOffset (e->model, offset + offsetof(iqmvert_t, norm)));
+			GL_VertexAttribPointerFunc (boneWeightAttrIndex, 4, GL_FLOAT, GL_FALSE, sizeof (iqmvert_t),
+				GL_AliasVertexOffset (e->model, offset + offsetof(iqmvert_t, weight)));
+			GL_VertexAttribPointerFunc (boneIndexAttrIndex, 4, GL_UNSIGNED_BYTE, GL_FALSE, sizeof (iqmvert_t),
+				GL_AliasVertexOffset (e->model, offset + offsetof(iqmvert_t, idx)));
+			GL_VertexAttribPointerFunc (texCoordsAttrIndex, 2, GL_FLOAT, GL_FALSE, sizeof (iqmvert_t),
+				GL_AliasVertexOffset (e->model, offset + offsetof(iqmvert_t, st)));
 
 			GL_EnableVertexAttribArrayFunc (vertColoursAttrIndex);
-			GL_VertexAttribPointerFunc (vertColoursAttrIndex, 4, GL_FLOAT, GL_FALSE, sizeof (iqmvert_t), pose->rgba);
+			GL_VertexAttribPointerFunc (vertColoursAttrIndex, 4, GL_FLOAT, GL_FALSE, sizeof (iqmvert_t),
+				GL_AliasVertexOffset (e->model, offset + offsetof(iqmvert_t, rgba)));
 		}
 		break;
 	}
