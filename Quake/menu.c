@@ -81,6 +81,27 @@ void (*vid_menumousefn)(int cx, int cy); // woods #mousemenu
 enum m_state_e m_state;
 int m_mousex, m_mousey; // woods #mousemenu
 
+/* woods -- usable menu area in CANVAS_MENU units (iw). The classic slot is
+   (0,0)-(320,200); list menus grow into the extra room a larger window gives
+   at the current scr_menuscale. Refreshed by M_UpdateBounds every frame. */
+static int m_left = 0, m_top = 0, m_width = 320, m_height = 200;
+static int m_namecols = 12; // name column width for the M_PrintScroll*2 helpers
+/* The name column the two-column helpers actually use: the longest name
+   (max_word_length) capped at m_namecols. Truncation, padding (+1, so a space
+   always separates name and description) and the description x all use it. */
+static int M_NameColWidth (void)
+{
+	int w = max_word_length > 0 ? max_word_length : m_namecols;
+	return q_max (1, q_min (w, m_namecols));
+}
+/* Classic layouts pin list menus to x 16 / y 32 with 36 columns and put the
+   search box at y 176. These map those spots into the current bounds: left
+   and top edges follow m_left/m_top, bottom-anchored rows move down with the
+   extra height, and lists gain one row per 8 extra units. */
+#define M_LIST_COLS		(m_width / 8 - 4)
+#define M_EXTRA_ROWS	((m_height - 200) / 8)
+#define M_BOTTOM(y)		(m_top + (y) + (m_height - 200))
+
 extern cvar_t net_master_ignore;
 
 void M_Menu_Main_f (void);
@@ -1398,15 +1419,16 @@ static void M_PrintScrollOnce2(int x, int y, int maxwidth,
 	char masked_name[MAX_QPATH];
 	char combined[MAX_CHAT_SIZE_EX];
 	int len_str = (int)strlen(str);
-	int effective_len_str = time != 0.0 ? len_str : q_min(len_str, 12);
+	int namecol = M_NameColWidth();
+	int effective_len_str = time != 0.0 ? len_str : q_min(len_str, namecol);
 	int name_len = q_min(effective_len_str, (int)sizeof(masked_name) - 1);
-	int padding_width = q_min(max_word_length + 1, 13);
+	int padding_width = namecol + 1;
 
 	for (int i = 0; i < name_len; ++i)
 		masked_name[i] = (char)((unsigned char)str[i] ^ (name_red ? 128 : 0));
 	masked_name[name_len] = '\0';
 
-	if (time != 0.0 && len_str > 12)
+	if (time != 0.0 && len_str > namecol)
 		q_snprintf(combined, sizeof(combined), "%-*s %s",
 			padding_width, masked_name, str2);
 	else
@@ -1423,8 +1445,9 @@ static void M_PrintHighlightScrollOnce2(int x, int y, int maxwidth,
 	char combined[MAX_CHAT_SIZE_EX];
 	char styled[MAX_CHAT_SIZE_EX];
 	int len_str = (int)strlen(str);
-	int effective_len_str = time != 0.0 ? len_str : q_min(len_str, 12);
-	int padding_width = q_min(max_word_length + 1, 13);
+	int namecol = M_NameColWidth();
+	int effective_len_str = time != 0.0 ? len_str : q_min(len_str, namecol);
+	int padding_width = namecol + 1;
 	int actual_name_len;
 	int combined_len;
 	int name_highlight_start = -1;
@@ -1436,7 +1459,7 @@ static void M_PrintHighlightScrollOnce2(int x, int y, int maxwidth,
 	if (effective_len_str < len_str && effective_len_str < (int)sizeof(name_str))
 		name_str[effective_len_str] = '\0';
 
-	if (time != 0.0 && len_str > 12)
+	if (time != 0.0 && len_str > namecol)
 		q_snprintf(name_portion, sizeof(name_portion), "%s ", name_str);
 	else
 		q_snprintf(name_portion, sizeof(name_portion), "%-*s", padding_width, name_str);
@@ -1695,7 +1718,8 @@ void M_PrintScroll2(int x, int y, int maxwidth, const char* str, const char* str
 	int len_str = (int)strlen(str);
 
 	// Determine effective name length based on scroll state
-	int effective_len_str = (time != 0.0) ? len_str : q_min(len_str, 12);
+	int namecol = M_NameColWidth();
+	int effective_len_str = (time != 0.0) ? len_str : q_min(len_str, namecol);
 
 	// Create masked version of name
 	char masked_str[MAX_QPATH];
@@ -1705,12 +1729,12 @@ void M_PrintScroll2(int x, int y, int maxwidth, const char* str, const char* str
 		masked_str[i] = (char)(str[i] ^ mask);
 	masked_str[effective_len_str] = '\0';
 
-	// Calculate padding width (capped at 13)
-	int padding_width = q_min(max_word_length + 1, 13);
+	// Pad to the name column plus one separating space
+	int padding_width = namecol + 1;
 
 	// Build combined string
 	char combined[MAX_CHAT_SIZE_EX];
-	if (time != 0.0 && len_str > 12)
+	if (time != 0.0 && len_str > namecol)
 		q_snprintf(combined, sizeof(combined), "%-*s %s", padding_width, masked_str, str2);
 	else
 		q_snprintf(combined, sizeof(combined), "%-*s%s", padding_width, masked_str, str2);
@@ -1769,7 +1793,8 @@ void M_PrintHighlightScroll2(int x, int y, int maxwidth,
 	// Safe string handling for name portion
 	char name_str[256];
 	int len_str = (int)strlen(str);
-	int effective_len_str = (time != 0.0) ? len_str : (len_str > 12 ? 12 : len_str);
+	int namecol = M_NameColWidth();
+	int effective_len_str = (time != 0.0) ? len_str : q_min(len_str, namecol);
 
 	// Safely copy the name portion
 	q_strlcpy(name_str, str, sizeof(name_str));
@@ -1778,14 +1803,10 @@ void M_PrintHighlightScroll2(int x, int y, int maxwidth,
 
 	// Build the name portion with proper padding
 	char name_portion[256];
-	if (time != 0.0 && len_str > 12)
+	if (time != 0.0 && len_str > namecol)
 		q_snprintf(name_portion, sizeof(name_portion), "%s ", name_str);
-	else {
-		int padding_width = max_word_length + 1;
-		if (padding_width > 13)
-			padding_width = 13;
-		q_snprintf(name_portion, sizeof(name_portion), "%-*s", padding_width, name_str);
-	}
+	else
+		q_snprintf(name_portion, sizeof(name_portion), "%-*s", namecol + 1, name_str);
 
 	// Build combined string
 	char combined[1024];
@@ -2604,6 +2625,50 @@ qboolean M_TextField_IsDraggingField(const menu_textfield_t *tf)
 qboolean M_TextField_IsDraggingAny(void)
 {
 	return textfield_mouse_dragging;
+}
+
+/*
+================
+M_UpdateBounds -- woods (iw)
+
+Half the spare room on each axis goes to the menu, capped at a 2:1 aspect and
+960 units wide, so long lists show more rows and wide ones more characters
+while staying centered. A window that only fits the classic slot gets exactly
+(0,0)-(320,200), keeping the old layout.
+================
+*/
+static void M_UpdateBounds (void)
+{
+	menucanvas_t mc;
+	float width, height;
+
+	Draw_GetMenuCanvas (&mc);
+	width = mc.right - mc.left;
+	height = mc.bottom - mc.top;
+
+	m_height = (int)q_min (height, 280.f);
+	m_height += (int)((height - m_height) * 0.5f);
+	m_height = q_max (m_height, 200) & ~7;
+	m_width = 320 + (int)(q_max (0.f, width - 320.f) * 0.5f);
+	m_width = q_min (m_width, m_height * 2);
+	m_width = q_min (m_width, 960);
+	m_width = q_max (m_width, 320) & ~15;
+	m_left = (int)floor (mc.left + (width - m_width) * 0.5f + 0.5f);
+	m_top = (int)floor (mc.top + (height - m_height) * 0.5f + 0.5f);
+}
+
+void M_List_AutoScroll(menulist_t* list);
+
+/* Resize a list's visible window, keeping scroll in range and the cursor shown. */
+static void M_List_SetViewsize (menulist_t *list, int viewsize)
+{
+	viewsize = q_max (viewsize, 1);
+	if (list->viewsize == viewsize)
+		return;
+	list->viewsize = viewsize;
+	list->scroll = CLAMP (0, list->scroll, q_max (0, list->numitems - viewsize));
+	if (list->cursor >= 0)
+		M_List_AutoScroll (list);
 }
 
 void M_List_AutoScroll(menulist_t* list)
@@ -5651,13 +5716,15 @@ int		load_cursor;		// 0 < load_cursor < MAX_SAVEGAMES
 #define	MAX_AUTOSAVE_MENU_ENTRIES	64
 #define	MAX_SAVEGAME_MENU_ENTRIES	(SAVEGAME_MENU_SLOTS + MAX_AUTOSAVE_MENU_ENTRIES)
 #define	LOADGAME_SEPARATOR_INDEX		-1
-#define	LOADGAME_LIST_X				16
-#define	LOADGAME_LIST_Y				32
-#define	LOADGAME_LIST_COLS			36
-#define	LOADGAME_LIST_ROWS			15
-#define	LOADGAME_INFO_Y				164
-#define	LOADGAME_SEARCH_BOX_Y		176
-#define	LOADGAME_SEARCH_TEXT_Y		184
+// woods -- follows the menu bounds (iw); classic values noted
+#define	LOADGAME_LIST_X				(m_left + 16)
+#define	LOADGAME_LIST_Y				(m_top + 32)
+#define	LOADGAME_LIST_COLS			M_LIST_COLS		// 36
+#define	LOADGAME_LIST_ROWS			(15 + M_EXTRA_ROWS)
+#define	LOADGAME_INFO_Y				M_BOTTOM(164)
+#define	LOADGAME_SEARCH_BOX_Y		M_BOTTOM(176)
+#define	LOADGAME_SEARCH_TEXT_Y		M_BOTTOM(184)
+#define	M_SAVE_TOP					(m_top + (m_height - 200) / 2)	// save menu: fixed rows, centered
 
 typedef struct {
 	char name[SAVEGAME_COMMENT_LENGTH + 1];
@@ -6100,6 +6167,7 @@ static void M_Load_Init(void)
 {
 	loadmenu.list.cursor = 0;
 	loadmenu.list.scroll = 0;
+	M_UpdateBounds (); // woods -- size for the current window before centering (iw)
 	loadmenu.list.viewsize = LOADGAME_LIST_ROWS;
 	loadmenu.list.numitems = 0;
 	loadmenu.list.isactive_fn = M_Load_IsSelectableDisplayIndex;
@@ -6154,13 +6222,16 @@ void M_Menu_Save_f (void)
 static void M_DrawSaveSlots (const char* title_pic)
 {
 	qpic_t* p = Draw_CachePic(title_pic);
-	M_DrawPic((320 - p->width) / 2, 4, p);
+	// The slot count is fixed, so the save menu grows wider but stays a
+	// classic-height block, centered vertically in the bounds.
+	const int top = M_SAVE_TOP;
+	M_DrawPic(m_left + (m_width - (int)p->width) / 2, top + 4, p);
 
 	for (int i = 0; i < SAVEGAME_MENU_SLOTS; i++)
 	{
 		save_entry_t *entry = &save_entries[i];
-		const int slot_y = 32 + 8 * i;
-		const int slot_cols = 36;	// list starts at x=16 (col 2); 38 usable, keep a margin
+		const int slot_y = top + 32 + 8 * i;
+		const int slot_cols = M_LIST_COLS;	// 36 classic: list starts at x=16 (col 2), keep a margin
 		const int kills_col = slot_cols - SAVEGAME_KILLS_FIELD;
 		int title_chars = entry->has_kills ? kills_col : slot_cols;
 
@@ -6168,15 +6239,15 @@ static void M_DrawSaveSlots (const char* title_pic)
 			title_chars = 1;
 
 		if ((int)strlen(entry->name) > title_chars)
-			M_PrintTruncated(16, slot_y, title_chars * 8, entry->name, !entry->autosave);
+			M_PrintTruncated(m_left + 16, slot_y, title_chars * 8, entry->name, !entry->autosave);
 		else if (entry->autosave)
-			M_PrintWhite(16, slot_y, entry->name);
+			M_PrintWhite(m_left + 16, slot_y, entry->name);
 		else
-			M_Print(16, slot_y, entry->name);
+			M_Print(m_left + 16, slot_y, entry->name);
 
 		if (entry->has_kills)
 		{
-			int kills_x = 16 + kills_col * 8;
+			int kills_x = m_left + 16 + kills_col * 8;
 			char kbuf[16];
 			M_FormatKills(kbuf, sizeof(kbuf), entry, true);
 			if (entry->autosave)
@@ -6190,19 +6261,19 @@ static void M_DrawSaveSlots (const char* title_pic)
 	if (save_entries[load_cursor].loadable)
 	{
 		char info[128];
-		const int info_y = 32 + 8 * SAVEGAME_MENU_SLOTS + 4;
-		M_Print(16, info_y,
+		const int info_y = top + 32 + 8 * SAVEGAME_MENU_SLOTS + 4;
+		M_Print(m_left + 16, info_y,
 			save_entries[load_cursor].autosave ? "auto save:" : "last save:");
 		q_snprintf(info, sizeof(info), "%s (%s)",
 			save_entries[load_cursor].date,
 			save_entries[load_cursor].mapname);
 		// Match the load menu: keep the info line within the list width.
-		M_PrintTruncated(100, info_y, (16 + 36 * 8) - 100, info, false);
+		M_PrintTruncated(m_left + 100, info_y, (16 + M_LIST_COLS * 8) - 100, info, false);
 	}
 
 // line cursor
 	if (load_cursor < SAVEGAME_MENU_SLOTS)
-		M_DrawCharacter(8, 32 + load_cursor * 8, 12 + ((int)(realtime * 4) & 1));
+		M_DrawCharacter(m_left + 8, top + 32 + load_cursor * 8, 12 + ((int)(realtime * 4) & 1));
 }
 
 void M_Load_Draw (void)
@@ -6214,6 +6285,7 @@ void M_Load_Draw (void)
 	loadmenu.x = LOADGAME_LIST_X;
 	loadmenu.y = LOADGAME_LIST_Y;
 	loadmenu.cols = LOADGAME_LIST_COLS;
+	M_List_SetViewsize(&loadmenu.list, LOADGAME_LIST_ROWS);
 
 	if (!keydown[K_MOUSE1])
 		loadmenu.scrollbar_grab = false;
@@ -6229,7 +6301,7 @@ void M_Load_Draw (void)
 	}
 
 	p = Draw_CachePic("gfx/p_load.lmp");
-	M_DrawPic((320 - p->width) / 2, 4, p);
+	M_DrawPic(m_left + (m_width - (int)p->width) / 2, m_top + 4, p);
 
 	if (loadmenu.list.numitems > 0)
 	{
@@ -6329,9 +6401,9 @@ void M_Load_Draw (void)
 	selected = M_Load_SelectedEntry();
 	if (selected)
 	{
-		const int info_x = 100;
+		const int info_x = m_left + 100;
 		const int info_width = (loadmenu.x + loadmenu.cols * 8 - 8) - info_x;
-		M_Print(16, LOADGAME_INFO_Y, selected->autosave ? "auto save:" : "last save:");
+		M_Print(m_left + 16, LOADGAME_INFO_Y, selected->autosave ? "auto save:" : "last save:");
 
 		if (loadmenu.list.search.len == 0)
 		{
@@ -6381,9 +6453,9 @@ void M_Load_Draw (void)
 
 	if (loadmenu.list.search.len > 0)
 	{
-		int cursor_x = 24 + 8 * loadmenu.list.search.len;
-		M_DrawTextBox(16, LOADGAME_SEARCH_BOX_Y, 32, 1);
-		M_PrintHighlight(24, LOADGAME_SEARCH_TEXT_Y, loadmenu.list.search.text,
+		int cursor_x = m_left + 24 + 8 * loadmenu.list.search.len;
+		M_DrawTextBox(m_left + 16, LOADGAME_SEARCH_BOX_Y, LOADGAME_LIST_COLS - 4, 1);
+		M_PrintHighlight(m_left + 24, LOADGAME_SEARCH_TEXT_Y, loadmenu.list.search.text,
 			loadmenu.list.search.text,
 			loadmenu.list.search.len);
 		if (loadmenu.list.numitems == 0)
@@ -6597,7 +6669,7 @@ void M_Load_Mousemove(int cx, int cy) // woods #mousemenu
 
 void M_Save_Mousemove(int cx, int cy) // woods #mousemenu
 {
-	M_UpdateCursor(cy, 32, 8, SAVEGAME_MENU_SLOTS, &load_cursor);
+	M_UpdateCursor(cy, M_SAVE_TOP + 32, 8, SAVEGAME_MENU_SLOTS, &load_cursor);
 }
 
 /*
@@ -6606,7 +6678,7 @@ Maps Menu (iw)
 ==================
 */
 
-#define MAX_VIS_MAPS			17
+#define MAX_VIS_MAPS	(17 + M_EXTRA_ROWS)
 #define DOWNLOAD_MAPS_LABEL		"Download"
 
 typedef struct
@@ -6745,7 +6817,7 @@ static int M_Maps_ContentCount(void)
 
 static int M_Maps_DescriptionX(int x)
 {
-	return x + q_min(max_word_length + 1, 13) * 8;
+	return x + (M_NameColWidth() + 1) * 8;
 }
 
 static void M_Maps_DrawDownloadMenuPrompt(int x, int y, const char *highlight, int highlight_len)
@@ -6760,8 +6832,9 @@ static void M_Maps_DrawDownloadMenuPrompt(int x, int y, const char *highlight, i
 
 static void M_Maps_UpdateViewsize(void)
 {
-	mapsmenu.list.viewsize = (mapsmenu.download_available && mapsmenu.list.search.len == 0) ?
-		MAX_VIS_MAPS - 1 : MAX_VIS_MAPS;
+	M_List_SetViewsize(&mapsmenu.list,
+		(mapsmenu.download_available && mapsmenu.list.search.len == 0) ?
+		MAX_VIS_MAPS - 1 : MAX_VIS_MAPS);
 }
 
 static void M_Maps_Refilter(void)
@@ -6815,6 +6888,7 @@ static void M_Maps_Init(void)
 
 	memset(&mapsmenu.list.search, 0, sizeof(mapsmenu.list.search));
 	mapsmenu.list.search.maxlen = 32;
+	M_UpdateBounds (); // woods -- size for the current window before centering (iw)
 	M_Maps_UpdateViewsize();
 
 	M_Ticker_Init(&mapsmenu.ticker);
@@ -7106,8 +7180,8 @@ static void M_Maps_DrawLevelshotPreview (void)
 		panel_h = h;			// status and name are centred inside the box
 	}
 
-	x = (320 - w) / 2;
-	y = (190 - h) / 2;
+	x = m_left + (m_width - w) / 2;
+	y = m_top + (m_height - 10 - h) / 2;
 
 	// The pad keeps the rounded corners clear of the image's square ones:
 	// an arc of radius r needs r*(1-1/sqrt2) of inset, well under PAD here.
@@ -7120,7 +7194,7 @@ static void M_Maps_DrawLevelshotPreview (void)
 	if (pic)
 	{
 		Draw_Levelshot (x, y, w, h, pic);
-		M_PrintWhite ((320 - (int)strlen(item->name) * 8) / 2, y + h + 5, item->name);
+		M_PrintWhite (m_left + (m_width - (int)strlen(item->name) * 8) / 2, y + h + 5, item->name);
 	}
 	else
 	{
@@ -7136,7 +7210,7 @@ static void M_Maps_DrawLevelshotPreview (void)
 		else
 			M_Print (x + (w - (int)strlen(status) * 8) / 2, sy, status);
 
-		M_PrintWhite ((320 - (int)strlen(item->name) * 8) / 2, sy + 16, item->name);
+		M_PrintWhite (m_left + (m_width - (int)strlen(item->name) * 8) / 2, sy + 16, item->name);
 	}
 }
 
@@ -7145,9 +7219,12 @@ void M_Maps_Draw(void)
 	int x, y, i, cols;
 	int firstvis, numvis;
 
-	x = 16;
-	y = 32;
-	cols = 36;
+	// woods -- size to the menu bounds (iw); the classic slot gives x 16,
+	// y 32, 36 columns, 17 rows and a 12-character name column.
+	x = m_left + 16;
+	y = m_top + 32;
+	cols = M_LIST_COLS;
+	M_Maps_UpdateViewsize();
 
 	mapsmenu.x = x;
 	mapsmenu.y = y;
@@ -7174,6 +7251,7 @@ void M_Maps_Draw(void)
 		M_Maps_ContentCount(), "level", "levels");
 	M_DrawQuakeBar(x - 8, y - 16, cols + 2);
 
+	m_namecols = (int)CLAMP(12, cols * 0.375f - 1, 40);
 	M_List_GetVisibleRange(&mapsmenu.list, &firstvis, &numvis);
 	for (i = 0; i < numvis; i++)
 	{
@@ -7242,6 +7320,7 @@ void M_Maps_Draw(void)
 		if (selected)
 			M_DrawCharacter(x - 8, item_y, 12 + ((int)(realtime * 4) & 1));
 	}
+	m_namecols = 12;
 
 	if (M_List_GetOverflow(&mapsmenu.list) > 0)
 	{
@@ -7255,16 +7334,17 @@ void M_Maps_Draw(void)
 
 	if (mapsmenu.list.search.len > 0) // Draw search box if search is active
 	{
-		int cursor_x = 24 + 8 * mapsmenu.list.search.len; // Start position + character width * text length
+		int box_y = y + MAX_VIS_MAPS * 8 + 8;
+		int cursor_x = x + 8 + 8 * mapsmenu.list.search.len; // Start position + character width * text length
 
-		M_DrawTextBox(16, 176, 32, 1);
-		M_PrintHighlight(24, 184, mapsmenu.list.search.text,
+		M_DrawTextBox(x, box_y, cols - 4, 1);
+		M_PrintHighlight(x + 8, box_y + 8, mapsmenu.list.search.text,
 			mapsmenu.list.search.text,
 			mapsmenu.list.search.len);
 		if (mapsmenu.list.numitems == 0)
-			M_DrawCharacter(cursor_x, 184, 11 ^ 128);
+			M_DrawCharacter(cursor_x, box_y + 8, 11 ^ 128);
 		else
-			M_DrawCharacter(cursor_x, 184, 10 + ((int)(realtime * 4) & 1));
+			M_DrawCharacter(cursor_x, box_y + 8, 10 + ((int)(realtime * 4) & 1));
 	}
 
 	M_Maps_DrawLevelshotPreview(); // woods #mapshots -- last, so it overlays the list
@@ -7649,6 +7729,7 @@ static void M_DownloadMaps_Init(void)
 {
 	downloadmapsmenu.scrollbar_grab = false;
 	downloadmapsmenu.prev_cursor = -2;
+	M_UpdateBounds (); // woods -- size for the current window before centering (iw)
 	downloadmapsmenu.list.viewsize = MAX_VIS_MAPS;
 	downloadmapsmenu.list.cursor = -1;
 	downloadmapsmenu.list.scroll = 0;
@@ -7705,10 +7786,10 @@ static void M_DownloadMaps_DrawTitle(int x, int y, int maxwidth, const char *nam
 	plcolour_t white = CL_PLColours_Parse("0xffffff");
 
 	q_strlcpy(visible_name, name, sizeof(visible_name));
-	if (time == 0.0 && strlen(visible_name) > 12)
-		visible_name[12] = 0;
+	if (time == 0.0 && (int)strlen(visible_name) > m_namecols)
+		visible_name[m_namecols] = 0;
 	name_len = (int)strlen(visible_name);
-	title_start = q_max(13, name_len + 1);
+	title_start = q_max(m_namecols + 1, name_len + 1);
 	q_snprintf(combined, sizeof(combined), "%-*s%s", title_start, visible_name, title);
 	length = (int)strlen(combined);
 	if (search_len)
@@ -7762,9 +7843,10 @@ void M_DownloadMaps_Draw(void)
 		return;
 	}
 
-	x = 16;
-	y = 32;
-	cols = 36;
+	x = m_left + 16;
+	y = m_top + 32;
+	cols = M_LIST_COLS;
+	M_List_SetViewsize(&downloadmapsmenu.list, MAX_VIS_MAPS);
 
 	downloadmapsmenu.x = x;
 	downloadmapsmenu.y = y;
@@ -7815,6 +7897,7 @@ void M_DownloadMaps_Draw(void)
 			M_Print(x, y, "No download maps");
 	}
 
+	m_namecols = (int)CLAMP(12, cols * 0.375f - 1, 40);
 	M_List_GetVisibleRange(&downloadmapsmenu.list, &firstvis, &numvis);
 	for (i = 0; i < numvis; i++)
 	{
@@ -7866,6 +7949,7 @@ void M_DownloadMaps_Draw(void)
 		if (selected)
 			M_DrawCharacter(x - 8, y + i * 8, 12 + ((int)(realtime * 4) & 1));
 	}
+	m_namecols = 12;
 
 	if (M_List_GetOverflow(&downloadmapsmenu.list) > 0)
 	{
@@ -7894,16 +7978,16 @@ void M_DownloadMaps_Draw(void)
 
 	if (downloadmapsmenu.list.search.len > 0)
 	{
-		M_DrawTextBox(16, 176, 32, 1);
-		M_PrintHighlight(24, 184, downloadmapsmenu.list.search.text,
+		M_DrawTextBox(m_left + 16, M_BOTTOM(176), cols - 4, 1);
+		M_PrintHighlight(m_left + 24, M_BOTTOM(184), downloadmapsmenu.list.search.text,
 			downloadmapsmenu.list.search.text,
 			downloadmapsmenu.list.search.len);
 		{
-			int cursor_x = 24 + 8 * downloadmapsmenu.list.search.len;
+			int cursor_x = m_left + 24 + 8 * downloadmapsmenu.list.search.len;
 			if (downloadmapsmenu.list.numitems == 0)
-				M_DrawCharacter(cursor_x, 184, 11 ^ 128);
+				M_DrawCharacter(cursor_x, M_BOTTOM(184), 11 ^ 128);
 			else
-				M_DrawCharacter(cursor_x, 184, 10 + ((int)(realtime * 4) & 1));
+				M_DrawCharacter(cursor_x, M_BOTTOM(184), 10 + ((int)(realtime * 4) & 1));
 		}
 	}
 }
@@ -9393,7 +9477,7 @@ Name Maker name fields.
 =============================================================
 */
 
-#define MAX_VIS_NAMEHISTORY	16
+#define MAX_VIS_NAMEHISTORY	(16 + M_EXTRA_ROWS)
 
 /* Copies rather than pointers into namehistorylist: deleting an entry frees the
  * filelist_item_t it came from. Sized to match filelist_item_t's own fields. */
@@ -9431,6 +9515,7 @@ static void M_NameHistory_Init (void)
 
 	NameHistory_Init ();
 
+	M_UpdateBounds (); // woods -- size for the current window before centering (iw)
 	namehistorymenu.list.viewsize = MAX_VIS_NAMEHISTORY;
 	namehistorymenu.list.cursor = 0;
 	namehistorymenu.list.scroll = 0;
@@ -9532,9 +9617,10 @@ void M_NameHistory_Draw (void)
 	int x, y, i, cols;
 	int firstvis, numvis;
 
-	x = 16;
-	y = 32;
-	cols = 36;
+	x = m_left + 16;
+	y = m_top + 32;
+	cols = M_LIST_COLS;
+	M_List_SetViewsize (&namehistorymenu.list, MAX_VIS_NAMEHISTORY);
 
 	namehistorymenu.x = x;
 	namehistorymenu.y = y;
@@ -11524,9 +11610,11 @@ static const defaultbind_t quakebindnames[] = // woods use iw quake bind names
 #define	NUMQUAKECOMMANDS	(sizeof(quakebindnames)/sizeof(quakebindnames[0]))
 
 
-#define MAX_VIS_KEYS	14 // woods #mousemenu
-#define KEYS_TAB_Y		40
-#define KEYS_LIST_Y		56
+// woods -- rows grow with the menu bounds (iw); columns keep their classic x,
+// which already sit centered and may run long bindings past the old edge
+#define MAX_VIS_KEYS	(14 + M_EXTRA_ROWS) // woods #mousemenu
+#define KEYS_TAB_Y		(m_top + 40)
+#define KEYS_LIST_Y		(m_top + 56)
 
 static struct
 {
@@ -11877,6 +11965,7 @@ void M_Menu_Keys_f(void)
 
 	M_Keys_Populate();
 
+	M_UpdateBounds (); // woods -- size for the current window before centering (iw)
 	keysmenu.list.viewsize = MAX_VIS_KEYS;
 	keysmenu.list.cursor = 0;
 	keysmenu.list.scroll = 0;
@@ -11979,8 +12068,11 @@ void M_Keys_Draw(void)
 	qpic_t* p;
 	const char* hint = NULL;
 
+	keysmenu.y = KEYS_LIST_Y;
+	M_List_SetViewsize(&keysmenu.list, MAX_VIS_KEYS);
+
 	p = Draw_CachePic("gfx/p_option.lmp");
-	M_DrawPic((320 - p->width) / 2, 4, p);
+	M_DrawPic((320 - (int)p->width) / 2, m_top + 4, p);
 
 	{
 		qboolean gamepad_connected = IN_HasGamepad();
@@ -12082,15 +12174,15 @@ void M_Keys_Draw(void)
 	// Draw search box
 	if (keysmenu.search.len > 0)
 	{
-		M_DrawTextBox(16, 174, 32, 1);
-		M_PrintHighlight(24, 182, keysmenu.search.text,
+		M_DrawTextBox(16, M_BOTTOM(174), 32, 1);
+		M_PrintHighlight(24, M_BOTTOM(182), keysmenu.search.text,
 			keysmenu.search.text,
 			keysmenu.search.len);
 		int cursor_x = 24 + 8 * keysmenu.search.len;
 		if (keysmenu.num_filtered == 0)
-			M_DrawCharacter(cursor_x, 182, 11 ^ 128);
+			M_DrawCharacter(cursor_x, M_BOTTOM(182), 11 ^ 128);
 		else
-			M_DrawCharacter(cursor_x, 182, 10 + ((int)(realtime * 4) & 1));
+			M_DrawCharacter(cursor_x, M_BOTTOM(182), 10 + ((int)(realtime * 4) & 1));
 	}
 	else
 	{
@@ -12109,7 +12201,7 @@ void M_Keys_Draw(void)
 			hint = va("%s = change, %s = clear", Key_KeynumToFriendlyString(K_ENTER), Key_KeynumToFriendlyString(K_BACKSPACE));
 		}
 
-		M_PrintWhite((320 - 8 * strlen(hint)) / 2, 182, hint);
+		M_PrintWhite((320 - 8 * (int)strlen(hint)) / 2, M_BOTTOM(182), hint);
 	}
 }
 
@@ -13164,9 +13256,10 @@ extern cvar_t gyro_yawsensitivity, gyro_pitchsensitivity, gyro_noise_thresh;
 #define CONTROLLER_SLIDER_X		186
 #define CONTROLLER_CURSOR_X		168
 #define CONTROLLER_VALUE_X		178
-#define CONTROLLER_TITLE_Y		32
-#define CONTROLLER_TOP_Y		48
-#define CONTROLLER_MAX_VISIBLE	18
+// woods -- rows grow with the menu bounds (iw); columns keep their classic x
+#define CONTROLLER_TITLE_Y		(m_top + 32)
+#define CONTROLLER_TOP_Y		(m_top + 48)
+#define CONTROLLER_MAX_VISIBLE	(18 + M_EXTRA_ROWS)
 #define MIN_JOY_SENS			60.f
 #define MAX_JOY_SENS			720.f
 #define MIN_JOY_EXPONENT		1.f
@@ -13555,10 +13648,13 @@ static void M_Controller_Ellipsize(char *dst, size_t dstsize, const char *src, i
 	dst[maxchars] = '\0';
 }
 
-static const char *M_Controller_GetDeviceLabel(void)
+/* x: where the label is drawn; it may run to the visible window edge */
+static const char *M_Controller_GetDeviceLabel(int x)
 {
-	static char label[20];
+	static char label[128];
 	const char *name = NULL;
+	menucanvas_t mc;
+	int maxchars;
 	int device = (int)joy_device.value;
 
 	if (device < 0)
@@ -13581,7 +13677,12 @@ static const char *M_Controller_GetDeviceLabel(void)
 	if (!name || !*name)
 		name = "[Unknown gamepad]";
 
-	M_Controller_Ellipsize(label, sizeof(label), name, 16);
+	// woods -- use the room to the right of the value column, up to the visible
+	// window edge less a margin (16 chars in the classic slot)
+	Draw_GetMenuCanvas(&mc);
+	maxchars = ((int)mc.right - 8 - x) / 8;
+	maxchars = CLAMP(16, maxchars, (int)sizeof(label) - 1);
+	M_Controller_Ellipsize(label, sizeof(label), name, maxchars);
 	return label;
 }
 
@@ -13920,6 +14021,7 @@ void M_Menu_Controller_f(void)
 	controller_cursor = 0;
 	controller_scroll = 0;
 	controller_slider_grab = false;
+	M_UpdateBounds (); // woods -- size for the current window (iw)
 	M_Controller_ClampCursor();
 
 	IN_UpdateGrabs();
@@ -13940,8 +14042,8 @@ void M_Controller_Draw(void)
 	max_visible = q_min(visible_count, CONTROLLER_MAX_VISIBLE);
 
 	p = Draw_CachePic("gfx/p_option.lmp");
-	M_DrawPic((320 - p->width) / 2, 4, p);
-	M_PrintWhite((320 - 8 * strlen(title)) / 2, CONTROLLER_TITLE_Y, title);
+	M_DrawPic((320 - (int)p->width) / 2, m_top + 4, p);
+	M_PrintWhite((320 - 8 * (int)strlen(title)) / 2, CONTROLLER_TITLE_Y, title);
 
 	visible_index = 0;
 	for (i = 0; i < CONTROLLER_ITEMS; i++)
@@ -13973,7 +14075,7 @@ void M_Controller_Draw(void)
 		{
 		case CONTROLLER_DEVICE:
 			if (!show_cvar_hint)
-				M_Controller_PrintMaybeDim(CONTROLLER_VALUE_X, y, M_Controller_GetDeviceLabel(), enabled);
+				M_Controller_PrintMaybeDim(CONTROLLER_VALUE_X, y, M_Controller_GetDeviceLabel(CONTROLLER_VALUE_X), enabled);
 			break;
 
 		case CONTROLLER_SENSX:
@@ -14350,21 +14452,26 @@ static void M_Controller_Test_DimPrint(int x, int y, const char *s, qboolean dim
 		M_Print(x, y, s);
 }
 
-static void M_Controller_Test_DrawStickBox(int x, int y, const char *label, float ax, float ay, float deadzone, qboolean dim)
+/* grow: extra pairs of 8-unit tiles on each axis (0 = classic 48x32 interior) */
+static void M_Controller_Test_DrawStickBox(int x, int y, int grow, const char *label, float ax, float ay, float deadzone, qboolean dim)
 {
 	int marker_x, marker_y;
+	int inner_w = 48 + 16 * grow, inner_h = 32 + 16 * grow;
 	qboolean active;
 	plcolour_t white = CL_PLColours_Parse("0xffffff");
 
-	M_Controller_Test_DimPrint(x + 16, y - 8, label, dim);
+	// centred over the box (x + 16 for the classic 64-wide box and 4-char labels)
+	M_Controller_Test_DimPrint(x + (64 + 16 * grow) / 2 - 4 * (int)strlen(label), y - 8, label, dim);
 
 	if (dim)
-		M_DrawTextBox_WithAlpha(x, y, 5, 4, M_CONTROLLER_TEST_DIM_ALPHA);
+		M_DrawTextBox_WithAlpha(x, y, 5 + 2 * grow, 4 + 2 * grow, M_CONTROLLER_TEST_DIM_ALPHA);
 	else
-		M_DrawTextBox(x, y, 5, 4);
+		M_DrawTextBox(x, y, 5 + 2 * grow, 4 + 2 * grow);
 
-	marker_x = x + 32 + M_Controller_Test_AxisPixel(ax, 16.f);
-	marker_y = y + 24 + M_Controller_Test_AxisPixel(ay, 16.f);
+	// The marker is an 8x8 glyph drawn from its top-left, so centre it on the
+	// interior's centre and let full deflection reach each edge exactly.
+	marker_x = x + 8 + inner_w / 2 - 4 + M_Controller_Test_AxisPixel(ax, inner_w / 2 - 4);
+	marker_y = y + 8 + inner_h / 2 - 4 + M_Controller_Test_AxisPixel(ay, inner_h / 2 - 4);
 	active = !dim && (ax * ax + ay * ay) > (deadzone * deadzone);
 
 	if (active)
@@ -14401,7 +14508,7 @@ static const char *M_Controller_Test_PowerLabel(void)
 	}
 }
 
-static void M_Controller_Test_AppendHeldKey(char *dst, size_t dstsize, int keynum, const char *label)
+static void M_Controller_Test_AppendHeldKey(char *dst, size_t dstsize, int maxchars, int keynum, const char *label)
 {
 	const char *name;
 
@@ -14412,7 +14519,8 @@ static void M_Controller_Test_AppendHeldKey(char *dst, size_t dstsize, int keynu
 	if (!name || !*name)
 		return;
 
-	if (strlen(dst) + strlen(name) + 2 >= dstsize)
+	if ((int)(strlen(dst) + strlen(name) + 1) > maxchars ||
+		strlen(dst) + strlen(name) + 5 >= dstsize) // room for " ..." too
 	{
 		if (!strstr(dst, "..."))
 			q_strlcat(dst, " ...", dstsize);
@@ -14423,47 +14531,48 @@ static void M_Controller_Test_AppendHeldKey(char *dst, size_t dstsize, int keynu
 	q_strlcat(dst, name, dstsize);
 }
 
-static void M_Controller_Test_DrawHeldButtons(int y, qboolean dim)
+/* x, maxchars: where the two lines start and how many characters fit (36 classic) */
+static void M_Controller_Test_DrawHeldButtons(int x, int y, int maxchars, qboolean dim)
 {
-	char face[38];
-	char other[38];
+	char face[128];
+	char other[128];
 
 	q_strlcpy(face, "Face:", sizeof(face));
-	M_Controller_Test_AppendHeldKey(face, sizeof(face), K_ABUTTON, NULL);
-	M_Controller_Test_AppendHeldKey(face, sizeof(face), K_BBUTTON, NULL);
-	M_Controller_Test_AppendHeldKey(face, sizeof(face), K_XBUTTON, NULL);
-	M_Controller_Test_AppendHeldKey(face, sizeof(face), K_YBUTTON, NULL);
-	M_Controller_Test_AppendHeldKey(face, sizeof(face), K_ABUTTON_ALT, NULL);
-	M_Controller_Test_AppendHeldKey(face, sizeof(face), K_BBUTTON_ALT, NULL);
-	M_Controller_Test_AppendHeldKey(face, sizeof(face), K_XBUTTON_ALT, NULL);
-	M_Controller_Test_AppendHeldKey(face, sizeof(face), K_YBUTTON_ALT, NULL);
+	M_Controller_Test_AppendHeldKey(face, sizeof(face), maxchars, K_ABUTTON, NULL);
+	M_Controller_Test_AppendHeldKey(face, sizeof(face), maxchars, K_BBUTTON, NULL);
+	M_Controller_Test_AppendHeldKey(face, sizeof(face), maxchars, K_XBUTTON, NULL);
+	M_Controller_Test_AppendHeldKey(face, sizeof(face), maxchars, K_YBUTTON, NULL);
+	M_Controller_Test_AppendHeldKey(face, sizeof(face), maxchars, K_ABUTTON_ALT, NULL);
+	M_Controller_Test_AppendHeldKey(face, sizeof(face), maxchars, K_BBUTTON_ALT, NULL);
+	M_Controller_Test_AppendHeldKey(face, sizeof(face), maxchars, K_XBUTTON_ALT, NULL);
+	M_Controller_Test_AppendHeldKey(face, sizeof(face), maxchars, K_YBUTTON_ALT, NULL);
 	if (!strcmp(face, "Face:"))
 		q_strlcat(face, " -", sizeof(face));
 
 	q_strlcpy(other, "Other:", sizeof(other));
-	M_Controller_Test_AppendHeldKey(other, sizeof(other), K_DPAD_UP, "Up");
-	M_Controller_Test_AppendHeldKey(other, sizeof(other), K_DPAD_DOWN, "Down");
-	M_Controller_Test_AppendHeldKey(other, sizeof(other), K_DPAD_LEFT, "Left");
-	M_Controller_Test_AppendHeldKey(other, sizeof(other), K_DPAD_RIGHT, "Right");
-	M_Controller_Test_AppendHeldKey(other, sizeof(other), K_LSHOULDER, NULL);
-	M_Controller_Test_AppendHeldKey(other, sizeof(other), K_RSHOULDER, NULL);
-	M_Controller_Test_AppendHeldKey(other, sizeof(other), K_LTRIGGER, NULL);
-	M_Controller_Test_AppendHeldKey(other, sizeof(other), K_RTRIGGER, NULL);
-	M_Controller_Test_AppendHeldKey(other, sizeof(other), K_LTHUMB, NULL);
-	M_Controller_Test_AppendHeldKey(other, sizeof(other), K_RTHUMB, NULL);
-	M_Controller_Test_AppendHeldKey(other, sizeof(other), K_ESCAPE, Key_KeynumToFriendlyString(K_START));
-	M_Controller_Test_AppendHeldKey(other, sizeof(other), K_TAB, Key_KeynumToFriendlyString(K_BACK));
-	M_Controller_Test_AppendHeldKey(other, sizeof(other), K_MISC1, NULL);
-	M_Controller_Test_AppendHeldKey(other, sizeof(other), K_PADDLE1, NULL);
-	M_Controller_Test_AppendHeldKey(other, sizeof(other), K_PADDLE2, NULL);
-	M_Controller_Test_AppendHeldKey(other, sizeof(other), K_PADDLE3, NULL);
-	M_Controller_Test_AppendHeldKey(other, sizeof(other), K_PADDLE4, NULL);
-	M_Controller_Test_AppendHeldKey(other, sizeof(other), K_TOUCHPAD, NULL);
+	M_Controller_Test_AppendHeldKey(other, sizeof(other), maxchars, K_DPAD_UP, "Up");
+	M_Controller_Test_AppendHeldKey(other, sizeof(other), maxchars, K_DPAD_DOWN, "Down");
+	M_Controller_Test_AppendHeldKey(other, sizeof(other), maxchars, K_DPAD_LEFT, "Left");
+	M_Controller_Test_AppendHeldKey(other, sizeof(other), maxchars, K_DPAD_RIGHT, "Right");
+	M_Controller_Test_AppendHeldKey(other, sizeof(other), maxchars, K_LSHOULDER, NULL);
+	M_Controller_Test_AppendHeldKey(other, sizeof(other), maxchars, K_RSHOULDER, NULL);
+	M_Controller_Test_AppendHeldKey(other, sizeof(other), maxchars, K_LTRIGGER, NULL);
+	M_Controller_Test_AppendHeldKey(other, sizeof(other), maxchars, K_RTRIGGER, NULL);
+	M_Controller_Test_AppendHeldKey(other, sizeof(other), maxchars, K_LTHUMB, NULL);
+	M_Controller_Test_AppendHeldKey(other, sizeof(other), maxchars, K_RTHUMB, NULL);
+	M_Controller_Test_AppendHeldKey(other, sizeof(other), maxchars, K_ESCAPE, Key_KeynumToFriendlyString(K_START));
+	M_Controller_Test_AppendHeldKey(other, sizeof(other), maxchars, K_TAB, Key_KeynumToFriendlyString(K_BACK));
+	M_Controller_Test_AppendHeldKey(other, sizeof(other), maxchars, K_MISC1, NULL);
+	M_Controller_Test_AppendHeldKey(other, sizeof(other), maxchars, K_PADDLE1, NULL);
+	M_Controller_Test_AppendHeldKey(other, sizeof(other), maxchars, K_PADDLE2, NULL);
+	M_Controller_Test_AppendHeldKey(other, sizeof(other), maxchars, K_PADDLE3, NULL);
+	M_Controller_Test_AppendHeldKey(other, sizeof(other), maxchars, K_PADDLE4, NULL);
+	M_Controller_Test_AppendHeldKey(other, sizeof(other), maxchars, K_TOUCHPAD, NULL);
 	if (!strcmp(other, "Other:"))
 		q_strlcat(other, " -", sizeof(other));
 
-	M_Controller_Test_DimPrint(16, y, face, dim);
-	M_Controller_Test_DimPrint(16, y + 8, other, dim);
+	M_Controller_Test_DimPrint(x, y, face, dim);
+	M_Controller_Test_DimPrint(x, y + 8, other, dim);
 }
 
 static void M_Controller_Test_DrawHintLetter(int x, int y, const char *s, qboolean dim)
@@ -14474,7 +14583,7 @@ static void M_Controller_Test_DrawHintLetter(int x, int y, const char *s, qboole
 		M_PrintWhite(x, y, s);
 }
 
-static void M_Controller_Test_DrawHints(int y, qboolean dim)
+static void M_Controller_Test_DrawHints(int ox, int y, qboolean dim)
 {
 	qboolean show_rumble, show_gyro;
 	int w, x;
@@ -14495,7 +14604,7 @@ static void M_Controller_Test_DrawHints(int y, qboolean dim)
 	if (show_gyro) w += (show_rumble ? 2 : 0) + 11;	// "  X Calibrate"
 	if (!w) return;
 
-	x = (320 - 8 * w) / 2;
+	x = ox + (320 - 8 * w) / 2;
 	if (show_rumble)
 	{
 		M_Controller_Test_DrawHintLetter(x, y, "A", dim);
@@ -14558,65 +14667,83 @@ void M_Controller_Test_Draw(void)
 	const char *title = "Controller Test";
 	qboolean has_pad = IN_HasGamepad();
 	qboolean dim = !has_pad;
+	/* woods -- fit the menu bounds (iw). The diagram keeps its classic layout
+	   around an origin (ox, oy); spare room grows both stick boxes by `grow`
+	   16-unit steps (half the extra height, limited by width), pushes the rows
+	   below them down by `gy`, and the rest centres the whole thing. */
+	int grow = CLAMP(0, q_min((m_height - 200) / 32, (m_width - 320) / 32 + 4), 4);
+	int gy = 16 * grow;
+	int ox = m_left + (m_width - 320) / 2;
+	int oy = m_top + (m_height - 200 - gy) / 2;
+	int box_w = 64 + gy;	// outer width of one stick box
+	// classic keeps the pair on the left (centre x 100); grown boxes centre it
+	int move_x = ox + (grow ? 160 : 100) - (2 * box_w + 24) / 2;
+	int look_x = move_x + box_w + 24;
 
 	IN_GetRawMoveAxis(&movex, &movey);
 	IN_GetRawLookAxis(&lookx, &looky);
 	IN_GetRawTriggerAxis(&trigleft, &trigright);
 
 	p = Draw_CachePic("gfx/p_option.lmp");
-	M_DrawPic((320 - p->width) / 2, 4, p);
-	M_PrintWhite((320 - 8 * strlen(title)) / 2, 32, title);
+	M_DrawPic(ox + (320 - (int)p->width) / 2, oy + 4, p);
+	M_PrintWhite(ox + (320 - 8 * (int)strlen(title)) / 2, oy + 32, title);
 
 	{
-		const char *device_label = M_Controller_GetDeviceLabel();
+		const char *device_label = M_Controller_GetDeviceLabel(ox + 72);
 		gamepadpower_t power = IN_GetGamepadPower();
 
-		M_Print(16, 48, "Device");
-		M_Controller_Test_DrawStatusValue(72, 48, device_label, true, false);
+		M_Print(ox + 16, oy + 48, "Device");
+		M_Controller_Test_DrawStatusValue(ox + 72, oy + 48, device_label, true, false);
 
-		M_Print(16, 56, "Type");
-		M_Controller_Test_DrawStatusValueRA(152, 56, has_pad ? M_Controller_Test_GamepadTypeLabel() : "--", has_pad, false);
+		M_Print(ox + 16, oy + 56, "Type");
+		M_Controller_Test_DrawStatusValueRA(ox + 144, oy + 56, has_pad ? M_Controller_Test_GamepadTypeLabel() : "--", has_pad, false);
 
-		M_Print(160, 56, "Power");
-		M_Controller_Test_DrawStatusValueRA(240, 56, has_pad ? M_Controller_Test_PowerLabel() : "--",
+		// "Power" ends a column before its 5-char values ("Wired", "Empty") start
+		M_Print(ox + 152, oy + 56, "Power");
+		M_Controller_Test_DrawStatusValueRA(ox + 240, oy + 56, has_pad ? M_Controller_Test_PowerLabel() : "--",
 			has_pad && power != GAMEPAD_POWER_UNKNOWN,
 			power == GAMEPAD_POWER_EMPTY || power == GAMEPAD_POWER_LOW);
 
-		M_Print(248, 56, "Gyro");
-		M_Controller_Test_DrawStatusValueRA(312, 56, has_pad ? (IN_HasGyro() ? "Yes" : "No") : "--", has_pad && IN_HasGyro(), false);
+		M_Print(ox + 248, oy + 56, "Gyro");
+		M_Controller_Test_DrawStatusValueRA(ox + 312, oy + 56, has_pad ? (IN_HasGyro() ? "Yes" : "No") : "--", has_pad && IN_HasGyro(), false);
 
-		M_Print(16, 64, "Rumble");
-		M_Controller_Test_DrawStatusValueRA(96, 64,
+		M_Print(ox + 16, oy + 64, "Rumble");
+		M_Controller_Test_DrawStatusValueRA(ox + 96, oy + 64,
 			has_pad ? (IN_HasRumble() ? "Yes" : "No") : "--", has_pad && IN_HasRumble(), false);
 
-		M_Print(104, 64, "Triggers");
-		M_Controller_Test_DrawStatusValueRA(192, 64,
+		M_Print(ox + 104, oy + 64, "Triggers");
+		M_Controller_Test_DrawStatusValueRA(ox + 192, oy + 64,
 			has_pad ? (IN_HasTriggerRumble() ? "Yes" : "No") : "--", has_pad && IN_HasTriggerRumble(), false);
 
-		M_Print(200, 64, "Touchpad");
-		M_Controller_Test_DrawStatusValueRA(312, 64,
+		M_Print(ox + 200, oy + 64, "Touchpad");
+		M_Controller_Test_DrawStatusValueRA(ox + 312, oy + 64,
 			has_pad ? (IN_HasTouchpad() ? "Yes" : "No") : "--", has_pad && IN_HasTouchpad(), false);
 	}
 
-	M_Controller_Test_DrawStickBox(24, 80, "Move", movex, movey, joy_deadzone_move.value, dim);
-	M_Controller_Test_DrawStickBox(112, 80, "Look", lookx, looky, joy_deadzone_look.value, dim);
+	M_Controller_Test_DrawStickBox(move_x, oy + 80, grow, "Move", movex, movey, joy_deadzone_move.value, dim);
+	M_Controller_Test_DrawStickBox(look_x, oy + 80, grow, "Look", lookx, looky, joy_deadzone_look.value, dim);
 
-	q_snprintf(value, sizeof(value), "X%+.1f Y%+.1f", movex, movey);
-	M_Controller_Test_DimPrint(56 - 4 * (int)strlen(value), 128, value, dim);
-	q_snprintf(value, sizeof(value), "X%+.1f Y%+.1f", lookx, looky);
-	M_Controller_Test_DimPrint(144 - 4 * (int)strlen(value), 128, value, dim);
+	// "X+0.0 Y+0.0" is 11 chars; when the boxes are closer than that plus a
+	// gap (the classic 88 units), drop the axis letters so the two don't touch
+	{
+		const char *fmt = (look_x - move_x) >= 8 * 12 ? "X%+.1f Y%+.1f" : "%+.1f %+.1f";
+		q_snprintf(value, sizeof(value), fmt, movex, movey);
+		M_Controller_Test_DimPrint(move_x + box_w / 2 - 4 * (int)strlen(value), oy + gy + 128, value, dim);
+		q_snprintf(value, sizeof(value), fmt, lookx, looky);
+	}
+	M_Controller_Test_DimPrint(look_x + box_w / 2 - 4 * (int)strlen(value), oy + gy + 128, value, dim);
 
 	{
 		qboolean lt_active = !dim && trigleft  > joy_deadzone_trigger.value;
 		qboolean rt_active = !dim && trigright > joy_deadzone_trigger.value;
 
-		if (lt_active) M_PrintWhite(40, 144, "Left Trigger");
-		else           M_Controller_Test_DimPrint(40, 144, "Left Trigger", dim);
-		M_Controller_DrawSliderMaybeDim(176, 144, trigleft,  trigleft  * 100.f, "%.0f%%", !dim);
+		if (lt_active) M_PrintWhite(ox + 40, oy + gy + 144, "Left Trigger");
+		else           M_Controller_Test_DimPrint(ox + 40, oy + gy + 144, "Left Trigger", dim);
+		M_Controller_DrawSliderMaybeDim(ox + 176, oy + gy + 144, trigleft,  trigleft  * 100.f, "%.0f%%", !dim);
 
-		if (rt_active) M_PrintWhite(40, 152, "Right Trigger");
-		else           M_Controller_Test_DimPrint(40, 152, "Right Trigger", dim);
-		M_Controller_DrawSliderMaybeDim(176, 152, trigright, trigright * 100.f, "%.0f%%", !dim);
+		if (rt_active) M_PrintWhite(ox + 40, oy + gy + 152, "Right Trigger");
+		else           M_Controller_Test_DimPrint(ox + 40, oy + gy + 152, "Right Trigger", dim);
+		M_Controller_DrawSliderMaybeDim(ox + 176, oy + gy + 152, trigright, trigright * 100.f, "%.0f%%", !dim);
 	}
 
 	if (IN_HasGyro())
@@ -14625,18 +14752,19 @@ void M_Controller_Test_Draw(void)
 		gyro = IN_GetRawGyroMagnitude();
 		r = CLAMP(0.f, gyro / 180.f, 1.f);
 		gyro_active = gyro > gyro_noise_thresh.value;
-		if (gyro_active) M_PrintWhite(40, 160, "Gyro");
-		else             M_Controller_Test_DimPrint(40, 160, "Gyro", dim);
-		M_Controller_DrawSliderMaybeDim(176, 160, r, gyro, "%.0f", !dim);
+		if (gyro_active) M_PrintWhite(ox + 40, oy + gy + 160, "Gyro");
+		else             M_Controller_Test_DimPrint(ox + 40, oy + gy + 160, "Gyro", dim);
+		M_Controller_DrawSliderMaybeDim(ox + 176, oy + gy + 160, r, gyro, "%.0f", !dim);
 	}
 	else
 	{
-		M_Controller_Test_DimPrint(40, 160, "Gyro", dim);
-		M_Controller_Test_DimPrint(176, 160, "Unavailable", dim);
+		M_Controller_Test_DimPrint(ox + 40, oy + gy + 160, "Gyro", dim);
+		M_Controller_Test_DimPrint(ox + 176, oy + gy + 160, "Unavailable", dim);
 	}
 
-	M_Controller_Test_DrawHeldButtons(176, dim);
-	M_Controller_Test_DrawHints(192, dim);
+	// aligned with the status rows, running to the bounds' right edge (36 classic)
+	M_Controller_Test_DrawHeldButtons(ox + 16, oy + gy + 176, (m_left + m_width - 16 - (ox + 16)) / 8, dim);
+	M_Controller_Test_DrawHints(ox, oy + gy + 192, dim);
 }
 
 void M_Controller_Test_Key(int key)
@@ -16608,16 +16736,19 @@ Skybox Viewer Menu
 ==================
 */
 
-#define SKYBOXVIEWER_LIST_X 16
-#define SKYBOXVIEWER_LIST_Y 12
-#define SKYBOXVIEWER_LIST_COLS 14
-#define SKYBOXVIEWER_LIST_ROWS 16
-#define SKYBOXVIEWER_PREVIEW_X 136
-#define SKYBOXVIEWER_PREVIEW_Y 12
-#define SKYBOXVIEWER_PREVIEW_W 176
-#define SKYBOXVIEWER_PREVIEW_H 136
-#define SKYBOXVIEWER_DETAIL_Y 160
-#define SKYBOXVIEWER_SEARCH_BOX_Y 176
+// woods -- follows the menu bounds like the model viewer (iw); classic values noted
+#define SKYBOXVIEWER_LIST_X (m_left + 16)
+#define SKYBOXVIEWER_LIST_Y (m_top + 12)
+// even growth only: M_DrawTextBox tiles in pairs of columns, so an odd preview
+// box width would overshoot the preview rect by 8 units
+#define SKYBOXVIEWER_LIST_COLS (14 + (((m_width - 320) / 24) & ~1))	// 14
+#define SKYBOXVIEWER_LIST_ROWS (16 + M_EXTRA_ROWS)
+#define SKYBOXVIEWER_PREVIEW_X (SKYBOXVIEWER_LIST_X + (SKYBOXVIEWER_LIST_COLS + 1) * 8)	// 136
+#define SKYBOXVIEWER_PREVIEW_Y (m_top + 12)
+#define SKYBOXVIEWER_PREVIEW_W (m_left + m_width - 8 - SKYBOXVIEWER_PREVIEW_X)	// 176
+#define SKYBOXVIEWER_PREVIEW_H (136 + (m_height - 200))
+#define SKYBOXVIEWER_DETAIL_Y M_BOTTOM(160)
+#define SKYBOXVIEWER_SEARCH_BOX_Y M_BOTTOM(176)
 #define SKYBOXVIEWER_LOOK_SENSITIVITY 0.35f
 
 typedef struct
@@ -16715,14 +16846,16 @@ static void M_SkyboxViewer_LoadSelection(void)
 static void M_SkyboxViewer_MenuRectToPixels(float x, float y, float w, float h,
 	float *px, float *py, float *pw, float *ph)
 {
-	vrect_t bounds, viewport;
+	// Sky_DrawMenuPreview takes y from the top of the view, so measure from
+	// the menu's top margin (the bottom one can differ by a pixel)
+	menucanvas_t mc;
 	float sx, sy;
 
-	Draw_GetMenuTransform(&bounds, &viewport);
-	sx = (float)viewport.width / (float)bounds.width;
-	sy = (float)viewport.height / (float)bounds.height;
-	*px = viewport.x + (x - bounds.x) * sx;
-	*py = viewport.y + (y - bounds.y) * sy;
+	Draw_GetMenuCanvas(&mc);
+	sx = mc.slot_w / 640.0f;
+	sy = mc.slot_h / 200.0f;
+	*px = glx + mc.ox + x * sx;
+	*py = (glheight - mc.oy_bottom - mc.slot_h) + y * sy;
 	*pw = w * sx;
 	*ph = h * sy;
 }
@@ -16755,6 +16888,7 @@ void M_Menu_SkyboxViewer_f(void)
 	memset(&skyboxviewermenu, 0, sizeof(skyboxviewermenu));
 	q_strlcpy(skyboxviewermenu.saved_skybox, skybox_name,
 		sizeof(skyboxviewermenu.saved_skybox));
+	M_UpdateBounds (); // woods -- size for the current window before centering (iw)
 	skyboxviewermenu.list.viewsize = SKYBOXVIEWER_LIST_ROWS;
 	skyboxviewermenu.list.search.maxlen = 32;
 	M_SkyboxViewer_ResetView();
@@ -16780,7 +16914,9 @@ void M_SkyboxViewer_Draw(void)
 		skyboxviewermenu.look_grab = false;
 	}
 	M_SkyboxViewer_LoadSelection();
-	M_DrawTextBox(SKYBOXVIEWER_PREVIEW_X - 8, SKYBOXVIEWER_PREVIEW_Y - 8, 22, 17);
+	M_List_SetViewsize(&skyboxviewermenu.list, SKYBOXVIEWER_LIST_ROWS);
+	M_DrawTextBox(SKYBOXVIEWER_PREVIEW_X - 8, SKYBOXVIEWER_PREVIEW_Y - 8,
+		SKYBOXVIEWER_PREVIEW_W / 8, SKYBOXVIEWER_PREVIEW_H / 8);
 
 	selected = M_SkyboxViewer_SelectedItem();
 	if (selected)
@@ -16789,7 +16925,8 @@ void M_SkyboxViewer_Draw(void)
 			SKYBOXVIEWER_PREVIEW_W, SKYBOXVIEWER_PREVIEW_H, &px, &py, &pw, &ph);
 		if (!Sky_DrawMenuPreview(px, py, pw, ph, skyboxviewermenu.yaw,
 			skyboxviewermenu.pitch, skyboxviewermenu.fov))
-			M_PrintWhite(SKYBOXVIEWER_PREVIEW_X + 44, SKYBOXVIEWER_PREVIEW_Y + 60, "preview unavailable");
+			M_PrintWhite(SKYBOXVIEWER_PREVIEW_X + (SKYBOXVIEWER_PREVIEW_W - 19 * 8) / 2,
+				SKYBOXVIEWER_PREVIEW_Y + SKYBOXVIEWER_PREVIEW_H / 2 - 8, "preview unavailable");
 		GL_SetCanvas(CANVAS_MENU);
 	}
 
@@ -16817,16 +16954,16 @@ void M_SkyboxViewer_Draw(void)
 			SKYBOXVIEWER_LIST_X + SKYBOXVIEWER_LIST_COLS * 8 - 8, SKYBOXVIEWER_LIST_Y);
 
 	if (selected)
-		M_PrintScroll(16, SKYBOXVIEWER_DETAIL_Y, 288, selected->name, realtime, false);
-	M_PrintRGBA(16, SKYBOXVIEWER_DETAIL_Y + 8,
+		M_PrintScroll(m_left + 16, SKYBOXVIEWER_DETAIL_Y, m_width - 32, selected->name, realtime, false);
+	M_PrintRGBA(m_left + 16, SKYBOXVIEWER_DETAIL_Y + 8,
 		"drag: look  wheel: zoom  Home: reset  Enter: use",
 		CL_PLColours_Parse("0xffffff"), 0.5f, false);
 
 	if (skyboxviewermenu.list.search.len > 0)
 	{
-		int cursor_x = 24 + 8 * skyboxviewermenu.list.search.len;
-		M_DrawTextBox(16, SKYBOXVIEWER_SEARCH_BOX_Y, 32, 1);
-		M_PrintHighlight(24, SKYBOXVIEWER_SEARCH_BOX_Y + 8,
+		int cursor_x = m_left + 24 + 8 * skyboxviewermenu.list.search.len;
+		M_DrawTextBox(m_left + 16, SKYBOXVIEWER_SEARCH_BOX_Y, M_LIST_COLS - 4, 1);
+		M_PrintHighlight(m_left + 24, SKYBOXVIEWER_SEARCH_BOX_Y + 8,
 			skyboxviewermenu.list.search.text, skyboxviewermenu.list.search.text,
 			skyboxviewermenu.list.search.len);
 		M_DrawCharacter(cursor_x, SKYBOXVIEWER_SEARCH_BOX_Y + 8,
@@ -23773,8 +23910,15 @@ static void M_LeaveMenuState (enum m_state_e from)
 */
 
 #define MENU_SEARCH_MAX_RESULTS 512
-#define MENU_SEARCH_VISIBLE_ROWS 12
-#define MENU_SEARCH_RESULTS_Y 52
+// woods -- the palette fills the menu bounds (iw). MS_X/MS_Y place a classic
+// coordinate from the top-left, MS_R from the right edge, MS_B from the bottom.
+#define MS_X(x) (m_left + (x))
+#define MS_R(x) (m_left + m_width - 320 + (x))
+#define MS_Y(y) (m_top + (y))
+#define MS_B(y) M_BOTTOM(y)
+#define MS_EXTRA_COLS ((m_width - 320) / 8)
+#define MENU_SEARCH_VISIBLE_ROWS (12 + M_EXTRA_ROWS)
+#define MENU_SEARCH_RESULTS_Y MS_Y(52)
 #define MENU_SEARCH_RESULTS_BOTTOM (MENU_SEARCH_RESULTS_Y + MENU_SEARCH_VISIBLE_ROWS * 8)
 #define MENU_SEARCH_QUERY_CHARS 32
 #define MENU_SEARCH_RECENTS 5
@@ -25347,17 +25491,17 @@ static void M_MenuSearch_Key(int key, qboolean repeat)
 	}
 	if (key == K_MOUSE1)
 	{
-		if (m_mousex < 8 || m_mousex >= 312 || m_mousey < 4 || m_mousey >= 196)
+		if (m_mousex < MS_X(8) || m_mousex >= MS_R(312) || m_mousey < MS_Y(4) || m_mousey >= MS_B(196))
 			M_MenuSearch_Close(true, true);
-		else if (m_mousex >= 16 && m_mousex < 304 && M_TextField_MouseInRow(m_mousey, 20))
-			M_TextField_MouseClick(&menusearch.field, m_mousex, 32);
+		else if (m_mousex >= MS_X(16) && m_mousex < MS_R(304) && M_TextField_MouseInRow(m_mousey, MS_Y(20)))
+			M_TextField_MouseClick(&menusearch.field, m_mousex, MS_X(32));
 		else if (!menusearch.empty_mode && menusearch.result_count > MENU_SEARCH_VISIBLE_ROWS &&
-			m_mousex >= 296 && m_mousex < 304 && m_mousey >= MENU_SEARCH_RESULTS_Y && m_mousey < MENU_SEARCH_RESULTS_BOTTOM)
+			m_mousex >= MS_R(296) && m_mousex < MS_R(304) && m_mousey >= MENU_SEARCH_RESULTS_Y && m_mousey < MENU_SEARCH_RESULTS_BOTTOM)
 		{
 			menusearch.scrollbar_grab = true;
 			MenuSearch_UpdateScrollbar(m_mousey);
 		}
-		else if (m_mousex >= 16 && m_mousex < 296 && m_mousey >= MENU_SEARCH_RESULTS_Y && m_mousey < MENU_SEARCH_RESULTS_BOTTOM)
+		else if (m_mousex >= MS_X(16) && m_mousex < MS_R(296) && m_mousey >= MENU_SEARCH_RESULTS_Y && m_mousey < MENU_SEARCH_RESULTS_BOTTOM)
 		{
 			clicked = MenuSearch_ResultAtVisualRow((m_mousey - MENU_SEARCH_RESULTS_Y) / 8);
 			if (clicked >= 0)
@@ -25459,9 +25603,9 @@ static void M_MenuSearch_Mousemove(int x, int y)
 		M_TextField_MouseDrag(x);
 		return;
 	}
-	if (x < 16 || x >= 304 || y < MENU_SEARCH_RESULTS_Y || y >= MENU_SEARCH_RESULTS_BOTTOM)
+	if (x < MS_X(16) || x >= MS_R(304) || y < MENU_SEARCH_RESULTS_Y || y >= MENU_SEARCH_RESULTS_BOTTOM)
 		return;
-	if (x >= 296 && !menusearch.empty_mode && menusearch.result_count > MENU_SEARCH_VISIBLE_ROWS)
+	if (x >= MS_R(296) && !menusearch.empty_mode && menusearch.result_count > MENU_SEARCH_VISIBLE_ROWS)
 		return;
 	result = MenuSearch_ResultAtVisualRow((y - MENU_SEARCH_RESULTS_Y) / 8);
 	if (result >= 0)
@@ -25480,26 +25624,40 @@ static void M_MenuSearch_Draw(void)
 	M_TextField_CheckMouseRelease();
 	if (!keydown[K_MOUSE1])
 		menusearch.scrollbar_grab = false;
+	// The row count follows the window, so a resize or scale change can leave
+	// scroll past the end or the cursor out of view; settle both first.
+	if (!menusearch.empty_mode)
+	{
+		menusearch.scroll = CLAMP(0, menusearch.scroll,
+			q_max(0, menusearch.result_count - MENU_SEARCH_VISIBLE_ROWS));
+		if (menusearch.result_count > 0)
+		{
+			if (menusearch.cursor < menusearch.scroll)
+				menusearch.scroll = menusearch.cursor;
+			else if (menusearch.cursor >= menusearch.scroll + MENU_SEARCH_VISIBLE_ROWS)
+				menusearch.scroll = menusearch.cursor - MENU_SEARCH_VISIBLE_ROWS + 1;
+		}
+	}
 	M_LivePreview_DrawColorOverlay(0.f, 0.f, 0.f, 0.55f);
 	GL_SetCanvas(CANVAS_MENU);
-	M_DrawTextBox(8, 4, 36, 22);
-	M_DrawTextBox(16, 12, 34, 1);
-	M_TextField_DrawHighlight(&menusearch.field, 32, 20);
+	M_DrawTextBox(MS_X(8), MS_Y(4), 36 + MS_EXTRA_COLS, 22 + M_EXTRA_ROWS);
+	M_DrawTextBox(MS_X(16), MS_Y(12), 34 + MS_EXTRA_COLS, 1);
+	M_TextField_DrawHighlight(&menusearch.field, MS_X(32), MS_Y(20));
 	if (!menusearch.query[0])
-		M_PrintRGBA(32, 20, "Search menus and settings", CL_PLColours_Parse("0xffffff"), 0.45f, false);
+		M_PrintRGBA(MS_X(32), MS_Y(20), "Search menus and settings", CL_PLColours_Parse("0xffffff"), 0.45f, false);
 	else
 	{
-		M_PrintWhite(32, 20, menusearch.query);
-		M_TextField_DrawCursor(&menusearch.field, 32, 20);
+		M_PrintWhite(MS_X(32), MS_Y(20), menusearch.query);
+		M_TextField_DrawCursor(&menusearch.field, MS_X(32), MS_Y(20));
 	}
-	M_DrawQuakeBar(24, 40, 34);
+	M_DrawQuakeBar(MS_X(24), MS_Y(40), 34 + MS_EXTRA_COLS);
 
 	if (menusearch.empty_mode)
 	{
-		M_PrintRGBA(32, MENU_SEARCH_RESULTS_Y, menusearch.empty_recent_count ? "Recent" : "Browse",
+		M_PrintRGBA(MS_X(32), MENU_SEARCH_RESULTS_Y, menusearch.empty_recent_count ? "Recent" : "Browse",
 			CL_PLColours_Parse("0xffffff"), 0.55f, false);
 		if (menusearch.empty_recent_count)
-			M_PrintRGBA(32, MENU_SEARCH_RESULTS_Y + (menusearch.empty_recent_count + 1) * 8, "Browse",
+			M_PrintRGBA(MS_X(32), MENU_SEARCH_RESULTS_Y + (menusearch.empty_recent_count + 1) * 8, "Browse",
 				CL_PLColours_Parse("0xffffff"), 0.55f, false);
 	}
 
@@ -25514,13 +25672,13 @@ static void M_MenuSearch_Draw(void)
 		cvar_t *cv = result->provider->cvar_fn ? result->provider->cvar_fn(result->index) : NULL;
 		const char *value = result->provider->value_fn ? result->provider->value_fn(result->index) : NULL;
 		char compact_value[12];
-		int label_width = 264;
+		int label_width = 264 + MS_EXTRA_COLS * 8;
 		int visual_row = !menusearch.empty_mode ? row : MenuSearch_EmptyResultRow(result_index);
 		int y = MENU_SEARCH_RESULTS_Y + visual_row * 8;
 		if (visual_row >= MENU_SEARCH_VISIBLE_ROWS)
 			continue;
 		if (result_index == menusearch.cursor)
-			M_DrawCharacter(16, y, 12 + ((int)(realtime * 4) & 1));
+			M_DrawCharacter(MS_X(16), y, 12 + ((int)(realtime * 4) & 1));
 		if (!value && cv && strlen(cv->string) <= 8)
 		{
 			q_strlcpy(compact_value, cv->string, sizeof(compact_value));
@@ -25530,20 +25688,20 @@ static void M_MenuSearch_Draw(void)
 			value = "...";
 		if (value)
 		{
-			int value_x = 296 - (int)strlen(value) * 8;
-			label_width = value_x - 40;
+			int value_x = MS_R(296) - (int)strlen(value) * 8;
+			label_width = value_x - MS_X(40);
 			M_Print(value_x, y, value);
 		}
 		if (!menusearch.empty_mode)
-			M_PrintHighlightScroll(32, y, label_width, label, menusearch.query,
+			M_PrintHighlightScroll(MS_X(32), y, label_width, label, menusearch.query,
 				result_index == menusearch.cursor ? realtime : 0.0);
 		else
-			M_PrintScroll(32, y, label_width, label, result_index == menusearch.cursor ? realtime : 0.0, false);
+			M_PrintScroll(MS_X(32), y, label_width, label, result_index == menusearch.cursor ? realtime : 0.0, false);
 	}
 	if (!menusearch.result_count)
 	{
-		M_PrintRGBA(32, MENU_SEARCH_RESULTS_Y + 8, "No matching menu items", CL_PLColours_Parse("0xffffff"), 0.55f, false);
-		M_PrintRGBA(32, MENU_SEARCH_RESULTS_Y + 24, "Try a label, category, or cvar", CL_PLColours_Parse("0xffffff"), 0.45f, false);
+		M_PrintRGBA(MS_X(32), MENU_SEARCH_RESULTS_Y + 8, "No matching menu items", CL_PLColours_Parse("0xffffff"), 0.55f, false);
+		M_PrintRGBA(MS_X(32), MENU_SEARCH_RESULTS_Y + 24, "Try a label, category, or cvar", CL_PLColours_Parse("0xffffff"), 0.45f, false);
 	}
 	if (!menusearch.empty_mode && menusearch.result_count > MENU_SEARCH_VISIBLE_ROWS)
 	{
@@ -25552,10 +25710,10 @@ static void M_MenuSearch_Draw(void)
 		list.numitems = menusearch.result_count;
 		list.viewsize = MENU_SEARCH_VISIBLE_ROWS;
 		list.scroll = menusearch.scroll;
-		M_List_DrawScrollbar(&list, 300, MENU_SEARCH_RESULTS_Y);
+		M_List_DrawScrollbar(&list, MS_R(300), MENU_SEARCH_RESULTS_Y);
 	}
 
-	M_DrawQuakeBar(24, 152, 34);
+	M_DrawQuakeBar(MS_X(24), MS_B(152), 34 + MS_EXTRA_COLS);
 	if (menusearch.result_count)
 	{
 		selected = &menusearch.results[menusearch.cursor];
@@ -25570,13 +25728,13 @@ static void M_MenuSearch_Draw(void)
 			else if (hint && hint[0])
 				q_strlcpy(detail, hint, sizeof(detail));
 		}
-		M_PrintScroll(24, 164, 272, detail, realtime, false);
+		M_PrintScroll(MS_X(24), MS_B(164), 272 + MS_EXTRA_COLS * 8, detail, realtime, false);
 	}
 	else
-		M_Print(24, 164, "Search covers native menu items");
+		M_Print(MS_X(24), MS_B(164), "Search covers native menu items");
 	if (menusearch.status_until > realtime)
 		footer = menusearch.status;
-	M_PrintScroll(24, 176, 272, footer, 0.0, false);
+	M_PrintScroll(MS_X(24), MS_B(176), 272 + MS_EXTRA_COLS * 8, footer, 0.0, false);
 }
 
 /*
@@ -28120,7 +28278,7 @@ Keyboard Shortcuts Menu
 ==================
 */
 
-#define MAX_VIS_SHORTCUTS	17
+#define MAX_VIS_SHORTCUTS	(17 + M_EXTRA_ROWS)
 
 typedef struct
 {
@@ -28323,6 +28481,7 @@ static void M_Shortcuts_Init(void)
 {
 	shortcutmenu.list.cursor = 0;
 	shortcutmenu.list.scroll = 0;
+	M_UpdateBounds (); // woods -- size for the current window before centering (iw)
 	shortcutmenu.list.viewsize = MAX_VIS_SHORTCUTS;
 	shortcutmenu.list.numitems = 0;
 	shortcutmenu.list.isactive_fn = M_Shortcuts_IsSelectableDisplayIndex;
@@ -28473,9 +28632,10 @@ void M_Shortcuts_Draw(void)
 	int saved_viewsize;
 	qboolean show_status;
 
-	x = 16;
-	y = 32;
-	cols = 36;
+	x = m_left + 16;
+	y = m_top + 32;
+	cols = M_LIST_COLS;
+	M_List_SetViewsize(&shortcutmenu.list, MAX_VIS_SHORTCUTS);
 
 	shortcutmenu.x = x;
 	shortcutmenu.y = y;
@@ -28498,9 +28658,9 @@ void M_Shortcuts_Draw(void)
 	M_DrawQuakeBar(x - 8, y - 16, cols + 2);
 
 	saved_viewsize = shortcutmenu.list.viewsize;
-	if (shortcutmenu.list.search.len > 0 && shortcutmenu.list.viewsize > 14)
+	if (shortcutmenu.list.search.len > 0 && shortcutmenu.list.viewsize > 14 + M_EXTRA_ROWS)
 	{
-		shortcutmenu.list.viewsize = 14;
+		shortcutmenu.list.viewsize = 14 + M_EXTRA_ROWS;
 		M_List_Rescroll(&shortcutmenu.list);
 	}
 
@@ -28577,19 +28737,19 @@ void M_Shortcuts_Draw(void)
 
 	if (shortcutmenu.list.search.len > 0)
 	{
-		int cursor_x = 24 + 8 * shortcutmenu.list.search.len;
-		M_DrawTextBox(16, 176, 32, 1);
-		M_PrintHighlight(24, 184, shortcutmenu.list.search.text,
+		int cursor_x = m_left + 24 + 8 * shortcutmenu.list.search.len;
+		M_DrawTextBox(m_left + 16, M_BOTTOM(176), cols - 4, 1);
+		M_PrintHighlight(m_left + 24, M_BOTTOM(184), shortcutmenu.list.search.text,
 			shortcutmenu.list.search.text,
 			shortcutmenu.list.search.len);
 		if (shortcutmenu.list.numitems == 0)
-			M_DrawCharacter(cursor_x, 184, 11 ^ 128);
+			M_DrawCharacter(cursor_x, M_BOTTOM(184), 11 ^ 128);
 		else
-			M_DrawCharacter(cursor_x, 184, 10);
+			M_DrawCharacter(cursor_x, M_BOTTOM(184), 10);
 	}
 
 	if (show_status)
-		M_PrintWhite(x, shortcutmenu.list.search.len > 0 ? 200 : 184, shortcutmenu.status_message);
+		M_PrintWhite(x, shortcutmenu.list.search.len > 0 ? M_BOTTOM(200) : M_BOTTOM(184), shortcutmenu.status_message);
 
 	shortcutmenu.list.viewsize = saved_viewsize;
 }
@@ -28728,21 +28888,24 @@ Model Viewer Menu
 ==================
 */
 
-#define MAX_VIS_MODELVIEWER	16
-#define MODELVIEWER_LIST_X	16
-#define MODELVIEWER_LIST_Y	12
-#define MODELVIEWER_LIST_COLS	14
-#define MODELVIEWER_PREVIEW_X	136
-#define MODELVIEWER_PREVIEW_Y	12
-#define MODELVIEWER_PREVIEW_W	168
-#define MODELVIEWER_PREVIEW_H	136
-#define MODELVIEWER_PREVIEW_BOX_COLS	22
-#define MODELVIEWER_PREVIEW_BOX_LINES	17
-#define MODELVIEWER_DETAIL_X	16
-#define MODELVIEWER_DETAIL_Y	160
-#define MODELVIEWER_DETAIL_W	288
-#define MODELVIEWER_SEARCH_BOX_X	16
-#define MODELVIEWER_SEARCH_BOX_Y	176
+// woods -- follows the menu bounds (iw): the list takes a third of the extra
+// width, the preview the rest plus all the extra height. Classic values noted.
+#define MAX_VIS_MODELVIEWER	(16 + M_EXTRA_ROWS)
+#define MODELVIEWER_LIST_X	(m_left + 16)
+#define MODELVIEWER_LIST_Y	(m_top + 12)
+// even growth only, see SKYBOXVIEWER_LIST_COLS
+#define MODELVIEWER_LIST_COLS	(14 + (((m_width - 320) / 24) & ~1))	// 14
+#define MODELVIEWER_PREVIEW_X	(MODELVIEWER_LIST_X + (MODELVIEWER_LIST_COLS + 1) * 8)	// 136
+#define MODELVIEWER_PREVIEW_Y	(m_top + 12)
+#define MODELVIEWER_PREVIEW_W	(m_left + m_width - 16 - MODELVIEWER_PREVIEW_X)	// 168
+#define MODELVIEWER_PREVIEW_H	(136 + (m_height - 200))
+#define MODELVIEWER_PREVIEW_BOX_COLS	(MODELVIEWER_PREVIEW_W / 8 + 1)	// 22
+#define MODELVIEWER_PREVIEW_BOX_LINES	(MODELVIEWER_PREVIEW_H / 8)	// 17
+#define MODELVIEWER_DETAIL_X	(m_left + 16)
+#define MODELVIEWER_DETAIL_Y	M_BOTTOM(160)
+#define MODELVIEWER_DETAIL_W	(m_width - 32)	// 288
+#define MODELVIEWER_SEARCH_BOX_X	(m_left + 16)
+#define MODELVIEWER_SEARCH_BOX_Y	M_BOTTOM(176)
 #define MODELVIEWER_ORBIT_SENSITIVITY	2.0f
 
 typedef struct
@@ -29099,7 +29262,8 @@ static void M_ModelViewer_DrawPreview(modelvieweritem_t *item)
 	if (!mod || (mod->type != mod_alias && mod->type != mod_sprite))
 	{
 		const char *status = (mod && mod->type != mod_ext_invalid) ? "not renderable" : "load failed";
-		M_PrintWhite(MODELVIEWER_PREVIEW_X + 40, MODELVIEWER_PREVIEW_Y + 60, status);
+		M_PrintWhite(MODELVIEWER_PREVIEW_X + (MODELVIEWER_PREVIEW_W - (int)strlen(status) * 8) / 2,
+			MODELVIEWER_PREVIEW_Y + MODELVIEWER_PREVIEW_H / 2 - 8, status);
 		return;
 	}
 
@@ -29153,6 +29317,7 @@ static void M_ModelViewer_Init(void)
 {
 	modelviewermenu.list.cursor = 0;
 	modelviewermenu.list.scroll = 0;
+	M_UpdateBounds (); // woods -- size for the current window before centering (iw)
 	modelviewermenu.list.viewsize = MAX_VIS_MODELVIEWER;
 	modelviewermenu.list.numitems = 0;
 	modelviewermenu.list.isactive_fn = NULL;
@@ -29191,6 +29356,7 @@ void M_ModelViewer_Draw(void)
 	modelviewermenu.x = MODELVIEWER_LIST_X;
 	modelviewermenu.y = MODELVIEWER_LIST_Y;
 	modelviewermenu.cols = MODELVIEWER_LIST_COLS;
+	M_List_SetViewsize(&modelviewermenu.list, MAX_VIS_MODELVIEWER);
 
 	if (!keydown[K_MOUSE1])
 	{
@@ -29293,7 +29459,7 @@ void M_ModelViewer_Draw(void)
 	if (modelviewermenu.list.search.len > 0)
 	{
 		int cursor_x = MODELVIEWER_SEARCH_BOX_X + 8 + 8 * modelviewermenu.list.search.len;
-		M_DrawTextBox(MODELVIEWER_SEARCH_BOX_X, MODELVIEWER_SEARCH_BOX_Y, 32, 1);
+		M_DrawTextBox(MODELVIEWER_SEARCH_BOX_X, MODELVIEWER_SEARCH_BOX_Y, M_LIST_COLS - 4, 1);
 		M_PrintHighlight(MODELVIEWER_SEARCH_BOX_X + 8, MODELVIEWER_SEARCH_BOX_Y + 8, modelviewermenu.list.search.text,
 			modelviewermenu.list.search.text,
 			modelviewermenu.list.search.len);
@@ -29485,7 +29651,7 @@ Version Menu
 ==================
 */
 
-#define MAX_VIS_VERSION	17
+#define MAX_VIS_VERSION	(17 + M_EXTRA_ROWS)
 
 typedef struct
 {
@@ -30099,6 +30265,7 @@ static void M_Version_Init(void)
 
 	versionmenu.list.cursor = 0;
 	versionmenu.list.scroll = 0;
+	M_UpdateBounds (); // woods -- size for the current window before centering (iw)
 	versionmenu.list.viewsize = MAX_VIS_VERSION;
 	versionmenu.list.numitems = 0;
 	versionmenu.list.isactive_fn = NULL;
@@ -30145,9 +30312,10 @@ void M_Version_Draw(void)
 	int x, y, cols;
 	int firstvis, numvis, i;
 
-	x = 16;
-	y = 32;
-	cols = 36;
+	x = m_left + 16;
+	y = m_top + 32;
+	cols = M_LIST_COLS;
+	M_List_SetViewsize(&versionmenu.list, MAX_VIS_VERSION);
 
 	versionmenu.x = x;
 	versionmenu.y = y;
@@ -30233,19 +30401,19 @@ void M_Version_Draw(void)
 
 	if (versionmenu.list.search.len > 0)
 	{
-		int cursor_x = 24 + 8 * versionmenu.list.search.len;
-		M_DrawTextBox(16, 176, 32, 1);
-		M_PrintHighlight(24, 184, versionmenu.list.search.text,
+		int cursor_x = m_left + 24 + 8 * versionmenu.list.search.len;
+		M_DrawTextBox(m_left + 16, M_BOTTOM(176), cols - 4, 1);
+		M_PrintHighlight(m_left + 24, M_BOTTOM(184), versionmenu.list.search.text,
 			versionmenu.list.search.text,
 			versionmenu.list.search.len);
 		if (versionmenu.list.numitems == 0)
-			M_DrawCharacter(cursor_x, 184, 11 ^ 128);
+			M_DrawCharacter(cursor_x, M_BOTTOM(184), 11 ^ 128);
 		else
-			M_DrawCharacter(cursor_x, 184, 10);
+			M_DrawCharacter(cursor_x, M_BOTTOM(184), 10);
 	}
 
 	if (versionmenu.status_message[0] && (realtime - versionmenu.status_time) < 2.0)
-		M_PrintWhite(x, versionmenu.list.search.len > 0 ? 200 : 184, versionmenu.status_message);
+		M_PrintWhite(x, versionmenu.list.search.len > 0 ? M_BOTTOM(200) : M_BOTTOM(184), versionmenu.status_message);
 }
 
 void M_Version_Key(int key)
@@ -30379,10 +30547,10 @@ Reset Config Menu
 ==================
 */
 
-#define MAX_VIS_RESETCONFIG	17
-#define RESETCONFIG_SEARCH_BOX_X	16
-#define RESETCONFIG_SEARCH_BOX_Y	180
-#define RESETCONFIG_SEARCH_BOX_COLS	32
+#define MAX_VIS_RESETCONFIG	(17 + M_EXTRA_ROWS)
+#define RESETCONFIG_SEARCH_BOX_X	(m_left + 16)
+#define RESETCONFIG_SEARCH_BOX_Y	M_BOTTOM(180)
+#define RESETCONFIG_SEARCH_BOX_COLS	(M_LIST_COLS - 4)	// 32
 #define RESETCONFIG_SEARCH_TEXT_X	(RESETCONFIG_SEARCH_BOX_X + 8)
 #define RESETCONFIG_SEARCH_TEXT_Y	(RESETCONFIG_SEARCH_BOX_Y + 8)
 
@@ -30511,6 +30679,7 @@ static void M_ResetConfig_Init(void)
 	char configdate[32];
 	char sortdate[32]; // For converted date format
 
+	M_UpdateBounds (); // woods -- size for the current window before centering (iw)
 	resetconfigmenu.list.viewsize = MAX_VIS_RESETCONFIG;
 	resetconfigmenu.list.cursor = -1;
 	resetconfigmenu.list.scroll = 0;
@@ -30581,6 +30750,7 @@ static void M_ResetConfig_Init(void)
 	char configdate[32];
 	char sortdate[32]; // For converted date format
 
+	M_UpdateBounds (); // woods -- size for the current window before centering (iw)
 	resetconfigmenu.list.viewsize = MAX_VIS_RESETCONFIG;
 	resetconfigmenu.list.cursor = -1;
 	resetconfigmenu.list.scroll = 0;
@@ -30676,9 +30846,10 @@ void M_ResetConfig_Draw(void)
 
 	M_TextField_CheckMouseRelease();
 
-	x = 16;
-	y = 32;
-	cols = 36;
+	x = m_left + 16;
+	y = m_top + 32;
+	cols = M_LIST_COLS;
+	M_List_SetViewsize(&resetconfigmenu.list, MAX_VIS_RESETCONFIG);
 
 	resetconfigmenu.x = x;
 	resetconfigmenu.y = y;
@@ -31926,7 +32097,7 @@ History Menu
 ==================
 */
 
-#define MAX_VIS_HISTORY	17
+#define MAX_VIS_HISTORY	(17 + M_EXTRA_ROWS)
 
 typedef struct
 {
@@ -32032,6 +32203,7 @@ static void M_History_Init(void)
 
 	ServerList_Init();
 
+	M_UpdateBounds (); // woods -- size for the current window before centering (iw)
 	historymenu.list.viewsize = MAX_VIS_HISTORY;
 	historymenu.list.cursor = -1;
 	historymenu.list.scroll = 0;
@@ -32073,9 +32245,10 @@ void M_History_Draw(void)
 	int x, y, i, cols;
 	int firstvis, numvis;
 
-	x = 16;
-	y = 32;
-	cols = 36;
+	x = m_left + 16;
+	y = m_top + 32;
+	cols = M_LIST_COLS;
+	M_List_SetViewsize(&historymenu.list, MAX_VIS_HISTORY);
 
 	historymenu.x = x;
 	historymenu.y = y;
@@ -32235,7 +32408,7 @@ Bookmarks Menu
 ==================
 */
 
-#define MAX_VIS_BOOKMARKS	16
+#define MAX_VIS_BOOKMARKS	(16 + M_EXTRA_ROWS)
 
 void FileList_Add(const char* name, const char* data, filelist_item_t** list);
 
@@ -32302,6 +32475,7 @@ static void M_Bookmarks_Init(void)
 
 	BookmarksList_Init();
 
+	M_UpdateBounds (); // woods -- size for the current window before centering (iw)
 	bookmarksmenu.list.viewsize = MAX_VIS_BOOKMARKS;
 	bookmarksmenu.list.cursor = -1;
 	bookmarksmenu.list.scroll = 0;
@@ -32337,9 +32511,10 @@ void M_Bookmarks_Draw(void)
 	int x, y, i, cols;
 	int firstvis, numvis;
 
-	x = 16;
-	y = 32;
-	cols = 36;
+	x = m_left + 16;
+	y = m_top + 32;
+	cols = M_LIST_COLS;
+	M_List_SetViewsize(&bookmarksmenu.list, MAX_VIS_BOOKMARKS);
 
 	bookmarksmenu.x = x;
 	bookmarksmenu.y = y;
@@ -32382,10 +32557,11 @@ void M_Bookmarks_Draw(void)
 			M_DrawCharacter(x - 8, y + i * 8, 12 + ((int)(realtime * 4) & 1));
 
 		char serverAddress[MAX_SERVER_ADDRESS_LEN];
-		char serverStr[40];
+		char serverStr[128];
+		int server_w = q_min(cols - 2, (int)sizeof(serverStr) - 1); // 34 classic
 		NET_HostnameCache_FormatDisplay(bookmarksmenu.items[idx].name, net_hostport,
 			serverAddress, sizeof(serverAddress));
-		q_snprintf(serverStr, sizeof(serverStr), "%-34.34s", serverAddress);
+		q_snprintf(serverStr, sizeof(serverStr), "%-*.*s", server_w, server_w, serverAddress);
 
 		if (selected)
 			M_PrintWhite(x, y + bookmarksmenu.list.viewsize * 8 + 12, serverStr);
@@ -34215,7 +34391,14 @@ Server List Menu
 ==================
 */
 
-#define MAX_VIS_SERVERS 17
+#define MAX_VIS_SERVERS	(17 + M_EXTRA_ROWS)
+/* woods -- column widths grow with the menu bounds (iw): classic is a 16-char
+   name and 6-char map, with headers at columns 0/18/25/31. Shared by the draw
+   and the header click test. */
+static int slist_name_w = 16, slist_map_w = 6;
+#define SLIST_MAP_COL	(slist_name_w + 2)
+#define SLIST_USERS_COL	(SLIST_MAP_COL + slist_map_w + 1)
+#define SLIST_PING_COL	(SLIST_USERS_COL + 6)
 #define PING_COOLDOWN 2.0
 #define MAX_PING_QUEUE 5
 #define SERVERLIST_UNAVAILABLE_ALPHA 0.35f
@@ -36360,8 +36543,8 @@ static int ServerList_RowCapacity(void)
 {
 	int rows = serversmenu.list.viewsize;
 
-	if (serversmenu.list.search.len > 0 && rows > 13)
-		rows = 13;
+	if (serversmenu.list.search.len > 0 && rows > 13 + M_EXTRA_ROWS)
+		rows = 13 + M_EXTRA_ROWS;
 
 	return q_max(rows, 1);
 }
@@ -36801,6 +36984,7 @@ void M_Menu_ServerList_f (void)
 	serversmenu.resolvedDedupePending = false;
 	serversmenu.copy_message_until = 0.0;
 	pingThreadsShouldExit = false;
+	M_UpdateBounds (); // woods -- size for the current window before centering (iw)
 	serversmenu.list.viewsize = MAX_VIS_SERVERS;
 	memset(&serversmenu.list.search, 0, sizeof(serversmenu.list.search));
 	serversmenu.list.search.maxlen = 32;
@@ -36826,9 +37010,15 @@ void M_ServerList_Draw (void)
 	const char* title;
 	qboolean loading;
 
-	x = 16;
-	y = 36;
-	cols = 36;
+	x = m_left + 16;
+	y = m_top + 36;
+	cols = M_LIST_COLS;
+	{
+		int extra = cols - 36;
+		slist_name_w = 16 + extra * 2 / 3;
+		slist_map_w = 6 + extra - extra * 2 / 3;
+	}
+	serversmenu.list.viewsize = MAX_VIS_SERVERS;
 	loading = (searchLastScope == SLIST_INTERNET &&
 		(slistInProgress || ServerList_ApiFetchIsLoading()));
 	copy_message_active = (realtime < serversmenu.copy_message_until);
@@ -36892,14 +37082,14 @@ void M_ServerList_Draw (void)
 	if (serversmenu.sort_mode == SORT_NAME) M_PrintWhite(x, header_y, hdr_name);
 	else M_Print(x, header_y, hdr_name);
 
-	if (serversmenu.sort_mode == SORT_MAP) M_PrintWhite(x + 18 * 8, header_y, hdr_map);
-	else M_Print(x + 18 * 8, header_y, hdr_map);
+	if (serversmenu.sort_mode == SORT_MAP) M_PrintWhite(x + SLIST_MAP_COL * 8, header_y, hdr_map);
+	else M_Print(x + SLIST_MAP_COL * 8, header_y, hdr_map);
 	
-	if (serversmenu.sort_mode == SORT_USERS) M_PrintWhite(x + 25 * 8, header_y, hdr_users);
-	else M_Print(x + 25 * 8, header_y, hdr_users);
+	if (serversmenu.sort_mode == SORT_USERS) M_PrintWhite(x + SLIST_USERS_COL * 8, header_y, hdr_users);
+	else M_Print(x + SLIST_USERS_COL * 8, header_y, hdr_users);
 	
-	if (serversmenu.sort_mode == SORT_PING) M_PrintWhite(x + 31 * 8, header_y, hdr_ping);
-	else M_Print(x + 31 * 8, header_y, hdr_ping);
+	if (serversmenu.sort_mode == SORT_PING) M_PrintWhite(x + SLIST_PING_COL * 8, header_y, hdr_ping);
+	else M_Print(x + SLIST_PING_COL * 8, header_y, hdr_ping);
 
         int saved_viewsize = serversmenu.list.viewsize;
 	ServerList_GetVisibleLayout(&list_rows, &item_viewsize, &pinned_count, &separator_visible);
@@ -36948,13 +37138,13 @@ void M_ServerList_Draw (void)
 			else
 				q_snprintf(plysStr, sizeof(plysStr), "%d/%d", server.users, server.maxusers);
 
-	                char linePrefixStr[32];
-			if (server.pinned_bookmark)
-				q_snprintf(linePrefixStr, sizeof(linePrefixStr), "%-14.14s  %-6.6s %-5s ",
-					server.name, server.map, plysStr);
-			else
-				q_snprintf(linePrefixStr, sizeof(linePrefixStr), "%-16.16s  %-6.6s %-5s ",
-					server.name, server.map, plysStr);
+	                char linePrefixStr[160];
+			{
+				int name_w = slist_name_w - (server.pinned_bookmark ? 2 : 0);
+				q_snprintf(linePrefixStr, sizeof(linePrefixStr), "%-*.*s  %-*.*s %-5s ",
+					name_w, name_w, server.name,
+					slist_map_w, slist_map_w, server.map, plysStr);
+			}
 
 		if (separator_visible && idx >= pinned_count)
 			row++;
@@ -37006,7 +37196,7 @@ void M_ServerList_Draw (void)
                 if (selected)
                 {
                         int info_y = y + list_rows * 8 + 12;
-                        int plys_text_x = x + 25 * 8;
+                        int plys_text_x = x + SLIST_USERS_COL * 8;
                         int plys_text_w = (int)strlen(plysStr) * 8;
                         qboolean hover_plys = (m_mousex >= plys_text_x &&
                                 m_mousex < plys_text_x + plys_text_w &&
@@ -37026,7 +37216,7 @@ void M_ServerList_Draw (void)
 	                                q_strlcpy(players_copy, server.players, sizeof(players_copy));
 
                                 char *pos = players_copy;
-                                char line_buffer[64];
+                                char line_buffer[640]; // a wrapped line plus one capped name
                                 int line_pos = 0;
                                 int line_count = 0;
                                 int current_y = info_y;
@@ -37052,11 +37242,11 @@ void M_ServerList_Draw (void)
                                         int comma_space = next_comma ? 2 : 0;
                                         int needed_space = name_len + comma_space;
 
-                                        if (line_pos > 0 && line_pos + needed_space > 40)
+                                        if (line_pos > 0 && line_pos + needed_space > cols + 4)
                                         {
                                                 if (line_count >= 2)
                                                 {
-                                                        if (line_pos + 4 <= 40)
+                                                        if (line_pos + 4 <= cols + 4)
                                                         {
                                                                 line_buffer[line_pos++] = ' ';
                                                                 line_buffer[line_pos++] = '.';
@@ -37098,8 +37288,9 @@ void M_ServerList_Draw (void)
 	                        {
 					char displayAddress[MAX_SERVER_ADDRESS_LEN];
 					qboolean friendly;
-	                                char infoStr[40];
-	                                q_snprintf(infoStr, sizeof(infoStr), "%-34.34s", server.name);
+	                                char infoStr[128];
+					int info_w = q_min(cols - 2, (int)sizeof(infoStr) - 1);
+	                                q_snprintf(infoStr, sizeof(infoStr), "%-*.*s", info_w, info_w, server.name);
 					if (server.unavailable_bookmark)
 						M_PrintRGBA(x, info_y, infoStr, CL_PLColours_Parse("0xffffff"),
 							SERVERLIST_UNAVAILABLE_ALPHA, false);
@@ -37107,7 +37298,7 @@ void M_ServerList_Draw (void)
 						M_PrintWhite(x, info_y, infoStr);
 					friendly = NET_HostnameCache_FormatDisplay(server.ip,
 						net_hostport, displayAddress, sizeof(displayAddress));
-	                                q_snprintf(infoStr, sizeof(infoStr), "%-34.34s", displayAddress);
+	                                q_snprintf(infoStr, sizeof(infoStr), "%-*.*s", info_w, info_w, displayAddress);
 					if (server.unavailable_bookmark)
 						M_PrintRGBA(x, info_y + 8, infoStr, CL_PLColours_Parse("0xffffff"),
 							SERVERLIST_UNAVAILABLE_ALPHA, false);
@@ -37115,7 +37306,7 @@ void M_ServerList_Draw (void)
 						M_PrintWhite(x, info_y + 8, infoStr);
 					if (friendly && serversmenu.list.search.len == 0)
 					{
-						q_snprintf(infoStr, sizeof(infoStr), "%-34.34s", server.ip);
+						q_snprintf(infoStr, sizeof(infoStr), "%-*.*s", info_w, info_w, server.ip);
 						if (server.unavailable_bookmark)
 							M_PrintRGBA(x, info_y + 16, infoStr,
 								CL_PLColours_Parse("0xffffff"),
@@ -37142,15 +37333,15 @@ void M_ServerList_Draw (void)
 	// Draw search box
 	if (serversmenu.list.search.len > 0)
 	{
-		M_DrawTextBox(16, 180, 32, 1);
-		M_PrintHighlight(24, 188, serversmenu.list.search.text,
+		M_DrawTextBox(m_left + 16, M_BOTTOM(180), cols - 4, 1);
+		M_PrintHighlight(m_left + 24, M_BOTTOM(188), serversmenu.list.search.text,
 			serversmenu.list.search.text,
 			serversmenu.list.search.len);
-		int cursor_x = 24 + 8 * serversmenu.list.search.len;
+		int cursor_x = m_left + 24 + 8 * serversmenu.list.search.len;
 		if (serversmenu.list.numitems == 0)
-			M_DrawCharacter(cursor_x, 188, 11 ^ 128);
+			M_DrawCharacter(cursor_x, M_BOTTOM(188), 11 ^ 128);
 		else
-			M_DrawCharacter(cursor_x, 188, 10 + ((int)(realtime * 4) & 1));
+			M_DrawCharacter(cursor_x, M_BOTTOM(188), 10 + ((int)(realtime * 4) & 1));
 	}
 }
 
@@ -37360,10 +37551,10 @@ void M_ServerList_Key(int key)
 		int hy = m_mousey - (serversmenu.y - 16);
 		if (hy >= 0 && hy < 8) {
 			int new_sort = -1;
-			if (hx >= 0 && hx < 16 * 8) new_sort = SORT_NAME;
-			else if (hx >= 18 * 8 && hx < (18 + 6) * 8) new_sort = SORT_MAP;
-			else if (hx >= 25 * 8 && hx < (25 + 5) * 8) new_sort = SORT_USERS;
-			else if (hx >= 32 * 8 && hx < (32 + 4) * 8) new_sort = SORT_PING;
+			if (hx >= 0 && hx < slist_name_w * 8) new_sort = SORT_NAME;
+			else if (hx >= SLIST_MAP_COL * 8 && hx < (SLIST_MAP_COL + slist_map_w) * 8) new_sort = SORT_MAP;
+			else if (hx >= SLIST_USERS_COL * 8 && hx < (SLIST_USERS_COL + 5) * 8) new_sort = SORT_USERS;
+			else if (hx >= SLIST_PING_COL * 8 && hx < (SLIST_PING_COL + 4) * 8) new_sort = SORT_PING;
 			
 			if (new_sort != -1) {
 				if (serversmenu.sort_mode == new_sort) {
@@ -37429,7 +37620,7 @@ Mods Menu (iw)
 ==================
 */
 
-#define MAX_VIS_MODS	19
+#define MAX_VIS_MODS	(19 + M_EXTRA_ROWS)
 #define DOWNLOAD_MODS_LABEL	"Download"
 
 typedef struct
@@ -37489,7 +37680,7 @@ static qboolean M_Mods_IsActive(const char* game)
 
 static int M_Mods_DescriptionX(int x)
 {
-	return x + q_min(max_word_length + 1, 13) * 8;
+	return x + (M_NameColWidth() + 1) * 8;
 }
 
 static void M_Mods_DrawDownloadMenuPrompt(int x, int y, const char *highlight, int highlight_len)
@@ -37547,8 +37738,8 @@ static void M_Mods_Add(const char* name)
 
 static void M_Mods_UpdateViewsize(void)
 {
-	modsmenu.list.viewsize = (modsmenu.list.search.len == 0) ?
-		MAX_VIS_MODS - 1 : MAX_VIS_MODS;
+	M_List_SetViewsize(&modsmenu.list, (modsmenu.list.search.len == 0) ?
+		MAX_VIS_MODS - 1 : MAX_VIS_MODS);
 }
 
 static void M_Mods_Refilter(void)
@@ -37593,6 +37784,7 @@ static void M_Mods_Init(void)
 
 	memset(&modsmenu.list.search, 0, sizeof(modsmenu.list.search));
 	modsmenu.list.search.maxlen = 32;
+	M_UpdateBounds (); // woods -- size for the current window before centering (iw)
 	M_Mods_UpdateViewsize();
 
 	M_Ticker_Init(&modsmenu.ticker);
@@ -37603,9 +37795,6 @@ static void M_Mods_Init(void)
 
 	for (item = modlist; item; item = item->next)
 		M_Mods_Add(item->name);
-
-	// Force 12 chars for consistent column alignment as requested
-	max_word_length = 12;
 
 	M_Mods_Refilter();
 
@@ -37642,10 +37831,12 @@ void M_Mods_Draw(void)
 {
 	int x, y, i, cols;
 	int firstvis, numvis;
+	int saved_max_word_length;
 
-	x = 16;
-	y = 32;
-	cols = 36;
+	x = m_left + 16;
+	y = m_top + 32;
+	cols = M_LIST_COLS;
+	M_Mods_UpdateViewsize();
 
 	modsmenu.x = x;
 	modsmenu.y = y;
@@ -37670,6 +37861,11 @@ void M_Mods_Draw(void)
 		M_Mods_ContentCount(), "mod", "mods");
 	M_DrawQuakeBar(x - 8, y - 16, cols + 2);
 
+	m_namecols = (int)CLAMP(12, cols * 0.375f - 1, 40);
+	// Mods use a fixed-width name column (12 classic) for consistent alignment;
+	// set it only while drawing so the global map-name width is left alone.
+	saved_max_word_length = max_word_length;
+	max_word_length = m_namecols;
 	M_List_GetVisibleRange(&modsmenu.list, &firstvis, &numvis);
 	for (i = 0; i < numvis; i++)
 	{
@@ -37719,6 +37915,8 @@ void M_Mods_Draw(void)
 		if (selected)
 			M_DrawCharacter(x - 8, item_y, 12 + ((int)(realtime * 4) & 1));
 	}
+	m_namecols = 12;
+	max_word_length = saved_max_word_length;
 
 	if (M_List_GetOverflow(&modsmenu.list) > 0)
 	{
@@ -37732,15 +37930,15 @@ void M_Mods_Draw(void)
 
 	if (modsmenu.list.search.len > 0) // Draw search box if search is active
 	{
-		M_DrawTextBox(16, 176, 32, 1);
-		M_PrintHighlight(24, 184, modsmenu.list.search.text,
+		M_DrawTextBox(m_left + 16, M_BOTTOM(176), cols - 4, 1);
+		M_PrintHighlight(m_left + 24, M_BOTTOM(184), modsmenu.list.search.text,
 			modsmenu.list.search.text,
 			modsmenu.list.search.len);
-		int cursor_x = 24 + 8 * modsmenu.list.search.len;
+		int cursor_x = m_left + 24 + 8 * modsmenu.list.search.len;
 		if (modsmenu.list.numitems == 0)
-			M_DrawCharacter(cursor_x, 184, 11 ^ 128);
+			M_DrawCharacter(cursor_x, M_BOTTOM(184), 11 ^ 128);
 		else
-			M_DrawCharacter(cursor_x, 184, 10 + ((int)(realtime * 4) & 1));
+			M_DrawCharacter(cursor_x, M_BOTTOM(184), 10 + ((int)(realtime * 4) & 1));
 	}
 }
 
@@ -37991,7 +38189,7 @@ Download Mods Menu
 ==================
 */
 
-#define MAX_VIS_DOWNLOAD_MODS	17
+#define MAX_VIS_DOWNLOAD_MODS	(17 + M_EXTRA_ROWS)
 #define DOWNLOAD_MODS_LIST_X	16
 #define DOWNLOAD_MODS_LIST_Y	32
 /* Match the local mods menu's width: cols 36 with the last 2 columns reserved
@@ -38004,6 +38202,9 @@ Download Mods Menu
 	(DOWNLOAD_MODS_LIST_COLS - DOWNLOAD_MODS_SCROLLBAR_COLS \
 		- DOWNLOAD_MODS_NAME_CHARS - 1)
 #define DOWNLOAD_MODS_SEPARATOR_INDEX	-1
+/* woods -- the name column takes whatever the menu bounds add (iw); the
+ * detail column keeps its fixed DOWNLOAD_MODS_DETAIL_CHARS width. */
+static int downloadmods_namechars = DOWNLOAD_MODS_NAME_CHARS;
 #define DOWNLOAD_MODS_MAX_URL	1024
 #define DOWNLOAD_MODS_MAX_MANIFEST_BYTES	((curl_off_t)1024 * 1024)
 #define DOWNLOAD_MODS_MAX_SPLIT_PART_BYTES	((curl_off_t)2 * 1024 * 1024 * 1024)
@@ -38555,6 +38756,7 @@ static void M_DownloadMods_Init(void)
 	downloadmodsmenu.exit_prompt = false;
 	downloadmodsmenu.exit_prompt_cursor = DOWNLOADMOD_EXIT_BACKGROUND;
 	downloadmodsmenu.prev_cursor = -2;
+	M_UpdateBounds (); // woods -- size for the current window before centering (iw)
 	downloadmodsmenu.list.viewsize = MAX_VIS_DOWNLOAD_MODS;
 	downloadmodsmenu.list.cursor = -1;
 	downloadmodsmenu.list.scroll = 0;
@@ -40983,8 +41185,8 @@ static void M_DownloadMods_DrawRow(int x, int y, const downloadmoditem_t *item,
 	const char *detail, downloadmoddetailstyle_t detail_style,
 	qboolean installed, qboolean selected, qboolean search_active)
 {
-	int name_width = DOWNLOAD_MODS_NAME_CHARS * 8;
-	int detail_x = x + (DOWNLOAD_MODS_NAME_CHARS + 1) * 8;
+	int name_width = downloadmods_namechars * 8;
+	int detail_x = x + (downloadmods_namechars + 1) * 8;
 	char name_text[sizeof(item->name) + sizeof(item->version) + 2];
 	char detail_text[DOWNLOAD_MODS_DETAIL_CHARS + 1];
 	plcolour_t white = M_DownloadMods_Color(255, 255, 255);
@@ -41004,7 +41206,7 @@ static void M_DownloadMods_DrawRow(int x, int y, const downloadmoditem_t *item,
 	}
 	else if (search_active)
 	{
-		if ((int)strlen(name_text) <= DOWNLOAD_MODS_NAME_CHARS)
+		if ((int)strlen(name_text) <= downloadmods_namechars)
 		{
 			M_PrintHighlight(x, y, name_text,
 				downloadmodsmenu.list.search.text,
@@ -41926,9 +42128,11 @@ void M_DownloadMods_Draw(void)
 	qboolean message_active = false;
 	downloadmoditem_t *selected_item;
 
-	x = DOWNLOAD_MODS_LIST_X;
-	y = DOWNLOAD_MODS_LIST_Y;
-	cols = DOWNLOAD_MODS_LIST_COLS;
+	x = m_left + DOWNLOAD_MODS_LIST_X;
+	y = m_top + DOWNLOAD_MODS_LIST_Y;
+	cols = M_LIST_COLS;
+	downloadmods_namechars = cols - DOWNLOAD_MODS_SCROLLBAR_COLS - 1 - DOWNLOAD_MODS_DETAIL_CHARS;
+	M_List_SetViewsize(&downloadmodsmenu.list, MAX_VIS_DOWNLOAD_MODS);
 
 	downloadmodsmenu.x = x;
 	downloadmodsmenu.y = y;
@@ -42057,16 +42261,16 @@ void M_DownloadMods_Draw(void)
 
 	if (downloadmodsmenu.list.search.len > 0)
 	{
-		M_DrawTextBox(16, 176, 32, 1);
-		M_PrintHighlight(24, 184, downloadmodsmenu.list.search.text,
+		M_DrawTextBox(m_left + 16, M_BOTTOM(176), cols - 4, 1);
+		M_PrintHighlight(m_left + 24, M_BOTTOM(184), downloadmodsmenu.list.search.text,
 			downloadmodsmenu.list.search.text,
 			downloadmodsmenu.list.search.len);
 		{
-			int cursor_x = 24 + 8 * downloadmodsmenu.list.search.len;
+			int cursor_x = m_left + 24 + 8 * downloadmodsmenu.list.search.len;
 			if (downloadmodsmenu.list.numitems == 0)
-				M_DrawCharacter(cursor_x, 184, 11 ^ 128);
+				M_DrawCharacter(cursor_x, M_BOTTOM(184), 11 ^ 128);
 			else
-				M_DrawCharacter(cursor_x, 184, 10 + ((int)(realtime * 4) & 1));
+				M_DrawCharacter(cursor_x, M_BOTTOM(184), 10 + ((int)(realtime * 4) & 1));
 		}
 	}
 
@@ -42225,19 +42429,20 @@ Demos Menu
 ==================
 */
 
-#define MAX_VIS_DEMOS	10
-#define MAX_VIS_DEMO_FOLDERS	11
-#define DEMOS_LIST_X	16
-#define DEMOS_LIST_COLS	36
+// woods -- positions follow the menu bounds (iw); classic values in comments
+#define MAX_VIS_DEMOS	(10 + M_EXTRA_ROWS)
+#define MAX_VIS_DEMO_FOLDERS	(11 + M_EXTRA_ROWS)
+#define DEMOS_LIST_X	(m_left + 16)
+#define DEMOS_LIST_COLS	M_LIST_COLS	// 36
 #define DEMOS_SORT_HEADER_GAP	16
 #define DEMOS_MAP_REFILTER_INTERVAL	0.25
-#define DEMOS_PATH_ROW_Y	32
-#define DEMOS_PATH_LABEL_X	16
-#define DEMOS_PATH_BOX_X	56
-#define DEMOS_PATH_TEXT_X	64
-#define DEMOS_PATH_BOX_CHARS	30
+#define DEMOS_PATH_ROW_Y	(m_top + 32)
+#define DEMOS_PATH_LABEL_X	(m_left + 16)
+#define DEMOS_PATH_BOX_X	(m_left + 56)
+#define DEMOS_PATH_TEXT_X	(m_left + 64)
+#define DEMOS_PATH_BOX_CHARS	(DEMOS_LIST_COLS - 6)	// 30
 #define DEMOS_PATH_MAX_DEPTH	8
-#define DEMOS_ID1_ROW_Y	44
+#define DEMOS_ID1_ROW_Y	(m_top + 44)
 #define DEMOS_ID1_TEXT_X	(DEMOS_PATH_BOX_X + 8)
 #define DEMOS_ID1_TEXT_SCALE	0.8125f
 
@@ -45257,6 +45462,7 @@ static void M_Demos_Init(void)
 	M_Demos_MetadataCache_Load();
 	t_cache = Sys_DoubleTime();
 
+	M_UpdateBounds (); // woods -- size for the current window before centering (iw)
 	demosmenu.list.viewsize = MAX_VIS_DEMOS;
 	demosmenu.list.cursor = -1;
 	demosmenu.list.scroll = 0;
@@ -45310,7 +45516,8 @@ void M_Menu_Demos_f (void)
 
 static int M_Demos_PathSuffixVisibleChars(void)
 {
-	return q_max(0, DEMOS_PATH_BOX_CHARS - (int)strlen(M_Demos_PathBase()) - 1);
+	// capped by the visible_suffix buffer in M_Demos_DrawPathField
+	return CLAMP(0, DEMOS_PATH_BOX_CHARS - (int)strlen(M_Demos_PathBase()) - 1, MAX_QPATH - 1);
 }
 
 static int M_Demos_PathViewStart(void)
@@ -45332,7 +45539,7 @@ static qboolean M_Demos_ShowPathOptions(void)
 
 static int M_Demos_ListY(void)
 {
-	int y = M_Demos_ShowId1Toggle() ? 64 : 56;
+	int y = m_top + (M_Demos_ShowId1Toggle() ? 64 : 56);
 	return demosmenu.path_valid && !M_Demos_ShowPathOptions() ? y + 8 : y;
 }
 
@@ -45620,6 +45827,7 @@ void M_Demos_Draw (void)
     x = DEMOS_LIST_X;
     y = M_Demos_ListY();
     cols = DEMOS_LIST_COLS;
+	M_List_SetViewsize(&demosmenu.list, MAX_VIS_DEMOS);
 
     char demofilename[MAX_OSPATH];
 
@@ -45667,9 +45875,9 @@ void M_Demos_Draw (void)
 
 	M_TextField_CheckMouseRelease();
 
-	M_DrawCountHeader(x, 4, cols, "Demos",
+	M_DrawCountHeader(x, m_top + 4, cols, "Demos",
 		demosmenu.democount, "demo", "demos");
-    M_DrawQuakeBar(x - 8, 16, cols + 2);
+    M_DrawQuakeBar(x - 8, m_top + 16, cols + 2);
 	M_Demos_DrawPathField();
 	M_Demos_DrawShowId1Toggle();
 
@@ -45806,12 +46014,12 @@ void M_Demos_Draw (void)
 
         if (di->players[0])
         {
-            // Handle player display with 40-character line wrapping
+            // Handle player display, wrapped to the list width (40 chars classic)
             char players_copy[256];
             q_strlcpy(players_copy, di->players, sizeof(players_copy));
             
             char* pos = players_copy;
-            char line_buffer[64];
+            char line_buffer[512]; // a wrapped line plus one whole name always fits
             int line_pos = 0;
             qboolean first_line = true;
             int line_count = 0;
@@ -45837,13 +46045,13 @@ void M_Demos_Draw (void)
                 int comma_space = next_comma ? 2 : 0; // ", " if there are more names
                 int needed_space = name_len + comma_space;
                 
-                if (line_pos > 0 && line_pos + needed_space > 40)
+                if (line_pos > 0 && line_pos + needed_space > cols + 4)
                 {
                     // Check if we've reached the 3-line limit
                     if (line_count >= 2) // 0, 1, 2 = 3 lines total
                     {
                         // Add ellipsis to indicate more players
-                        if (line_pos + 4 <= 40) // Space for " ..."
+                        if (line_pos + 4 <= cols + 4) // Space for " ..."
                         {
                             line_buffer[line_pos++] = ' ';
                             line_buffer[line_pos++] = '.';
@@ -45895,15 +46103,15 @@ void M_Demos_Draw (void)
 
     if (demosmenu.list.search.len > 0)
     {
-        M_DrawTextBox(16, 180, 32, 1);
-        M_PrintHighlight(24, 188, demosmenu.list.search.text,
+        M_DrawTextBox(m_left + 16, M_BOTTOM(180), cols - 4, 1);
+        M_PrintHighlight(m_left + 24, M_BOTTOM(188), demosmenu.list.search.text,
             demosmenu.list.search.text,
             demosmenu.list.search.len);
-        int cursor_x = 24 + 8 * demosmenu.list.search.len;
+        int cursor_x = m_left + 24 + 8 * demosmenu.list.search.len;
 		if (demosmenu.list.numitems == 0)
-			M_DrawCharacter(cursor_x, 188, 11 ^ 128);
+			M_DrawCharacter(cursor_x, M_BOTTOM(188), 11 ^ 128);
 		else
-			M_DrawCharacter(cursor_x, 188, 10 + ((int)(realtime * 4) & 1));
+			M_DrawCharacter(cursor_x, M_BOTTOM(188), 10 + ((int)(realtime * 4) & 1));
     }
 }
 
@@ -48251,6 +48459,7 @@ void M_Draw (void)
 	}
 
 	GL_SetCanvas (CANVAS_MENU); //johnfitz
+	M_UpdateBounds (); // woods (iw)
 
 	{
 		float lp_frac = M_LivePreview_Alpha ();
@@ -51279,10 +51488,10 @@ static void M_PakLoading_Shutdown(void)
 void M_PakLoading_Draw(void)
 {
 	int i;
-	int x = 16;
-	int y = 32;
-	const int visible_items = 13;
-	const int cols = 36;
+	int x = m_left + 16;
+	int y = m_top + 32;
+	const int visible_items = 13 + M_EXTRA_ROWS;
+	const int cols = M_LIST_COLS;
 	static const char* enginepacknames[] = { "quakespasm.pak", "qssm.pak" };
 	const char* pinned[] = {
 		"pak0.pak, pak1.pak (always loaded)",
@@ -51386,7 +51595,7 @@ void M_PakLoading_Draw(void)
 		int box_x = x;
 		int box_y = list_y + visible_items * 8 + 16;
 		int cursor_x = box_x + 8 * pakmenu.search.len;
-		M_DrawTextBox(box_x - 8, box_y - 8, 32, 1);
+		M_DrawTextBox(box_x - 8, box_y - 8, cols - 4, 1);
 		M_PrintWhite(box_x, box_y, pakmenu.search.text);
 
 		/* cursor color matches other menus: blink if match exists, solid inverted if no match */
@@ -51410,11 +51619,11 @@ void M_PakLoading_Draw(void)
 	if (pakmenu.search.len == 0)
 	{
 		if (!pak_reorder_enabled)
-			M_PrintWhite(16, 180, "Re-ordering disabled");
+			M_PrintWhite(x, M_BOTTOM(180), "Re-ordering disabled");
 		else if (pakmenu.dragging)
-			M_PrintWhite(16, 180, "Arrows: Move  Enter/Space: Drop");
+			M_PrintWhite(x, M_BOTTOM(180), "Arrows: Move  Enter/Space: Drop");
 		else
-			M_PrintWhite(16, 180, "Enter/Space: Grab  Arrows: Move");
+			M_PrintWhite(x, M_BOTTOM(180), "Enter/Space: Grab  Arrows: Move");
 	}
 }
 
@@ -51548,9 +51757,9 @@ void M_PakLoading_Mousemove(int cx, int cy)
 {
 	const int pinned_count = 3; /* pak0+pak1, engine packs */
 	const int pinned_offset = pinned_count + 1; /* spacer line */
-	const int y_start = 32 + pinned_offset * 8;
+	const int y_start = m_top + 32 + pinned_offset * 8;
 	const int item_h = 8;
-	const int visible_items = 13;
+	const int visible_items = 13 + M_EXTRA_ROWS; // match M_PakLoading_Draw
 	
 	int item_idx;
 	

@@ -11334,14 +11334,16 @@ static void DrawSpinningModelToMenuPixelsInternal(const char* modelname,
 		GL_BindFramebufferFunc(GL_FRAMEBUFFER, GLSLGamma_SceneFBO());
 		glViewport(oldVP[0], oldVP[1], oldVP[2], oldVP[3]);
 		/* Convert back to CANVAS_MENU virtual units for the textured quad */
-		float s = q_min((float)glwidth / 320.0f, (float)glheight / 200.0f);
-		s = CLAMP(1.0f, scr_menuscale.value, s);
-		float vp_x = glx + (glwidth - 320.0f * s) * 0.5f;
-		float vp_y = gly + (glheight - 200.0f * s) * 0.5f;
-		float mx = (pixel_x - vp_x) / s;
-		float my = (pixel_y - vp_y) / s;
-		float mw = pixel_w / s;
-		float mh = pixel_h / s;
+		/* Exact inverse of the menu-to-pixel mapping callers used
+		   (Draw_GetMenuTransform: slot origin plus truncated slot scale). */
+		menucanvas_t mc;
+		Draw_GetMenuCanvas(&mc);
+		float sx = mc.slot_w / 640.0f;
+		float sy = mc.slot_h / 200.0f;
+		float mx = (pixel_x - (glx + mc.ox)) / sx;
+		float my = (pixel_y - (gly + mc.oy_bottom)) / sy;
+		float mw = pixel_w / sx;
+		float mh = pixel_h / sy;
 		GL_SetCanvas(CANVAS_MENU);
 		MenuPreview_DrawQuad(preview_fbo.color_tex, mx, my, mw, mh);
 		return;

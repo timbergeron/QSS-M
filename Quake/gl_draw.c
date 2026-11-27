@@ -2385,11 +2385,11 @@ void Draw_ScaledPic (int x, int y, qpic_t *pic, float scale)
 	glTexCoord2f (gl->sl, gl->tl);
 	glVertex2f (x, y);
 	glTexCoord2f (gl->sh, gl->tl);
-	glVertex2f (x + pic->width * scale, y);
+	glVertex2f (x + (int)pic->width * scale, y);
 	glTexCoord2f (gl->sh, gl->th);
-	glVertex2f (x + pic->width * scale, y + pic->height * scale);
+	glVertex2f (x + (int)pic->width * scale, y + (int)pic->height * scale);
 	glTexCoord2f (gl->sl, gl->th);
-	glVertex2f (x, y + pic->height * scale);
+	glVertex2f (x, y + (int)pic->height * scale);
 	glEnd ();
 }
 
@@ -2415,11 +2415,11 @@ void Draw_Pic (int x, int y, qpic_t *pic)
 	glTexCoord2f (gl->sl, gl->tl);
 	glVertex2f (x, y);
 	glTexCoord2f (gl->sh, gl->tl);
-	glVertex2f (x+pic->width, y);
+	glVertex2f (x+(int)pic->width, y);
 	glTexCoord2f (gl->sh, gl->th);
-	glVertex2f (x+pic->width, y+pic->height);
+	glVertex2f (x+(int)pic->width, y+(int)pic->height);
 	glTexCoord2f (gl->sl, gl->th);
-	glVertex2f (x, y+pic->height);
+	glVertex2f (x, y+(int)pic->height);
 	glEnd ();
 }
 
@@ -2489,11 +2489,11 @@ void Draw_BatchPic (drawpicbatch_t *batch, int x, int y, qpic_t *pic)
 	glTexCoord2f (gl.sl, gl.tl);
 	glVertex2f (x, y);
 	glTexCoord2f (gl.sh, gl.tl);
-	glVertex2f (x + pic->width, y);
+	glVertex2f (x + (int)pic->width, y);
 	glTexCoord2f (gl.sh, gl.th);
-	glVertex2f (x + pic->width, y + pic->height);
+	glVertex2f (x + (int)pic->width, y + (int)pic->height);
 	glTexCoord2f (gl.sl, gl.th);
-	glVertex2f (x, y + pic->height);
+	glVertex2f (x, y + (int)pic->height);
 }
 
 void Draw_EndPicBatch (drawpicbatch_t *batch)
@@ -2561,11 +2561,11 @@ void Draw_PicRGBA (int x, int y, qpic_t *pic, plcolour_t c, float alpha)
 	glTexCoord2f (gl->sl, gl->tl);
 	glVertex2f (x, y);
 	glTexCoord2f (gl->sh, gl->tl);
-	glVertex2f (x+pic->width, y);
+	glVertex2f (x+(int)pic->width, y);
 	glTexCoord2f (gl->sh, gl->th);
-	glVertex2f (x+pic->width, y+pic->height);
+	glVertex2f (x+(int)pic->width, y+(int)pic->height);
 	glTexCoord2f (gl->sl, gl->th);
-	glVertex2f (x, y+pic->height);
+	glVertex2f (x, y+(int)pic->height);
 	glEnd ();
 
 	if (gl_menu_alpha < 1.0f)
@@ -2624,18 +2624,18 @@ void Draw_Pic_RGBA_Outline (int x, int y, qpic_t* pic, plcolour_t c, float alpha
 		GL_Bind(gl->gltexture);
 		glBegin(GL_QUADS);
 		glTexCoord2f(gl->sl, gl->tl); glVertex2f(x - outlineThickness, y - outlineThickness);
-		glTexCoord2f(gl->sh, gl->tl); glVertex2f(x + pic->width + outlineThickness, y - outlineThickness);
-		glTexCoord2f(gl->sh, gl->th); glVertex2f(x + pic->width + outlineThickness, y + pic->height + outlineThickness);
-		glTexCoord2f(gl->sl, gl->th); glVertex2f(x - outlineThickness, y + pic->height + outlineThickness);
+		glTexCoord2f(gl->sh, gl->tl); glVertex2f(x + (int)pic->width + outlineThickness, y - outlineThickness);
+		glTexCoord2f(gl->sh, gl->th); glVertex2f(x + (int)pic->width + outlineThickness, y + (int)pic->height + outlineThickness);
+		glTexCoord2f(gl->sl, gl->th); glVertex2f(x - outlineThickness, y + (int)pic->height + outlineThickness);
 		glEnd();
 
 		// Draw the filled quad
 		glColor4f(red, green, blue, a);
 		glBegin(GL_QUADS);
 		glTexCoord2f(gl->sl, gl->tl); glVertex2f(x, y);
-		glTexCoord2f(gl->sh, gl->tl); glVertex2f(x + pic->width, y);
-		glTexCoord2f(gl->sh, gl->th); glVertex2f(x + pic->width, y + pic->height);
-		glTexCoord2f(gl->sl, gl->th); glVertex2f(x, y + pic->height);
+		glTexCoord2f(gl->sh, gl->tl); glVertex2f(x + (int)pic->width, y);
+		glTexCoord2f(gl->sh, gl->th); glVertex2f(x + (int)pic->width, y + (int)pic->height);
+		glTexCoord2f(gl->sl, gl->th); glVertex2f(x, y + (int)pic->height);
 		glEnd();
 	}
 
@@ -3531,6 +3531,55 @@ void Draw_FadeScreen_Rect_Alpha (float x0, float y0, float x1, float y1, float a
 
 /*
 ================
+Draw_GetMenuCanvas -- woods
+
+Geometry of CANVAS_MENU. The classic menu was a 640x200-unit viewport placed
+so its first 320 units sat centered on screen, with pixel sizes truncated the
+way glViewport truncates floats; those truncations are reproduced here so the
+full-window canvas maps menu units to the same pixels as before.
+================
+*/
+void Draw_GetMenuCanvas (menucanvas_t *mc)
+{
+	float s, sx, sy;
+	int oy_top;
+
+	if (glwidth <= 0 || glheight <= 0)
+	{
+		// minimized or not yet sized: report the classic slot at scale 1
+		// rather than feeding zero divisors to glOrtho and the menu bounds
+		mc->scale = 1.0f;
+		mc->ox = mc->oy_bottom = 0;
+		mc->slot_w = 640;
+		mc->slot_h = 200;
+		mc->left = 0.0f;
+		mc->right = 320.0f;
+		mc->top = 0.0f;
+		mc->bottom = 200.0f;
+		return;
+	}
+
+	s = q_min ((float)glwidth / 320.0f, (float)glheight / 200.0f);
+	s = CLAMP (1.0f, scr_menuscale.value, s);
+
+	mc->scale = s;
+	mc->ox = (int)((glwidth - 320 * s) / 2);
+	mc->oy_bottom = (int)((glheight - 200 * s) / 2);
+	mc->slot_w = (int)(640 * s);
+	mc->slot_h = (int)(200 * s);
+
+	sx = mc->slot_w / 640.0f;
+	sy = mc->slot_h / 200.0f;
+	oy_top = glheight - mc->oy_bottom - mc->slot_h;
+
+	mc->left = -mc->ox / sx;
+	mc->right = (glwidth - mc->ox) / sx;
+	mc->top = -oy_top / sy;
+	mc->bottom = (glheight - oy_top) / sy;
+}
+
+/*
+================
 Draw_GetCanvasTransform -- woods #mousemenu (iw)
 ================
 */
@@ -3547,18 +3596,23 @@ qboolean Draw_GetCanvasTransform(canvastype canvas, vrect_t *bounds, vrect_t *vi
 	switch (canvas)
 	{
 	case CANVAS_MENU:
-		s = q_min((float)glwidth / 320.0f, (float)glheight / 200.0f);
-		s = CLAMP(1.0f, scr_menuscale.value, s);
-		// ericw -- doubled width to 640 to accommodate long keybindings
+	{
+		// The canvas now covers the whole window, but this reference rect
+		// still describes its classic 640x200 slot: the mapping is linear,
+		// so callers converting menu coords to pixels (and back) stay exact
+		// for points outside the slot too.
+		menucanvas_t mc;
+		Draw_GetMenuCanvas (&mc);
 		bounds->x = 0;
 		bounds->y = 0;
 		bounds->width = 640;
 		bounds->height = 200;
-		viewport->x = glx + (glwidth - 320 * s) / 2;
-		viewport->y = gly + (glheight - 200 * s) / 2;
-		viewport->width = 640 * s;
-		viewport->height = 200 * s;
+		viewport->x = glx + mc.ox;
+		viewport->y = gly + mc.oy_bottom;
+		viewport->width = mc.slot_w;
+		viewport->height = mc.slot_h;
 		return true;
+	}
 
 	case CANVAS_NETGRAPH: // woods #netgraph
 		s = CLAMP(1.0f, scr_sbarscale.value, (float)glwidth / 320.0f);
@@ -3632,8 +3686,10 @@ qboolean Draw_WindowToCanvas(canvastype canvas, int win_x, int win_y, int *canva
 	}
 
 	viewport_top_y = drawable_h - (viewport.y + viewport.height);
-	*canvas_x = bounds.x + (int)((drawable_x - viewport.x) * bounds.width / (float)viewport.width + 0.5f);
-	*canvas_y = bounds.y + (int)((drawable_y - viewport_top_y) * bounds.height / (float)viewport.height + 0.5f);
+	// floor, not truncate: canvases such as CANVAS_MENU extend past their
+	// reference rect, so points left of or above it map to negative units
+	*canvas_x = bounds.x + (int)floorf((drawable_x - viewport.x) * bounds.width / (float)viewport.width + 0.5f);
+	*canvas_y = bounds.y + (int)floorf((drawable_y - viewport_top_y) * bounds.height / (float)viewport.height + 0.5f);
 	return true;
 }
 
@@ -3699,12 +3755,16 @@ void GL_SetCanvas (canvastype newcanvas)
 		glViewport (glx, gly, glwidth, glheight);
 		break;
 	case CANVAS_MENU:
-		s = q_min((float)glwidth / 320.0f, (float)glheight / 200.0f);
-		s = CLAMP (1.0f, scr_menuscale.value, s);
-		// ericw -- doubled width to 640 to accommodate long keybindings
-		glOrtho (0, 640, 200, 0, -99999, 99999);
-		glViewport (glx + (glwidth - 320*s) / 2, gly + (glheight - 200*s) / 2, 640*s, 200*s);
+	{
+		// woods -- full-window menu canvas (iw): (0,0)-(320,200) lands on
+		// exactly the pixels it always did, but drawing is no longer clipped
+		// to that slot, so menus can grow into the rest of the screen.
+		menucanvas_t mc;
+		Draw_GetMenuCanvas (&mc);
+		glOrtho (mc.left, mc.right, mc.bottom, mc.top, -99999, 99999);
+		glViewport (glx, gly, glwidth, glheight);
 		break;
+	}
 	case CANVAS_MENU2:
 		s = q_min((float)glwidth / 320.0, (float)glheight / 200.0);
 		s = CLAMP(1.0, scr_menuscale.value-1, s);

@@ -126,6 +126,14 @@ void Draw_PreloadStartupPics (void);
 qboolean Draw_GetCanvasTransform(canvastype canvas, vrect_t *bounds, vrect_t *viewport);
 qboolean Draw_WindowToCanvas(canvastype canvas, int win_x, int win_y, int *canvas_x, int *canvas_y);
 void Draw_GetMenuTransform(vrect_t* bounds, vrect_t* viewport); // woods #mousemenu (iw)
+typedef struct menucanvas_s
+{
+	float	scale;			// pixels per menu unit
+	int		ox, oy_bottom;	// pixel offset of the classic slot from glx / gly
+	int		slot_w, slot_h;	// pixel size of the classic 640x200 slot
+	float	left, top, right, bottom;	// whole window, in menu units
+} menucanvas_t;
+void Draw_GetMenuCanvas (menucanvas_t *mc); // woods -- full-window CANVAS_MENU
 qboolean Draw_ReloadTextures(qboolean force);
 void Draw_RefreshTextures (qboolean force);
 plcolour_t Draw_GetConcharsAccentColor(void); // woods #goldtext
