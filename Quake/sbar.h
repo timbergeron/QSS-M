@@ -56,6 +56,25 @@ extern int	fragsort[MAX_SCOREBOARD];
 extern int	scoreboardlines;
 extern int	Sbar_ColorForMap (int m);
 void Sbar_SortFrags (qboolean ignorespecs);
+void Sbar_PollScoreboardPings (void);	// rate-limited ping/pl refresh, independent of drawing
+
+typedef enum
+{
+	SBAR_CLOCK_NONE,
+	SBAR_CLOCK_ELAPSED,		// counting up
+	SBAR_CLOCK_REMAINING,	// counting down
+	SBAR_CLOCK_PREMATCH,	// " -0:SS" countdown before a match
+	SBAR_CLOCK_SUDDENDEATH
+} sbar_clock_kind_t;
+
+typedef struct
+{
+	sbar_clock_kind_t kind;
+	int minutes, seconds;
+	qboolean warn;			// drawn red: final minute or sudden death
+} sbar_matchclock_t;
+
+qboolean Sbar_GetMatchClock (sbar_matchclock_t *clock);
 
 #endif	/* _QUAKE_SBAR_H */
 

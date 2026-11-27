@@ -142,6 +142,7 @@ cvar_t		scr_match_hud = {"scr_match_hud", "1", CVAR_ARCHIVE};  // woods #matchhu
 cvar_t		scr_showspeed = {"scr_showspeed", "0",CVAR_ARCHIVE}; // woods #speed
 cvar_t		scr_showspeed_y = {"scr_showspeed_y", "176", CVAR_ARCHIVE}; // woods - #speedometer
 cvar_t		scr_movekeys = {"scr_movekeys", "0", CVAR_ARCHIVE}; // woods #movementkeys
+cvar_t		scr_csqc_cleanhud = {"scr_csqc_cleanhud", "0", CVAR_ARCHIVE}; // simple CSQC HUD: 1 hides engine gameplay overlays, 2 also crosshair + demo bar
 cvar_t		scr_matchclock = {"scr_matchclock", "0",CVAR_ARCHIVE}; // woods #varmatchclock
 cvar_t		scr_matchclock_countup = {"scr_matchclock_countup", "0", CVAR_ARCHIVE}; // woods #varmatchclock
 cvar_t		scr_matchclock_y = {"scr_matchclock_y", "0",CVAR_ARCHIVE}; // woods #varmatchclock
@@ -1082,6 +1083,15 @@ static void Sbar_Completion_f(cvar_t* cvar, const char* partial)
 ShowSpeed_Completion_f -- woods #iwtabcomplete
 ===============
 */
+static void CSQCCleanHud_Completion_f(cvar_t* cvar, const char* partial)
+{
+	(void)cvar;
+
+	Con_AddToTabList("0", partial, "engine overlays on", NULL);
+	Con_AddToTabList("1", partial, "hide gameplay overlays", NULL);
+	Con_AddToTabList("2", partial, "also crosshair and demo bar", NULL);
+}
+
 static void ShowSpeed_Completion_f(cvar_t* cvar, const char* partial)
 {
 	(void)cvar;
@@ -1236,6 +1246,8 @@ void SCR_Init (void)
 	Cvar_SetCompletion (&scr_showspeed, &ShowSpeed_Completion_f); // woods #iwtabcomplete
 	Cvar_RegisterVariable (&scr_showspeed_y); // woods #speedometer
 	Cvar_RegisterVariable (&scr_movekeys); // woods #movementkeys
+	Cvar_RegisterVariable (&scr_csqc_cleanhud);
+	Cvar_SetCompletion (&scr_csqc_cleanhud, &CSQCCleanHud_Completion_f);
 	Cvar_RegisterVariable (&scr_matchclock); // woods #varmatchclock
 	Cvar_SetCompletion (&scr_matchclock, &MatchClock_Completion_f); // woods #iwtabcomplete
 	Cvar_RegisterVariable (&scr_matchclock_countup); // woods #varmatchclock
@@ -1400,9 +1412,20 @@ static float scr_demobar_prevbasespeed = 1.0f;
 static float scr_demobar_showtime = 1.0f;
 static double scr_demobar_force_until = 0.0; // woods #democontrols -- realtime deadline for forced-visible bar
 
+/* scr_csqc_cleanhud level that applies right now. Only a simple CSQC HUD
+   (CSQC_DrawHud without CSQC_UpdateView) honours it: full CSQC already owns
+   the gameplay HUD, and with no CSQC there is nothing to replace the engine's. */
+static int SCR_CSQCCleanHudLevel (void)
+{
+	if (!cl.qcvm.progs || !cl.qcvm.extfuncs.CSQC_DrawHud || cl.qcvm.extfuncs.CSQC_UpdateView)
+		return 0;
+	return CLAMP (0, (int)scr_csqc_cleanhud.value, 2);
+}
+
 static qboolean SCR_DemoBarEligible(void)
 {
-	return cls.demoplayback;
+	/* level 2 hides the bar, so its hitbox and scrub input go with it */
+	return cls.demoplayback && SCR_CSQCCleanHudLevel () < 2;
 }
 
 static int SCR_DemoBarStatusY(void)
@@ -1802,6 +1825,28 @@ void SCR_DrawClock (void)
 
 /*
 ==================
+SCR_PollPing
+
+Keeps scoreboard pings fresh while scr_ping or a CSQC HUD/scoreboard may be
+showing them. Runs whether or not SCR_ShowPing draws anything.
+==================
+*/
+static void SCR_PollPing (void)
+{
+	qboolean csqc_hud = cl.qcvm.progs &&
+		(cl.qcvm.extfuncs.CSQC_DrawHud || cl.qcvm.extfuncs.CSQC_DrawScores || cl.qcvm.extfuncs.CSQC_UpdateView);
+
+	if (cl.gametype != GAME_DEATHMATCH || cls.state != ca_connected || cls.demoplayback)
+		return;
+	if (key_dest == key_console) // dont update when console down
+		return;
+	if (!scr_ping.value && !csqc_hud)
+		return;
+	Sbar_PollScoreboardPings ();
+}
+
+/*
+==================
 SCR_Show_Ping -- added by woods #scrping
 ==================
 */
@@ -1865,14 +1910,6 @@ void SCR_ShowPing(void)
 				}
 			}
 
-			if (key_dest != key_console && (cls.signon >= SIGNONS)) // dont update when console down or not fully connected
-
-				if (!cls.message.cursize && cl.expectingpingtimes < realtime)
-				{
-					cl.expectingpingtimes = realtime + 5;   // update frequency
-					MSG_WriteByte(&cls.message, clc_stringcmd);
-					MSG_WriteString(&cls.message, "ping");
-				}
 		}
 	}
 
@@ -3927,11 +3964,10 @@ static float SCR_LivePreviewSpeedValue(void)
 	return 475.0f + sin(realtime * 3.0f) * 60.0f;
 }
 
-static float GetSpeedValue(void)
+/* Speed the speedometer shows: interpolated spectator tinfo speed when
+   observing, else local velocity. Also read by CSQC as serverkey "qssm_speed". */
+float SCR_GetPlayerSpeed(void)
 {
-	if (M_LivePreview_UseSpeed())
-		return SCR_LivePreviewSpeedValue();
-
 	if (!cl.notobserver &&
 		cl.viewentity - 1 >= 0 && cl.viewentity - 1 < MAX_SCOREBOARD)
 	{
@@ -3954,6 +3990,24 @@ static float GetSpeedValue(void)
 		}
 	}
 	return GetLocalVelocity();
+}
+
+static float GetSpeedValue(void)
+{
+	if (M_LivePreview_UseSpeed())
+		return SCR_LivePreviewSpeedValue();
+	return SCR_GetPlayerSpeed();
+}
+
+/* Movement keys the scr_movekeys overlay lights up, as a bitmask:
+   1 forward, 2 back, 4 left, 8 right, 16 jump, 32 swim up.
+   Also read by CSQC as serverkey "qssm_movekeys". */
+int SCR_GetMoveKeys(void)
+{
+	extern kbutton_t in_moveleft, in_moveright, in_forward, in_back, in_jump, in_up;
+	return ((in_forward.state & 1) ? 1 : 0) | ((in_back.state & 1) ? 2 : 0) |
+		((in_moveleft.state & 1) ? 4 : 0) | ((in_moveright.state & 1) ? 8 : 0) |
+		((in_jump.state & 1) ? 16 : 0) | ((in_up.state & 1) ? 32 : 0);
 }
 
 /*
@@ -8869,12 +8923,14 @@ void SCR_UpdateScreen (void)
 		if (!cl.intermission)
 		{
 			Sbar_Draw ();
-			if (!scr_drawloading && !con_forcedup)
+			if (!scr_drawloading && !con_forcedup && SCR_CSQCCleanHudLevel () < 2)
 				SCR_DrawCrosshair (); //johnfitz
 		}
 	}
 
 	Wheel_Draw ();
+
+	SCR_PollPing (); // independent of which scoreboard or overlay draws this frame, intermission included
 
 	if (scr_drawdialog) //new game confirm
 	{
@@ -8906,34 +8962,54 @@ void SCR_UpdateScreen (void)
 	}
 	else
 	{
-		SCR_DrawNet ();
-		SCR_DrawTurtle ();
-		SCR_DrawPause ();
-		SCR_DrawPause2 (); // woods #showpaused
+		/* Like FTE: once CSQC_UpdateView owns the view it owns the gameplay
+		   HUD too. Keep system/diagnostic overlays (centerprint, FPS,
+		   netgraph, devstats, demo controls, debug tools, console, menus). */
+		qboolean engine_hud = !csqc_updateview;
+		/* scr_csqc_cleanhud lets a simple CSQC HUD take these over too */
+		qboolean gameplay_hud = engine_hud && SCR_CSQCCleanHudLevel () < 1;
+
+		if (engine_hud)
+		{
+			SCR_DrawNet ();
+			SCR_DrawTurtle ();
+			SCR_DrawPause ();
+			SCR_DrawPause2 (); // woods #showpaused
+		}
 		Pong_Update (); // woods #pong
 		Pong_Draw (); // woods #pong
 		SCR_CheckDrawCenterString ();
 		SCR_DrawDevStats (); //johnfitz
 		SCR_DrawFPS (); //johnfitz
-		SCR_DrawClock (); //johnfitz
+		if (gameplay_hud)
+			SCR_DrawClock (); //johnfitz
 		SCR_DrawDemoControls(); // woods (iw) #democontrols
-		SCR_ShowPing (); // woods #scrping
-		SCR_ShowPL (); // woods #scrpl
+		if (gameplay_hud)
+		{
+			SCR_ShowPing (); // woods #scrping
+			SCR_ShowPL (); // woods #scrpl
+		}
 		SCR_DrawNetGraph (); // woods #netgraph
-		SCR_DrawMatchClock (); // woods #matchhud
-		SCR_DrawMatchScores (); // woods #matchhud
-		SCR_ShowFlagStatus (); // woods #matchhud #flagstatus
-		SCR_ShowObsFrags (); // woods #observerhud
-		SCR_DrawSpeed (); // woods #speed
-		SCR_DrawMovementKeys (); // woods #movementkeys
-		SCR_DrawGrenadeTimer(); // woods #nadecount
-		SCR_DrawMapName ();
-		TP_DrawClosestLocText (); // woods #locext
-		SCR_DrawObsTimers (); // woods #obstimers
-		SCR_Mute (); // woods #usermute
-		SCR_Observing (); // woods
+		if (gameplay_hud)
+		{
+			SCR_DrawMatchClock (); // woods #matchhud
+			SCR_DrawMatchScores (); // woods #matchhud
+			SCR_ShowFlagStatus (); // woods #matchhud #flagstatus
+			SCR_ShowObsFrags (); // woods #observerhud
+			SCR_DrawSpeed (); // woods #speed
+			SCR_DrawMovementKeys (); // woods #movementkeys
+			SCR_DrawGrenadeTimer(); // woods #nadecount
+			SCR_DrawMapName ();
+			TP_DrawClosestLocText (); // woods #locext
+			SCR_DrawObsTimers (); // woods #obstimers
+			SCR_Mute (); // woods #usermute
+			SCR_Observing (); // woods
+		}
+		else
+			obs_frags_active = false; // no stale click target for IN_ObsFragsClick
 		TexturePointer_Draw (); // woods #texturepointer
-		SCR_DrawScopeOverlay (); // woods #scope
+		if (gameplay_hud)
+			SCR_DrawScopeOverlay (); // woods #scope
 		SCR_DrawEdictInfo (); // woods #showfields
 		SCR_HullDebug_DrawInfo ();
 		SCR_DrawConsole ();

@@ -209,6 +209,17 @@ static void Sbar_RequestScoreboardPings(void)
 	MSG_WriteString(&cls.message, command);
 }
 
+/* Refreshes cl.scores ping/pl every few seconds. Shared by the engine
+   scoreboard, scr_ping and CSQC HUDs so polling never depends on which of
+   them is drawing. */
+void Sbar_PollScoreboardPings(void)
+{
+	if (cls.message.cursize || cl.expectingpingtimes >= realtime || cls.signon < SIGNONS)
+		return;
+	cl.expectingpingtimes = realtime + 5;
+	Sbar_RequestScoreboardPings();
+}
+
 qpic_t		*rsb_invbar[2];
 qpic_t		*rsb_weapons[5];
 qpic_t		*rsb_items[2];
@@ -2196,6 +2207,62 @@ static qboolean AreTeamsEven (void)
 }
 
 /*===============
+Sbar_GetMatchClock -- the ProQuake/CRMod match clock exactly as the classic
+status bar shows it in its frag slot. Shared with CSQC (serverkey "pq_clock*")
+so a custom HUD and the engine bar can never disagree.
+============== */
+qboolean Sbar_GetMatchClock (sbar_matchclock_t *clock)
+{
+	extern qboolean crxintermission; // woods #crxintermission
+	int match_time;
+
+	memset (clock, 0, sizeof(*clock));
+	if (cl.minutes == 255)
+		return false;
+
+	if (cl.minutes == 254)
+	{
+		clock->kind = SBAR_CLOCK_SUDDENDEATH;
+		clock->warn = true;
+	}
+	else if (cl.minutes || cl.seconds)
+	{
+		if (cl.seconds >= 128)
+		{
+			clock->kind = SBAR_CLOCK_PREMATCH;
+			clock->seconds = cl.seconds - 128;
+		}
+		else
+		{
+			if (cl.match_pause_time)
+				match_time = ceil(60.0 * cl.minutes + cl.seconds - (cl.match_pause_time - cl.last_match_time));
+			else
+				match_time = ceil(60.0 * cl.minutes + cl.seconds - (cl.time - cl.last_match_time));
+			clock->kind = SBAR_CLOCK_REMAINING;
+			clock->minutes = q_max(0, floor(match_time / 60));
+			clock->seconds = q_max(0, match_time - 60 * floor(match_time / 60));
+			clock->warn = !clock->minutes; // final minute
+			if (SCR_GetCRMod7CountupTime(&match_time))
+			{
+				clock->kind = SBAR_CLOCK_ELAPSED;
+				clock->minutes = match_time / 60;
+				clock->seconds = match_time - 60 * clock->minutes;
+			}
+		}
+	}
+	else
+	{
+		clock->kind = SBAR_CLOCK_ELAPSED;
+		clock->minutes = cl.time / 60;
+		clock->seconds = cl.time - 60 * clock->minutes;
+		clock->minutes = clock->minutes & 511;
+		if (crxintermission) // woods #crxintermission
+			clock->minutes = clock->seconds = 0;
+	}
+	return true;
+}
+
+/*===============
 Sbar_DrawFrags -- for proquake, HEAVILY modified (draws match time, and teamscores) replace this entire function // woods #pqteam
 ============== */
 void Sbar_DrawFrags(void)
@@ -2206,11 +2273,8 @@ void Sbar_DrawFrags(void)
 	int				x, f;
 	char			num[20];
 	scoreboard_t* s;
-	int				teamscores, colors, minutes, seconds, mask; // JPG - added these
-	int				match_time; // JPG - added this
-	qboolean		final_minute;
-
-	extern qboolean crxintermission; // woods #crxintermission
+	int				teamscores, colors, mask; // JPG - added these
+	sbar_matchclock_t	clock;
 
 	int clampedSbar = CLAMP(1, (int)scr_sbar.value, 3);
 	
@@ -2233,50 +2297,17 @@ void Sbar_DrawFrags(void)
 	// display match clock
 	// 
 	// JPG - check to see if we need to draw the timer
-	if (cl.minutes != 255)
+	if (Sbar_GetMatchClock(&clock))
 	{
 		if (l > 2)
 			l = 2;
-		mask = 0;
-		if (cl.minutes == 254)
-		{
+		mask = clock.warn ? 128 : 0;
+		if (clock.kind == SBAR_CLOCK_SUDDENDEATH)
 			strcpy(num, "    SD");
-			mask = 128;
-		}
-		else if (cl.minutes || cl.seconds)
-		{
-			if (cl.seconds >= 128)
-				sprintf(num, " -0:%02d", cl.seconds - 128);
-			else
-			{
-				if (cl.match_pause_time)
-					match_time = ceil(60.0 * cl.minutes + cl.seconds - (cl.match_pause_time - cl.last_match_time));
-				else
-					match_time = ceil(60.0 * cl.minutes + cl.seconds - (cl.time - cl.last_match_time));
-				minutes = q_max(0, floor(match_time / 60));
-				seconds = q_max(0, match_time - 60 * floor(match_time / 60));
-				final_minute = !minutes;
-				if (SCR_GetCRMod7CountupTime(&match_time))
-				{
-					minutes = match_time / 60;
-					seconds = match_time - 60 * minutes;
-				}
-				sprintf(num, "%3d:%02d", minutes, seconds);
-				if (final_minute)
-					mask = 128;
-			}
-		}
+		else if (clock.kind == SBAR_CLOCK_PREMATCH)
+			sprintf(num, " -0:%02d", clock.seconds);
 		else
-		{
-			minutes = cl.time / 60;
-			seconds = cl.time - 60 * minutes;
-			minutes = minutes & 511;
-
-			if (crxintermission) // woods #crxintermission
-				sprintf(num, "%3d:%02d", 0, 0);
-			else
-				sprintf(num, "%3d:%02d", minutes, seconds);
-		}
+			sprintf(num, "%3d:%02d", clock.minutes, clock.seconds);
 
 		{
 			drawcharbatch_t chars;
@@ -2807,14 +2838,9 @@ void Sbar_Draw (void)
 		glDisable (GL_ALPHA_TEST);	//in the finest tradition of glquake, we litter gl state calls all over the place. yay state trackers.
 		glTexEnvf(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_MODULATE);
 		PR_SwitchQCVM(&cl.qcvm);
+		PR_CSQC_SyncGlobals(); // intermission, player_localnum, server times... same as CSQC_UpdateView
 		pr_global_struct->time = qcvm->time;
 		pr_global_struct->frametime = qcvm->frametime;
-		if (qcvm->extglobals.cltime)
-			*qcvm->extglobals.cltime = realtime;
-		if (qcvm->extglobals.clframetime)
-			*qcvm->extglobals.clframetime = host_frametime;
-		if (qcvm->extglobals.player_localentnum)
-			*qcvm->extglobals.player_localentnum = cl.viewentity;
 		Sbar_SortFrags (false);
 		G_VECTORSET(OFS_PARM0, vid.width/s, vid.height/s, 0);
 		G_FLOAT(OFS_PARM1) = sb_showscores;
@@ -3569,11 +3595,7 @@ void Sbar_DeathmatchOverlay (void)
 
 	GL_SetCanvas (CANVAS_SBAR); //johnfitz
 
-	if ((!cls.message.cursize && cl.expectingpingtimes < realtime) && (cls.signon >= SIGNONS))
-	{
-		cl.expectingpingtimes = realtime + 5;
-		Sbar_RequestScoreboardPings();
-	}
+	Sbar_PollScoreboardPings();
 }
 
 /*
@@ -3673,16 +3695,7 @@ void Sbar_IntermissionOverlay (void)
 		glDisable (GL_ALPHA_TEST);
 		glTexEnvf(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_MODULATE);
 		PR_SwitchQCVM(&cl.qcvm);
-		if (qcvm->extglobals.cltime)
-			*qcvm->extglobals.cltime = realtime;
-		if (qcvm->extglobals.clframetime)
-			*qcvm->extglobals.clframetime = host_frametime;
-		if (qcvm->extglobals.player_localentnum)
-			*qcvm->extglobals.player_localentnum = cl.viewentity;
-		if (qcvm->extglobals.intermission)
-			*qcvm->extglobals.intermission = cl.intermission;
-		if (qcvm->extglobals.intermission_time)
-			*qcvm->extglobals.intermission_time = cl.completed_time;
+		PR_CSQC_SyncGlobals();
 		pr_global_struct->time = cl.time;
 		pr_global_struct->frametime = host_frametime;
 		Sbar_SortFrags (false);

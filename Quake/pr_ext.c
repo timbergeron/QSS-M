@@ -8249,6 +8249,103 @@ static void PF_cl_registercommand(void)
 	const char *cmdname = G_STRING(OFS_PARM0);
 	Cmd_AddCommand(cmdname, NULL);
 }
+/*	ProQuake/CRMod match state that reaches the client as binary ProQuake
+	messages or prose prints, which CSQC can't see. Read through serverkey()
+	as "pq_*" pseudo-keys: no new builtins, and other engines simply return
+	the empty string. Absent data is "" so serverkeyfloat's default applies.
+		pq_clock		seconds shown by the classic bar's match clock
+		pq_clockmode	up, down, prematch, suddendeath
+		pq_clockwarn	1 when the engine draws it red (final minute, sudden death)
+		pq_matchpaused	1 while a match is paused
+		pq_teamgame		1 when the server sends team scores
+		pq_teams		space separated team colours (0-13) that have a score
+		pq_teamfragsN	frags of team colour N
+	*handled is false for any other pq_ name, so a real serverinfo key that
+	happens to share the prefix still reaches Info_GetKey.
+*/
+static const char *PF_cl_serverkey_proquake(const char *key, char *buf, size_t bufsize, qboolean *handled)
+{
+	sbar_matchclock_t clock;
+	int i;
+	qboolean isclock = !strcmp(key, "clock") || !strcmp(key, "clockmode") || !strcmp(key, "clockwarn");
+	qboolean isteams = !strcmp(key, "teams");
+	qboolean isteamfrags = !strncmp(key, "teamfrags", 9) && key[9];
+
+	*handled = isclock || isteams || isteamfrags || !strcmp(key, "matchpaused") || !strcmp(key, "teamgame");
+	if (!*handled || cls.state != ca_connected)
+		return NULL;
+	if (isclock)
+	{
+		if (!Sbar_GetMatchClock(&clock))
+			return NULL;
+		if (!strcmp(key, "clock"))
+			q_snprintf(buf, bufsize, "%i", clock.minutes * 60 + clock.seconds);
+		else if (!strcmp(key, "clockwarn"))
+			q_snprintf(buf, bufsize, "%i", clock.warn ? 1 : 0);
+		else
+			q_strlcpy(buf, clock.kind == SBAR_CLOCK_ELAPSED ? "up" :
+				clock.kind == SBAR_CLOCK_REMAINING ? "down" :
+				clock.kind == SBAR_CLOCK_PREMATCH ? "prematch" : "suddendeath", bufsize);
+		return buf;
+	}
+	if (!strcmp(key, "matchpaused"))
+		return cl.match_pause_time ? "1" : "0";
+	if (!strcmp(key, "teamgame"))
+		return cl.teamgame ? "1" : "0";
+	if (!cl.teamscores)
+		return NULL;
+	if (isteams)
+	{
+		buf[0] = 0;
+		for (i = 0; i < 14; i++)
+			if (cl.teamscores[i].colors)
+				q_snprintf(buf + strlen(buf), bufsize - strlen(buf), "%s%i", buf[0] ? " " : "", i);
+		return buf;
+	}
+	{	// teamfragsN
+		char *end;
+		long team = strtol(key + 9, &end, 10);
+		if (*end || team < 0 || team > 13 || !cl.teamscores[team].colors)
+			return NULL;
+		q_snprintf(buf, bufsize, "%i", cl.teamscores[team].frags);
+		return buf;
+	}
+}
+
+/*	Values QSS-M's own HUD overlays already put on screen, so a CSQC HUD can
+	draw them anywhere. Display values only: raw velocity/origin stay withheld
+	from untrusted (simple) CSQC, as in FTE.
+		qssm_speed		units/sec the speedometer shows (spectators: the tracked player)
+		qssm_loc		location name for the view, as team chat's %l reports it
+		qssm_movekeys	what scr_movekeys lights: 1 fwd, 2 back, 4 left, 8 right, 16 jump, 32 swim up
+	*handled as for the pq_ keys.
+*/
+static const char *PF_cl_serverkey_qssm(const char *key, char *buf, size_t bufsize, qboolean *handled)
+{
+	const char *loc;
+
+	*handled = !strcmp(key, "speed") || !strcmp(key, "movekeys") || !strcmp(key, "loc");
+	if (!*handled || cls.state != ca_connected || cls.signon != SIGNONS)
+		return NULL;
+	if (!strcmp(key, "speed"))
+	{
+		q_snprintf(buf, bufsize, "%.0f", SCR_GetPlayerSpeed());
+		return buf;
+	}
+	if (!strcmp(key, "movekeys"))
+	{
+		q_snprintf(buf, bufsize, "%i", SCR_GetMoveKeys());
+		return buf;
+	}
+	// loc
+	if (!cl.entities || cl.viewentity <= 0 || cl.viewentity >= cl.num_entities)
+		return NULL;
+	loc = LOC_GetLocation(cl.entities[cl.viewentity].origin);
+	if (!loc || !*loc || !strcmp(loc, "no .loc"))	// no loc file for this map
+		return NULL;
+	return loc;
+}
+
 void PF_cl_serverkey_internal(const char *key, qboolean retfloat)
 {
 	char buf[1024];
@@ -8264,7 +8361,14 @@ void PF_cl_serverkey_internal(const char *key, qboolean retfloat)
 	}
 	else
 	{
-		ret = Info_GetKey(cl.serverinfo, key, buf, sizeof(buf));
+		qboolean handled = false;
+		ret = NULL;
+		if (!strncmp(key, "pq_", 3))
+			ret = PF_cl_serverkey_proquake(key + 3, buf, sizeof(buf), &handled);
+		else if (!strncmp(key, "qssm_", 5))
+			ret = PF_cl_serverkey_qssm(key + 5, buf, sizeof(buf), &handled);
+		if (!handled)
+			ret = Info_GetKey(cl.serverinfo, key, buf, sizeof(buf));
 	}
 
 	if (retfloat)
@@ -8275,7 +8379,7 @@ void PF_cl_serverkey_internal(const char *key, qboolean retfloat)
 			G_FLOAT(OFS_RETURN) = (qcvm->argc > 1)?G_FLOAT(OFS_PARM1):0;
 	}
 	else
-		G_INT(OFS_RETURN) = (ret && *ret)?PR_SetEngineString(ret):0;	//null string, not an empty tempstring
+		G_INT(OFS_RETURN) = (ret && *ret)?PR_MakeTempString(ret):0;	//null string, not an empty tempstring. ret may point into a stack buffer, so copy it
 }
 static void PF_cs_infokey(void)
 {
@@ -8357,7 +8461,7 @@ void PF_sv_serverkey_internal(const char *key, qboolean retfloat)
 			G_FLOAT(OFS_RETURN) = (qcvm->argc > 1)?G_FLOAT(OFS_PARM1):0;
 	}
 	else
-		G_INT(OFS_RETURN) = (ret && *ret)?PR_SetEngineString(ret):0;	//null string, not an empty tempstring
+		G_INT(OFS_RETURN) = (ret && *ret)?PR_MakeTempString(ret):0;	//null string, not an empty tempstring. ret may point into a stack buffer, so copy it
 }
 static void PF_sv_serverkey_s(void)
 {
@@ -10191,6 +10295,8 @@ void PR_CSQC_SyncGlobals(void)
 		*qcvm->extglobals.clframetime = host_frametime;
 	if (qcvm->extglobals.player_localentnum)
 		*qcvm->extglobals.player_localentnum = cl.viewentity;
+	if (qcvm->extglobals.player_localnum)	//our own slot (like fte playernum), not the eyecam target that player_localentnum follows
+		*qcvm->extglobals.player_localnum = (cl.realviewentity > 0 ? cl.realviewentity : cl.viewentity) - 1;
 	if (qcvm->extglobals.intermission)
 		*qcvm->extglobals.intermission = cl.intermission;
 	if (qcvm->extglobals.intermission_time)
@@ -11578,6 +11684,11 @@ static void PF_cs_rotatemoves(void)
 static void PF_cs_getinputstate(void)
 {
 	unsigned int seq = G_FLOAT(OFS_PARM0);
+	if (qcvm->nogameaccess)
+	{	//simplecsqc gets no input frames (matches fte, which disconnects the input_* globals)
+		G_FLOAT(OFS_RETURN) = 0;
+		return;
+	}
 	if (seq == cl.movemessages)
 	{	//the partial/pending frame!
 		G_FLOAT(OFS_RETURN) = 1;

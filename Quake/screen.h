@@ -186,5 +186,7 @@ extern int scr_tileclear_updates; //johnfitz
 void FXAA_BeginFrame(void); // woods #fxaa
 void FXAA_EndFrame(void); // woods #fxaa
 
-#endif	/* _QUAKE_SCREEN_H */
+float SCR_GetPlayerSpeed (void);	// speedometer value (CSQC serverkey "qssm_speed")
+int SCR_GetMoveKeys (void);		// scr_movekeys bitmask (CSQC serverkey "qssm_movekeys")
 
+#endif	/* _QUAKE_SCREEN_H */

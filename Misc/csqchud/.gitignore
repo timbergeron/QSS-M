@@ -1,0 +1,4 @@
+artifacts/
+*.dat
+*.lno
+src/qscsextensions.qc
