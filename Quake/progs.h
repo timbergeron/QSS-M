@@ -116,6 +116,7 @@ const char *PR_UglyValueString (int type, eval_t *val);
 ddef_t *ED_FindField (const char *name);
 enum { ED_LINK_OUT = 1, ED_LINK_IN = 2 };
 int ED_EntityLinks (edict_t *focus, edict_t *other, int directions);
+int ED_EntityLinkNames (edict_t *focus, edict_t *other, char *out, char *in, size_t size);
 ddef_t *ED_FindGlobal (const char *name);
 dfunction_t *ED_FindFunction (const char *fn_name);
 

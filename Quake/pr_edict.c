@@ -1215,17 +1215,38 @@ usage:
 	Con_Printf("usage: edictfind [class <classname>] [field <name> <value>] [near <units>]\n");
 }
 
-static void ED_PrintEntityLink (edict_t *from, edict_t *to, const char *field, int *remaining)
+typedef struct
 {
-	if (!remaining || !*remaining)
+	int *remaining;		/* edictlinks: print each link, stop at zero */
+	char *names[2];		/* overlay: collect field names, [0] out, [1] in */
+	size_t namesize;
+} ed_linksink_t;
+
+static void ED_ReportEntityLink (ed_linksink_t *sink, int dir, edict_t *from, edict_t *to, const char *field)
+{
+	if (!sink)
 		return;
-	--*remaining;
-	Con_SafePrintf("%d %s --%s--> %d %s\n",
-		NUM_FOR_EDICT(from), PR_GetString(from->v.classname), field,
-		NUM_FOR_EDICT(to), PR_GetString(to->v.classname));
+	if (sink->remaining)
+	{
+		if (!*sink->remaining)
+			return;
+		--*sink->remaining;
+		Con_SafePrintf("%d %s --%s--> %d %s\n",
+			NUM_FOR_EDICT(from), PR_GetString(from->v.classname), field,
+			NUM_FOR_EDICT(to), PR_GetString(to->v.classname));
+	}
+	else
+	{
+		char *names = sink->names[dir == ED_LINK_IN];
+		if (!names)
+			return;
+		if (*names)
+			q_strlcat(names, " ", sink->namesize);
+		q_strlcat(names, field, sink->namesize);
+	}
 }
 
-static int ED_EntityLinkFlags (edict_t *focus, edict_t *other, int directions, int *remaining)
+static int ED_EntityLinkFlags (edict_t *focus, edict_t *other, int directions, ed_linksink_t *sink)
 {
 	int links = 0;
 	int focus_prog = EDICT_TO_PROG(focus);
@@ -1242,7 +1263,7 @@ static int ED_EntityLinkFlags (edict_t *focus, edict_t *other, int directions, i
 		if (*target && !strcmp(target, PR_GetString(other->v.targetname)))
 		{
 			links |= ED_LINK_OUT;
-			ED_PrintEntityLink(focus, other, "target", remaining);
+			ED_ReportEntityLink(sink, ED_LINK_OUT, focus, other, "target");
 		}
 	}
 	if (directions & ED_LINK_IN)
@@ -1251,10 +1272,12 @@ static int ED_EntityLinkFlags (edict_t *focus, edict_t *other, int directions, i
 		if (*target && !strcmp(target, PR_GetString(focus->v.targetname)))
 		{
 			links |= ED_LINK_IN;
-			ED_PrintEntityLink(other, focus, "target", remaining);
+			ED_ReportEntityLink(sink, ED_LINK_IN, other, focus, "target");
 		}
 	}
-	for (i = 1; i < qcvm->progs->numfielddefs && (remaining ? *remaining > 0 : links != directions); i++)
+	/* Without a sink only the flags matter, so stop once every direction is found. */
+	for (i = 1; i < qcvm->progs->numfielddefs &&
+		(!sink ? links != directions : !sink->remaining || *sink->remaining > 0); i++)
 	{
 		const ddef_t *field = &qcvm->fielddefs[i];
 		int ofs = field->ofs * 4;
@@ -1270,14 +1293,12 @@ static int ED_EntityLinkFlags (edict_t *focus, edict_t *other, int directions, i
 		if ((directions & ED_LINK_OUT) && other_prog && a == other_prog)
 		{
 			links |= ED_LINK_OUT;
-			if (remaining)
-				ED_PrintEntityLink(focus, other, PR_GetString(field->s_name), remaining);
+			ED_ReportEntityLink(sink, ED_LINK_OUT, focus, other, PR_GetString(field->s_name));
 		}
 		if ((directions & ED_LINK_IN) && focus_prog && b == focus_prog)
 		{
 			links |= ED_LINK_IN;
-			if (remaining)
-				ED_PrintEntityLink(other, focus, PR_GetString(field->s_name), remaining);
+			ED_ReportEntityLink(sink, ED_LINK_IN, other, focus, PR_GetString(field->s_name));
 		}
 	}
 	return links;
@@ -1286,6 +1307,18 @@ static int ED_EntityLinkFlags (edict_t *focus, edict_t *other, int directions, i
 int ED_EntityLinks (edict_t *focus, edict_t *other, int directions)
 {
 	return ED_EntityLinkFlags(focus, other, directions, NULL);
+}
+
+/* Space-separated names of the fields linking focus to other (out) and other to focus (in). */
+int ED_EntityLinkNames (edict_t *focus, edict_t *other, char *out, char *in, size_t size)
+{
+	ed_linksink_t sink = {NULL, {out, in}, size};
+
+	if (out)
+		*out = 0;
+	if (in)
+		*in = 0;
+	return ED_EntityLinkFlags(focus, other, ED_LINK_OUT | ED_LINK_IN, &sink);
 }
 
 static void ED_EntityLinks_f (void)
@@ -1298,6 +1331,7 @@ static void ED_EntityLinks_f (void)
 	const char *direction = Cmd_Argv(2);
 	const char *depth_arg = Cmd_Argv(3);
 	int directions = ED_LINK_OUT, head, tail = 1, remaining = LINK_LIMIT;
+	ed_linksink_t sink = {&remaining, {NULL, NULL}, 0};
 	long root = 0, depth = 4;
 	char *end;
 	qboolean use_focus = Cmd_Argc() == 1 || !strcmp(start, "look");
@@ -1349,7 +1383,7 @@ static void ED_EntityLinks_f (void)
 		for (i = 0; i < qcvm->num_edicts; i++)
 		{
 			edict_t *other = EDICT_NUM(i);
-			if (other->free || !ED_EntityLinkFlags(from, other, directions, &remaining))
+			if (other->free || !ED_EntityLinkFlags(from, other, directions, &sink))
 				continue;
 			if (!remaining)
 			{

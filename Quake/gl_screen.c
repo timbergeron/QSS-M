@@ -8310,6 +8310,12 @@ static void SCR_DrawEdictInfo (void)
 		float sx, sy;
 		int box_w, box_h;
 		char label[SHOWFIELDS_MAX_LABEL_CHARS + 1];
+		char link_lines[2][SHOWFIELDS_MAX_LABEL_CHARS + 1];
+		char link_names[2][256];
+		int num_link_lines = 0;
+		int line_chars;
+		int label_lines;
+		int l;
 		plcolour_t bg_color;
 
 		if (ed->free)
@@ -8338,15 +8344,30 @@ static void SCR_DrawEdictInfo (void)
 				SCR_DrawDebugLine(x, y, focus_x, focus_y, incoming_line, 0.95f);
 		}
 
+		/* Classless edicts (door trigger fields, spawned helpers) still get a box,
+		   so their links are named; they just have no classname line. */
 		ed_classname = SCR_GetEdictStringField(ed, classname_field);
-		if (!*ed_classname)
-			continue;
+		label_lines = *ed_classname ? 1 : 0;
 
 		q_snprintf(label, sizeof(label), "%.*s", SHOWFIELDS_MAX_LABEL_CHARS, ed_classname);
 		q_snprintf(header, sizeof(header), "EDICT %i", NUM_FOR_EDICT(ed));
 
-		box_w = q_max((int)strlen(header), (int)strlen(label)) * 8 + 16;
-		box_h = 24;
+		/* Name the fields behind each link, as edictlinks prints them:
+		   "-> f" means the focus's f points here, "<- f" means our f points at the focus. */
+		if (link_flags)
+		{
+			ED_EntityLinkNames(bbox_focus, ed, link_names[0], link_names[1], sizeof(link_names[0]));
+			if (link_names[0][0])
+				q_snprintf(link_lines[num_link_lines++], sizeof(link_lines[0]), "-> %s", link_names[0]);
+			if (link_names[1][0])
+				q_snprintf(link_lines[num_link_lines++], sizeof(link_lines[0]), "<- %s", link_names[1]);
+		}
+
+		line_chars = q_max((int)strlen(header), (int)strlen(label));
+		for (l = 0; l < num_link_lines; l++)
+			line_chars = q_max(line_chars, (int)strlen(link_lines[l]));
+		box_w = line_chars * 8 + 16;
+		box_h = 16 + (label_lines + num_link_lines) * 8;
 		sx = x - box_w * 0.5f;
 		sy = y - box_h * 0.5f;
 
@@ -8370,7 +8391,11 @@ static void SCR_DrawEdictInfo (void)
 
 		Draw_Fill_Plus_Radius((int)sx, (int)sy, box_w, box_h, bg_color, 0.7f, true, DRAW_CORNERS_ALL, 5.0f);
 		SCR_DrawRedConcharsString((int)(sx + (box_w - (int)strlen(header) * 8) * 0.5f), (int)sy + 4, header);
-		Draw_String((int)(sx + (box_w - (int)strlen(label) * 8) * 0.5f), (int)sy + 12, label);
+		if (label_lines)
+			Draw_String((int)(sx + (box_w - (int)strlen(label) * 8) * 0.5f), (int)sy + 12, label);
+		for (l = 0; l < num_link_lines; l++)
+			Draw_StringRGBA((int)(sx + (box_w - (int)strlen(link_lines[l]) * 8) * 0.5f), (int)sy + 12 + (label_lines + l) * 8,
+				link_lines[l], field_name_fg, 1.0f);
 	}
 
 	if (bbox_focus)
