@@ -755,10 +755,11 @@ float Q_atof (const char *str)
 // Q_ftoa: convert IEEE 754 float to a base-10 string with "infinite" decimal places
 void Q_ftoa(char *str, float in)
 {
-	struct {
+	union {	//must be a union: a struct left i zero, so every value printed with 46 decimals and NaN/Inf went undetected
 		float f;
 		unsigned int i;
-	} u = {in};
+	} u;
+	u.f = in;
 
 	int signbit = (u.i & 0x80000000) >> 31;
 	int exp = (signed int)((u.i & 0x7F800000) >> 23) - 127;
@@ -787,19 +788,19 @@ void Q_ftoa(char *str, float in)
 	else
 	{
 		char tstr[32];
-		char *lsig = str - 1;
+		char *end = str;
 		sprintf(tstr, "%%.%if", exp);
 		sprintf(str, tstr, in);
 		// find last significant digit and trim
 		while (*str)
 		{
 			if (*str >= '1' && *str <= '9')
-				lsig = str;
+				end = str + 1;
 			else if (*str == '.')
-				lsig = str - 1;
+				end = str;
 			str++;
 		}
-		lsig[1] = '\0';
+		*end = '\0';
 	}
 }
 

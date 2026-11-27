@@ -529,6 +529,13 @@ static void PF_ext_vectoangles(void)
 
 	VectorAngles(value1, up, G_VECTOR(OFS_RETURN));
 	G_VECTOR(OFS_RETURN)[PITCH] *= -1;	//this builtin is for use with models. models have an inverted pitch. consistency with makevectors would never do!
+	//like vanilla vectoangles and fte, report 0..360 rather than -180..180 (straight down is pitch 270, not -90)
+	if (G_VECTOR(OFS_RETURN)[PITCH] < 0)
+		G_VECTOR(OFS_RETURN)[PITCH] += 360;
+	if (G_VECTOR(OFS_RETURN)[YAW] < 0)
+		G_VECTOR(OFS_RETURN)[YAW] += 360;
+	if (G_VECTOR(OFS_RETURN)[ROLL] < 0)
+		G_VECTOR(OFS_RETURN)[ROLL] += 360;
 }
 
 //string stuff
@@ -1085,11 +1092,11 @@ static void PF_strreplace(void)
 	const char *replace = G_STRING(OFS_PARM1);
 	const char *subject = G_STRING(OFS_PARM2);
 	int searchlen = strlen(search);
-	int replacelen = strlen(replace);
+	size_t replacelen = strlen(replace);
 
 	if (searchlen)
 	{
-		while (*subject && result < resultbuf + STRINGTEMP_LENGTH - replacelen - 2)
+		while (*subject && replacelen + 2 < STRINGTEMP_LENGTH - (size_t)(result - resultbuf))
 		{
 			if (!strncmp(subject, search, searchlen))
 			{
@@ -1114,11 +1121,11 @@ static void PF_strireplace(void)
 	const char *replace = G_STRING(OFS_PARM1);
 	const char *subject = G_STRING(OFS_PARM2);
 	int searchlen = strlen(search);
-	int replacelen = strlen(replace);
+	size_t replacelen = strlen(replace);
 
 	if (searchlen)
 	{
-		while (*subject && result < resultbuf + sizeof(resultbuf) - replacelen - 2)
+		while (*subject && replacelen + 2 < STRINGTEMP_LENGTH - (size_t)(result - resultbuf))
 		{
 			//UTF-8-FIXME: case insensitivity is awkward...
 			if (!q_strncasecmp(subject, search, searchlen))
@@ -1885,7 +1892,7 @@ static void PF_stoh(void)
 static void PF_htos(void)
 {
 	char *result = PR_GetTempString();
-	q_snprintf(result, STRINGTEMP_LENGTH, "%x", G_INT(OFS_PARM0));
+	q_snprintf(result, STRINGTEMP_LENGTH, "%08x", (unsigned int)G_INT(OFS_PARM0));	//fte pads to 8 digits
 	G_INT(OFS_RETURN) = PR_SetEngineString(result);
 }
 static void PF_ftoi(void)
@@ -5827,7 +5834,7 @@ static void PF_digest_hex(void)
 	const char *hashtype = G_STRING(OFS_PARM0);
 	const byte *data = (const byte*)PF_VarString(1);
 	size_t len = strlen((const char*)data);
-	const char *hex = "0123456789ABCDEF";
+	const char *hex = "0123456789abcdef";	//lowercase for every algorithm, like fte and dp
 	char *resultbuf;
 	byte hashdata[DIGEST_MAXSIZE];
 	static const struct {
@@ -5868,8 +5875,6 @@ static void PF_digest_hex(void)
 			return;
 		}
 		len = CalcHash(algorithms[i].hash, hashdata, sizeof(hashdata), data, len);
-		// Legacy CRC16/MD4 retain QSS's uppercase spelling.
-		hex = "0123456789abcdef";
 	}
 
 	resultbuf = PR_GetTempString();
@@ -12227,7 +12232,8 @@ static const qcextension_t qcextensions[] =
 	{"DP_QC_ASINACOSATANATAN2TAN"},
 	{"DP_QC_COPYENTITY"},
 	{"DP_QC_CRC16"},
-	//{"DP_QC_DIGEST"},
+	//{"DP_QC_DIGEST"},	//fte doesn't list the generic one either, only the specific algorithms.
+	{"DP_QC_DIGEST_SHA256"},
 	{"DP_QC_CVAR_DEFSTRING"},
 	{"DP_QC_CVAR_STRING"},
 	{"DP_QC_CVAR_TYPE"},
@@ -12306,6 +12312,10 @@ static const qcextension_t qcextensions[] =
 	{"FTE_QC_CHECKCOMMAND"},
 	{"FTE_QC_CHECKPVS",			NULL,	NULL,	QCEVM_SS|QCEVM_CS},
 	{"FTE_QC_CROSSPRODUCT"},
+	{"FTE_QC_DIGEST_SHA1"},
+	{"FTE_QC_DIGEST_SHA224"},
+	{"FTE_QC_DIGEST_SHA384"},
+	{"FTE_QC_DIGEST_SHA512"},
 	{"FTE_QC_FS_SEARCH_SIZEMTIME"},
 	{"FTE_QC_HARDWARECURSORS"},
 	{"FTE_QC_INFOKEY",			PR_NotQEX},
