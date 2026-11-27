@@ -3728,23 +3728,189 @@ static void PF_sv_te_particlesnow(void)
 #define PF_sv_te_particlerain PF_void_stub
 #define PF_sv_te_particlesnow PF_void_stub
 #endif
-#define PF_sv_te_bloodshower PF_void_stub
-#define PF_sv_te_explosionrgb PF_void_stub
-#define PF_sv_te_particlecube PF_void_stub
-#define PF_sv_te_spark PF_void_stub
-#define PF_sv_te_gunshotquad PF_sv_te_gunshot
-#define PF_sv_te_spikequad PF_sv_te_spike
-#define PF_sv_te_superspikequad PF_sv_te_superspike
-#define PF_sv_te_explosionquad PF_sv_te_explosion
-#define PF_sv_te_smallflash PF_void_stub
-#define PF_sv_te_customflash PF_void_stub
-#define PF_sv_te_plasmaburn PF_sv_te_tarexplosion
-#define PF_sv_effect PF_void_stub
-
-// Bound client-supplied coordinates before particle and light code converts them to integers.
+// Bound effect coordinates before particle, sound, and network code converts them to integers.
 static qboolean PF_EffectVector(const vec3_t v)
 {
 	return fabs(v[0]) <= 8388608 && fabs(v[1]) <= 8388608 && fabs(v[2]) <= 8388608;
+}
+
+// DP temp entities only reach clients that negotiated FTE replacement deltas; vanilla clients would misparse them.
+static void PF_sv_tedp_begin(int type, const float *org)
+{
+	MSG_WriteByte(&sv.multicast, svc_temp_entity);
+	MSG_WriteByte(&sv.multicast, type);
+	MSG_WriteCoord(&sv.multicast, org[0], sv.protocolflags);
+	MSG_WriteCoord(&sv.multicast, org[1], sv.protocolflags);
+	MSG_WriteCoord(&sv.multicast, org[2], sv.protocolflags);
+}
+static void PF_sv_tedp_send(const float *org)
+{
+	vec3_t o;
+	VectorCopy(org, o);
+	SV_Multicast(MULTICAST_PVS_U, o, 0, PEXT2_REPLACEMENTDELTAS);
+}
+static int PF_sv_tedp_byte(float v)
+{
+	return isfinite(v) ? (int)bound(0, v, 255) : 0;
+}
+static int PF_sv_tedp_char(float v)
+{
+	return isfinite(v) ? (int)bound(-128, v, 127) : 0;
+}
+static void PF_sv_te_bloodshower(void)
+{
+	float *min = G_VECTOR(OFS_PARM0), *max = G_VECTOR(OFS_PARM1);
+	float count = G_FLOAT(OFS_PARM3);
+	float speed = G_FLOAT(OFS_PARM2);
+	vec3_t mid;
+	if (!(count >= 1) || !PF_EffectVector(min) || !PF_EffectVector(max) || !(fabsf(speed) <= 8388608))
+		return;
+	PF_sv_tedp_begin(TEDP_BLOODSHOWER, min);
+	MSG_WriteCoord(&sv.multicast, max[0], sv.protocolflags);
+	MSG_WriteCoord(&sv.multicast, max[1], sv.protocolflags);
+	MSG_WriteCoord(&sv.multicast, max[2], sv.protocolflags);
+	MSG_WriteCoord(&sv.multicast, speed, sv.protocolflags);
+	MSG_WriteShort(&sv.multicast, (int)q_min(count, 65535));
+	VectorAdd(min, max, mid);
+	VectorScale(mid, 0.5f, mid);
+	PF_sv_tedp_send(mid);
+}
+static void PF_sv_te_explosionrgb(void)
+{
+	float *org = G_VECTOR(OFS_PARM0), *rgb = G_VECTOR(OFS_PARM1);
+	if (!PF_EffectVector(org))
+		return;
+	PF_sv_tedp_begin(TEDP_EXPLOSIONRGB, org);
+	MSG_WriteByte(&sv.multicast, PF_sv_tedp_byte(rgb[0] * 255));
+	MSG_WriteByte(&sv.multicast, PF_sv_tedp_byte(rgb[1] * 255));
+	MSG_WriteByte(&sv.multicast, PF_sv_tedp_byte(rgb[2] * 255));
+	PF_sv_tedp_send(org);
+}
+static void PF_sv_te_particlecube(void)
+{
+	float *min = G_VECTOR(OFS_PARM0), *max = G_VECTOR(OFS_PARM1), *dir = G_VECTOR(OFS_PARM2);
+	float count = G_FLOAT(OFS_PARM3);
+	float jitter = qcvm->argc > 6 ? G_FLOAT(OFS_PARM6) : 0;
+	vec3_t mid;
+	if (!(count >= 1) || !PF_EffectVector(min) || !PF_EffectVector(max) ||
+		!PF_EffectVector(dir) || !(fabsf(jitter) <= 8388608))
+		return;
+	PF_sv_tedp_begin(TEDP_PARTICLECUBE, min);
+	MSG_WriteCoord(&sv.multicast, max[0], sv.protocolflags);
+	MSG_WriteCoord(&sv.multicast, max[1], sv.protocolflags);
+	MSG_WriteCoord(&sv.multicast, max[2], sv.protocolflags);
+	MSG_WriteCoord(&sv.multicast, dir[0], sv.protocolflags);
+	MSG_WriteCoord(&sv.multicast, dir[1], sv.protocolflags);
+	MSG_WriteCoord(&sv.multicast, dir[2], sv.protocolflags);
+	MSG_WriteShort(&sv.multicast, (int)q_min(count, 65535));
+	MSG_WriteByte(&sv.multicast, PF_sv_tedp_byte(G_FLOAT(OFS_PARM4)));
+	MSG_WriteByte(&sv.multicast, G_FLOAT(OFS_PARM5) != 0);
+	MSG_WriteCoord(&sv.multicast, jitter, sv.protocolflags);
+	VectorAdd(min, max, mid);
+	VectorScale(mid, 0.5f, mid);
+	PF_sv_tedp_send(mid);
+}
+static void PF_sv_te_spark(void)
+{
+	float *org = G_VECTOR(OFS_PARM0), *vel = G_VECTOR(OFS_PARM1);
+	if (!PF_EffectVector(org) || !(G_FLOAT(OFS_PARM2) >= 1))
+		return;
+	PF_sv_tedp_begin(TEDP_SPARK, org);
+	MSG_WriteChar(&sv.multicast, PF_sv_tedp_char(vel[0]));
+	MSG_WriteChar(&sv.multicast, PF_sv_tedp_char(vel[1]));
+	MSG_WriteChar(&sv.multicast, PF_sv_tedp_char(vel[2]));
+	MSG_WriteByte(&sv.multicast, PF_sv_tedp_byte(G_FLOAT(OFS_PARM2)));
+	PF_sv_tedp_send(org);
+}
+static void PF_sv_tedp_point(int type)
+{
+	float *org = G_VECTOR(OFS_PARM0);
+	if (!PF_EffectVector(org))
+		return;
+	PF_sv_tedp_begin(type, org);
+	PF_sv_tedp_send(org);
+}
+// Clients without the extension still get the vanilla effect these used to be aliased to.
+static void PF_sv_tedp_point_fallback(int type, int vanillatype)
+{
+	float *org = G_VECTOR(OFS_PARM0);
+	unsigned int i;
+	if (!PF_EffectVector(org))
+		return;
+	PF_sv_tedp_point(type);
+	PF_sv_tedp_begin(vanillatype, org);
+	for (i = 0; i < (unsigned int)svs.maxclients; i++)
+		if (svs.clients[i].active && !(svs.clients[i].protocol_pext2 & PEXT2_REPLACEMENTDELTAS))
+			SZ_Write(&svs.clients[i].datagram, sv.multicast.data, sv.multicast.cursize);
+	SZ_Clear(&sv.multicast);
+}
+static void PF_sv_te_gunshotquad(void)		{PF_sv_tedp_point_fallback(TEDP_GUNSHOTQUAD, TE_GUNSHOT);}
+static void PF_sv_te_spikequad(void)		{PF_sv_tedp_point_fallback(TEDP_SPIKEQUAD, TE_SPIKE);}
+static void PF_sv_te_superspikequad(void)	{PF_sv_tedp_point_fallback(TEDP_SUPERSPIKEQUAD, TE_SUPERSPIKE);}
+static void PF_sv_te_explosionquad(void)	{PF_sv_tedp_point_fallback(TEDP_EXPLOSIONQUAD, TE_EXPLOSION);}
+static void PF_sv_te_smallflash(void)		{PF_sv_tedp_point(TEDP_SMALLFLASH);}
+static void PF_sv_te_plasmaburn(void)		{PF_sv_tedp_point_fallback(TEDP_PLASMABURN, TE_TAREXPLOSION);}
+static void PF_sv_te_customflash(void)
+{
+	float *org = G_VECTOR(OFS_PARM0), *rgb = G_VECTOR(OFS_PARM3);
+	float radius = G_FLOAT(OFS_PARM1), lifetime = G_FLOAT(OFS_PARM2);
+	if (!PF_EffectVector(org) || !(radius > 0) || !(lifetime >= 1.0f / 256))
+		return;
+	PF_sv_tedp_begin(TEDP_CUSTOMFLASH, org);
+	MSG_WriteByte(&sv.multicast, PF_sv_tedp_byte(radius / 8 - 1));	// DP wire format: radius (byte+1)*8, life (byte+1)/256
+	MSG_WriteByte(&sv.multicast, PF_sv_tedp_byte(lifetime * 256 - 1));
+	MSG_WriteByte(&sv.multicast, PF_sv_tedp_byte(rgb[0] * 255));
+	MSG_WriteByte(&sv.multicast, PF_sv_tedp_byte(rgb[1] * 255));
+	MSG_WriteByte(&sv.multicast, PF_sv_tedp_byte(rgb[2] * 255));
+	PF_sv_tedp_send(org);
+}
+static void PF_sv_te_flamejet(void)
+{
+	float *org = G_VECTOR(OFS_PARM0), *vel = G_VECTOR(OFS_PARM1);
+	if (!PF_EffectVector(org) || !PF_EffectVector(vel) || !(G_FLOAT(OFS_PARM2) >= 1))
+		return;
+	PF_sv_tedp_begin(TEDP_FLAMEJET, org);
+	MSG_WriteCoord(&sv.multicast, vel[0], sv.protocolflags);
+	MSG_WriteCoord(&sv.multicast, vel[1], sv.protocolflags);
+	MSG_WriteCoord(&sv.multicast, vel[2], sv.protocolflags);
+	MSG_WriteByte(&sv.multicast, PF_sv_tedp_byte(G_FLOAT(OFS_PARM2)));
+	PF_sv_tedp_send(org);
+}
+// Same svc numbers FTE uses for NQ (svcnq_effect/effect2); QSS-M clients accept them once FTE extensions are negotiated.
+static void PF_sv_effect(void)
+{
+	float *org = G_VECTOR(OFS_PARM0);
+	const char *name = G_STRING(OFS_PARM1);
+	float start = G_FLOAT(OFS_PARM2), count = G_FLOAT(OFS_PARM3), rate = G_FLOAT(OFS_PARM4);
+	int index;
+	if (!PF_EffectVector(org) || !(start >= 0 && start <= 65535))
+		return;
+	for (index = 1; index < MAX_MODELS && sv.model_precache[index]; index++)
+		if (!strcmp(sv.model_precache[index], name))
+			break;	// lookup only: the model must already be precached, like any other modelindex sent to clients
+	if (index >= MAX_MODELS || !sv.model_precache[index])
+		return;
+	if (index > 255 || start > 255)
+	{
+		MSG_WriteByte(&sv.multicast, svcdp_effect2);
+		MSG_WriteCoord(&sv.multicast, org[0], sv.protocolflags);
+		MSG_WriteCoord(&sv.multicast, org[1], sv.protocolflags);
+		MSG_WriteCoord(&sv.multicast, org[2], sv.protocolflags);
+		MSG_WriteShort(&sv.multicast, index);
+		MSG_WriteShort(&sv.multicast, (int)start);
+	}
+	else
+	{
+		MSG_WriteByte(&sv.multicast, svcdp_effect);
+		MSG_WriteCoord(&sv.multicast, org[0], sv.protocolflags);
+		MSG_WriteCoord(&sv.multicast, org[1], sv.protocolflags);
+		MSG_WriteCoord(&sv.multicast, org[2], sv.protocolflags);
+		MSG_WriteByte(&sv.multicast, index);
+		MSG_WriteByte(&sv.multicast, (int)start);
+	}
+	MSG_WriteByte(&sv.multicast, PF_sv_tedp_byte(count));
+	MSG_WriteByte(&sv.multicast, PF_sv_tedp_byte(rate));
+	PF_sv_tedp_send(org);
 }
 
 static float PF_EffectCount(float count)
@@ -11954,20 +12120,20 @@ static struct
 	{"setcolors",		PF_setcolors,		PF_NoCSQC,			401,	PF_NoMenu, D("void(entity ent, float colours)", "Changes a player's colours. The bits 0-3 are the lower/trouser colour, bits 4-7 are the upper/shirt colours.")},//DP_SV_SETCOLOR
 	{"findchain",		PF_findchain,		PF_findchain,		402,	PF_findchain,26, "entity(.string field, string match, optional .entity chainfield)"},// (DP_QC_FINDCHAIN)
 	{"findchainfloat",	PF_findchainfloat,	PF_findchainfloat,	403,	PF_findchainfloat,27, "entity(.float fld, float match, optional .entity chainfield)"},// (DP_QC_FINDCHAINFLOAT)
-	{"effect",			PF_sv_effect,		PF_cl_effect,				404,	PF_NoMenu, D("void(vector org, string modelname, float startframe, float framecount, float framerate)", "SSQC stub. CSQC spawns a self-animating model, starting at startframe and playing framecount frames (zero plays the remaining frames).")},// (DP_SV_EFFECT)
+	{"effect",			PF_sv_effect,		PF_cl_effect,				404,	PF_NoMenu, D("void(vector org, string modelname, float startframe, float framecount, float framerate)", "Spawns a self-animating model, starting at startframe and playing framecount frames (zero plays the remaining frames).")},// (DP_SV_EFFECT)
 	{"te_blood",		PF_sv_te_blooddp,	PF_cl_te_blooddp,				405,	PF_NoMenu, "void(vector org, vector dir, float count)"},// #405 te_blood
-	{"te_bloodshower",	PF_sv_te_bloodshower,PF_SCRIPT_CLIENT(PF_cl_te_bloodshower),				406,	PF_NoMenu, "void(vector mincorner, vector maxcorner, float explosionspeed, float howmany)", "SSQC stub."},// (DP_TE_BLOODSHOWER)
-	{"te_explosionrgb",	PF_sv_te_explosionrgb,PF_cl_te_explosionrgb,				407,	PF_NoMenu, "void(vector org, vector color)", "SSQC stub."},// (DP_TE_EXPLOSIONRGB)
-	{"te_particlecube",	PF_sv_te_particlecube,PF_SCRIPT_CLIENT(PF_cl_te_particlecube),				408,	PF_NoMenu, "void(vector mincorner, vector maxcorner, vector vel, float howmany, float color, float gravityflag, float randomveljitter)", "SSQC stub."},// (DP_TE_PARTICLECUBE)
+	{"te_bloodshower",	PF_sv_te_bloodshower,PF_SCRIPT_CLIENT(PF_cl_te_bloodshower),				406,	PF_NoMenu, "void(vector mincorner, vector maxcorner, float explosionspeed, float howmany)"},// (DP_TE_BLOODSHOWER)
+	{"te_explosionrgb",	PF_sv_te_explosionrgb,PF_cl_te_explosionrgb,				407,	PF_NoMenu, "void(vector org, vector color)"},// (DP_TE_EXPLOSIONRGB)
+	{"te_particlecube",	PF_sv_te_particlecube,PF_SCRIPT_CLIENT(PF_cl_te_particlecube),				408,	PF_NoMenu, "void(vector mincorner, vector maxcorner, vector vel, float howmany, float color, float gravityflag, float randomveljitter)"},// (DP_TE_PARTICLECUBE)
 	{"te_particlerain",	PF_sv_te_particlerain,PF_SCRIPT_CLIENT(PF_cl_te_particlerain),				409,	PF_NoMenu, "void(vector mincorner, vector maxcorner, vector vel, float howmany, float color)"},// (DP_TE_PARTICLERAIN)
 	{"te_particlesnow",	PF_sv_te_particlesnow,PF_SCRIPT_CLIENT(PF_cl_te_particlesnow),				410,	PF_NoMenu, "void(vector mincorner, vector maxcorner, vector vel, float howmany, float color)"},// (DP_TE_PARTICLESNOW)
-	{"te_spark",		PF_sv_te_spark,		PF_cl_te_spark,				411,	PF_NoMenu, "void(vector org, vector vel, float howmany)", "SSQC stub."},// (DP_TE_SPARK)
-	{"te_gunshotquad",	PF_sv_te_gunshotquad,PF_cl_te_gunshotquad,				412,	PF_NoMenu, "void(vector org)", "SSQC stub."},// (DP_TE_QUADEFFECTS1)
-	{"te_spikequad",	PF_sv_te_spikequad,	PF_cl_te_spikequad,				413,	PF_NoMenu, "void(vector org)", "SSQC stub."},// (DP_TE_QUADEFFECTS1)
-	{"te_superspikequad",PF_sv_te_superspikequad,PF_cl_te_superspikequad,			414,	PF_NoMenu, "void(vector org)", "SSQC stub."},// (DP_TE_QUADEFFECTS1)
-	{"te_explosionquad",PF_sv_te_explosionquad,PF_cl_te_explosionquad,			415,	PF_NoMenu, "void(vector org)", "SSQC stub."},// (DP_TE_QUADEFFECTS1)
-	{"te_smallflash",	PF_sv_te_smallflash,PF_cl_te_smallflash,				416,	PF_NoMenu, "void(vector org)", "SSQC stub."},// (DP_TE_SMALLFLASH)
-	{"te_customflash",	PF_sv_te_customflash,PF_cl_te_customflash,				417,	PF_NoMenu, "void(vector org, float radius, float lifetime, vector color)", "SSQC stub."},// (DP_TE_CUSTOMFLASH)
+	{"te_spark",		PF_sv_te_spark,		PF_cl_te_spark,				411,	PF_NoMenu, "void(vector org, vector vel, float howmany)"},// (DP_TE_SPARK)
+	{"te_gunshotquad",	PF_sv_te_gunshotquad,PF_cl_te_gunshotquad,				412,	PF_NoMenu, "void(vector org)"},// (DP_TE_QUADEFFECTS1)
+	{"te_spikequad",	PF_sv_te_spikequad,	PF_cl_te_spikequad,				413,	PF_NoMenu, "void(vector org)"},// (DP_TE_QUADEFFECTS1)
+	{"te_superspikequad",PF_sv_te_superspikequad,PF_cl_te_superspikequad,			414,	PF_NoMenu, "void(vector org)"},// (DP_TE_QUADEFFECTS1)
+	{"te_explosionquad",PF_sv_te_explosionquad,PF_cl_te_explosionquad,			415,	PF_NoMenu, "void(vector org)"},// (DP_TE_QUADEFFECTS1)
+	{"te_smallflash",	PF_sv_te_smallflash,PF_cl_te_smallflash,				416,	PF_NoMenu, "void(vector org)"},// (DP_TE_SMALLFLASH)
+	{"te_customflash",	PF_sv_te_customflash,PF_cl_te_customflash,				417,	PF_NoMenu, "void(vector org, float radius, float lifetime, vector color)"},// (DP_TE_CUSTOMFLASH)
 	{"te_gunshot",		PF_sv_te_gunshot,	PF_cl_te_gunshot,	418,	PF_NoMenu, "void(vector org, optional float count)"},// #418 te_gunshot
 	{"te_spike",		PF_sv_te_spike,		PF_cl_te_spike,		419,	PF_NoMenu, "void(vector org)"},// #419 te_spike
 	{"te_superspike",	PF_sv_te_superspike,PF_cl_te_superspike,420,	PF_NoMenu, "void(vector org)"},// #420 te_superspike
@@ -11983,7 +12149,7 @@ static struct
 	{"te_lightning3",	PF_sv_te_lightning3,PF_cl_te_lightning3,430,	PF_NoMenu, "void(entity own, vector start, vector end)"},// #430 te_lightning3
 	{"te_beam",			PF_sv_te_beam,		PF_cl_te_beam,		431,	PF_NoMenu, "void(entity own, vector start, vector end)"},// #431 te_beam
 	{"vectorvectors",	PF_vectorvectors,	PF_vectorvectors,	432,	PF_NoMenu, "void(vector dir)"},// (DP_QC_VECTORVECTORS)
-	{"te_plasmaburn",	PF_sv_te_plasmaburn,PF_cl_te_plasmaburn,				433,	PF_NoMenu, "void(vector org)", "SSQC stub."},// (DP_TE_PLASMABURN)
+	{"te_plasmaburn",	PF_sv_te_plasmaburn,PF_cl_te_plasmaburn,				433,	PF_NoMenu, "void(vector org)"},// (DP_TE_PLASMABURN)
 	{"getsurfacenumpoints",PF_getsurfacenumpoints,PF_getsurfacenumpoints,434,PF_NoMenu, "float(entity e, float s)"},// (DP_QC_GETSURFACE)
 	{"getsurfacepoint",	PF_getsurfacepoint,	PF_getsurfacepoint,	435,	PF_NoMenu, "vector(entity e, float s, float n)"},// (DP_QC_GETSURFACE)
 	{"getsurfacenormal",PF_getsurfacenormal,PF_getsurfacenormal,436,	PF_NoMenu, "vector(entity e, float s)"},// (DP_QC_GETSURFACE)
@@ -12010,7 +12176,7 @@ static struct
 	{"spawnclient",		PF_spawnclient,		PF_NoCSQC,			454,	PF_NoMenu, "entity()", "Spawns a dummy player entity.\nNote that such dummy players will be carried from one map to the next.\nWarning: DP_SV_CLIENTCOLORS DP_SV_CLIENTNAME are not implemented in quakespasm, so use KRIMZON_SV_PARSECLIENTCOMMAND's clientcommand builtin to change the bot's name/colours/skin/team/etc, in the same way that clients would ask."},//DP_SV_BOTCLIENT
 	{"clienttype",		PF_clienttype,		PF_NoCSQC,			455,	PF_NoMenu, "float(entity client)"},//botclient
 	{"WriteUnterminatedString",PF_WriteString2,PF_NoCSQC,		456,	PF_NoMenu, "void(float target, string str)"},	//writestring but without the null terminator. makes things a little nicer.
-	{"te_flamejet", PF_NoSSQC, PF_cl_te_flamejet, 457, PF_NoMenu, "void(vector org, vector velocity, float count)"},
+	{"te_flamejet", PF_sv_te_flamejet, PF_cl_te_flamejet, 457, PF_NoMenu, "void(vector org, vector velocity, float count)"},
 
 	{"edict_num",		PF_edict_for_num,	PF_edict_for_num,	459,	PF_NoMenu, "entity(float entnum)"},//DP_QC_EDICT_NUM
 	{"buf_create",		PF_buf_create,		PF_buf_create,		460,	PF_buf_create,440, "strbuf()"},//DP_QC_STRINGBUFFERS
@@ -12278,6 +12444,7 @@ static const qcextension_t qcextensions[] =
 	{"DP_SV_CUSTOMIZEENTITYFORCLIENT"},
 	{"DP_SV_DRAWONLYTOCLIENT"},
 	{"DP_SV_DROPCLIENT"},
+	{"DP_SV_EFFECT",			NULL,	NULL,	QCEVM_SS|QCEVM_CS},	//ssqc version only reaches clients with fte extensions
 	{"DP_SV_NODRAWTOCLIENT"},
 //	{"DP_SV_POINTPARTICLES",	PR_Can_Particles},	//can't enable this, because certain mods then assume that we're DP and all the particles break.
 	{"DP_SV_POINTSOUND"},
@@ -12287,11 +12454,17 @@ static const qcextension_t qcextensions[] =
 	{"DP_SV_SETCOLOR"},
 	{"DP_SV_SPAWNFUNC_PREFIX"},
 	{"DP_SV_WRITEUNTERMINATEDSTRING"},
-//	{"DP_TE_BLOOD",				PR_Can_Particles},
+	{"DP_TE_BLOOD",				NULL,	NULL,	QCEVM_SS|QCEVM_CS},
+	{"DP_TE_CUSTOMFLASH",		NULL,	NULL,	QCEVM_SS|QCEVM_CS},
+	{"DP_TE_EXPLOSIONRGB",		NULL,	NULL,	QCEVM_SS|QCEVM_CS},
 #ifdef PSET_SCRIPT
+	{"DP_TE_PARTICLECUBE",		NULL,	NULL,	QCEVM_SS|QCEVM_CS},
 	{"DP_TE_PARTICLERAIN",		PR_Can_Particles},
 	{"DP_TE_PARTICLESNOW",		PR_Can_Particles},
 #endif
+	{"DP_TE_SMALLFLASH",		NULL,	NULL,	QCEVM_SS|QCEVM_CS},
+	{"DP_TE_SPARK",				NULL,	NULL,	QCEVM_SS|QCEVM_CS},
+	//like fte, DP_TE_BLOODSHOWER/FLAMEJET/PLASMABURN/QUADEFFECTS1 stay unadvertised: they need an external particle config to look right.
 	{"DP_TE_STANDARDEFFECTBUILTINS"},
 	{"EXT_BITSHIFT"},
 	{"EXT_CSQC"},
@@ -12326,6 +12499,8 @@ static const qcextension_t qcextensions[] =
 #ifdef PSET_SCRIPT
 	{"FTE_SV_POINTPARTICLES",	PR_Can_Particles},
 #endif
+	{"FTE_TE_STANDARDEFFECTBUILTINS",	NULL,	NULL,	QCEVM_SS|QCEVM_CS},
+	//FTE_MVD_PLAYERSTATS: not advertised, getplayerstat only reports the local view player (no mvd playback).
 	{"KRIMZON_SV_PARSECLIENTCOMMAND"},
 	{"ZQ_QC_STRINGS",			PR_NotQEX},
 };

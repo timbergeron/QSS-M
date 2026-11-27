@@ -557,7 +557,7 @@ void CL_ParseTEnt (void)
 		dl->origin[0] = MSG_ReadCoord(cl.protocolflags);
 		dl->origin[1] = MSG_ReadCoord(cl.protocolflags);
 		dl->origin[2] = MSG_ReadCoord(cl.protocolflags);
-		dl->radius = 8*MSG_ReadByte();
+		dl->radius = 8*(MSG_ReadByte()+1);	//DP wire format
 		dl->die = (MSG_ReadByte()+1)*(1/256.0);
 		dl->decay = dl->radius / dl->die;
 		dl->die += cl.time;
@@ -606,7 +606,7 @@ void CL_ParseTEnt (void)
 			dir[2] = MSG_ReadChar();
 			cnt = MSG_ReadByte();
 			if (PScript_RunParticleEffectTypeString(pos, dir, cnt, "TE_BLOOD"))
-				Con_Printf ("CL_ParseTEnt: TEDP_BLOOD unavailable\n");
+				R_RunParticleEffect (pos, dir, 73, cnt);
 		}
 		break;
 
@@ -622,7 +622,7 @@ void CL_ParseTEnt (void)
 			dir[2] = MSG_ReadChar();
 			cnt = MSG_ReadByte();
 			if (PScript_RunParticleEffectTypeString(pos, dir, cnt, "TE_SPARK"))
-				Con_Printf ("CL_ParseTEnt: TEDP_SPARK unavailable\n");
+				R_RunParticleEffect (pos, dir, 224, cnt);
 		}
 		break;
 	case TEDP_SMALLFLASH: // [vector] origin
@@ -630,46 +630,87 @@ void CL_ParseTEnt (void)
 		pos[1] = MSG_ReadCoord(cl.protocolflags);
 		pos[2] = MSG_ReadCoord(cl.protocolflags);
 		if (PScript_RunParticleEffectTypeString(pos, NULL, 1, "TE_SMALLFLASH"))
-			Con_Printf ("CL_ParseTEnt: TEDP_SMALLFLASH unavailable\n");
+		{	//same light as csqc's te_smallflash
+			dl = CL_AllocDlight (0);
+			VectorCopy (pos, dl->origin);
+			dl->color[0] = dl->color[1] = dl->color[2] = 2;
+			dl->radius = 200;
+			dl->decay = 1000;
+			dl->die = cl.time + 0.2;
+		}
 		break;
 
-	//spike: these are all kinda useless once the ssqc has access to pointparticles...
-	//I'm too lazy to bother implementing them properly.
+	//these mirror the csqc te_* builtins of the same names.
 	case TEDP_BLOODSHOWER:
-		/*mins[0] =*/ MSG_ReadCoord(cl.protocolflags);
-		/*mins[1] =*/ MSG_ReadCoord(cl.protocolflags);
-		/*mins[2] =*/ MSG_ReadCoord(cl.protocolflags);
-		/*maxs[0] =*/ MSG_ReadCoord(cl.protocolflags);
-		/*maxs[1] =*/ MSG_ReadCoord(cl.protocolflags);
-		/*maxs[2] =*/ MSG_ReadCoord(cl.protocolflags);
-		/*velspeed =*/ MSG_ReadCoord(cl.protocolflags);
-		/*count =*/ MSG_ReadShort();
-		Con_Printf ("CL_ParseTEnt: TEDP_BLOODSHOWER unsupported\n");
+		{
+			vec3_t maxs, vel = {0, 0, 0};
+			int cnt;
+			pos[0] = MSG_ReadCoord(cl.protocolflags);
+			pos[1] = MSG_ReadCoord(cl.protocolflags);
+			pos[2] = MSG_ReadCoord(cl.protocolflags);
+			maxs[0] = MSG_ReadCoord(cl.protocolflags);
+			maxs[1] = MSG_ReadCoord(cl.protocolflags);
+			maxs[2] = MSG_ReadCoord(cl.protocolflags);
+			vel[2] = -MSG_ReadCoord(cl.protocolflags);
+			cnt = (unsigned short)MSG_ReadShort();
+#ifdef PSET_SCRIPT
+			if (CL_TEntValidVector(pos) && CL_TEntValidVector(maxs) && CL_TEntValidVector(vel))
+				PScript_RunParticleBox(PScript_FindParticleType("TE_BLOODSHOWER"), "te_cube", 0, pos, maxs, vel, vel, cnt, 0);
+#else
+			(void)cnt;
+#endif
+		}
 		break;
 	case TEDP_EXPLOSIONRGB:
-		/*pos[0] =*/ MSG_ReadCoord(cl.protocolflags);
-		/*pos[1] =*/ MSG_ReadCoord(cl.protocolflags);
-		/*pos[2] =*/ MSG_ReadCoord(cl.protocolflags);
-		/*col[0] =*/ MSG_ReadByte();
-		/*col[1] =*/ MSG_ReadByte();
-		/*col[2] =*/ MSG_ReadByte();
-		Con_Printf ("CL_ParseTEnt: TEDP_EXPLOSIONRGB unsupported\n");
+		pos[0] = MSG_ReadCoord(cl.protocolflags);
+		pos[1] = MSG_ReadCoord(cl.protocolflags);
+		pos[2] = MSG_ReadCoord(cl.protocolflags);
+		{
+			vec3_t col;
+			col[0] = MSG_ReadByte() * (1/255.0);
+			col[1] = MSG_ReadByte() * (1/255.0);
+			col[2] = MSG_ReadByte() * (1/255.0);
+			if (!CL_TEntValidVector(pos))
+				break;
+			if (PScript_RunParticleEffectTypeString(pos, NULL, 1, "TE_EXPLOSION"))
+				R_ParticleExplosion (pos);
+			if (r_explosionlight.value)
+			{
+				dl = CL_AllocDlight (0);
+				VectorCopy (pos, dl->origin);
+				dl->radius = 150 + 200 * bound(0, r_explosionlight.value, 1);
+				dl->die = cl.time + 0.5;
+				dl->decay = 300;
+				VectorScale (col, 0.4f, dl->color);
+			}
+			S_StartSound (-1, 0, CL_TEntSound (&cl_sfx_r_exp3, "weapons/r_exp3.wav"), pos, 1, 1);
+		}
 		break;
 	case TEDP_PARTICLECUBE:
-		/*mins[0] =*/ MSG_ReadCoord(cl.protocolflags);
-		/*mins[1] =*/ MSG_ReadCoord(cl.protocolflags);
-		/*mins[2] =*/ MSG_ReadCoord(cl.protocolflags);
-		/*maxs[0] =*/ MSG_ReadCoord(cl.protocolflags);
-		/*maxs[1] =*/ MSG_ReadCoord(cl.protocolflags);
-		/*maxs[2] =*/ MSG_ReadCoord(cl.protocolflags);
-		/*dir[0] =*/ MSG_ReadCoord(cl.protocolflags);
-		/*dir[1] =*/ MSG_ReadCoord(cl.protocolflags);
-		/*dir[2] =*/ MSG_ReadCoord(cl.protocolflags);
-		/*count =*/ MSG_ReadShort();
-		/*pal_start =*/ MSG_ReadByte();
-		/*pal_rand =*/ MSG_ReadByte();
-		/*velspeed =*/ MSG_ReadCoord(cl.protocolflags);
-		Con_Printf ("CL_ParseTEnt: TEDP_PARTICLECUBE unsupported\n");
+		{
+			vec3_t maxs, dir;
+			int cnt, colour, gravity;
+			float jitter;
+			pos[0] = MSG_ReadCoord(cl.protocolflags);
+			pos[1] = MSG_ReadCoord(cl.protocolflags);
+			pos[2] = MSG_ReadCoord(cl.protocolflags);
+			maxs[0] = MSG_ReadCoord(cl.protocolflags);
+			maxs[1] = MSG_ReadCoord(cl.protocolflags);
+			maxs[2] = MSG_ReadCoord(cl.protocolflags);
+			dir[0] = MSG_ReadCoord(cl.protocolflags);
+			dir[1] = MSG_ReadCoord(cl.protocolflags);
+			dir[2] = MSG_ReadCoord(cl.protocolflags);
+			cnt = (unsigned short)MSG_ReadShort();
+			colour = MSG_ReadByte();
+			gravity = MSG_ReadByte();
+			jitter = MSG_ReadCoord(cl.protocolflags);
+#ifdef PSET_SCRIPT
+			if (CL_TEntValidVector(pos) && CL_TEntValidVector(maxs) && CL_TEntValidVector(dir) && fabsf(jitter) <= 8388608)
+				PScript_RunParticleBox(P_INVALID, gravity ? "te_cube_g" : "te_cube", colour, pos, maxs, dir, dir, cnt, jitter);
+#else
+			(void)cnt; (void)colour; (void)gravity; (void)jitter;
+#endif
+		}
 		break;
 	case TEDP_FLAMEJET:
 		{
@@ -683,7 +724,7 @@ void CL_ParseTEnt (void)
 			dir[2] = MSG_ReadCoord(cl.protocolflags);
 			cnt = MSG_ReadByte();
 			if (PScript_RunParticleEffectTypeString(pos, dir, cnt, "TE_FLAMEJET"))
-				Con_Printf ("CL_ParseTEnt: TEDP_FLAMEJET unavailable\n");
+				R_RunParticleEffect (pos, dir, 232, cnt);
 		}
 		break;
 	case TEDP_PLASMABURN:
@@ -691,7 +732,7 @@ void CL_ParseTEnt (void)
 		pos[1] = MSG_ReadCoord(cl.protocolflags);
 		pos[2] = MSG_ReadCoord(cl.protocolflags);
 		if (PScript_RunParticleEffectTypeString(pos, NULL, 1, "TE_PLASMABURN"))
-			Con_Printf ("CL_ParseTEnt: TEDP_PLASMABURN unavailable\n");
+			R_RunParticleEffect (pos, vec3_origin, 15, 50);
 		break;
 	case TEDP_TEI_G3:
 		Host_Error ("CL_ParseTEnt: TEDP_TEI_G3 unsupported");
@@ -732,7 +773,7 @@ void CL_ParseEffect (qboolean big)
 	framecount = MSG_ReadByte();
 	framerate = MSG_ReadByte();
 
-	if (modelindex < 0 || modelindex >= MAX_MODELS)
+	if (!CL_TEntValidVector(org) || modelindex < 0 || modelindex >= MAX_MODELS)
 		return;	//the index comes straight off the network
 	mod = cl.model_precache[modelindex];
 	if (mod)

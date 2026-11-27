@@ -5787,9 +5787,9 @@ void CL_ParseServerMessage (void)
 			Con_DPrintf("Ignoring svcdp_hidepic\n");
 			break;
 
-		case 52:
-			if (cl.protocol == PROTOCOL_VERSION_DP7)
-			{	//svcdp_effect
+		case svcdp_effect:
+			if (cl.protocol == PROTOCOL_VERSION_DP7 || (cl.protocol_pext2 & PEXT2_REPLACEMENTDELTAS))
+			{	//svcdp_effect (fte servers use dp's number for nq too)
 				CL_ParseEffect(false);
 			}
 			else
@@ -5799,7 +5799,7 @@ void CL_ParseServerMessage (void)
 			}
 			break;
 		case svcdp_effect2:	//these are kinda pointless when the particle system can do it
-			if (cl.protocol != PROTOCOL_VERSION_DP7)
+			if (cl.protocol != PROTOCOL_VERSION_DP7 && !(cl.protocol_pext2 & PEXT2_REPLACEMENTDELTAS))
 				Host_Error ("Received svcdp_effect2 but extension not active");
 			CL_ParseEffect(true);
 			break;
