@@ -1037,7 +1037,7 @@ static qboolean ED_FieldMatches (const edict_t *ed, const ddef_t *field,
 			return false;
 		break;
 	case ev_function:
-		if (value.function < 0 || value.function >= qcvm->progs->numfunctions)
+		if (value.function >= (func_t)qcvm->progs->numfunctions)
 			return false;
 		break;
 	case ev_field:
@@ -1082,7 +1082,7 @@ static void ED_FindEdicts_f (void)
 	double radius = 0, precise = 0;
 	char *end;
 	int i, matches = 0;
-	qboolean near = false;
+	qboolean use_near = false;
 
 	for (i = 1; i < Cmd_Argc();)
 	{
@@ -1094,7 +1094,7 @@ static void ED_FindEdicts_f (void)
 			fieldname = Cmd_Argv(i++);
 			wanted = Cmd_Argv(i++);
 		}
-		else if (!strcmp(option, "near") && !near && i < Cmd_Argc())
+		else if (!strcmp(option, "near") && !use_near && i < Cmd_Argc())
 		{
 			const char *distance = Cmd_Argv(i++);
 			errno = 0;
@@ -1105,19 +1105,19 @@ static void ED_FindEdicts_f (void)
 				Con_Printf("edictfind: near requires a nonnegative distance\n");
 				goto usage;
 			}
-			near = true;
+			use_near = true;
 		}
 		else
 			goto usage;
 	}
-	if (!classname && !fieldname && !near)
+	if (!classname && !fieldname && !use_near)
 		goto usage;
 	if (!sv.active)
 	{
 		Con_Printf("edictfind: start a local server first\n");
 		return;
 	}
-	if (near)
+	if (use_near)
 	{
 		for (i = 0; !isDedicated && i < svs.maxclients; i++)
 		{
