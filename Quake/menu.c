@@ -336,7 +336,6 @@ void M_ModMenu_Key (int key);
 	void M_Mods_Mousemove(int cx, int cy);
 	void M_DownloadMods_Mousemove(int cx, int cy);
 	void M_Demos_Mousemove(int cx, int cy);
-	//void M_Help_Mousemove (int cx, int cy);
 	//void M_Quit_Mousemove (int cx, int cy);
 
 qboolean	m_entersound;		// play after drawing a frame, so caching
@@ -31213,6 +31212,18 @@ Help Menu
 int		help_page;
 #define	NUM_HELP_PAGES	6
 
+enum help_website_choice
+{
+	HELP_WEBSITE_CLOSED,
+	HELP_WEBSITE_OPEN,
+	HELP_WEBSITE_CANCEL
+};
+
+static enum help_website_choice help_website_choice;
+#define HELP_WEBSITE_OPEN_X 64
+#define HELP_WEBSITE_CANCEL_X 208
+#define HELP_WEBSITE_BUTTON_Y 112
+
 
 void M_Menu_Help_f (void)
 {
@@ -31220,21 +31231,106 @@ void M_Menu_Help_f (void)
 	m_state = m_help;
 	m_entersound = true;
 	help_page = 0;
+	help_website_choice = HELP_WEBSITE_CANCEL;
 	IN_UpdateGrabs();
-	SCR_ModalMessage("The QSS-M webpage has been opened\nin your ^mweb browser^m\n\nMinimize QSS-M for further assistance", 3.5f); // woods
-	SDL_OpenURL("https://qssm.quakeone.com");
 }
-
 
 
 void M_Help_Draw (void)
 {
-	M_DrawPic (0, 0, Draw_CachePic ( va("gfx/help%i.lmp", help_page)) );
+	qpic_t *page = Draw_TryCachePic (va("gfx/help%i.lmp", help_page),
+		TEXPREF_ALPHA | TEXPREF_PAD | TEXPREF_NOPICMIP);
+	if (page)
+		M_DrawPic (0, 0, page);
+	if (help_website_choice == HELP_WEBSITE_CLOSED)
+	{
+		if (!page)
+			M_PrintWhite (48, 96, "In-game help is unavailable.");
+		return;
+	}
+
+	if (page)
+	{
+		Draw_FadeScreen ();
+		GL_SetCanvas (CANVAS_MENU);
+	}
+	M_DrawTextBox (40, 64, 28, 7);
+	M_PrintWhite (72, 80, "Open the QSS-M website");
+	M_PrintWhite (96, 92, "in your browser?");
+	M_Print (HELP_WEBSITE_OPEN_X, HELP_WEBSITE_BUTTON_Y, "Open website");
+	M_Print (HELP_WEBSITE_CANCEL_X, HELP_WEBSITE_BUTTON_Y, "Cancel");
+	M_DrawArrowCursor (help_website_choice == HELP_WEBSITE_OPEN ?
+		HELP_WEBSITE_OPEN_X - 8 : HELP_WEBSITE_CANCEL_X - 8,
+		HELP_WEBSITE_BUTTON_Y);
 }
 
+static enum help_website_choice M_Help_WebsiteButtonAt (int x, int y)
+{
+	if (y >= HELP_WEBSITE_BUTTON_Y - 4 && y < HELP_WEBSITE_BUTTON_Y + 12)
+	{
+		if (x >= HELP_WEBSITE_OPEN_X - 8 && x < HELP_WEBSITE_OPEN_X + 13 * 8)
+			return HELP_WEBSITE_OPEN;
+		if (x >= HELP_WEBSITE_CANCEL_X - 8 && x < HELP_WEBSITE_CANCEL_X + 7 * 8)
+			return HELP_WEBSITE_CANCEL;
+	}
+	return HELP_WEBSITE_CLOSED;
+}
+
+static void M_Help_Mousemove (int x, int y)
+{
+	if (help_website_choice == HELP_WEBSITE_CLOSED)
+		return;
+
+	enum help_website_choice hovered = M_Help_WebsiteButtonAt (x, y);
+	if (hovered != HELP_WEBSITE_CLOSED)
+		help_website_choice = hovered;
+}
+
+static void M_Help_WebsiteKey (int key)
+{
+	enum help_website_choice choice = help_website_choice;
+
+	switch (key)
+	{
+	case K_LEFTARROW:
+		help_website_choice = HELP_WEBSITE_OPEN;
+		return;
+	case K_RIGHTARROW:
+		help_website_choice = HELP_WEBSITE_CANCEL;
+		return;
+	case K_TAB:
+		help_website_choice = choice == HELP_WEBSITE_OPEN ? HELP_WEBSITE_CANCEL : HELP_WEBSITE_OPEN;
+		return;
+	case K_MOUSE1:
+		choice = M_Help_WebsiteButtonAt (m_mousex, m_mousey);
+		if (choice == HELP_WEBSITE_CLOSED)
+			return;
+		break;
+	case K_ENTER:
+	case K_KP_ENTER:
+		break;
+	case K_ESCAPE:
+	case K_MOUSE2:
+	case K_MOUSE4:
+		choice = HELP_WEBSITE_CANCEL;
+		break;
+	default:
+		return;
+	}
+
+	help_website_choice = HELP_WEBSITE_CLOSED;
+	if (choice == HELP_WEBSITE_OPEN && !SDL_OpenURL ("https://qssm.quakeone.com"))
+		SCR_ModalMessage ("Unable to open the QSS-M website.", 2.5f);
+}
 
 void M_Help_Key (int key)
 {
+	if (help_website_choice != HELP_WEBSITE_CLOSED)
+	{
+		M_Help_WebsiteKey (key);
+		return;
+	}
+
 	switch (key)
 	{
 	case K_ESCAPE:
@@ -49534,9 +49630,9 @@ void M_Mousemove(int x, int y) // woods #mousemenu
 		M_Demos_Mousemove(x, y);
 		return;
 
-		//case m_help:
-		//	M_Help_Mousemove (x, y);
-		//	return;
+	case m_help:
+		M_Help_Mousemove (x, y);
+		return;
 
 		//case m_quit:
 		//	M_Quit_Mousemove (x, y);
@@ -51354,6 +51450,7 @@ static qboolean MenuSearch_HasLocalModalState(enum m_state_e state)
 	return (state == m_weaponwheel && weaponwheelmenu.preview) ||
 		(state == m_pakloading && pakmenu.dragging) ||
 		(state == m_downloadmods && downloadmodsmenu.exit_prompt) ||
+		(state == m_help && help_website_choice != HELP_WEBSITE_CLOSED) ||
 		(state == m_discord && M_Discord_TextEntry());
 }
 
