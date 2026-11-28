@@ -34681,10 +34681,56 @@ static struct {
 } serversmenu;
 
 enum {
+	SORT_PING,
 	SORT_NAME,
 	SORT_MAP,
-	SORT_USERS,
-	SORT_PING
+	SORT_USERS
+};
+
+typedef struct
+{
+	const char *name;
+	qboolean descending;
+} menu_sort_column_t;
+
+/* A bare column name uses the same direction as the first header click. */
+static int M_ReadMenuSort(const char *value, const menu_sort_column_t *columns, size_t count,
+	qboolean *descending)
+{
+	for (size_t i = 0; i < count; ++i)
+	{
+		size_t len = strlen(columns[i].name);
+		const char *suffix;
+
+		if (q_strncasecmp(value, columns[i].name, len))
+			continue;
+		suffix = value + len;
+		if (!*suffix)
+			*descending = columns[i].descending;
+		else if (!q_strcasecmp(suffix, "_asc"))
+			*descending = false;
+		else if (!q_strcasecmp(suffix, "_desc"))
+			*descending = true;
+		else
+			continue;
+		return (int)i;
+	}
+
+	*descending = columns[0].descending;
+	return 0;
+}
+
+static const char *M_MenuSortValue(const menu_sort_column_t *column, qboolean descending)
+{
+	return va("%s_%s", column->name, descending ? "desc" : "asc");
+}
+
+static cvar_t menu_servers_sort = {"menu_servers_sort", "ping", CVAR_ARCHIVE};
+static const menu_sort_column_t server_sort_columns[] = {
+	[SORT_PING] = {"ping", false},
+	[SORT_NAME] = {"name", false},
+	[SORT_MAP] = {"map", false},
+	[SORT_USERS] = {"players", true}
 };
 
 //=============================================================================
@@ -37017,6 +37063,8 @@ void M_Menu_ServerList_f (void)
 	serversmenu.resolvedDedupePending = false;
 	serversmenu.copy_message_until = 0.0;
 	serversmenu.nextPingSort = 0.0;
+	serversmenu.sort_mode = M_ReadMenuSort(menu_servers_sort.string, server_sort_columns,
+		Q_COUNTOF(server_sort_columns), &serversmenu.sort_descending);
 	M_UpdateBounds (); // woods -- size for the current window before centering (iw)
 	serversmenu.list.viewsize = MAX_VIS_SERVERS;
 	memset(&serversmenu.list.search, 0, sizeof(serversmenu.list.search));
@@ -37609,10 +37657,10 @@ void M_ServerList_Key(int key)
 					serversmenu.sort_descending = !serversmenu.sort_descending;
 				} else {
 					serversmenu.sort_mode = new_sort;
-                    // Default sort directions
-                    if (new_sort == SORT_USERS) serversmenu.sort_descending = true;
-                    else serversmenu.sort_descending = false;
+					serversmenu.sort_descending = server_sort_columns[new_sort].descending;
 				}
+				Cvar_SetQuick(&menu_servers_sort,
+					M_MenuSortValue(&server_sort_columns[new_sort], serversmenu.sort_descending));
 				SortServers(true);
 				S_LocalSound("misc/menu2.wav");
 				return;
@@ -42522,11 +42570,35 @@ Demos Menu
 
 typedef enum
 {
-	DEMO_SORT_DATE, // the original date order is the zero-initialized default
+	DEMO_SORT_DATE,
 	DEMO_SORT_NAME,
 	DEMO_SORT_SIZE,
 	DEMO_SORT_MAP
 } demo_sort_t;
+
+static cvar_t menu_demos_sort = {"menu_demos_sort", "date", CVAR_ARCHIVE};
+static const menu_sort_column_t demo_sort_columns[] = {
+	[DEMO_SORT_DATE] = {"date", true},
+	[DEMO_SORT_NAME] = {"name", false},
+	[DEMO_SORT_SIZE] = {"size", false},
+	[DEMO_SORT_MAP] = {"map", false}
+};
+
+static void M_MenuSortCompletion(cvar_t *setting, const char *partial)
+{
+	const qboolean servers = setting == &menu_servers_sort;
+	const menu_sort_column_t *columns = servers ? server_sort_columns : demo_sort_columns;
+	size_t count = servers ? Q_COUNTOF(server_sort_columns) : Q_COUNTOF(demo_sort_columns);
+
+	for (size_t i = 0; i < count; ++i)
+	{
+		const menu_sort_column_t *column = &columns[i];
+
+		Con_AddToTabList(column->name, partial, column->descending ? "descending" : "ascending", NULL);
+		Con_AddToTabList(M_MenuSortValue(column, false), partial, NULL, NULL);
+		Con_AddToTabList(M_MenuSortValue(column, true), partial, NULL, NULL);
+	}
+}
 
 typedef enum
 {
@@ -45584,6 +45656,11 @@ static void M_Demos_Init(void)
 
 void M_Menu_Demos_f (void)
 {
+	qboolean descending;
+
+	demosmenu.sort_mode = M_ReadMenuSort(menu_demos_sort.string, demo_sort_columns,
+		Q_COUNTOF(demo_sort_columns), &descending);
+	demosmenu.sort_reverse = descending != demo_sort_columns[demosmenu.sort_mode].descending;
 	key_dest = key_menu;
 	demosmenu.prev = m_state;
 	m_state = m_demos;
@@ -46356,6 +46433,8 @@ void M_Demos_Key(int key)
 				demosmenu.sort_mode = mode;
 				demosmenu.sort_reverse = false;
 			}
+			Cvar_SetQuick(&menu_demos_sort, M_MenuSortValue(&demo_sort_columns[mode],
+				demo_sort_columns[mode].descending != demosmenu.sort_reverse));
 			VEC_CLEAR(demosmenu.sorted_indices);
 			demosmenu.bg_parse_map_changed = false;
 			// Start at the first result instead of following the old selection.
@@ -48458,6 +48537,10 @@ void M_Init (void)
 	Cvar_RegisterVariable (&cl_modmenu);
 	Cvar_RegisterVariable (&menu_search_enable);
 	Cvar_RegisterVariable (&menu_search_debug);
+	Cvar_RegisterVariable (&menu_servers_sort);
+	Cvar_SetCompletion (&menu_servers_sort, M_MenuSortCompletion);
+	Cvar_RegisterVariable (&menu_demos_sort);
+	Cvar_SetCompletion (&menu_demos_sort, M_MenuSortCompletion);
 	M_TextField_Init(&menusearch.field, menusearch.query, MENU_SEARCH_QUERY_CHARS, false);
 	MenuSearch_CheckRegistry();
 	AudioCatalog_InitCommands();
