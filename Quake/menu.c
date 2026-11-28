@@ -2651,7 +2651,8 @@ void M_List_AutoScroll(menulist_t* list)
 ================
 M_UpdateBounds -- woods (iw)
 
-Half the spare room on each axis goes to the menu, capped at a 2:1 aspect and
+A vertical margin (7% of the height, at least 12 units) is reserved first,
+then half the spare room on each axis goes to the menu, capped at a 2:1 aspect and
 960 units wide, so long lists show more rows and wide ones more characters
 while staying centered. A window that only fits the classic slot gets exactly
 (0,0)-(320,200), keeping the old layout.
@@ -2660,14 +2661,19 @@ while staying centered. A window that only fits the classic slot gets exactly
 static void M_UpdateBounds (void)
 {
 	menucanvas_t mc;
-	float width, height;
+	float width, height, pad, avail;
 
 	Draw_GetMenuCanvas (&mc);
 	width = mc.right - mc.left;
 	height = mc.bottom - mc.top;
 
-	m_height = (int)q_min (height, 280.f);
-	m_height += (int)((height - m_height) * 0.5f);
+	/* Keep a margin above and below so headers and footers don't hug the
+	   window edges; it eats only spare room, never the classic 200. */
+	pad = q_min ((height - 200.f) * 0.5f, q_max (12.f, height * 0.07f));
+	pad = q_max (pad, 0.f);
+	avail = height - pad * 2.f;
+	m_height = (int)q_min (avail, 280.f);
+	m_height += (int)((avail - m_height) * 0.5f);
 	m_height = q_max (m_height, 200) & ~7;
 	m_width = 320 + (int)(q_max (0.f, width - 320.f) * 0.5f);
 	m_width = q_min (m_width, m_height * 2);
