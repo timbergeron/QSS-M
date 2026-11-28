@@ -636,7 +636,12 @@ void R_GetEntityLightColor (entity_t *e, vec3_t color);
 int R_LightPointCachedAlias (entity_t *e, vec3_t p, float raise);
 
 void GL_SubdivideSurface (msurface_t *fa);
-int R_SurfaceVertCount (const msurface_t *s); // woods #collinear -- verts in polys after collinear removal (<= numedges)
+int R_SurfaceVertCount (const msurface_t *s); // woods #collinear -- verts in the first poly (can exceed numedges after t-junction welds)
+void R_PreparePolyFan (glpoly_t *p); // woods #collinear -- dedup coincident verts, rotate to clean fan or flag for repair
+int GL_PolyBegin (const glpoly_t *p, GLenum fanprim, const unsigned short **order); // woods #collinear -- immediate mode: repaired triangles or fanprim
+#define GL_PolyVert(p, order, i) ((p)->verts[(order) ? (order)[i] : (i)]) // woods #collinear -- i-th vert after GL_PolyBegin
+unsigned int R_NumSurfaceIndices (const msurface_t *s); // woods #collinear
+unsigned int R_EmitSurfaceIndices (const msurface_t *s, unsigned int *dest); // woods #collinear -- thread-safe
 typedef struct r_lightmap_buildstate_s
 {
 	int format;

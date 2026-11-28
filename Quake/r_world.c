@@ -494,9 +494,51 @@ void R_DrawTextureChains_Glow (qmodel_t *model, entity_t *ent, texchain_t chain)
 //
 //==============================================================================
 
+/*
+================
+R_NumSurfaceIndices / R_EmitSurfaceIndices -- woods #collinear
+
+Every triangle-list emission for a VBO surface goes through these: a surface
+whose plain fan would be degenerate carries a load-time triangulation
+(tridata, see R_BuildSurfaceTriangulations) that must be used instead.
+Thread-safe (the scene cache worker calls them). May return 0.
+================
+*/
+unsigned int R_NumSurfaceIndices (const msurface_t *s)
+{
+	int nv;
+	if (s->polys && s->polys->tridata)
+		return 3 * (unsigned int)s->polys->numtris;
+	nv = R_SurfaceVertCount (s);
+	return nv >= 3 ? 3 * (unsigned int)(nv - 2) : 0;
+}
+
+unsigned int R_EmitSurfaceIndices (const msurface_t *s, unsigned int *dest)
+{
+	unsigned int base = (unsigned int)s->vbo_firstvert, i, n;
+	if (s->polys && s->polys->tridata)
+	{
+		const unsigned short *t = s->polys->tridata;
+		n = 3 * (unsigned int)s->polys->numtris;
+		for (i = 0; i < n; i++)
+			dest[i] = base + t[i];
+		return n;
+	}
+	n = (unsigned int)R_SurfaceVertCount (s);
+	if (n < 3)
+		return 0;
+	for (i = 2; i < n; i++)
+	{
+		*dest++ = base;
+		*dest++ = base + i - 1;
+		*dest++ = base + i;
+	}
+	return 3 * (n - 2);
+}
+
 static unsigned int R_NumTriangleIndicesForSurf (msurface_t *s)
 {
-	return 3 * (R_SurfaceVertCount (s) - 2);	// woods #collinear -- poly may hold fewer verts than numedges
+	return R_NumSurfaceIndices (s);
 }
 
 /*
@@ -509,13 +551,7 @@ The number of indices it will write is given by R_NumTriangleIndicesForSurf.
 */
 static void R_TriangleIndicesForSurf (msurface_t *s, unsigned int *dest)
 {
-	int i, numverts = R_SurfaceVertCount (s);	// woods #collinear
-	for (i=2; i<numverts; i++)
-	{
-		*dest++ = s->vbo_firstvert;
-		*dest++ = s->vbo_firstvert + i - 1;
-		*dest++ = s->vbo_firstvert + i;
-	}
+	R_EmitSurfaceIndices (s, dest);	// woods #collinear
 }
 
 #define MAX_BATCH_SIZE 65536
@@ -692,13 +728,16 @@ void R_DrawTextureChains_Multitexture (qmodel_t *model, entity_t *ent, texchain_
 				bound = true;
 			}
 			GL_Bind (lightmaps[s->lightmaptexturenum].texture);
-			glBegin(GL_POLYGON);
-			v = s->polys->verts[0];
-			for (j=0 ; j<s->polys->numverts ; j++, v+= VERTEXSIZE)
 			{
-				GL_MTexCoord2fFunc (GL_TEXTURE0_ARB, v[3], v[4]);
-				GL_MTexCoord2fFunc (GL_TEXTURE1_ARB, v[5], v[6]);
-				glVertex3fv (v);
+				const unsigned short *order;
+				int n = GL_PolyBegin (s->polys, GL_POLYGON, &order);	// woods #collinear
+				for (j=0 ; j<n ; j++)
+				{
+					v = GL_PolyVert (s->polys, order, j);
+					GL_MTexCoord2fFunc (GL_TEXTURE0_ARB, v[3], v[4]);
+					GL_MTexCoord2fFunc (GL_TEXTURE1_ARB, v[5], v[6]);
+					glVertex3fv (v);
+				}
 			}
 			glEnd ();
 			rs_brushpasses++;
@@ -4491,16 +4530,16 @@ static qboolean R_GrassBuildSurfaceCache (grass_surface_cache_t *cache, const qm
 		return true;
 
 	p = s->polys;
-	for (tri = 2; tri < p->numverts; tri++)
+	for (tri = 0; tri < (p->tridata ? p->numtris : p->numverts - 2); tri++)	// woods #collinear -- repaired triangles when present
 	{
 		float *va, *vb, *vc;
 		float min_x, max_x, min_y, max_y, denom, invdenom;
 		double cells;
 		int cell_x, cell_y, first_x, last_x, first_y, last_y;
 
-		va = p->verts[0];
-		vb = p->verts[tri - 1];
-		vc = p->verts[tri];
+		va = p->tridata ? p->verts[p->tridata[3 * tri]] : p->verts[0];
+		vb = p->tridata ? p->verts[p->tridata[3 * tri + 1]] : p->verts[tri + 1];
+		vc = p->tridata ? p->verts[p->tridata[3 * tri + 2]] : p->verts[tri + 2];
 		if (!isfinite(va[0]) || !isfinite(va[1]) || !isfinite(va[2]) ||
 			!isfinite(vb[0]) || !isfinite(vb[1]) || !isfinite(vb[2]) ||
 			!isfinite(vc[0]) || !isfinite(vc[1]) || !isfinite(vc[2]))
@@ -6704,10 +6743,11 @@ void R_DrawLightmapChains (void)
 		GL_Bind (lightmaps[i].texture);
 		for (p = lightmaps[i].polys; p; p=p->chain)
 		{
-			glBegin (GL_POLYGON);
-			v = p->verts[0];
-			for (j=0 ; j<p->numverts ; j++, v+= VERTEXSIZE)
+			const unsigned short *order;
+			int n = GL_PolyBegin (p, GL_POLYGON, &order);	// woods #collinear
+			for (j=0 ; j<n ; j++)
 			{
+				v = GL_PolyVert (p, order, j);
 				glTexCoord2f (v[5], v[6]);
 				glVertex3fv (v);
 			}
@@ -8721,13 +8761,13 @@ static qboolean RSceneCache_ReserveCellRanges(struct rscenecache_s *cache, unsig
 typedef struct rscenecache_staged_s
 {
 	unsigned int batch_idx;
-	unsigned int vcount;
+	unsigned int numidx;
 	msurface_t *surf;
 	byte cell;
 } rscenecache_staged_t;
 
 static qboolean RSceneCache_StageSurface(rscenecache_staged_t **staged, size_t *num, size_t *max,
-	unsigned int batch_idx, msurface_t *surf, unsigned int vcount, byte cell)
+	unsigned int batch_idx, msurface_t *surf, unsigned int numidx, byte cell)
 {
 	if (*num >= *max)
 	{
@@ -8739,7 +8779,7 @@ static qboolean RSceneCache_StageSurface(rscenecache_staged_t **staged, size_t *
 		*max = newmax;
 	}
 	(*staged)[*num].batch_idx = batch_idx;
-	(*staged)[*num].vcount = vcount;
+	(*staged)[*num].numidx = numidx;
 	(*staged)[*num].surf = surf;
 	(*staged)[*num].cell = cell;
 	(*num)++;
@@ -8756,22 +8796,14 @@ static void RSceneCache_FlushStagedFlat(struct rscenecache_s *cache, const rscen
 	for (i = 0; i < num_staged; i++)
 	{
 		msurface_t *surf = staged[i].surf;
-		unsigned int vcount = staged[i].vcount;
-		size_t numidx = (size_t)(vcount - 2) * 3;
+		size_t numidx = staged[i].numidx;
 		struct rscenecachebath_s *batch = &cache->batches[staged[i].batch_idx];
-		unsigned int *idx, e;
-		if (!RSceneCache_ReserveBatchIndices(batch, numidx, "spatial-fallback"))
+		if (!numidx || !RSceneCache_ReserveBatchIndices(batch, numidx, "spatial-fallback"))
 			continue;
-		idx = &batch->idx[batch->numidx];
+		R_EmitSurfaceIndices(surf, &batch->idx[batch->numidx]);
 		batch->numidx += numidx;
 		batch->numpolys++;
 		RSceneCache_ExpandBounds(batch->mins, batch->maxs, surf->mins, surf->maxs);
-		for (e = 2; e < vcount; e++)
-		{
-			*idx++ = surf->vbo_firstvert;
-			*idx++ = surf->vbo_firstvert + e - 1;
-			*idx++ = surf->vbo_firstvert + e;
-		}
 	}
 }
 
@@ -8867,12 +8899,12 @@ static void RSceneCache_EmitStagedSpatial(struct rscenecache_s *cache, rscenecac
 			size_t run_end = i;
 			size_t run_idx = 0;
 			unsigned int first_idx = (unsigned int)batch->numidx;
-			unsigned int *idx, e;
+			unsigned int *idx;
 			rscenecache_cellrange_t *cr;
 
 			while (run_end < num_staged && staged[run_end].batch_idx == bidx && staged[run_end].cell == cell)
 			{
-				run_idx += (size_t)(staged[run_end].vcount - 2) * 3;
+				run_idx += staged[run_end].numidx;
 				run_end++;
 			}
 
@@ -8898,14 +8930,8 @@ static void RSceneCache_EmitStagedSpatial(struct rscenecache_s *cache, rscenecac
 			for (; i < run_end; i++)
 			{
 				msurface_t *surf = staged[i].surf;
-				unsigned int vcount = staged[i].vcount;
 				RSceneCache_ExpandBounds(cr->mins, cr->maxs, surf->mins, surf->maxs);
-				for (e = 2; e < vcount; e++)
-				{
-					*idx++ = surf->vbo_firstvert;
-					*idx++ = surf->vbo_firstvert + e - 1;
-					*idx++ = surf->vbo_firstvert + e;
-				}
+				idx += R_EmitSurfaceIndices(surf, idx);
 			}
 			RSceneCache_ExpandBounds(batch->mins, batch->maxs, cr->mins, cr->maxs);
 			RSceneCache_ExpandBounds(cache->spatial_mins[cell], cache->spatial_maxs[cell], cr->mins, cr->maxs);
@@ -8915,14 +8941,13 @@ static void RSceneCache_EmitStagedSpatial(struct rscenecache_s *cache, rscenecac
 
 static int RSceneCache_Thread(void *ctx)
 {
-	unsigned int i, j, e;
+	unsigned int i, j;
 	mleaf_t *leaf;
 	msurface_t **mark, *surf;
 	struct rscenecache_s *cache;
 	byte *vis;
 	unsigned int bpolys;
 	unsigned int clusters;
-	unsigned int *idx;
 	size_t numidx;
 	struct rscenecachebath_s *batch;
 	mmodel_t *sub;
@@ -9002,8 +9027,9 @@ static int RSceneCache_Thread(void *ctx)
 								}
 								if ((unsigned int)surf->texinfo->materialidx >= cache->numtextures)
 									continue;	//should have been sanitised at load.
-								unsigned int vcount = (unsigned int)R_SurfaceVertCount (surf);	// woods #collinear
-								numidx = (vcount-2)*3;
+								numidx = R_NumSurfaceIndices (surf);	// woods #collinear
+								if (!numidx)
+									continue;
 								int uw = (surf->flags & SURF_UNDERWATER) ? 1 : 0;
 								unsigned int bidx = (unsigned int)(
 								        surf->texinfo->materialidx * cache->lightmaps * 2   /* texture bank  */
@@ -9012,7 +9038,7 @@ static int RSceneCache_Thread(void *ctx)
 								if (use_spatial)
 								{
 									if (!RSceneCache_StageSurface(&staged, &num_staged, &max_staged,
-										bidx, surf, vcount, RSceneCache_SurfCell(cache, surf)))
+										bidx, surf, (unsigned int)numidx, RSceneCache_SurfCell(cache, surf)))
 									{
 										RSceneCache_FlushStagedFlat(cache, staged, num_staged);
 										num_staged = 0;
@@ -9024,16 +9050,10 @@ static int RSceneCache_Thread(void *ctx)
 									batch = &cache->batches[bidx];
 									if (!RSceneCache_ReserveBatchIndices(batch, numidx, "world"))
 										continue;
-									idx = &batch->idx[batch->numidx];
+									R_EmitSurfaceIndices (surf, &batch->idx[batch->numidx]);
 									batch->numidx += numidx;
 									batch->numpolys++;
 									RSceneCache_ExpandBounds(batch->mins, batch->maxs, surf->mins, surf->maxs);
-									for (e = 2; e < vcount; e++)
-									{
-										*idx++ = surf->vbo_firstvert;
-										*idx++ = surf->vbo_firstvert + e-1;
-										*idx++ = surf->vbo_firstvert + e;
-									}
 								}
 
 								RSceneCache_AddTeleportSurface(cache, surf);
@@ -9073,8 +9093,9 @@ static int RSceneCache_Thread(void *ctx)
 					}
 					if ((unsigned int)surf->texinfo->materialidx >= cache->numtextures)
 						continue;	//should have been sanitised at load.
-					unsigned int vcount = (unsigned int)R_SurfaceVertCount (surf);	// woods #collinear
-					numidx = (vcount-2)*3;
+					numidx = R_NumSurfaceIndices (surf);	// woods #collinear
+					if (!numidx)
+						continue;
 					int uw = (surf->flags & SURF_UNDERWATER) ? 1 : 0;
 					unsigned int bidx = (unsigned int)(
 					        surf->texinfo->materialidx * cache->lightmaps * 2   /* texture bank  */
@@ -9083,7 +9104,7 @@ static int RSceneCache_Thread(void *ctx)
 					if (use_spatial)
 					{
 						if (!RSceneCache_StageSurface(&staged, &num_staged, &max_staged,
-							bidx, surf, vcount, RSceneCache_SurfCell(cache, surf)))
+							bidx, surf, (unsigned int)numidx, RSceneCache_SurfCell(cache, surf)))
 						{
 							RSceneCache_FlushStagedFlat(cache, staged, num_staged);
 							num_staged = 0;
@@ -9095,16 +9116,10 @@ static int RSceneCache_Thread(void *ctx)
 						batch = &cache->batches[bidx];
 						if (!RSceneCache_ReserveBatchIndices(batch, numidx, "submodel"))
 							continue;
-						idx = &batch->idx[batch->numidx];
+						R_EmitSurfaceIndices (surf, &batch->idx[batch->numidx]);
 						batch->numidx += numidx;
 						batch->numpolys++;
 						RSceneCache_ExpandBounds(batch->mins, batch->maxs, surf->mins, surf->maxs);
-						for (e = 2; e < vcount; e++)
-						{
-							*idx++ = surf->vbo_firstvert;
-							*idx++ = surf->vbo_firstvert + e-1;
-							*idx++ = surf->vbo_firstvert + e;
-						}
 					}
 
 					RSceneCache_AddTeleportSurface(cache, surf);

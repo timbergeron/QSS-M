@@ -289,10 +289,6 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 #define	BOOKMARK_DATA_LENGTH	50	// woods #bookmarksjson - max length of bookmark data field
 #define	BOOKMARK_PIN_SUFFIX	"|pin"	// woods #bookmarksjson - legacy pinned suffix
 
-#if defined(__APPLE__) && defined(__aarch64__)
-#define MACBOOK_ARM_HACK // woods #collinear
-#endif
-
 typedef struct
 {
 	const char *basedir;

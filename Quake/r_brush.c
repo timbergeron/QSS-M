@@ -186,18 +186,42 @@ texture_t *R_TextureAnimation (texture_t *base, int frame)
 
 /*
 ================
+GL_PolyBegin -- woods #collinear
+
+Immediate-mode counterpart of R_EmitSurfaceIndices: a poly with a repaired
+triangulation (tridata) is drawn as those GL_TRIANGLES, anything else with
+fanprim (GL_POLYGON / GL_TRIANGLE_FAN). Calls glBegin and returns the vert
+count; fetch verts with GL_PolyVert, then glEnd.
+================
+*/
+int GL_PolyBegin (const glpoly_t *p, GLenum fanprim, const unsigned short **order)
+{
+	if (p->tridata)
+	{
+		glBegin (GL_TRIANGLES);
+		*order = p->tridata;
+		return 3 * p->numtris;
+	}
+	glBegin (fanprim);
+	*order = NULL;
+	return p->numverts >= 3 ? p->numverts : 0;
+}
+
+/*
+================
 DrawGLPoly
 ================
 */
 void DrawGLPoly (glpoly_t *p)
 {
+	const unsigned short *order;
 	float	*v;
-	int		i;
+	int		i, n;
 
-	glBegin (GL_POLYGON);
-	v = p->verts[0];
-	for (i=0 ; i<p->numverts ; i++, v+= VERTEXSIZE)
+	n = GL_PolyBegin (p, GL_POLYGON, &order);	// woods #collinear
+	for (i=0 ; i<n ; i++)
 	{
+		v = GL_PolyVert (p, order, i);
 		glTexCoord2f (v[3], v[4]);
 		glVertex3fv (v);
 	}
@@ -211,15 +235,12 @@ DrawGLTriangleFan -- johnfitz -- like DrawGLPoly but for r_showtris
 */
 void DrawGLTriangleFan (glpoly_t *p)
 {
-	float	*v;
-	int		i;
+	const unsigned short *order;
+	int		i, n;
 
-	glBegin (GL_TRIANGLE_FAN);
-	v = p->verts[0];
-	for (i=0 ; i<p->numverts ; i++, v+= VERTEXSIZE)
-	{
-		glVertex3fv (v);
-	}
+	n = GL_PolyBegin (p, GL_TRIANGLE_FAN, &order);	// woods #collinear -- r_showtris shows the real triangles
+	for (i=0 ; i<n ; i++)
+		glVertex3fv (GL_PolyVert (p, order, i));
 	glEnd ();
 }
 
@@ -1105,14 +1126,15 @@ typedef struct lm_filljob_s
 {
 	qmodel_t	*model;
 	msurface_t	*surf;
-	glpoly_t	*poly;	// non-NULL: build poly verts too (BuildSurfaceVerts)
+	glpoly_t	*poly;		// non-NULL: build or refresh poly verts (BuildSurfaceVerts)
+	qboolean	uv_only;	// true on lightmap rebuild: refresh UVs in place, keep welded/repaired xyz
 } lm_filljob_t;
 
 static lm_filljob_t	*lm_filljobs;
 static int		lm_numfilljobs, lm_maxfilljobs;
 static qboolean		lm_defer_fill;
 
-static void BuildSurfaceVerts (qmodel_t *model, msurface_t *fa, glpoly_t *poly);	//forward
+static void BuildSurfaceVerts (qmodel_t *model, msurface_t *fa, glpoly_t *poly, qboolean uv_only);	//forward
 
 static void LM_ClearFillJobs (void)
 {
@@ -1138,7 +1160,7 @@ static void LM_FillRange (const lm_fillctx_t *ctx)
 		msurface_t *surf = lm_filljobs[i].surf;
 
 		if (lm_filljobs[i].poly)
-			BuildSurfaceVerts (lm_filljobs[i].model, surf, lm_filljobs[i].poly);
+			BuildSurfaceVerts (lm_filljobs[i].model, surf, lm_filljobs[i].poly, lm_filljobs[i].uv_only);
 
 		if (surf->lightmaptexturenum >= 0)
 		{
@@ -1158,7 +1180,7 @@ static int LM_FillThread (void *arg)
 #define LM_MAX_FILL_THREADS	8
 #define LM_MIN_JOBS_PER_THREAD	64
 
-static void LM_QueueFillJob (qmodel_t *model, msurface_t *surf, glpoly_t *poly)
+static void LM_QueueFillJob (qmodel_t *model, msurface_t *surf, glpoly_t *poly, qboolean uv_only)
 {
 	if (lm_numfilljobs == lm_maxfilljobs)
 	{
@@ -1174,6 +1196,7 @@ static void LM_QueueFillJob (qmodel_t *model, msurface_t *surf, glpoly_t *poly)
 	lm_filljobs[lm_numfilljobs].model = model;
 	lm_filljobs[lm_numfilljobs].surf = surf;
 	lm_filljobs[lm_numfilljobs].poly = poly;
+	lm_filljobs[lm_numfilljobs].uv_only = uv_only;
 	lm_numfilljobs++;
 }
 
@@ -1250,107 +1273,504 @@ void GL_CreateSurfaceLightmap (qmodel_t *model, msurface_t *surf)
 	R_BuildLightMap (model, surf, base, LMBLOCK_WIDTH*lightmap_bytes, currententity, r_framecount, cl_dlights);
 }
 
-#ifdef MACBOOK_ARM_HACK // ezquake 22f39e2 by nano -- woods #collinear
-#define EPSILON 1e-6
+/*
+=============================================================================
 
-// Check if triangle has a ~zero area
-// https://en.wikipedia.org/wiki/Collinearity
-static qboolean R_ArePointsColinear(const float *v1, const float *v2, const float *v3)
+DEGENERATE FAN REPAIR -- woods #collinear
+
+Quake polys are convex but routinely carry collinear verts (qbsp's t-junction
+fixes, CSG splits). Fanning such a poly from vert 0 emits zero-area triangles,
+and Apple M1-class GPUs mis-cull a *later* real triangle after one of those
+(ezquake #562) -- missing triangles / white void artifacts. Deleting collinear
+verts (the old r_remove_collinear_vertices) hid that on short edges while
+reopening t-junction cracks or leaving long-edge collinear verts unfixed.
+
+Every non-duplicate vert now stays:
+  1. Exact coincident consecutive verts (0-length edges, <= 1e-5 units) are
+     compacted out -- they carry identical coords and cannot form t-junctions.
+  2. If the plain fan from vert 0 has a flat/inverted triangle, we first look
+     for another vert whose fan is clean and rotate poly->verts[] in place
+     (handles the vast majority of collinear faces with zero extra memory or
+     draw-path overhead).
+  3. Only if no single vertex yields a clean fan (e.g. collinear verts on
+     every corner's incident edges), R_BuildSurfaceTriangulations ear-clips
+     the poly into glpoly_t.tridata (with a filtered-fan fallback for corrupt
+     non-simple BSP faces) so zero-area triangles never reach the GPU.
+
+Flatness is measured as a triangle's smallest altitude in world units
+(2*area / longest_side), not by angle: a 4096x1 trim sliver has tiny angles
+but is a real triangle, while collinear t-junction verts sit at float noise.
+
+=============================================================================
+*/
+
+#define TRI_MIN_ALTITUDE	0.01	// world units; collinear verts sit at float noise (~1e-4)
+#define TRI_LOOSE_ALTITUDE	1e-6	// absolute floor: never emit zero-area or inverted tris
+#define TRI_DUP_DIST2		1e-10	// coincident vertex threshold (1e-5 world units)
+
+// signed smallest altitude of a triangle (2*area / longest side) measured
+// along the poly normal n: <= 0 for flat or inverted triangles
+static double Tri_MinAltitude (const float *a, const float *b, const float *c, const double *n)
 {
-	vec3_t d0, d1, cross;
+	double e0[3], e1[3], e2[3], cr, l, m;
+	int k;
 
-	VectorSubtract(v2, v1, d0);
-	VectorSubtract(v3, v2, d1);
+	for (k = 0; k < 3; k++)
+	{
+		e0[k] = (double)b[k] - a[k];
+		e1[k] = (double)c[k] - a[k];
+		e2[k] = (double)c[k] - b[k];
+	}
+	cr = (e0[1]*e1[2] - e0[2]*e1[1]) * n[0]
+	   + (e0[2]*e1[0] - e0[0]*e1[2]) * n[1]
+	   + (e0[0]*e1[1] - e0[1]*e1[0]) * n[2];
+	m = e0[0]*e0[0] + e0[1]*e0[1] + e0[2]*e0[2];
+	if ((l = e1[0]*e1[0] + e1[1]*e1[1] + e1[2]*e1[2]) > m) m = l;
+	if ((l = e2[0]*e2[0] + e2[1]*e2[1] + e2[2]*e2[2]) > m) m = l;
+	if (m <= 0.0)
+		return 0.0;
+	return cr / sqrt (m);
+}
 
-	// Prevent T-junctions by only removing vertices that are very close to their neighbors.
-	// If edges are long, we keep the vertex even if it's collinear.
-	if (DotProduct(d0, d0) > 1.0f || DotProduct(d1, d1) > 1.0f)
-		return false;
+// unit Newell normal for a vertex array: follows the poly's winding, robust to collinear runs; returns 2*area
+static double Tri_PolyNormalVerts (const float (*verts)[VERTEXSIZE], int numverts, double *n)
+{
+	double l;
+	int i;
 
-	CrossProduct(d0, d1, cross);
+	n[0] = n[1] = n[2] = 0.0;
+	for (i = 0; i < numverts; i++)
+	{
+		const float *a = verts[i], *b = verts[i + 1 < numverts ? i + 1 : 0];
+		n[0] += ((double)a[1] - b[1]) * ((double)a[2] + b[2]);
+		n[1] += ((double)a[2] - b[2]) * ((double)a[0] + b[0]);
+		n[2] += ((double)a[0] - b[0]) * ((double)a[1] + b[1]);
+	}
+	l = sqrt (n[0]*n[0] + n[1]*n[1] + n[2]*n[2]);
+	if (l > 0.0)
+	{
+		double inv = 1.0 / l;
+		n[0] *= inv; n[1] *= inv; n[2] *= inv;
+	}
+	return l;
+}
 
-	if (DotProduct(cross, cross) >= EPSILON)
-		return false;
+static double Tri_PolyNormal (const glpoly_t *p, int numverts, double *n)
+{
+	return Tri_PolyNormalVerts ((const float (*)[VERTEXSIZE])p->verts, numverts, n);
+}
 
-	// Check texture coordinates (indices 3, 4)
-	d0[0] = v2[3] - v1[3];
-	d0[1] = v2[4] - v1[4];
-	d0[2] = 0;
+// fan from vert `origin` has no triangle flatter than minalt or inverted
+static qboolean R_PolyFanFromIsClean (const glpoly_t *p, int numverts, int origin, const double *n, double minalt)
+{
+	int i, a, b;
 
-	d1[0] = v3[3] - v2[3];
-	d1[1] = v3[4] - v2[4];
-	d1[2] = 0;
-
-	CrossProduct(d0, d1, cross);
-
-	if (DotProduct(cross, cross) >= EPSILON)
-		return false;
-
-	// Check lightmap coordinates (indices 5, 6)
-	d0[0] = v2[5] - v1[5];
-	d0[1] = v2[6] - v1[6];
-	d0[2] = 0;
-
-	d1[0] = v3[5] - v2[5];
-	d1[1] = v3[6] - v2[6];
-	d1[2] = 0;
-
-	CrossProduct(d0, d1, cross);
-
-	if (DotProduct(cross, cross) >= EPSILON)
-		return false;
-
+	for (i = 2; i < numverts; i++)
+	{
+		a = origin + i - 1; if (a >= numverts) a -= numverts;
+		b = origin + i;     if (b >= numverts) b -= numverts;
+		if (Tri_MinAltitude (p->verts[origin], p->verts[a], p->verts[b], n) < minalt)
+			return false;
+	}
 	return true;
 }
 
-static void R_RemoveColinearVertices(glpoly_t* poly, float new_verts[][VERTEXSIZE])
+static void R_ReversePolyVerts (glpoly_t *p, int lo, int hi)
 {
-	int i, v1_index, v2_index, v3_index, new_numverts = 0;
-	int numverts = poly->numverts;
+	float tmp[VERTEXSIZE];
 
-	v1_index = numverts - 1;
-	v2_index = 0;
-	v3_index = 1;
-
-	for (i = 0; i < numverts; i++) {
-		float* v1 = poly->verts[v1_index];
-		float* v2 = poly->verts[v2_index];
-		float* v3 = poly->verts[v3_index];
-
-		if (!R_ArePointsColinear(v1, v2, v3)) {
-			memcpy(new_verts[new_numverts], v2, sizeof(float) * VERTEXSIZE);
-			new_numverts++;
-		}
-
-		v1_index = v2_index;
-		v2_index = v3_index;
-		v3_index = (v3_index + 1) % numverts;
-	}
-
-	// never shrink below a renderable triangle; index/VBO code assumes >= 3 verts
-	if (new_numverts >= 3) {
-		memcpy(poly->verts, new_verts, new_numverts * sizeof(float) * VERTEXSIZE);
-		poly->numverts = new_numverts;
+	while (lo < hi)
+	{
+		memcpy (tmp, p->verts[lo], sizeof(tmp));
+		memcpy (p->verts[lo], p->verts[hi], sizeof(tmp));
+		memcpy (p->verts[hi], tmp, sizeof(tmp));
+		lo++;
+		hi--;
 	}
 }
-#endif
+
+// cyclically shift verts[0..numverts-1] left by origin so verts[origin] becomes verts[0]
+static void R_RotatePolyVerts (glpoly_t *p, int origin)
+{
+	int nv = p->numverts;
+
+	if (origin <= 0 || origin >= nv)
+		return;
+	R_ReversePolyVerts (p, 0, origin - 1);
+	R_ReversePolyVerts (p, origin, nv - 1);
+	R_ReversePolyVerts (p, 0, nv - 1);
+}
+
+// compact exact coincident consecutive verts (0-length edges cannot hold t-junctions)
+static void R_DedupeCoincidentVerts (glpoly_t *p)
+{
+	int i, out = 0, nv = p->numverts;
+
+	for (i = 0; i < nv; i++)
+	{
+		if (out > 0)
+		{
+			double dx = (double)p->verts[i][0] - p->verts[out - 1][0];
+			double dy = (double)p->verts[i][1] - p->verts[out - 1][1];
+			double dz = (double)p->verts[i][2] - p->verts[out - 1][2];
+			if (dx*dx + dy*dy + dz*dz <= TRI_DUP_DIST2)
+				continue;
+		}
+		if (out != i)
+			memcpy (p->verts[out], p->verts[i], sizeof(p->verts[0]));
+		out++;
+	}
+	while (out > 1)
+	{
+		double dx = (double)p->verts[out - 1][0] - p->verts[0][0];
+		double dy = (double)p->verts[out - 1][1] - p->verts[0][1];
+		double dz = (double)p->verts[out - 1][2] - p->verts[0][2];
+		if (dx*dx + dy*dy + dz*dz <= TRI_DUP_DIST2)
+			out--;
+		else
+			break;
+	}
+	p->numverts = out;
+}
+
+/*
+================
+R_PreparePolyFan -- woods #collinear
+
+Thread-safe (runs in BuildSurfaceVerts workers and SubdividePolygon): removes
+zero-length duplicate verts, then checks whether the plain fan from vert 0 is
+clean. If not, tries rotating poly->verts[] in place to a clean starting vert.
+Only if no rotation is clean does it flag numtris = -1 for serial ear-clipping.
+On GL_BuildLightmaps re-entry, an existing poly->tridata is kept as-is (same
+geometry, updated lightmap UVs) so zero hunk memory is allocated on rebuilds.
+================
+*/
+void R_PreparePolyFan (glpoly_t *p)
+{
+	double	n[3];
+	int		nv, origin;
+
+	R_DedupeCoincidentVerts (p);
+	if (p->tridata)
+		return;	// reused on lightmap rebuild: geometry/vert order unchanged, tridata still valid
+
+	nv = p->numverts;
+	if (nv < 3)
+	{
+		p->numtris = 0;
+		return;
+	}
+	if (Tri_PolyNormal (p, nv, n) <= 0.0)
+	{
+		p->numtris = -1;	// zero-area face: repair attaches empty tridata (0 tris drawn)
+		return;
+	}
+	if (R_PolyFanFromIsClean (p, nv, 0, n, TRI_MIN_ALTITUDE))
+	{
+		p->numtris = 0;
+		return;
+	}
+	for (origin = 1; origin < nv; origin++)
+	{
+		if (R_PolyFanFromIsClean (p, nv, origin, n, TRI_MIN_ALTITUDE))
+		{
+			R_RotatePolyVerts (p, origin);
+			p->numtris = 0;
+			return;
+		}
+	}
+	p->numtris = -1;
+}
+
+// closed-triangle test: w inside or on a-b-c (all wound along n).
+// Tight tolerance on boundary edges (a->b, b->c) avoids false positives from
+// nearby collinear neighbors; diag_tol on the new diagonal (c->a) prevents
+// stranding collinear verts on a straight run behind the diagonal.
+static qboolean Tri_ContainsClosed (const float *a, const float *b, const float *c, const float *w, const double *n, double diag_tol)
+{
+	const float *e[3][2] = {{a, b}, {b, c}, {c, a}};
+	const double tol[3] = {1e-6, 1e-6, diag_tol};
+	int i, k;
+
+	for (i = 0; i < 3; i++)
+	{
+		double d[3], q[3], l;
+		for (k = 0; k < 3; k++)
+		{
+			d[k] = (double)e[i][1][k] - e[i][0][k];
+			q[k] = (double)w[k] - e[i][0][k];
+		}
+		l = sqrt (d[0]*d[0] + d[1]*d[1] + d[2]*d[2]);
+		if (l <= 0.0)
+			continue;
+		// signed distance of w from the edge, positive towards the inside
+		if (((d[1]*q[2] - d[2]*q[1]) * n[0] + (d[2]*q[0] - d[0]*q[2]) * n[1] + (d[0]*q[1] - d[1]*q[0]) * n[2]) / l < -tol[i])
+			return false;
+	}
+	return true;
+}
+
+/*
+================
+Tri_EarClip
+
+Ear-clips a simple poly while keeping every boundary vert. An ear is a corner
+whose triangle has signed altitude >= minalt and contains no other remaining
+vert (including verts sitting on the new diagonal c->a). Picks the deepest ear
+(largest altitude) at each step. Returns triangle count, or -1 if stuck.
+================
+*/
+static int Tri_EarClip (const glpoly_t *p, int nv, const double *n, double minalt, double diag_tol, unsigned short *out)
+{
+	int		prevbuf[128], nextbuf[128];
+	int		*prev = prevbuf, *next = nextbuf;
+	int		i, m, cur = 0, numtris = 0, result = -1;
+
+	if (nv > 128)
+	{
+		prev = (int *) malloc (nv * sizeof(int));
+		next = (int *) malloc (nv * sizeof(int));
+		if (!prev || !next)
+			Sys_Error ("Tri_EarClip: out of memory (%d verts)", nv);
+	}
+	for (i = 0; i < nv; i++)
+	{
+		prev[i] = i ? i - 1 : nv - 1;
+		next[i] = i + 1 < nv ? i + 1 : 0;
+	}
+
+	for (m = nv; m > 3; m--)
+	{
+		int k, v, best = -1;
+		double bestalt = minalt;
+
+		for (k = 0, v = cur; k < m; k++, v = next[v])
+		{
+			int a = prev[v], c = next[v], w;
+			double alt = Tri_MinAltitude (p->verts[a], p->verts[v], p->verts[c], n);
+			if (alt < bestalt || alt <= 0.0)
+				continue;
+			for (w = next[c]; w != a; w = next[w])
+				if (Tri_ContainsClosed (p->verts[a], p->verts[v], p->verts[c], p->verts[w], n, diag_tol))
+					break;
+			if (w != a)
+				continue;	// another vert inside or on it: not an ear
+			best = v;
+			bestalt = alt;
+		}
+		if (best < 0)
+			goto done;
+		*out++ = (unsigned short)prev[best];
+		*out++ = (unsigned short)best;
+		*out++ = (unsigned short)next[best];
+		numtris++;
+		next[prev[best]] = next[best];
+		prev[next[best]] = prev[best];
+		cur = next[best];
+	}
+	{
+		double alt = Tri_MinAltitude (p->verts[prev[cur]], p->verts[cur], p->verts[next[cur]], n);
+		if (alt < minalt || alt <= 0.0)
+			goto done;
+		*out++ = (unsigned short)prev[cur];
+		*out++ = (unsigned short)cur;
+		*out++ = (unsigned short)next[cur];
+		numtris++;
+	}
+	result = numtris;
+done:
+	if (prev != prevbuf)
+	{
+		free (prev);
+		free (next);
+	}
+	return result;
+}
+
+typedef enum
+{
+	TRIREPAIR_EARCLIP,		// ear-clipped cleanly (>= TRI_MIN_ALTITUDE)
+	TRIREPAIR_REFAN_THIN,	// hair-thin sliver rotated to clean plain fan (>= TRI_LOOSE_ALTITUDE)
+	TRIREPAIR_LOOSE,		// hair-thin sliver ear-clipped (>= TRI_LOOSE_ALTITUDE)
+	TRIREPAIR_BROKEN,		// corrupt/zero-area poly: flat/inverted triangles dropped
+	TRIREPAIR_COUNT
+} trirepair_t;
+
+/*
+================
+R_RepairPolyFan
+
+Serial (Hunk_Alloc). Gives a poly whose plain fan from every vert had a flat
+or inverted triangle a validated triangulation in tridata (or rotates in place
+for hair-thin valid fans). Guarantees every emitted triangle has positive
+winding and altitude >= TRI_LOOSE_ALTITUDE.
+================
+*/
+static trirepair_t R_RepairPolyFan (glpoly_t *p)
+{
+	int			nv = p->numverts, origin, i, numtris = 0;
+	unsigned short stackbuf[3 * 128], *buf = stackbuf;
+	double		n[3], area2;
+	trirepair_t	kind;
+
+	if (nv > 128)
+	{
+		buf = (unsigned short *) malloc ((size_t)nv * 3 * sizeof(*buf));
+		if (!buf)
+			Sys_Error ("R_RepairPolyFan: out of memory (%d verts)", nv);
+	}
+	area2 = Tri_PolyNormal (p, nv, n);
+
+	if (area2 <= 0.0)
+	{	// completely collapsed face: emit 0 triangles
+		numtris = 0;
+		kind = TRIREPAIR_BROKEN;
+	}
+	else if ((numtris = Tri_EarClip (p, nv, n, TRI_MIN_ALTITUDE, 1e-4, buf)) >= 0)
+	{
+		kind = TRIREPAIR_EARCLIP;
+	}
+	else
+	{
+		// hair-thin but valid fan (e.g. narrow bevel strip): rotate in place, no tridata needed
+		for (origin = 0; origin < nv; origin++)
+		{
+			if (R_PolyFanFromIsClean (p, nv, origin, n, TRI_LOOSE_ALTITUDE))
+			{
+				R_RotatePolyVerts (p, origin);
+				p->tridata = NULL;
+				p->numtris = 0;
+				if (buf != stackbuf)
+					free (buf);
+				return TRIREPAIR_REFAN_THIN;
+			}
+		}
+		if ((numtris = Tri_EarClip (p, nv, n, TRI_LOOSE_ALTITUDE, 1e-6, buf)) >= 0)
+		{
+			kind = TRIREPAIR_LOOSE;
+		}
+		else
+		{	// corrupt/self-intersecting poly: pick the fan keeping the most positive area and drop flat/inverted tris
+			int best_origin = 0;
+			double best_area = -1.0;
+
+			for (origin = 0; origin < nv; origin++)
+			{
+				double sum = 0.0;
+				for (i = 2; i < nv; i++)
+				{
+					int a = (origin + i - 1) % nv;
+					int b = (origin + i) % nv;
+					if (Tri_MinAltitude (p->verts[origin], p->verts[a], p->verts[b], n) >= TRI_LOOSE_ALTITUDE)
+					{
+						double e0[3], e1[3];
+						int k;
+						for (k = 0; k < 3; k++)
+						{
+							e0[k] = (double)p->verts[a][k] - p->verts[origin][k];
+							e1[k] = (double)p->verts[b][k] - p->verts[origin][k];
+						}
+						sum += (e0[1]*e1[2] - e0[2]*e1[1]) * n[0]
+						     + (e0[2]*e1[0] - e0[0]*e1[2]) * n[1]
+						     + (e0[0]*e1[1] - e0[1]*e1[0]) * n[2];
+					}
+				}
+				if (sum > best_area)
+				{
+					best_area = sum;
+					best_origin = origin;
+				}
+			}
+			numtris = 0;
+			if (best_area > 0.0)
+			{
+				unsigned short *t = buf;
+				for (i = 2; i < nv; i++)
+				{
+					int a = (best_origin + i - 1) % nv;
+					int b = (best_origin + i) % nv;
+					if (Tri_MinAltitude (p->verts[best_origin], p->verts[a], p->verts[b], n) >= TRI_LOOSE_ALTITUDE)
+					{
+						*t++ = (unsigned short)best_origin;
+						*t++ = (unsigned short)a;
+						*t++ = (unsigned short)b;
+						numtris++;
+					}
+				}
+			}
+			kind = TRIREPAIR_BROKEN;
+		}
+	}
+
+	p->tridata = (unsigned short *) Hunk_AllocName (q_max (numtris, 1) * 3 * sizeof(*buf), "tridata");
+	if (numtris > 0)
+		memcpy (p->tridata, buf, (size_t)numtris * 3 * sizeof(*buf));
+	p->numtris = numtris;
+
+	if (buf != stackbuf)
+		free (buf);
+	return kind;
+}
+
+/*
+================
+R_BuildSurfaceTriangulations
+
+Serial pass after deferred surface fills: repairs every poly still flagged
+with numtris < 0 (including subdivided legacy water polys on polys->next).
+================
+*/
+static void R_BuildSurfaceTriangulations (void)
+{
+	int			j, i, pass, counts[TRIREPAIR_COUNT] = {0}, total = 0;
+	qmodel_t	*m;
+
+	for (pass = 0; pass < 2; pass++)
+	for (j = 1; j < MAX_MODELS; j++)
+	{
+		m = pass ? cl.model_precache_csqc[j] : cl.model_precache[j];
+		if (!m)
+		{
+			if (pass)
+				break;
+			continue;
+		}
+		if (m->name[0] == '*' || m->type != mod_brush)
+			continue;
+		for (i = 0; i < m->numsurfaces; i++)
+		{
+			glpoly_t *p;
+			for (p = m->surfaces[i].polys; p; p = p->next)
+			{
+				if (p->numtris >= 0)
+					continue;
+				p->numtris = 0;
+				if (p->numverts < 3 || p->numverts > 65535)
+					continue;
+				counts[R_RepairPolyFan (p)]++;
+				total++;
+			}
+		}
+	}
+	if (total)
+		Con_DPrintf ("R_BuildSurfaceTriangulations: repaired %d polys (earclip %d, thin-fan %d, thin-earclip %d, broken %d)\n",
+			total, counts[TRIREPAIR_EARCLIP], counts[TRIREPAIR_REFAN_THIN], counts[TRIREPAIR_LOOSE], counts[TRIREPAIR_BROKEN]);
+}
 
 /*
 ================
 R_SurfaceVertCount -- woods #collinear
 
-Number of verts actually stored in the surface's poly (collinear removal may
-have shrunk it below numedges). Clamped to numedges so it never exceeds the
-per-surface space counted for the bmodel VBO. Every place that fans this
-surface into triangle indices must use this count, not numedges, or the fan
-picks up stale verts left behind by the compaction.
+Number of verts actually stored in the surface's first poly. Can exceed
+numedges once R_FixTJunctions has welded verts in (or shrink below it after
+coincident-vert deduplication), so VBO sizing must count with this, never
+numedges. Index emission must go through R_NumSurfaceIndices /
+R_EmitSurfaceIndices to honour repaired tridata.
 ================
 */
 int R_SurfaceVertCount (const msurface_t *s)
 {
-	if (s->polys && s->polys->numverts < s->numedges)
-		return s->polys->numverts;
-	return s->numedges;
+	return s->polys ? s->polys->numverts : s->numedges;
 }
 
 /*
@@ -1358,45 +1778,99 @@ int R_SurfaceVertCount (const msurface_t *s)
 BuildSurfaceDisplayList -- called at level load time
 ================
 */
-static glpoly_t *AllocSurfacePoly (msurface_t *fa)
+static glpoly_t *AllocSurfacePoly (msurface_t *fa, qboolean *created)
 {
 	glpoly_t *poly = fa->polys;
 	/* Rebuilding lighting does not change geometry. Keep both the base polygon
-	 * and any legacy water subdivisions rather than appending hunk allocations. */
+	 * (including any t-junction welds, rotations, and tridata) and any legacy
+	 * water subdivisions rather than appending hunk allocations. */
 	if (!poly)
 	{
-		poly = (glpoly_t *) Hunk_Alloc (sizeof(glpoly_t) + (fa->numedges-4) * VERTEXSIZE*sizeof(float));
+		poly = (glpoly_t *) Hunk_Alloc (sizeof(glpoly_t) + q_max (fa->numedges - 4, 0) * VERTEXSIZE * sizeof(float));
 		fa->polys = poly;
+		poly->numverts = fa->numedges;
+		if (created)
+			*created = true;
 	}
-	poly->numverts = fa->numedges;
+	else if (created)
+	{
+		*created = false;
+	}
 	return poly;
+}
+
+static void SurfaceTexOffsets (const msurface_t *fa, float *s0, float *t0)
+{
+	if ((fa->flags & SURF_DRAWTURB) && r_brokenturbbias.value)
+		*s0 = *t0 = 0.f;	// match Mod_PolyForUnlitSurface
+	else
+	{
+		*s0 = fa->texinfo->vecs[0][3];
+		*t0 = fa->texinfo->vecs[1][3];
+	}
+}
+
+// position + texture + lightmap coords of one poly vert (shared with the
+// t-junction weld so inserted verts get bit-identical coords; safe when out == vec)
+static void SurfaceVertCoords (const msurface_t *fa, const float *vec, float s0, float t0, float *out)
+{
+	float s, t;
+
+	s = DotProduct (vec, fa->texinfo->vecs[0]) + s0;
+	s /= fa->texinfo->texture->width;
+
+	t = DotProduct (vec, fa->texinfo->vecs[1]) + t0;
+	t /= fa->texinfo->texture->height;
+
+	if (out != vec)
+		VectorCopy (vec, out);
+	out[3] = s;
+	out[4] = t;
+
+	// Q64 RERELEASE texture shift
+	if (fa->texinfo->texture->shift > 0)
+	{
+		out[3] /= ( 2 * fa->texinfo->texture->shift);
+		out[4] /= ( 2 * fa->texinfo->texture->shift);
+	}
+
+	//
+	// lightmap texture coordinates
+	//
+	s = DotProduct (vec, fa->lmvecs[0]) + fa->lmvecs[0][3] + 0.5;
+	s += fa->light_s;
+	s /= LMBLOCK_WIDTH;
+
+	t = DotProduct (vec, fa->lmvecs[1]) + fa->lmvecs[1][3] + 0.5;
+	t += fa->light_t;
+	t /= LMBLOCK_HEIGHT;
+
+	out[5] = s;
+	out[6] = t;
 }
 
 //tb -- the vertex math from BuildSurfaceDisplayList, split out so deferred
 //fill jobs can run it on worker threads (no Hunk_Alloc, no globals)
-static void BuildSurfaceVerts (qmodel_t *model, msurface_t *fa, glpoly_t *poly)
+static void BuildSurfaceVerts (qmodel_t *model, msurface_t *fa, glpoly_t *poly, qboolean uv_only)
 {
-#ifdef MACBOOK_ARM_HACK // woods #collinear
-	extern cvar_t r_remove_collinear_vertices;
-#endif
 	int			i, lindex, lnumverts;
 	medge_t		*pedges, *r_pedge;
 	float		*vec;
-	float		s, t, s0, t0;
+	float		s0, t0;
+
+	SurfaceTexOffsets (fa, &s0, &t0);
+
+	if (uv_only)
+	{
+		// lightmap rebuild: xyz (including welds/rotations) and tridata are already
+		// built; only refresh diffuse + lightmap UVs in place with zero allocations
+		for (i = 0; i < poly->numverts; i++)
+			SurfaceVertCoords (fa, poly->verts[i], s0, t0, poly->verts[i]);
+		return;
+	}
 
 	pedges = model->edges;
 	lnumverts = fa->numedges;
-
-	if ((fa->flags & SURF_DRAWTURB) && r_brokenturbbias.value)
-	{
-		// match Mod_PolyForUnlitSurface
-		s0 = t0 = 0.f;
-	}
-	else
-	{
-		s0 = fa->texinfo->vecs[0][3];
-		t0 = fa->texinfo->vecs[1][3];
-	}
 
 	for (i=0 ; i<lnumverts ; i++)
 	{
@@ -1412,65 +1886,660 @@ static void BuildSurfaceVerts (qmodel_t *model, msurface_t *fa, glpoly_t *poly)
 			r_pedge = &pedges[-lindex];
 			vec = model->vertexes[r_pedge->v[1]].position;
 		}
-		s = DotProduct (vec, fa->texinfo->vecs[0]) + s0;
-		s /= fa->texinfo->texture->width;
-
-		t = DotProduct (vec, fa->texinfo->vecs[1]) + t0;
-		t /= fa->texinfo->texture->height;
-
-		VectorCopy (vec, poly->verts[i]);
-		poly->verts[i][3] = s;
-		poly->verts[i][4] = t;
-
-		// Q64 RERELEASE texture shift
-		if (fa->texinfo->texture->shift > 0)
-		{
-			poly->verts[i][3] /= ( 2 * fa->texinfo->texture->shift);
-			poly->verts[i][4] /= ( 2 * fa->texinfo->texture->shift);
-		}
-
-		//
-		// lightmap texture coordinates
-		//
-		s = DotProduct (vec, fa->lmvecs[0]) + fa->lmvecs[0][3] + 0.5;
-		s += fa->light_s;
-		s /= LMBLOCK_WIDTH;
-
-		t = DotProduct (vec, fa->lmvecs[1]) + fa->lmvecs[1][3] + 0.5;
-		t += fa->light_t;
-		t /= LMBLOCK_HEIGHT;
-
-		poly->verts[i][5] = s;
-		poly->verts[i][6] = t;
-
+		SurfaceVertCoords (fa, vec, s0, t0, poly->verts[i]);
 	}
 
 	//johnfitz -- removed gl_keeptjunctions code
 
 	poly->numverts = lnumverts;
+	R_PreparePolyFan (poly);	// woods #collinear
+}
 
-#ifdef MACBOOK_ARM_HACK // woods #collinear
-	// Some GPUs misbehave if fed triangles of empty size.
-	if (r_remove_collinear_vertices.value) {
-		if (poly->numverts > 4) {
-			float (*new_verts)[VERTEXSIZE] = Q_malloc(poly->numverts * sizeof(float[VERTEXSIZE]));
-			R_RemoveColinearVertices(poly, new_verts);
-			free(new_verts);
-		}
-		else {
-			float new_verts[4][VERTEXSIZE];
-			R_RemoveColinearVertices(poly, new_verts);
+/*
+=============================================================================
+
+T-JUNCTION WELD -- woods #collinear
+
+A vertex of one face lying in the middle of a neighbour's edge leaves a
+sub-pixel crack along that edge (the sparkle seams). qbsp normally inserts the
+vertex into the neighbour; maps built without that pass (aerowalk: 1240+
+unwelded t-junctions) and even id's own maps (e1m1) leave some behind.
+
+At first model build, each poly edge is tested against the vertex pool of the
+BSP submodel it belongs to and every vertex lying on the edge is inserted with
+its exact position and SurfaceVertCoords. Candidates are restricted to the
+surface's own BSP submodel (moving doors/plats never weld to world verts),
+legacy subdivided water is left untouched, and any weld that would make a face
+self-intersecting is skipped (never projected) so every welded vertex stays
+bit-identical to its neighbour.
+
+Runs once per newly loaded model on worker threads against a read-only spatial
+hash; subsequent GL_BuildLightmaps() rebuilds refresh UVs in place and skip
+welding completely (0ms, 0 allocations).
+
+=============================================================================
+*/
+
+cvar_t r_fix_tjunctions = {"r_fix_tjunctions", "1", CVAR_NONE};	// latched at map load
+
+#define WELD_ONLINE_DIST	0.05f		// max distance from the edge line
+#define WELD_ENDPOINT_DIST	0.1f		// ignore verts this close to an edge endpoint
+#define WELD_CELL			64.f
+#define WELD_MAX_COORD		1e6f		// bounds-check before hashing to prevent int overflow
+#define WELD_MAX_CELLS		(1u << 24)	// edge AABBs wider than this scan the whole pool
+#define WELD_MAX_THREADS	8
+
+typedef struct
+{
+	float		p[3];
+	int			cell[3];
+	int			owner;			// submodel, -2 shared by several
+	int			v;				// model->vertexes index
+} weldvert_t;					// packed so the scan never leaves the bucket array
+
+typedef struct
+{
+	qmodel_t	*model;
+	int			*pool;			// used vertex indices
+	int			numpool;
+	int			*owner;			// per vertex: submodel, -1 unused, -2 shared by several
+	int			*shared;		// sorted (vertex, submodel) pairs for the -2 verts
+	int			numshared, maxshared;
+	int			*surfowner;		// per surface: submodel, -1 none
+	int			*bucketstart;	// hashmask+2 entries
+	weldvert_t	*bucketverts;
+	unsigned	hashmask;
+} weldmodel_t;
+
+typedef struct
+{
+	int		surf;
+	int		edge;	// insert after poly vert `edge`
+	int		vert;	// model->vertexes index
+	float	t;
+} weldinsert_t;
+
+typedef struct
+{
+	const weldmodel_t	*wm;
+	int				first, stride;
+	weldinsert_t	*ins;
+	int				numins, maxins;
+	weldinsert_t	*edgebuf;	// candidates on the current edge, grown on demand
+	int				maxedge;
+} weldjob_t;
+
+static qboolean Weld_CoordOK (const float *p)
+{
+	return isfinite (p[0]) && isfinite (p[1]) && isfinite (p[2]) &&
+		fabsf (p[0]) <= WELD_MAX_COORD && fabsf (p[1]) <= WELD_MAX_COORD && fabsf (p[2]) <= WELD_MAX_COORD;
+}
+
+static unsigned Weld_Hash (int x, int y, int z)
+{
+	return ((unsigned)x * 73856093u) ^ ((unsigned)y * 19349663u) ^ ((unsigned)z * 83492791u);
+}
+
+static int Weld_Cell (float v)
+{
+	return (int)floorf (v * (1.f / WELD_CELL));
+}
+
+static int Weld_CompareT (const void *a, const void *b)
+{
+	float ta = ((const weldinsert_t *)a)->t, tb = ((const weldinsert_t *)b)->t;
+	return ta < tb ? -1 : ta > tb;
+}
+
+static void Weld_Push (weldjob_t *job, const weldinsert_t *w)
+{
+	if (job->numins == job->maxins)
+	{
+		int newmax = job->maxins ? job->maxins * 2 : 256;
+		weldinsert_t *n = (weldinsert_t *) realloc (job->ins, (size_t)newmax * sizeof(*n));
+		if (!n)
+			Sys_Error ("R_FixTJunctions: out of memory");
+		job->ins = n;
+		job->maxins = newmax;
+	}
+	job->ins[job->numins++] = *w;
+}
+
+static int Weld_ComparePair (const void *a, const void *b)
+{
+	const int *x = (const int *)a, *y = (const int *)b;
+	if (x[0] != y[0])
+		return x[0] < y[0] ? -1 : 1;
+	return x[1] < y[1] ? -1 : x[1] > y[1];
+}
+
+static void Weld_AddShared (weldmodel_t *wm, int v, int sub)
+{
+	if (wm->numshared == wm->maxshared)
+	{
+		int newmax = wm->maxshared ? wm->maxshared * 2 : 256;
+		int *n = (int *) realloc (wm->shared, (size_t)newmax * 2 * sizeof(int));
+		if (!n)
+			Sys_Error ("R_FixTJunctions: out of memory");
+		wm->shared = n;
+		wm->maxshared = newmax;
+	}
+	wm->shared[2 * wm->numshared] = v;
+	wm->shared[2 * wm->numshared + 1] = sub;
+	wm->numshared++;
+}
+
+// vertex v belongs to submodel sub (a vert shared by several submodels is a
+// candidate only for the submodels that actually use it)
+static qboolean Weld_VertInSubmodel (const weldmodel_t *wm, int v, int owner, int sub)
+{
+	int key[2] = {v, sub};
+	if (owner != -2)
+		return owner == sub;
+	return bsearch (key, wm->shared, (size_t)wm->numshared, 2 * sizeof(int), Weld_ComparePair) != NULL;
+}
+
+// The poly's boundary does not cross or touch itself (projected onto its own
+// plane). Welding can break this near sharp corners; O(n^2), only run on the
+// small subset of surfaces that actually receive welded verts.
+static qboolean Tri_PolyIsSimple (const float (*verts)[VERTEXSIZE], int nv, const double *n)
+{
+	int ax = (fabs (n[0]) >= fabs (n[1]) && fabs (n[0]) >= fabs (n[2])) ? 0 : (fabs (n[1]) >= fabs (n[2]) ? 1 : 2);
+	int u = (ax + 1) % 3, w = (ax + 2) % 3, i, j, k;
+	const double tol = 1e-3;	// world units off a line still count as on it (float noise)
+
+#define TRI_ORIENT(a, b, c) (((double)(b)[u] - (a)[u]) * ((double)(c)[w] - (a)[w]) - ((double)(b)[w] - (a)[w]) * ((double)(c)[u] - (a)[u]))
+#define TRI_LEN(a, b) sqrt (((double)(b)[u] - (a)[u]) * ((double)(b)[u] - (a)[u]) + ((double)(b)[w] - (a)[w]) * ((double)(b)[w] - (a)[w]))
+	for (i = 0; i < nv; i++)
+	{
+		const float *a = verts[i], *b = verts[(i + 1) % nv], *c = verts[(i + 2) % nv];
+		double lab = TRI_LEN (a, b), ec;
+
+		if (lab <= 0.0)
+			return false;
+		// adjacent edges folding back onto each other
+		if (fabs (TRI_ORIENT (a, b, c)) <= tol * lab &&
+			((double)b[u] - a[u]) * ((double)c[u] - b[u]) + ((double)b[w] - a[w]) * ((double)c[w] - b[w]) < 0.0)
+			return false;
+		for (j = i + 2; j < nv; j++)
+		{
+			const float *d = verts[j], *e = verts[(j + 1) % nv];
+			const float *pt[4], *s0[4], *s1[4];
+			double o[4], lde;
+
+			if ((j + 1) % nv == i)
+				continue;	// adjacent through the wrap
+			lde = TRI_LEN (d, e);
+			if (lde <= 0.0)
+				return false;
+			// signed distances: d,e from line ab; a,b from line de
+			o[0] = TRI_ORIENT (a, b, d) / lab;
+			o[1] = TRI_ORIENT (a, b, e) / lab;
+			o[2] = TRI_ORIENT (d, e, a) / lde;
+			o[3] = TRI_ORIENT (d, e, b) / lde;
+			if (((o[0] > tol && o[1] < -tol) || (o[0] < -tol && o[1] > tol)) &&
+				((o[2] > tol && o[3] < -tol) || (o[2] < -tol && o[3] > tol)))
+				return false;	// proper crossing
+			// an endpoint lying on the other segment (within tol) is a touch
+			pt[0] = d; s0[0] = a; s1[0] = b;
+			pt[1] = e; s0[1] = a; s1[1] = b;
+			pt[2] = a; s0[2] = d; s1[2] = e;
+			pt[3] = b; s0[3] = d; s1[3] = e;
+			for (k = 0; k < 4; k++)
+			{
+				if (fabs (o[k]) > tol)
+					continue;
+				ec = ((double)s1[k][u] - s0[k][u]) * ((double)pt[k][u] - s0[k][u]) + ((double)s1[k][w] - s0[k][w]) * ((double)pt[k][w] - s0[k][w]);
+				if (ec >= 0.0 && ec <= ((double)s1[k][u] - s0[k][u]) * ((double)s1[k][u] - s0[k][u]) + ((double)s1[k][w] - s0[k][w]) * ((double)s1[k][w] - s0[k][w]))
+					return false;
+			}
 		}
 	}
-#endif
+#undef TRI_ORIENT
+#undef TRI_LEN
+	return true;
 }
+
+// test vertex v against edge a->b, collect it into the job's edge buffer
+static void Weld_TestVert (weldjob_t *job, int *numedge, int v, int owner, const float *p, int sub,
+	const float *a, const float *d, float inv_len2, float t_min, float t_max)
+{
+	float ap[3], t, perp[3];
+
+	// cheap single-submodel reject before vector math; defer shared bsearch until geometry matches
+	if (owner != sub && owner != -2)
+		return;
+	VectorSubtract (p, a, ap);
+	t = DotProduct (ap, d) * inv_len2;
+	if (t <= t_min || t >= t_max)
+		return;
+	VectorMA (ap, -t, d, perp);
+	if (DotProduct (perp, perp) > WELD_ONLINE_DIST * WELD_ONLINE_DIST)
+		return;
+	if (owner == -2 && !Weld_VertInSubmodel (job->wm, v, owner, sub))
+		return;
+	if (*numedge == job->maxedge)
+	{
+		int newmax = job->maxedge ? job->maxedge * 2 : 64;
+		weldinsert_t *n = (weldinsert_t *) realloc (job->edgebuf, (size_t)newmax * sizeof(*n));
+		if (!n)
+			Sys_Error ("R_FixTJunctions: out of memory");
+		job->edgebuf = n;
+		job->maxedge = newmax;
+	}
+	job->edgebuf[*numedge].vert = v;
+	job->edgebuf[*numedge].t = t;
+	(*numedge)++;
+}
+
+static void Weld_ScanSurface (weldjob_t *job, int surfnum)
+{
+	const weldmodel_t *wm = job->wm;
+	msurface_t *fa = &wm->model->surfaces[surfnum];
+	glpoly_t *poly = fa->polys;
+	int i, sub = wm->surfowner[surfnum];
+
+	// leave legacy subdivided water alone (polys->next holds the rendered subdivisions)
+	if (sub < 0 || !poly || poly->numverts < 3 || poly->next || ((fa->flags & SURF_DRAWTURB) && !gl_glsl_water_able))
+		return;
+
+	for (i = 0; i < poly->numverts; i++)
+	{
+		const float *a = poly->verts[i], *b = poly->verts[(i + 1) % poly->numverts];
+		float d[3], len2, len, inv_len2, t_min, t_max, lo[3], hi[3];
+		int numedge = 0, k, x, y, z, c0[3], c1[3];
+		size_t cells;
+
+		if (!Weld_CoordOK (a) || !Weld_CoordOK (b))
+			continue;
+		VectorSubtract (b, a, d);
+		len2 = DotProduct (d, d);
+		if (len2 <= 4 * WELD_ENDPOINT_DIST * WELD_ENDPOINT_DIST)
+			continue;
+		len = sqrtf (len2);
+		inv_len2 = 1.f / len2;
+		t_min = WELD_ENDPOINT_DIST / len;
+		t_max = 1.f - t_min;
+		for (k = 0; k < 3; k++)
+		{
+			lo[k] = q_min (a[k], b[k]) - WELD_ONLINE_DIST;
+			hi[k] = q_max (a[k], b[k]) + WELD_ONLINE_DIST;
+			c0[k] = Weld_Cell (lo[k]);
+			c1[k] = Weld_Cell (hi[k]);
+		}
+		cells = (size_t)(c1[0] - c0[0] + 1) * (size_t)(c1[1] - c0[1] + 1) * (size_t)(c1[2] - c0[2] + 1);
+
+		if (cells > WELD_MAX_CELLS)
+		{	// absurd edge: brute force the pool
+			for (k = 0; k < wm->numpool; k++)
+			{
+				const float *p = wm->model->vertexes[wm->pool[k]].position;
+				if (p[0] < lo[0] || p[0] > hi[0] || p[1] < lo[1] || p[1] > hi[1] || p[2] < lo[2] || p[2] > hi[2])
+					continue;
+				Weld_TestVert (job, &numedge, wm->pool[k], wm->owner[wm->pool[k]], p, sub, a, d, inv_len2, t_min, t_max);
+			}
+		}
+		else
+		{
+			// walk the edge's major axis one cell slab at a time and only visit
+			// the cells the (tolerance-padded) segment crosses inside each slab:
+			// O(length) cells instead of the O(length^2) AABB of a diagonal edge
+			int ax = (fabsf (d[0]) >= fabsf (d[1]) && fabsf (d[0]) >= fabsf (d[2])) ? 0 : (fabsf (d[1]) >= fabsf (d[2]) ? 1 : 2);
+			int o1 = (ax + 1) % 3, o2 = (ax + 2) % 3, sl;
+
+			for (sl = c0[ax]; sl <= c1[ax]; sl++)
+			{
+				float s0 = q_max (lo[ax], sl * WELD_CELL), s1 = q_min (hi[ax], (sl + 1) * WELD_CELL);
+				float t0 = (s0 - a[ax]) / d[ax], t1 = (s1 - a[ax]) / d[ax];
+				int cmin[3], cmax[3];
+
+				t0 = q_min (q_max (t0, 0.f), 1.f);
+				t1 = q_min (q_max (t1, 0.f), 1.f);
+				cmin[ax] = cmax[ax] = sl;
+				cmin[o1] = Weld_Cell (q_min (a[o1] + d[o1] * t0, a[o1] + d[o1] * t1) - 2 * WELD_ONLINE_DIST);
+				cmax[o1] = Weld_Cell (q_max (a[o1] + d[o1] * t0, a[o1] + d[o1] * t1) + 2 * WELD_ONLINE_DIST);
+				cmin[o2] = Weld_Cell (q_min (a[o2] + d[o2] * t0, a[o2] + d[o2] * t1) - 2 * WELD_ONLINE_DIST);
+				cmax[o2] = Weld_Cell (q_max (a[o2] + d[o2] * t0, a[o2] + d[o2] * t1) + 2 * WELD_ONLINE_DIST);
+
+				for (x = cmin[0]; x <= cmax[0]; x++)
+				for (y = cmin[1]; y <= cmax[1]; y++)
+				for (z = cmin[2]; z <= cmax[2]; z++)
+				{
+					unsigned h = Weld_Hash (x, y, z) & wm->hashmask;
+					const weldvert_t *wv = wm->bucketverts + wm->bucketstart[h], *we = wm->bucketverts + wm->bucketstart[h + 1];
+					for (; wv < we; wv++)
+					{
+						// different cells share buckets: only accept the vert from its own cell
+						if (wv->cell[0] != x || wv->cell[1] != y || wv->cell[2] != z)
+							continue;
+						// cheap AABB reject eliminates most verts in the 64-unit cell before dot products
+						if (wv->p[0] < lo[0] || wv->p[0] > hi[0] || wv->p[1] < lo[1] || wv->p[1] > hi[1] || wv->p[2] < lo[2] || wv->p[2] > hi[2])
+							continue;
+						Weld_TestVert (job, &numedge, wv->v, wv->owner, wv->p, sub, a, d, inv_len2, t_min, t_max);
+					}
+				}
+			}
+		}
+
+		if (!numedge)
+			continue;
+		if (numedge > 1)
+			qsort (job->edgebuf, (size_t)numedge, sizeof(job->edgebuf[0]), Weld_CompareT);
+		{
+			float lastt = 0.f;
+			for (k = 0; k < numedge; k++)
+			{
+				weldinsert_t *w = &job->edgebuf[k];
+				// duplicate vertex entries at (nearly) the same spot: keep the first
+				if (k && (w->t - lastt) * len < WELD_ENDPOINT_DIST * 0.1f)
+					continue;
+				lastt = w->t;
+				w->surf = surfnum;
+				w->edge = i;
+				Weld_Push (job, w);
+			}
+		}
+	}
+}
+
+static int Weld_Thread (void *arg)
+{
+	weldjob_t *job = (weldjob_t *)arg;
+	int i;
+	for (i = job->first; i < job->wm->model->numsurfaces; i += job->stride)
+		Weld_ScanSurface (job, i);
+	return 0;
+}
+
+static qboolean Weld_BuildModel (weldmodel_t *wm, qmodel_t *m)
+{
+	int i, j, k, numbuckets;
+
+	memset (wm, 0, sizeof(*wm));
+	wm->model = m;
+	if (m->numvertexes <= 0 || m->numsurfaces <= 0 || m->numsubmodels <= 0)
+		return false;
+
+	wm->owner = (int *) malloc ((size_t)m->numvertexes * sizeof(int));
+	wm->surfowner = (int *) malloc ((size_t)m->numsurfaces * sizeof(int));
+	wm->pool = (int *) malloc ((size_t)m->numvertexes * sizeof(int));
+	if (!wm->owner || !wm->surfowner || !wm->pool)
+		Sys_Error ("R_FixTJunctions: out of memory");
+	for (i = 0; i < m->numvertexes; i++)
+		wm->owner[i] = -1;
+	for (i = 0; i < m->numsurfaces; i++)
+		wm->surfowner[i] = -1;
+
+	for (k = 0; k < m->numsubmodels; k++)
+	{
+		const mmodel_t *sm = &m->submodels[k];
+		if (sm->firstface < 0 || sm->numfaces < 0 || sm->firstface > m->numsurfaces - sm->numfaces)
+			continue;
+		for (i = sm->firstface; i < sm->firstface + sm->numfaces; i++)
+		{
+			const msurface_t *fa = &m->surfaces[i];
+			wm->surfowner[i] = k;
+			if (fa->firstedge < 0 || fa->numedges < 0 || fa->firstedge > m->numsurfedges - fa->numedges)
+				continue;
+			for (j = 0; j < fa->numedges; j++)
+			{
+				int lindex = m->surfedges[fa->firstedge + j];
+				int e = lindex >= 0 ? lindex : -lindex;
+				int v;
+				if (lindex == INT_MIN || e >= m->numedges)
+					continue;
+				v = m->edges[e].v[lindex >= 0 ? 0 : 1];
+				if (v < 0 || v >= m->numvertexes)
+					continue;
+				if (!Weld_CoordOK (m->vertexes[v].position))
+					continue;
+				if (wm->owner[v] == -1)
+				{
+					wm->owner[v] = k;
+					wm->pool[wm->numpool++] = v;
+				}
+				else if (wm->owner[v] == -2)
+					Weld_AddShared (wm, v, k);
+				else if (wm->owner[v] != k)
+				{
+					Weld_AddShared (wm, v, wm->owner[v]);
+					Weld_AddShared (wm, v, k);
+					wm->owner[v] = -2;
+				}
+			}
+		}
+	}
+	if (!wm->numpool)
+		return false;
+	if (wm->numshared)
+	{
+		int n = 1;
+		qsort (wm->shared, (size_t)wm->numshared, 2 * sizeof(int), Weld_ComparePair);
+		for (i = 1; i < wm->numshared; i++)
+			if (Weld_ComparePair (&wm->shared[2 * i], &wm->shared[2 * (n - 1)]))
+			{
+				wm->shared[2 * n] = wm->shared[2 * i];
+				wm->shared[2 * n + 1] = wm->shared[2 * i + 1];
+				n++;
+			}
+		wm->numshared = n;
+	}
+
+	for (numbuckets = 256; numbuckets < wm->numpool * 4; numbuckets <<= 1)
+		;
+	wm->hashmask = (unsigned)numbuckets - 1;
+	wm->bucketstart = (int *) calloc ((size_t)numbuckets + 1, sizeof(int));
+	wm->bucketverts = (weldvert_t *) malloc ((size_t)wm->numpool * sizeof(weldvert_t));
+	if (!wm->bucketstart || !wm->bucketverts)
+		Sys_Error ("R_FixTJunctions: out of memory");
+	for (i = 0; i < wm->numpool; i++)
+	{
+		const float *p = m->vertexes[wm->pool[i]].position;
+		wm->bucketstart[(Weld_Hash (Weld_Cell (p[0]), Weld_Cell (p[1]), Weld_Cell (p[2])) & wm->hashmask) + 1]++;
+	}
+	for (i = 0; i < numbuckets; i++)
+		wm->bucketstart[i + 1] += wm->bucketstart[i];
+	{
+		int *fill = (int *) malloc ((size_t)numbuckets * sizeof(int));
+		if (!fill)
+			Sys_Error ("R_FixTJunctions: out of memory");
+		memcpy (fill, wm->bucketstart, (size_t)numbuckets * sizeof(int));
+		for (i = 0; i < wm->numpool; i++)
+		{
+			const float *p = m->vertexes[wm->pool[i]].position;
+			weldvert_t *wv;
+			unsigned h = Weld_Hash (Weld_Cell (p[0]), Weld_Cell (p[1]), Weld_Cell (p[2])) & wm->hashmask;
+			wv = &wm->bucketverts[fill[h]++];
+			for (k = 0; k < 3; k++)
+			{
+				wv->p[k] = p[k];
+				wv->cell[k] = Weld_Cell (p[k]);
+			}
+			wv->v = wm->pool[i];
+			wv->owner = wm->owner[wv->v];
+		}
+		free (fill);
+	}
+	return true;
+}
+
+static void Weld_FreeModel (weldmodel_t *wm)
+{
+	free (wm->owner);
+	free (wm->shared);
+	free (wm->surfowner);
+	free (wm->pool);
+	free (wm->bucketstart);
+	free (wm->bucketverts);
+}
+
+static int weld_skipped;	// welded polys skipped because inserting verts would self-intersect
+
+// rebuild one surface's poly with its inserts (sorted by edge, then t);
+// returns false without allocating on the hunk if welding would make the face non-simple
+static qboolean Weld_ApplySurface (qmodel_t *m, msurface_t *fa, const weldinsert_t *ins, int numins)
+{
+	glpoly_t *old = fa->polys, *poly;
+	int i, k = 0, n = 0, nn = old->numverts + numins;
+	float stackverts[128][VERTEXSIZE];
+	float (*tmpverts)[VERTEXSIZE] = stackverts;
+	float s0, t0;
+	double nrm[3];
+
+	if (nn > 65535)
+	{
+		weld_skipped++;
+		return false;
+	}
+	if (nn > 128)
+	{
+		tmpverts = (float (*)[VERTEXSIZE]) malloc ((size_t)nn * sizeof(*tmpverts));
+		if (!tmpverts)
+			Sys_Error ("R_FixTJunctions: out of memory (%d verts)", nn);
+	}
+
+	SurfaceTexOffsets (fa, &s0, &t0);
+	for (i = 0; i < old->numverts; i++)
+	{
+		memcpy (tmpverts[n++], old->verts[i], VERTEXSIZE * sizeof(float));
+		for (; k < numins && ins[k].edge == i; k++)
+			SurfaceVertCoords (fa, m->vertexes[ins[k].vert].position, s0, t0, tmpverts[n++]);
+	}
+
+	if (Tri_PolyNormalVerts ((const float (*)[VERTEXSIZE])tmpverts, nn, nrm) <= 0.0 ||
+		!Tri_PolyIsSimple ((const float (*)[VERTEXSIZE])tmpverts, nn, nrm))
+	{	// dented welds would cross each other (sharp corner): skip rather than
+		// projecting onto the edge (a projected vert isn't shared with the neighbour)
+		weld_skipped++;
+		if (tmpverts != stackverts)
+			free (tmpverts);
+		return false;
+	}
+
+	poly = (glpoly_t *) Hunk_Alloc (sizeof(glpoly_t) + q_max (nn - 4, 0) * VERTEXSIZE * sizeof(float));
+	poly->next = old->next;
+	poly->chain = NULL;
+	poly->numverts = nn;
+	poly->tridata = NULL;
+	poly->numtris = 0;
+	memcpy (poly->verts, tmpverts, (size_t)nn * VERTEXSIZE * sizeof(float));
+	if (tmpverts != stackverts)
+		free (tmpverts);
+
+	R_PreparePolyFan (poly);	// rotate in place if a clean fan exists, else flag for ear-clipping
+	fa->polys = poly;
+	return true;
+}
+
+/*
+================
+R_FixTJunctions
+
+Only scans models flagged in need_weld (newly allocated during this
+GL_BuildLightmaps call), so live lightmap rebuilds skip welding completely.
+================
+*/
+static void R_FixTJunctions (const byte need_weld[2][MAX_MODELS])
+{
+	SDL_Thread	*threads[WELD_MAX_THREADS];
+	weldjob_t	*jobs;
+	weldmodel_t	wm;
+	qmodel_t	*m;
+	int			j, i, t, pass, numthreads, totalwelds = 0, totalsurfs = 0;
+	double		t_start, t0, t_hash = 0, t_scan = 0, t_apply = 0;
+
+	if (!r_fix_tjunctions.value)
+		return;
+
+	t_start = Sys_DoubleTime ();
+	weld_skipped = 0;
+	numthreads = q_min (q_max (1, SDL_GetNumLogicalCPUCores ()), WELD_MAX_THREADS);
+	jobs = (weldjob_t *) calloc ((size_t)numthreads, sizeof(*jobs));
+	if (!jobs)
+		Sys_Error ("R_FixTJunctions: out of memory");
+
+	for (pass = 0; pass < 2; pass++)
+	for (j = 1; j < MAX_MODELS; j++)
+	{
+		int nthr;
+
+		if (!need_weld[pass][j])
+			continue;
+		m = pass ? cl.model_precache_csqc[j] : cl.model_precache[j];
+		if (!m || m->name[0] == '*' || m->type != mod_brush)
+			continue;
+		t0 = Sys_DoubleTime ();
+		if (!Weld_BuildModel (&wm, m))
+		{
+			Weld_FreeModel (&wm);
+			continue;
+		}
+
+		t_hash += Sys_DoubleTime () - t0;
+		t0 = Sys_DoubleTime ();
+		nthr = q_min (numthreads, q_max (1, m->numsurfaces / 256));
+		for (t = 0; t < nthr; t++)
+		{
+			jobs[t].wm = &wm;
+			jobs[t].first = t;
+			jobs[t].stride = nthr;
+			jobs[t].numins = 0;
+		}
+		for (t = 1; t < nthr; t++)
+			threads[t] = SDL_CreateThread (Weld_Thread, "tjunc_weld", &jobs[t]);
+		Weld_Thread (&jobs[0]);
+		for (t = 1; t < nthr; t++)
+		{
+			if (threads[t])
+				SDL_WaitThread (threads[t], NULL);
+			else
+				Weld_Thread (&jobs[t]);
+		}
+
+		t_scan += Sys_DoubleTime () - t0;
+		t0 = Sys_DoubleTime ();
+		// apply serially: each job's inserts are grouped by surface, edge, t
+		for (t = 0; t < nthr; t++)
+		{
+			const weldinsert_t *ins = jobs[t].ins;
+			for (i = 0; i < jobs[t].numins; )
+			{
+				int end = i;
+				while (end < jobs[t].numins && ins[end].surf == ins[i].surf)
+					end++;
+				if (Weld_ApplySurface (m, &m->surfaces[ins[i].surf], ins + i, end - i))
+				{
+					totalwelds += end - i;
+					totalsurfs++;
+				}
+				i = end;
+			}
+		}
+		t_apply += Sys_DoubleTime () - t0;
+		Weld_FreeModel (&wm);
+	}
+
+	for (t = 0; t < numthreads; t++)
+	{
+		free (jobs[t].ins);
+		free (jobs[t].edgebuf);
+	}
+	free (jobs);
+	Con_DPrintf ("R_FixTJunctions: welded %d verts into %d surfaces (%d skipped) in %.1fms (hash %.1f, scan %.1f x%d threads, apply %.1f)\n",
+		totalwelds, totalsurfs, weld_skipped, (Sys_DoubleTime () - t_start) * 1000.0, t_hash * 1000.0, t_scan * 1000.0, numthreads, t_apply * 1000.0);
+}
+
+static qboolean lm_model_had_new_polys;	// set by GL_BuildModel when any surface allocates a fresh glpoly_t
 
 static void BuildSurfaceDisplayList (msurface_t *fa)
 {
 	glpoly_t	*poly;
+	qboolean	created = false;
 
-	poly = AllocSurfacePoly (fa);
-	BuildSurfaceVerts (currentmodel, fa, poly);
+	poly = AllocSurfacePoly (fa, &created);
+	if (created)
+		lm_model_had_new_polys = true;
+	BuildSurfaceVerts (currentmodel, fa, poly, !created);
 
 	//oldwater is lame. subdivide it now.
 	if ((fa->flags & SURF_DRAWTURB) && !gl_glsl_water_able && !poly->next)
@@ -1499,14 +2568,18 @@ void GL_BuildModel (qmodel_t *m)
 		GL_CreateSurfaceLightmap (m, surf);
 		if (lm_defer_fill && !((surf->flags & SURF_DRAWTURB) && !gl_glsl_water_able))
 		{
+			qboolean created = false;
+			glpoly_t *poly = AllocSurfacePoly (surf, &created);
+			if (created)
+				lm_model_had_new_polys = true;
 			//tb -- allocate now (Hunk_Alloc isn't thread-safe), fill verts + lightmap on workers
-			LM_QueueFillJob (m, surf, AllocSurfacePoly (surf));
+			LM_QueueFillJob (m, surf, poly, !created);
 		}
 		else
 		{
 			BuildSurfaceDisplayList (surf);	// legacy oldwater path needs serial GL_SubdivideSurface
 			if (lm_defer_fill)
-				LM_QueueFillJob (m, surf, NULL);
+				LM_QueueFillJob (m, surf, NULL, false);
 		}
 		//johnfitz
 	}
@@ -1714,31 +2787,53 @@ void GL_BuildLightmaps (void)
 		}
 	}
 
-	lm_defer_fill = true;	//tb -- queue surface fills, then run them on worker threads below
-	for (j=1 ; j<MAX_MODELS ; j++)
 	{
-		m = cl.model_precache[j];
-		if (!m)
-			continue;
-		GL_BuildModel(m);
+		byte need_weld[2][MAX_MODELS];
+		qboolean any_new_polys = false;
+
+		memset (need_weld, 0, sizeof(need_weld));
+		lm_defer_fill = true;	//tb -- queue surface fills, then run them on worker threads below
+		for (j=1 ; j<MAX_MODELS ; j++)
+		{
+			m = cl.model_precache[j];
+			if (!m)
+				continue;
+			lm_model_had_new_polys = false;
+			GL_BuildModel(m);
+			if (lm_model_had_new_polys)
+			{
+				need_weld[0][j] = 1;
+				any_new_polys = true;
+			}
+		}
+		for (j=1 ; j<MAX_MODELS ; j++)
+		{
+			m = cl.model_precache_csqc[j];
+			if (!m)
+				break;
+			lm_model_had_new_polys = false;
+			GL_BuildModel(m);
+			if (lm_model_had_new_polys)
+			{
+				need_weld[1][j] = 1;
+				any_new_polys = true;
+			}
+		}
+		lm_defer_fill = false;
+		if (profile)
+		{
+			double t_fill = Sys_DoubleTime ();
+			Con_DPrintf ("GL_BuildLightmaps: surfaces %.1fms\n", (t_fill-t_start)*1000.0);
+			LM_RunDeferredFill ();
+			Con_DPrintf ("GL_BuildLightmaps: fill %.1fms\n", (Sys_DoubleTime()-t_fill)*1000.0);
+		}
+		else
+			LM_RunDeferredFill ();
+
+		if (any_new_polys)
+			R_FixTJunctions (need_weld);	// woods #collinear -- before triangulating: welded verts are collinear
+		R_BuildSurfaceTriangulations ();	// woods #collinear
 	}
-	for (j=1 ; j<MAX_MODELS ; j++)
-	{
-		m = cl.model_precache_csqc[j];
-		if (!m)
-			break;
-		GL_BuildModel(m);
-	}
-	lm_defer_fill = false;
-	if (profile)
-	{
-		double t_fill = Sys_DoubleTime ();
-		Con_DPrintf ("GL_BuildLightmaps: surfaces %.1fms\n", (t_fill-t_start)*1000.0);
-		LM_RunDeferredFill ();
-		Con_DPrintf ("GL_BuildLightmaps: fill %.1fms\n", (Sys_DoubleTime()-t_fill)*1000.0);
-	}
-	else
-		LM_RunDeferredFill ();
 
 	t_built = profile ? Sys_DoubleTime () : 0;
 
@@ -1919,9 +3014,10 @@ void GL_BuildBModelVertexBuffer (void)
 
 		for (i=0 ; i<m->numsurfaces ; i++)
 		{
-			if (m->surfaces[i].numedges < 0 || (size_t)m->surfaces[i].numedges > (size_t)INT_MAX - numverts)
+			int nv = R_SurfaceVertCount (&m->surfaces[i]);	// woods #collinear
+			if (nv < 0 || (size_t)nv > (size_t)INT_MAX - numverts)
 				Sys_Error ("GL_BuildBModelVertexBuffer: too many vertices");
-			numverts += (size_t)m->surfaces[i].numedges;
+			numverts += (size_t)nv;
 		}
 	}
 	for (j=1 ; j<MAX_MODELS ; j++)
@@ -1932,9 +3028,10 @@ void GL_BuildBModelVertexBuffer (void)
 
 		for (i=0 ; i<m->numsurfaces ; i++)
 		{
-			if (m->surfaces[i].numedges < 0 || (size_t)m->surfaces[i].numedges > (size_t)INT_MAX - numverts)
+			int nv = R_SurfaceVertCount (&m->surfaces[i]);	// woods #collinear
+			if (nv < 0 || (size_t)nv > (size_t)INT_MAX - numverts)
 				Sys_Error ("GL_BuildBModelVertexBuffer: too many vertices");
-			numverts += (size_t)m->surfaces[i].numedges;
+			numverts += (size_t)nv;
 		}
 	}
 
@@ -2984,21 +4081,18 @@ static bshadowcache_t *GL_BrushShadowCache_Get (qmodel_t *model)
 		model->firstmodelsurface > model->numsurfaces - model->nummodelsurfaces)
 		return NULL;
 
-	//every surface is fan-triangulated, matching the immediate path's GL_POLYGON
-	//R_SurfaceVertCount, not polys->numverts: GL_BuildBModelVertexBuffer sizes
-	//each surface's VBO region with it, so using the raw poly count could emit
-	//indices that run past this surface into the next one's vertices.
+	//R_NumSurfaceIndices/R_EmitSurfaceIndices: same triangulation as the
+	//world draw (degenerate fans repaired), confined to the surface's VBO region
 	total = 0;
 	surf = &model->surfaces[model->firstmodelsurface];
 	for (i = 0; i < model->nummodelsurfaces; i++, surf++)
 	{
 		size_t add;
-		int nv = R_SurfaceVertCount (surf);
-		if (!surf->polys || nv < 3)
+		if (!surf->polys)
 			continue;
 		//check each addition: a post-loop guard can only see a total that has
 		//already wrapped. glDrawElements takes a signed GLsizei, so cap there.
-		add = (size_t)(nv - 2) * 3;
+		add = R_NumSurfaceIndices (surf);
 		if (add > (size_t)INT_MAX - total)
 			return NULL;
 		total += add;
@@ -3024,15 +4118,9 @@ static bshadowcache_t *GL_BrushShadowCache_Get (qmodel_t *model)
 	surf = &model->surfaces[model->firstmodelsurface];
 	for (i = 0; i < model->nummodelsurfaces; i++, surf++)
 	{
-		int k, first = surf->vbo_firstvert, nv = R_SurfaceVertCount (surf);
-		if (!surf->polys || nv < 3)
+		if (!surf->polys)
 			continue;
-		for (k = 2; k < nv; k++)
-		{
-			idx[count++] = (unsigned int)first;
-			idx[count++] = (unsigned int)(first + k - 1);
-			idx[count++] = (unsigned int)(first + k);
-		}
+		count += R_EmitSurfaceIndices (surf, idx + count);
 	}
 
 	if (!c->ebo)
@@ -3208,17 +4296,14 @@ void GL_DrawBrushShadowPrepared (const brushshadow_rec_t *rec)
 		for (i = 0; i < clmodel->nummodelsurfaces; i++, surf++)
 		{
 			glpoly_t* p = surf->polys;
-			int k, nv = R_SurfaceVertCount (surf);
-			float* v;
+			const unsigned short *order;
+			int k, n;
 
-			if (!p || nv < 3)
+			if (!p || p->numverts < 3)
 				continue;
-			v = p->verts[0];
-			glBegin(GL_POLYGON);
-			for (k = 0; k < nv; k++, v += VERTEXSIZE)
-			{
-				glVertex3fv(v);
-			}
+			n = GL_PolyBegin (p, GL_POLYGON, &order);	// woods #collinear
+			for (k = 0; k < n; k++)
+				glVertex3fv (GL_PolyVert (p, order, k));
 			glEnd();
 		}
 	}

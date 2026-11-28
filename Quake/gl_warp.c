@@ -132,7 +132,7 @@ void SubdividePolygon (int numverts, float *verts)
 		return;
 	}
 
-	poly = (glpoly_t *) Hunk_Alloc (sizeof(glpoly_t) + (numverts-4) * VERTEXSIZE*sizeof(float));
+	poly = (glpoly_t *) Hunk_Alloc (sizeof(glpoly_t) + q_max (numverts - 4, 0) * VERTEXSIZE * sizeof(float));
 	poly->next = warpface->polys->next;
 	warpface->polys->next = poly;
 	poly->numverts = numverts;
@@ -144,6 +144,7 @@ void SubdividePolygon (int numverts, float *verts)
 		poly->verts[i][3] = s;
 		poly->verts[i][4] = t;
 	}
+	R_PreparePolyFan (poly);	// woods #collinear
 }
 
 /*
@@ -176,15 +177,16 @@ DrawWaterPoly -- johnfitz
 */
 void DrawWaterPoly (glpoly_t *p)
 {
+	const unsigned short *order;
 	float	*v;
-	int		i;
+	int		i, n;
 
 	if (load_subdivide_size > 48)
 	{
-		glBegin (GL_POLYGON);
-		v = p->verts[0];
-		for (i=0 ; i<p->numverts ; i++, v+= VERTEXSIZE)
+		n = GL_PolyBegin (p, GL_POLYGON, &order);	// woods #collinear
+		for (i=0 ; i<n ; i++)
 		{
+			v = GL_PolyVert (p, order, i);
 			glTexCoord2f (WARPCALC2(v[3],v[4]), WARPCALC2(v[4],v[3]));
 			glVertex3fv (v);
 		}
@@ -192,10 +194,10 @@ void DrawWaterPoly (glpoly_t *p)
 	}
 	else
 	{
-		glBegin (GL_POLYGON);
-		v = p->verts[0];
-		for (i=0 ; i<p->numverts ; i++, v+= VERTEXSIZE)
+		n = GL_PolyBegin (p, GL_POLYGON, &order);	// woods #collinear
+		for (i=0 ; i<n ; i++)
 		{
+			v = GL_PolyVert (p, order, i);
 			glTexCoord2f (WARPCALC(v[3],v[4]), WARPCALC(v[4],v[3]));
 			glVertex3fv (v);
 		}

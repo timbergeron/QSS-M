@@ -3451,14 +3451,8 @@ void Host_RunCvarMigrations (void) // woods #migration
 
 	if (schema < 2)
 	{
-#ifdef MACBOOK_ARM_HACK // woods #collinear
-		cv = Cvar_FindVar ("r_remove_collinear_vertices");
-		if (cv && !q_strcasecmp (cv->string, "0"))
-		{
-			Cvar_Set ("r_remove_collinear_vertices", "1");
-			Con_Printf ("Migrated r_remove_collinear_vertices to 1\n");
-		}
-#endif
+		// woods #collinear -- was r_remove_collinear_vertices 0 -> 1; the cvar is
+		// gone (degenerate fans are rotated or re-triangulated at load), nothing to migrate
 
 		schema = 2;
 	}

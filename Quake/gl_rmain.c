@@ -140,9 +140,6 @@ cvar_t	r_nooutline_list = {"r_nooutline_list", "progs/bolt1.mdl,progs/bolt2.mdl,
 cvar_t	r_outline = {"r_outline", "0", CVAR_ARCHIVE}; // woods #routline
 cvar_t	r_outline_minpixels = {"r_outline_minpixels", "1", CVAR_ARCHIVE}; // woods #routline -- fade from four times this projected width, then skip the per-entity outline pass below it; 0 disables fade/cull
 cvar_t	r_player_xray = {"r_player_xray", "0xFF0000 1.0 0", CVAR_ARCHIVE}; // woods #routline
-#ifdef MACBOOK_ARM_HACK // woods #collinear
-cvar_t	r_remove_collinear_vertices = {"r_remove_collinear_vertices", "1", CVAR_ARCHIVE};
-#endif
 
 //johnfitz
 
@@ -3477,15 +3474,24 @@ Point3D R_EmitSurfaceHighlight (entity_t* enty, msurface_t* surf, vec4_t color, 
 	glDisable(GL_DEPTH_TEST);
 	glEnable(GL_BLEND);
 
-	glBegin(GL_POLYGON);
-
-	// Draw polygon while collecting information for the center.
 	for (i = 0; i < surf->polys->numverts; i++, verts += VERTEXSIZE)
-	{
 		VectorExtendLimits(verts, mins, maxs);
-		glVertex3fv(verts);
+
+	if (style == OUTLINED_POLYGON)
+	{	// the outline must stay the poly's boundary, not its triangles
+		glBegin(GL_POLYGON);
+		for (i = 0, verts = surf->polys->verts[0]; i < surf->polys->numverts; i++, verts += VERTEXSIZE)
+			glVertex3fv(verts);
+		glEnd();
 	}
-	glEnd();
+	else
+	{
+		const unsigned short *order;
+		int n = GL_PolyBegin (surf->polys, GL_POLYGON, &order);	// woods #collinear
+		for (i = 0; i < n; i++)
+			glVertex3fv (GL_PolyVert (surf->polys, order, i));
+		glEnd();
+	}
 
 	glEnable(GL_TEXTURE_2D);
 	glDisable(GL_POLYGON_OFFSET_FILL);

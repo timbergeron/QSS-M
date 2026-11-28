@@ -3402,8 +3402,11 @@ void Sky_ProcessEntities (void)
 				{
 					//copy the polygon and translate manually, since Sky_ProcessPoly needs it to be in world space
 					mark = Hunk_LowMark();
-					p = (glpoly_t *) Hunk_Alloc (sizeof(*s->polys)); //FIXME: don't allocate for each poly
+					// woods #collinear -- size for every vert and preserve repaired triangulation
+					p = (glpoly_t *) Hunk_Alloc (sizeof(glpoly_t) + q_max (s->polys->numverts - 4, 0) * VERTEXSIZE * sizeof(float)); //FIXME: don't allocate for each poly
 					p->numverts = s->polys->numverts;
+					p->tridata = s->polys->tridata;
+					p->numtris = s->polys->numtris;
 					for (k=0; k<p->numverts; k++)
 					{
 						if (rotated)

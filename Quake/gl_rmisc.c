@@ -54,9 +54,7 @@ extern cvar_t r_nooutline_list; // woods #routline
 extern cvar_t r_outline; // woods #routline
 extern cvar_t r_outline_minpixels; // woods #routline
 extern cvar_t r_player_xray; // woods #routline
-#ifdef MACBOOK_ARM_HACK // woods #collinear
-extern cvar_t r_remove_collinear_vertices;
-#endif
+extern cvar_t r_fix_tjunctions; // woods #collinear
 
 //johnfitz
 extern cvar_t r_scenecache, r_bmodelcache, r_lightmap_format;
@@ -691,9 +689,7 @@ void R_Init (void)
 	Cvar_SetCallback (&r_player_xray, R_OutlineXrayChanged);
 	R_OutlineXrayChanged (&r_player_xray);
 	Cvar_SetCompletion (&r_player_xray, &R_Player_Xray_Completion_f); // woods #iwtabcomplete
-#ifdef MACBOOK_ARM_HACK // woods #collinear
-	Cvar_RegisterVariable (&r_remove_collinear_vertices);
-#endif
+	Cvar_RegisterVariable (&r_fix_tjunctions); // woods #collinear
 	//johnfitz
 	//spike -- new cvars...
 	Cvar_RegisterVariable (&r_scenecache);

@@ -143,6 +143,8 @@ typedef struct glpoly_s
 	struct	glpoly_s	*next;
 	struct	glpoly_s	*chain;
 	int		numverts;
+	unsigned short	*tridata;	// woods #collinear -- repaired triangulation (local vert indices), NULL = plain fan
+	int		numtris;		// woods #collinear -- triangles in tridata (< 0 at load: needs repair)
 	float	verts[4][VERTEXSIZE];	// variable sized (xyz s1t1 s2t2)
 } glpoly_t;
 
