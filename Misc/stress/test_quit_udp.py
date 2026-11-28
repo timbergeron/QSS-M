@@ -88,6 +88,9 @@ int main(int argc, char **argv) {
     char *names = UDP_QueryPlayers(argv[3], 2);
     assert(names && !strcmp(names, "alice (7), bob (-99)"));
     free(names);
+    names = NET_QueryBrowserPlayers(argv[3], 2, 25, NULL);
+    assert(names && !strcmp(names, "alice (7), bob (-99)"));
+    free(names);
 
     enum { WORKERS = 4 };
     query_t queries[WORKERS] = {0};

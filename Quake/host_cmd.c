@@ -7833,243 +7833,529 @@ static void FormatResolvedServerAddress(const struct sockaddr* addr, socklen_t a
 		q_snprintf(out, outsize, "%s:%d", numeric, port);
 }
 
-/* Each attempt owns a socket until the query ends. Late/duplicate replies
- * cannot become a fast sample on a newer attempt or reuse its source port. */
-static int Socket_Ping_Address(const struct addrinfo* address,
-	const ping_query_t* queries, size_t query_count)
+static void InitPingQueries(ping_query_t queries[4], unsigned char *nq_query, size_t size)
 {
-	enum { MAX_SAMPLES = 3, MAX_QUERIES = 4 };
-	struct
-	{
-		sys_socket_t socket;
-		double sent_time[MAX_QUERIES];
-		unsigned int sent_types;
-		qboolean complete;
-	} samples[MAX_SAMPLES] = {0};
-	int attempts = 0;
-	int preferred_query = -1;
-	int best_ping = -1;
-	double deadline = Sys_DoubleTime() + 1.5;
-	double next_sample_time = 0.0;
-
-	if (query_count > MAX_QUERIES)
-		return -1;
-	for (int i = 0; i < MAX_SAMPLES; ++i)
-		samples[i].socket = INVALID_SOCKET;
-
-	while (!SDL_GetAtomicInt(&server_queries_abort))
-	{
-		double now = Sys_DoubleTime();
-		double remaining = deadline - now;
-		fd_set readfds;
-		struct timeval timeout;
-		sys_socket_t max_socket = 0;
-		int pending = 0;
-		int selected;
-
-		if (remaining <= 0 || (attempts == MAX_SAMPLES &&
-			samples[attempts - 1].sent_types && samples[attempts - 1].complete))
-			break;
-		if (attempts < MAX_SAMPLES && now >= next_sample_time)
-		{
-			int index = attempts++;
-			sys_socket_t sock = socket(address->ai_family, address->ai_socktype, address->ai_protocol);
-			samples[index].socket = sock;
-			samples[index].complete = true;
-			next_sample_time = now + 0.5;
-			if (sock == INVALID_SOCKET)
-			{
-				Con_DPrintf("ping socket() failed: %s\n", socketerror(SOCKETERRNO));
-				continue;
-			}
-#ifndef _WIN32
-			if (sock >= FD_SETSIZE)
-			{
-				closesocket(sock);
-				samples[index].socket = INVALID_SOCKET;
-				continue;
-			}
-#endif
-			for (size_t i = 0; i < query_count && !SDL_GetAtomicInt(&server_queries_abort); ++i)
-			{
-				/* After discovery, avoid sending three unsupported protocols again. */
-				if (preferred_query >= 0 && (int)i != preferred_query)
-					continue;
-				samples[index].sent_time[i] = Sys_DoubleTime();
-				if (SendPingPacket(sock, address->ai_addr, (socklen_t)address->ai_addrlen,
-					&queries[i], index != 0))
-				{
-					samples[index].sent_types |= queries[i].reply_type;
-					samples[index].complete = false;
-				}
-			}
-		}
-
-		FD_ZERO(&readfds);
-		for (int i = 0; i < attempts; ++i)
-		{
-			if (samples[i].complete)
-				continue;
-			FD_SET(samples[i].socket, &readfds);
-			if (samples[i].socket > max_socket)
-				max_socket = samples[i].socket;
-			pending++;
-		}
-		if (!pending)
-		{
-			if (attempts == MAX_SAMPLES)
-				break;
-			next_sample_time = 0.0;
-			continue;
-		}
-
-		now = Sys_DoubleTime();
-		remaining = deadline - now;
-		if (attempts < MAX_SAMPLES)
-			remaining = q_min(remaining, next_sample_time - now);
-		if (remaining <= 0)
-			continue;
-		/* Preserve prompt cancellation without overshooting the next attempt. */
-		remaining = q_min(remaining, 0.05);
-		timeout.tv_sec = 0;
-		timeout.tv_usec = (int)(remaining * 1000000.0);
-		if (timeout.tv_usec <= 0)
-			timeout.tv_usec = 1;
-#ifdef _WIN32
-		selected = selectsocket(0, &readfds, NULL, NULL, &timeout);
-#else
-		selected = selectsocket((int)(max_socket + 1), &readfds, NULL, NULL, &timeout);
-#endif
-		if (selected == SOCKET_ERROR)
-		{
-			int err = SOCKETERRNO;
-#ifdef _WIN32
-			if (err == WSAEINTR)
-#else
-			if (err == EINTR)
-#endif
-				continue;
-			Con_DPrintf("ping select() failed: %s\n", socketerror(err));
-			break;
-		}
-		if (!selected)
-			continue;
-
-		for (int i = 0; i < attempts; ++i)
-		{
-			unsigned char buffer[8192];
-			struct sockaddr_storage from;
-			socklen_t fromlen = sizeof(from);
-			unsigned int reply_type;
-			int received;
-
-			if (samples[i].complete || !FD_ISSET(samples[i].socket, &readfds))
-				continue;
-			received = recvfrom(samples[i].socket, (char*)buffer, sizeof(buffer), 0,
-				(struct sockaddr*)&from, &fromlen);
-			if (received == SOCKET_ERROR)
-			{
-				int err = SOCKETERRNO;
-#ifdef _WIN32
-				if (err == WSAEINTR)
-#else
-				if (err == EINTR)
-#endif
-					continue;
-				Con_DPrintf("ping recvfrom() failed: %s\n", socketerror(err));
-				/* An oversized datagram (WSAEMSGSIZE) or a queued UDP error
-				 * must not discard a valid reply that is still in flight. */
-				continue;
-			}
-			if (!received || !PingReplyAddressMatches(address->ai_addr, &from, fromlen))
-				continue;
-			reply_type = PingReplyType(buffer, received);
-			if (!(reply_type & samples[i].sent_types))
-				continue;
-			for (size_t query = 0; query < query_count; ++query)
-			{
-				if (queries[query].reply_type == reply_type)
-				{
-					double elapsed = (Sys_DoubleTime() - samples[i].sent_time[query]) * 1000.0;
-					int ping = (int)(q_max(0.0, elapsed) + 0.5);
-					if (best_ping < 0 || ping < best_ping)
-						best_ping = ping;
-					if (preferred_query < 0)
-						preferred_query = (int)query;
-					samples[i].complete = true;
-					/* Successful samples can follow immediately; loss waits 500 ms. */
-					next_sample_time = 0.0;
-					break;
-				}
-			}
-		}
-	}
-
-	for (int i = 0; i < attempts; ++i)
-		if (samples[i].socket != INVALID_SOCKET)
-			closesocket(samples[i].socket);
-	return SDL_GetAtomicInt(&server_queries_abort) ? -1 : best_ping;
-}
-
-static int Socket_Ping_HostResolved(const char* host, int port, char* resolved, size_t resolvedsize)
-{
-	struct addrinfo hints;
-	struct addrinfo* res = NULL;
-	struct addrinfo* rp;
-	char portstr[16];
-	int ping_result = -1;
-	unsigned char nq_query[32];
-	size_t nq_query_len;
 	static const unsigned char qw_getinfo[] = { 0xFF, 0xFF, 0xFF, 0xFF, 'g', 'e', 't', 'i', 'n', 'f', 'o', '\n' };
 	static const unsigned char qw_status[] = { 0xFF, 0xFF, 0xFF, 0xFF, 's', 't', 'a', 't', 'u', 's', '\n' };
 	static const unsigned char dp_getchallenge[] = { 0xFF, 0xFF, 0xFF, 0xFF, 'g', 'e', 't', 'c', 'h', 'a', 'l', 'l', 'e', 'n', 'g', 'e', '\n' };
-	int ret;
-
-	if (resolved && resolvedsize)
-		resolved[0] = '\0';
-	if (SDL_GetAtomicInt(&server_queries_abort))
-		return -1;
-
-	memset(&hints, 0, sizeof(hints));
-	hints.ai_socktype = SOCK_DGRAM;
-	hints.ai_protocol = IPPROTO_UDP;
-	hints.ai_family = AF_UNSPEC;
-	q_snprintf(portstr, sizeof(portstr), "%d", port);
-	nq_query_len = BuildNetQuakePingQuery(nq_query, sizeof(nq_query));
-	const ping_query_t queries[] = {
+	size_t nq_query_len = BuildNetQuakePingQuery(nq_query, size);
+	const ping_query_t requests[] = {
 		{nq_query, nq_query_len, "netquake", PING_REPLY_NETQUAKE},
 		{qw_getinfo, sizeof(qw_getinfo), "getinfo", PING_REPLY_INFO},
 		{qw_status, sizeof(qw_status), "status", PING_REPLY_STATUS},
 		{dp_getchallenge, sizeof(dp_getchallenge), "getchallenge", PING_REPLY_CHALLENGE},
 	};
+	memcpy(queries, requests, sizeof(requests));
+}
 
-	ret = getaddrinfo(host, portstr, &hints, &res);
-	if (ret != 0)
+/* Six shared sockets plus three private sockets per target fit Winsock's
+ * default 64-socket select set even when every target is an alias or refresh. */
+enum { PING_ROUNDS = 3, PING_PROTOCOLS = 4, PING_TARGETS = 18 };
+
+typedef struct
+{
+	sys_socket_t socket;
+	double sent[PING_PROTOCOLS];
+	int next_query;
+	qboolean complete;
+} ping_round_t;
+
+typedef struct
+{
+	struct addrinfo *addresses, *address;
+	unsigned int id;
+	ping_round_t rounds[PING_ROUNDS];
+	double deadline, next_round;
+	int round_count, preferred, best;
+	qboolean shared;
+} ping_target_t;
+
+struct net_ping_sweep_s
+{
+	net_ping_result_fn result;
+	void *context;
+	ping_target_t targets[PING_TARGETS];
+	sys_socket_t sockets[2][PING_ROUNDS];
+	struct sockaddr_storage *seen;
+	size_t seen_count, seen_capacity;
+	unsigned char netquake[32];
+	ping_query_t queries[PING_PROTOCOLS];
+	double next_packet;
+};
+
+struct addrinfo *NET_PingResolve(const char *address, int default_port, qboolean numeric_only,
+	qboolean *needs_dns)
+{
+	net_endpoint_t endpoint;
+	struct addrinfo hints = {0}, *addresses = NULL;
+	char service[16];
+
+	if (needs_dns)
+		*needs_dns = false;
+	if (SDL_GetAtomicInt(&server_queries_abort) || !NET_ParseEndpoint(address, default_port, &endpoint))
+		return NULL;
+	if (numeric_only && endpoint.kind == NET_HOST_DNS)
 	{
-#ifdef _WIN32
-		Con_DPrintf("getaddrinfo failed for %s:%s (%d)\n", host, portstr, ret);
-#else
-		Con_DPrintf("getaddrinfo failed for %s:%s (%s)\n", host, portstr, gai_strerror(ret));
-#endif
-		return -1;
+		if (needs_dns)
+			*needs_dns = true;
+		return NULL;
 	}
 
-	for (rp = res; rp && !SDL_GetAtomicInt(&server_queries_abort); rp = rp->ai_next)
+	hints.ai_family = AF_UNSPEC;
+	hints.ai_socktype = SOCK_DGRAM;
+	hints.ai_protocol = IPPROTO_UDP;
+	if (endpoint.kind != NET_HOST_DNS)
+		hints.ai_flags = AI_NUMERICHOST;
+	q_snprintf(service, sizeof(service), "%d", endpoint.port);
+	if (getaddrinfo(endpoint.host, service, &hints, &addresses) != 0)
+		return NULL;
+	return addresses;
+}
+
+void NET_PingFreeAddresses(struct addrinfo *addresses)
+{
+	if (addresses)
+		freeaddrinfo(addresses);
+}
+
+net_ping_sweep_t *NET_PingCreate(net_ping_result_fn result, void *context)
+{
+	net_ping_sweep_t *sweep = calloc(1, sizeof(*sweep));
+
+	if (!sweep)
+		return NULL;
+	sweep->result = result;
+	sweep->context = context;
+	for (int family = 0; family < 2; ++family)
+		for (int round = 0; round < PING_ROUNDS; ++round)
+			sweep->sockets[family][round] = INVALID_SOCKET;
+	InitPingQueries(sweep->queries, sweep->netquake, sizeof(sweep->netquake));
+	return sweep;
+}
+
+static void PingCloseRounds(ping_target_t *target)
+{
+	if (!target->shared)
+		for (int i = 0; i < target->round_count; ++i)
+			if (target->rounds[i].socket != INVALID_SOCKET)
+				closesocket(target->rounds[i].socket);
+	target->round_count = 0;
+}
+
+void NET_PingDestroy(net_ping_sweep_t *sweep)
+{
+	for (int i = 0; i < PING_TARGETS; ++i)
 	{
-		if (resolved && resolvedsize && !resolved[0])
-			FormatResolvedServerAddress(rp->ai_addr, (socklen_t)rp->ai_addrlen,
-				port, resolved, resolvedsize);
-		ping_result = Socket_Ping_Address(rp, queries, Q_COUNTOF(queries));
-		if (ping_result >= 0)
+		PingCloseRounds(&sweep->targets[i]);
+		NET_PingFreeAddresses(sweep->targets[i].addresses);
+	}
+	for (int family = 0; family < 2; ++family)
+		for (int round = 0; round < PING_ROUNDS; ++round)
+			if (sweep->sockets[family][round] != INVALID_SOCKET)
+				closesocket(sweep->sockets[family][round]);
+	free(sweep->seen);
+	free(sweep);
+}
+
+qboolean NET_PingHasRoom(const net_ping_sweep_t *sweep)
+{
+	for (int i = 0; i < PING_TARGETS; ++i)
+		if (!sweep->targets[i].addresses)
+			return true;
+	return false;
+}
+
+qboolean NET_PingIdle(const net_ping_sweep_t *sweep)
+{
+	for (int i = 0; i < PING_TARGETS; ++i)
+		if (sweep->targets[i].addresses)
+			return false;
+	return true;
+}
+
+static qboolean PingCanShareSocket(net_ping_sweep_t *sweep, const struct addrinfo *address)
+{
+	/* These protocols carry no query ID. An endpoint may only use the shared
+	 * ports once per sweep, even if reached through another hostname later. */
+	for (size_t i = 0; i < sweep->seen_count; ++i)
+		if (PingReplyAddressMatches(address->ai_addr, &sweep->seen[i], sizeof(sweep->seen[i])))
+			return false;
+	if (sweep->seen_count == sweep->seen_capacity)
+	{
+		size_t capacity = sweep->seen_capacity ? 2 * sweep->seen_capacity : 64;
+		struct sockaddr_storage *seen = realloc(sweep->seen, capacity * sizeof(*seen));
+		if (!seen)
+			return false;
+		sweep->seen = seen;
+		sweep->seen_capacity = capacity;
+	}
+	memset(&sweep->seen[sweep->seen_count], 0, sizeof(*sweep->seen));
+	memcpy(&sweep->seen[sweep->seen_count++], address->ai_addr, address->ai_addrlen);
+	return true;
+}
+
+static void PingSweepReport(net_ping_sweep_t *sweep, const ping_target_t *target, qboolean done)
+{
+	char resolved[MAX_SERVER_ADDRESS_LEN] = "";
+	const struct addrinfo *address = target->best >= 0 ? target->address : target->addresses;
+
+	if (address)
+	{
+		int port = address->ai_family == AF_INET6 ?
+			ntohs(((const struct sockaddr_in6 *)address->ai_addr)->sin6_port) :
+			ntohs(((const struct sockaddr_in *)address->ai_addr)->sin_port);
+		FormatResolvedServerAddress(address->ai_addr, (socklen_t)address->ai_addrlen,
+			port, resolved, sizeof(resolved));
+	}
+	sweep->result(sweep->context, target->id, target->best, resolved, done);
+}
+
+static void PingSweepAdvance(net_ping_sweep_t *sweep, ping_target_t *target)
+{
+	PingCloseRounds(target);
+	if (target->best < 0)
+	{
+		for (; target->address; target->address = target->address->ai_next)
 		{
-			FormatResolvedServerAddress(rp->ai_addr, (socklen_t)rp->ai_addrlen,
-				port, resolved, resolvedsize);
-			break;
+			if (target->address->ai_family != AF_INET && target->address->ai_family != AF_INET6)
+				continue;
+			target->shared = PingCanShareSocket(sweep, target->address);
+			target->deadline = 0;
+			target->next_round = 0;
+			target->preferred = -1;
+			return;
 		}
 	}
 
-	freeaddrinfo(res);
-	return ping_result;
+	PingSweepReport(sweep, target, true);
+	NET_PingFreeAddresses(target->addresses);
+	target->addresses = NULL;
+}
+
+void NET_PingAdd(net_ping_sweep_t *sweep, unsigned int id, struct addrinfo *addresses)
+{
+	if (!addresses)
+	{
+		sweep->result(sweep->context, id, -1, "", true);
+		return;
+	}
+
+	for (int i = 0; i < PING_TARGETS; ++i)
+	{
+		ping_target_t *target = &sweep->targets[i];
+		if (target->addresses)
+			continue;
+		*target = (ping_target_t){.addresses = addresses, .address = addresses, .id = id, .best = -1};
+		PingSweepAdvance(sweep, target);
+		return;
+	}
+	SDL_assert(false); // caller checks NET_PingHasRoom before transferring ownership
+	NET_PingFreeAddresses(addresses);
+	sweep->result(sweep->context, id, -1, "", true);
+}
+
+static sys_socket_t PingOpenSocket(int family)
+{
+	sys_socket_t sock = socket(family, SOCK_DGRAM, IPPROTO_UDP);
+#ifdef _WIN32
+	u_long nonblocking = 1;
+#else
+	int nonblocking = 1;
+#endif
+
+	if (sock != INVALID_SOCKET)
+	{
+#ifndef _WIN32
+		if (sock >= FD_SETSIZE || ioctlsocket(sock, FIONBIO, &nonblocking) == SOCKET_ERROR)
+#else
+		if (ioctlsocket(sock, FIONBIO, &nonblocking) == SOCKET_ERROR)
+#endif
+		{
+			closesocket(sock);
+			return INVALID_SOCKET;
+		}
+	}
+	return sock;
+}
+
+static void PingSweepSend(net_ping_sweep_t *sweep, ping_target_t *target, double now,
+	double packet_interval)
+{
+	int index = target->round_count - 1;
+	ping_round_t *round;
+
+	if (index < 0 || target->rounds[index].next_query == PING_PROTOCOLS)
+	{
+		int family = target->address->ai_family;
+		index = target->round_count++;
+		round = &target->rounds[index];
+		*round = (ping_round_t){.socket = INVALID_SOCKET};
+		if (target->shared)
+		{
+			sys_socket_t *shared = &sweep->sockets[family == AF_INET6][index];
+			if (*shared == INVALID_SOCKET)
+				*shared = PingOpenSocket(family);
+			round->socket = *shared;
+		}
+		else
+			round->socket = PingOpenSocket(family);
+		if (!target->deadline)
+			target->deadline = now + 1.5;
+		if (round->socket == INVALID_SOCKET)
+		{
+			round->next_query = PING_PROTOCOLS;
+			round->complete = true;
+		}
+	}
+	else
+		round = &target->rounds[index];
+
+	if (!round->complete)
+	{
+		int query = target->preferred >= 0 ? target->preferred : round->next_query;
+		double sent = Sys_DoubleTime();
+		if (SendPingPacket(round->socket, target->address->ai_addr,
+			(socklen_t)target->address->ai_addrlen, &sweep->queries[query], index != 0))
+			round->sent[query] = sent;
+		round->next_query = target->preferred >= 0 ? PING_PROTOCOLS : query + 1;
+		sweep->next_packet = Sys_DoubleTime() + packet_interval;
+	}
+	target->next_round = now + 0.5;
+}
+
+static qboolean PingSweepReceive(net_ping_sweep_t *sweep, sys_socket_t sock, int index, ping_target_t *only)
+{
+	unsigned char buffer[8192];
+	struct sockaddr_storage from;
+	socklen_t fromlen = sizeof(from);
+	int received = recvfrom(sock, (char *)buffer, sizeof(buffer), 0, (struct sockaddr *)&from, &fromlen);
+	double now = Sys_DoubleTime();
+	int query;
+	unsigned int type;
+
+	/* A queued UDP error or oversized packet must not discard other replies. */
+	if (received < 0)
+		return false;
+	type = PingReplyType(buffer, received);
+	for (query = 0; query < PING_PROTOCOLS; ++query)
+		if (sweep->queries[query].reply_type == type)
+			break;
+	if (query == PING_PROTOCOLS)
+		return true;
+
+	for (int i = 0; i < (only ? 1 : PING_TARGETS); ++i)
+	{
+		ping_target_t *target = only ? only : &sweep->targets[i];
+		ping_round_t *round = &target->rounds[index];
+		int ping;
+
+		if (!target->addresses || index >= target->round_count || round->socket != sock ||
+			round->complete || !round->sent[query] ||
+			!PingReplyAddressMatches(target->address->ai_addr, &from, fromlen))
+			continue;
+		ping = (int)(q_max(0.0, (now - round->sent[query]) * 1000.0) + 0.5);
+		round->complete = true;
+		round->next_query = PING_PROTOCOLS;
+		if (target->preferred < 0)
+			target->preferred = query;
+		/* A small gap separates successful samples without delaying first paint. */
+		target->next_round = now + 0.035;
+		if (target->best < 0 || ping < target->best)
+		{
+			target->best = ping;
+			PingSweepReport(sweep, target, false);
+		}
+		break;
+	}
+	return true;
+}
+
+static qboolean PingSweepRoundPending(const ping_target_t *target, int index, double now)
+{
+	const ping_round_t *round = &target->rounds[index];
+
+	if (round->complete)
+		return false;
+	for (int query = 0; query < PING_PROTOCOLS; ++query)
+	{
+		if (round->sent[query] && (target->best < 0 ||
+			(now - round->sent[query]) * 1000.0 < target->best))
+			return true;
+	}
+	return false;
+}
+
+void NET_PingPoll(net_ping_sweep_t *sweep, double packet_interval)
+{
+	double now = Sys_DoubleTime();
+	double wake = now + 0.02;
+	double earliest_send = wake;
+	ping_target_t *send_target = NULL;
+	int best_priority = INT_MAX;
+	fd_set readfds;
+	sys_socket_t highest = 0;
+	qboolean have_sockets = false;
+	struct timeval timeout;
+	int selected;
+
+	if (SDL_GetAtomicInt(&server_queries_abort))
+		return;
+
+	for (int i = 0; i < PING_TARGETS; ++i)
+	{
+		ping_target_t *target = &sweep->targets[i];
+		int index = target->round_count - 1;
+		qboolean sending = index >= 0 && target->rounds[index].next_query < PING_PROTOCOLS;
+		qboolean pending = false;
+
+		if (!target->addresses)
+			continue;
+		for (int r = 0; r <= index; ++r)
+			pending |= PingSweepRoundPending(target, r, now);
+		/* Finish a successful target once no outstanding reply can improve it.
+		 * A silent target retains the entire reply window, including late replies. */
+		if ((target->deadline && now >= target->deadline) ||
+			(index == PING_ROUNDS - 1 && !sending && !pending))
+		{
+			if (target->best < 0)
+				target->address = target->address->ai_next;
+			PingSweepAdvance(sweep, target);
+			index = -1;
+			sending = false;
+			if (!target->addresses)
+				continue;
+		}
+		if (target->deadline)
+			wake = q_min(wake, target->deadline);
+		if (sending || index < PING_ROUNDS - 1)
+		{
+			double ready = q_max(sending ? now : target->next_round, sweep->next_packet);
+			int priority = index < 0 ? 0 : target->best < 0 ? 1 : 2;
+			earliest_send = q_min(earliest_send, ready);
+			if (ready <= now && priority < best_priority)
+			{
+				send_target = target;
+				best_priority = priority;
+			}
+		}
+	}
+
+	if (NET_PingIdle(sweep))
+		return;
+	if (send_target)
+	{
+		PingSweepSend(sweep, send_target, now, packet_interval);
+		/* Reassess scheduling after each packet. Never catch up with a burst. */
+		wake = q_min(wake, sweep->next_packet);
+	}
+	else
+		wake = q_min(wake, earliest_send);
+
+	FD_ZERO(&readfds);
+	for (int family = 0; family < 2; ++family)
+		for (int r = 0; r < PING_ROUNDS; ++r)
+		{
+			sys_socket_t sock = sweep->sockets[family][r];
+			if (sock == INVALID_SOCKET)
+				continue;
+			FD_SET(sock, &readfds);
+			highest = q_max(highest, sock);
+			have_sockets = true;
+		}
+	for (int i = 0; i < PING_TARGETS; ++i)
+	{
+		const ping_target_t *target = &sweep->targets[i];
+		if (target->shared)
+			continue;
+		for (int r = 0; r < target->round_count; ++r)
+		{
+			const ping_round_t *round = &target->rounds[r];
+			if (round->complete || round->socket == INVALID_SOCKET)
+				continue;
+			FD_SET(round->socket, &readfds);
+			highest = q_max(highest, round->socket);
+			have_sockets = true;
+		}
+	}
+
+	double wait = wake - Sys_DoubleTime();
+	if (!have_sockets)
+	{
+		if (wait > 0 && !NET_PingIdle(sweep))
+			SDL_DelayNS((Uint64)(wait * 1000000000.0));
+		return;
+	}
+	timeout.tv_sec = 0;
+	timeout.tv_usec = q_max(1, (int)(wait * 1000000.0));
+#ifdef _WIN32
+	selected = selectsocket(0, &readfds, NULL, NULL, &timeout);
+#else
+	selected = selectsocket((int)(highest + 1), &readfds, NULL, NULL, &timeout);
+#endif
+	if (selected <= 0)
+		return;
+	for (int family = 0; family < 2; ++family)
+		for (int r = 0; r < PING_ROUNDS; ++r)
+		{
+			sys_socket_t sock = sweep->sockets[family][r];
+			if (sock != INVALID_SOCKET && FD_ISSET(sock, &readfds))
+			{
+				/* Drain the receive queue before scheduling more sends. Under
+				 * heavy traffic, cap the work per socket to keep probes moving. */
+				for (int packet = 0; packet < 16; ++packet)
+					if (!PingSweepReceive(sweep, sock, r, NULL))
+						break;
+			}
+		}
+	for (int i = 0; i < PING_TARGETS; ++i)
+	{
+		ping_target_t *target = &sweep->targets[i];
+		if (!target->shared)
+			for (int r = 0; r < target->round_count; ++r)
+			{
+				const ping_round_t *round = &target->rounds[r];
+				if (!round->complete && round->socket != INVALID_SOCKET && FD_ISSET(round->socket, &readfds))
+					PingSweepReceive(sweep, round->socket, r, target);
+			}
+	}
+}
+
+typedef struct
+{
+	int ping;
+	char *resolved;
+	size_t resolved_size;
+} single_ping_t;
+
+static void SinglePingResult(void *context, unsigned int id, int ping, const char *resolved, qboolean done)
+{
+	single_ping_t *result = context;
+
+	(void)id;
+	if (!done)
+		return;
+	result->ping = ping;
+	if (result->resolved && result->resolved_size)
+		q_strlcpy(result->resolved, resolved, result->resolved_size);
+}
+
+static int Socket_Ping_HostResolved(const char *host, int port, char *resolved, size_t resolved_size)
+{
+	single_ping_t result = {-1, resolved, resolved_size};
+	net_ping_sweep_t *sweep;
+
+	if (resolved && resolved_size)
+		resolved[0] = '\0';
+	if (SDL_GetAtomicInt(&server_queries_abort))
+		return -1;
+	sweep = NET_PingCreate(SinglePingResult, &result);
+	if (!sweep)
+		return -1;
+	NET_PingAdd(sweep, 0, NET_PingResolve(host, port, false, NULL));
+	while (!NET_PingIdle(sweep) && !SDL_GetAtomicInt(&server_queries_abort))
+		NET_PingPoll(sweep, 0);
+	NET_PingDestroy(sweep);
+	return SDL_GetAtomicInt(&server_queries_abort) ? -1 : result.ping;
 }
 
 static int Socket_Ping_Host(const char* host, int port)
@@ -8106,208 +8392,201 @@ UDP_QueryPlayers -- query player names and scores from a server via CCREQ_PLAYER
 Returns a malloc'd comma-separated string, or NULL on failure.
 ==================
 */
-char *UDP_QueryPlayers(const char *host, int maxslots)
+static void SendPlayerQuery(sys_socket_t sock, const struct addrinfo *address, int slot)
 {
-	char hostbuf[MAX_SERVER_ADDRESS_LEN];
-	int port;
-	struct addrinfo hints, *res, *rp;
-	char portstr[16];
+	unsigned char packet[6];
+	int header = BigLong(NETFLAG_CTL | sizeof(packet));
+
+	memcpy(packet, &header, sizeof(header));
+	packet[4] = CCREQ_PLAYER_INFO;
+	packet[5] = (unsigned char)slot;
+	sendto(sock, (const char *)packet, sizeof(packet), 0, address->ai_addr,
+		(socklen_t)address->ai_addrlen);
+}
+
+static qboolean PlayerQueryCanceled(SDL_AtomicInt *stop)
+{
+	return SDL_GetAtomicInt(&server_queries_abort) || (stop && SDL_GetAtomicInt(stop));
+}
+
+static char *QueryPlayers(const char *host, int maxslots, int interval_ms, SDL_AtomicInt *stop)
+{
+	struct addrinfo *addresses, *address;
 	sys_socket_t sock = INVALID_SOCKET;
 	char names[512];
 	int nameslen = 0;
-	int ret;
+	int sent = 0, received_count = 0;
+	double deadline = 0, idle_deadline = 0, next_send = 0;
+	qboolean have_slot[MAX_SCOREBOARD] = {0};
 
-	if (!host || !*host || maxslots <= 0)
+	if (!host || !*host || maxslots <= 0 || PlayerQueryCanceled(stop))
 		return NULL;
-	if (SDL_GetAtomicInt(&server_queries_abort))
-		return NULL;
-	if (maxslots > MAX_SCOREBOARD)
-		maxslots = MAX_SCOREBOARD;
-
-	if (!ParseServerAddress(host, hostbuf, sizeof(hostbuf), &port))
-		return NULL;
-
-	memset(&hints, 0, sizeof(hints));
-	hints.ai_socktype = SOCK_DGRAM;
-	hints.ai_protocol = IPPROTO_UDP;
-	hints.ai_family = AF_UNSPEC;
-
-	q_snprintf(portstr, sizeof(portstr), "%d", port);
-	ret = getaddrinfo(hostbuf, portstr, &hints, &res);
-	if (ret != 0)
-		return NULL;
-
-	for (rp = res; rp && !SDL_GetAtomicInt(&server_queries_abort); rp = rp->ai_next)
+	maxslots = q_min(maxslots, MAX_SCOREBOARD);
+	if (interval_ms)
+		addresses = NET_PingResolve(host, 26000, true, NULL);
+	else
 	{
-		sock = socket(rp->ai_family, rp->ai_socktype, rp->ai_protocol);
+		int port = net_hostport > 0 && net_hostport <= 65535 ? net_hostport : DEFAULTnet_hostport;
+		addresses = NET_PingResolve(host, port > 0 && port <= 65535 ? port : 26000, false, NULL);
+	}
+	for (address = addresses; address && !PlayerQueryCanceled(stop); address = address->ai_next)
+	{
+		sock = PingOpenSocket(address->ai_family);
 		if (sock != INVALID_SOCKET)
 			break;
 	}
-	if (sock == INVALID_SOCKET || !rp)
+	if (sock == INVALID_SOCKET)
 	{
-		freeaddrinfo(res);
+		NET_PingFreeAddresses(addresses);
 		return NULL;
 	}
 
-	/* send CCREQ_PLAYER_INFO for each slot */
+	/* The browser paces player queries too, draining replies between sends. */
+	while (received_count < maxslots && !PlayerQueryCanceled(stop))
 	{
-		unsigned char pkt[8];
-		int i;
-		for (i = 0; i < maxslots && !SDL_GetAtomicInt(&server_queries_abort); i++)
+		double now = Sys_DoubleTime();
+		double remaining;
+		fd_set readfds;
+		struct timeval tv;
+		int sel;
+		unsigned char buf[512];
+		struct sockaddr_storage from;
+		socklen_t fromlen = sizeof(from);
+		int len;
+
+		while (sent < maxslots && now >= next_send && !PlayerQueryCanceled(stop))
 		{
-			unsigned int hdr;
-			int behdr;
-			size_t pktlen = 6; /* 4 header + 1 command + 1 slot */
-
-			pkt[4] = CCREQ_PLAYER_INFO;
-			pkt[5] = (unsigned char)i;
-			hdr = NETFLAG_CTL | ((unsigned int)pktlen & NETFLAG_LENGTH_MASK);
-			behdr = BigLong((int)hdr);
-			memcpy(pkt, &behdr, 4);
-
-			sendto(sock, (const char *)pkt, (int)pktlen, 0, rp->ai_addr, (socklen_t)rp->ai_addrlen);
+			SendPlayerQuery(sock, address, sent++);
+			now = Sys_DoubleTime();
+			next_send = now + interval_ms * 0.001;
+			deadline = now + 1.5;
+			idle_deadline = now + 0.3;
+			if (interval_ms)
+				break;
 		}
-	}
+		remaining = (sent < maxslots ? next_send : q_min(deadline, idle_deadline)) - now;
+		if (remaining <= 0)
+			break;
 
-	/* collect responses with timeout */
-	{
-		double deadline = Sys_DoubleTime() + 1.5;
-		double idle_deadline = Sys_DoubleTime() + 0.3; /* give up if no response within 300ms */
-		int received_count = 0;
-
-		while (received_count < maxslots && !SDL_GetAtomicInt(&server_queries_abort))
-		{
-			double now = Sys_DoubleTime();
-			double wait_until = (idle_deadline < deadline) ? idle_deadline : deadline;
-			double remaining = wait_until - now;
-			fd_set readfds;
-			struct timeval tv;
-			int sel;
-			unsigned char buf[512];
-			struct sockaddr_storage from;
-			socklen_t fromlen = sizeof(from);
-			ssize_t recv_len;
-			int len;
-
-			if (remaining <= 0)
-				break;
-
-			FD_ZERO(&readfds);
-			FD_SET(sock, &readfds);
-			remaining = q_min(remaining, 0.05);
-			tv.tv_sec = 0;
-			tv.tv_usec = (int)(remaining * 1000000.0);
-			if (tv.tv_usec <= 0)
-				tv.tv_usec = 1000;
-
+		FD_ZERO(&readfds);
+		FD_SET(sock, &readfds);
+		tv.tv_sec = 0;
+		tv.tv_usec = q_max(1, (int)(q_min(remaining, 0.05) * 1000000.0));
 #ifdef _WIN32
-			sel = selectsocket(0, &readfds, NULL, NULL, &tv);
+		sel = selectsocket(0, &readfds, NULL, NULL, &tv);
 #else
-			sel = selectsocket((int)(sock + 1), &readfds, NULL, NULL, &tv);
+		sel = selectsocket((int)(sock + 1), &readfds, NULL, NULL, &tv);
 #endif
-			if (sel == 0)
-				continue; // poll slice expired; the reply/idle deadlines still apply
-			if (sel < 0)
-				break;
-			if (!FD_ISSET(sock, &readfds))
-				break;
+		if (sel == SOCKET_ERROR)
+			break;
+		if (!sel)
+			continue;
 
-			recv_len = recvfrom(sock, (char *)buf, sizeof(buf), 0, (struct sockaddr *)&from, &fromlen);
-			if (recv_len > (ssize_t)sizeof(buf))
+		len = recvfrom(sock, (char *)buf, sizeof(buf), 0, (struct sockaddr *)&from, &fromlen);
+		if (len < 6 || !PingReplyAddressMatches(address->ai_addr, &from, fromlen))
+			continue;
+
+		{
+			int control;
+			int pktlen;
+			const unsigned char *p;
+			const char *pname;
+			int namelen;
+			int frags = 0;
+			qboolean has_frags = false;
+
+			memcpy(&control, buf, sizeof(control));
+			control = BigLong(control);
+			if ((control & (~NETFLAG_LENGTH_MASK)) != (int)NETFLAG_CTL)
 				continue;
-			len = (int)recv_len;
-			if (len < 6) /* minimum: 4 header + 1 type + 1 slot */
+			pktlen = control & NETFLAG_LENGTH_MASK;
+			if (pktlen != len)
+				continue;
+			if (buf[4] != CCREP_PLAYER_INFO || buf[5] >= sent || have_slot[buf[5]])
 				continue;
 
+			/* buf[5] = player number, name starts at buf[6] as null-terminated string */
+			p = buf + 6;
+			pname = (const char *)p;
+
+			/* ensure name is null-terminated within received data */
 			{
-				int control = BigLong(*(int *)buf);
-				int pktlen;
-				const unsigned char *p;
-				const char *pname;
-				int namelen;
-				int frags = 0;
-				qboolean has_frags = false;
-
-				if ((control & (~NETFLAG_LENGTH_MASK)) != (int)NETFLAG_CTL)
-					continue;
-				pktlen = control & NETFLAG_LENGTH_MASK;
-				if (pktlen != len)
-					continue;
-				if (buf[4] != CCREP_PLAYER_INFO)
-					continue;
-
-				/* buf[5] = player number, name starts at buf[6] as null-terminated string */
-				p = buf + 6;
-				pname = (const char *)p;
-
-				/* ensure name is null-terminated within received data */
+				const unsigned char *end = buf + len;
+				const unsigned char *scan = p;
+				int encoded_value;
+				int network_frags;
+				while (scan < end && *scan)
+					scan++;
+				if (scan >= end)
+					continue; /* no null terminator found, skip */
+				namelen = (int)(scan - p);
+				/* CCREP_PLAYER_INFO continues with colors and frags. */
+				if ((size_t)(end - scan) >= 1 + 2 * sizeof(encoded_value))
 				{
-					const unsigned char *end = buf + len;
-					const unsigned char *scan = p;
-					int encoded_value;
-					int network_frags;
-					while (scan < end && *scan)
-						scan++;
-					if (scan >= end)
-						continue; /* no null terminator found, skip */
-					namelen = (int)(scan - p);
-					/* CCREP_PLAYER_INFO continues with colors and frags. */
-					if ((size_t)(end - scan) >= 1 + 2 * sizeof(encoded_value))
+					memcpy(&encoded_value, scan + 1 + sizeof(encoded_value), sizeof(encoded_value));
+					network_frags = BigLong(encoded_value);
+					/* A few server implementations return the control header in
+					 * network order but leave the player fields in host order. */
+					if (network_frags >= -1000000 && network_frags <= 1000000)
 					{
-						memcpy(&encoded_value, scan + 1 + sizeof(encoded_value), sizeof(encoded_value));
-						network_frags = BigLong(encoded_value);
-						/* A few server implementations return the control header in
-						 * network order but leave the player fields in host order. */
-						if (network_frags >= -1000000 && network_frags <= 1000000)
-						{
-							frags = network_frags;
-							has_frags = true;
-						}
-						else if (encoded_value >= -1000000 && encoded_value <= 1000000)
-						{
-							frags = encoded_value;
-							has_frags = true;
-						}
+						frags = network_frags;
+						has_frags = true;
+					}
+					else if (encoded_value >= -1000000 && encoded_value <= 1000000)
+					{
+						frags = encoded_value;
+						has_frags = true;
 					}
 				}
-
-				/* trim trailing spaces */
-				while (namelen > 0 && pname[namelen - 1] == ' ')
-					namelen--;
-
-				if (namelen > 0)
-				{
-					char player[128];
-					int playerlen;
-
-					if (has_frags)
-						q_snprintf(player, sizeof(player), "%.*s (%d)", namelen, pname, frags);
-					else
-						q_snprintf(player, sizeof(player), "%.*s", namelen, pname);
-					playerlen = (int)strlen(player);
-					if (nameslen + playerlen + 2 >= (int)sizeof(names))
-						continue;
-					if (nameslen > 0)
-					{
-						names[nameslen++] = ',';
-						names[nameslen++] = ' ';
-					}
-					memcpy(names + nameslen, player, playerlen);
-					nameslen += playerlen;
-					names[nameslen] = '\0';
-				}
-				received_count++;
-				idle_deadline = Sys_DoubleTime() + 0.3; /* extend idle window after each response */
 			}
+
+			/* trim trailing spaces */
+			while (namelen > 0 && pname[namelen - 1] == ' ')
+				namelen--;
+
+			if (namelen > 0)
+			{
+				char player[128];
+				int playerlen;
+
+				if (has_frags)
+					q_snprintf(player, sizeof(player), "%.*s (%d)", namelen, pname, frags);
+				else
+					q_snprintf(player, sizeof(player), "%.*s", namelen, pname);
+				playerlen = (int)strlen(player);
+				if (nameslen + playerlen + 2 >= (int)sizeof(names))
+					continue;
+				if (nameslen > 0)
+				{
+					names[nameslen++] = ',';
+					names[nameslen++] = ' ';
+				}
+				memcpy(names + nameslen, player, playerlen);
+				nameslen += playerlen;
+				names[nameslen] = '\0';
+			}
+			have_slot[buf[5]] = true;
+			received_count++;
+			idle_deadline = Sys_DoubleTime() + 0.3; /* extend idle window after each response */
 		}
 	}
 
 	closesocket(sock);
-	freeaddrinfo(res);
+	NET_PingFreeAddresses(addresses);
 
-	if (nameslen > 0)
+	if (nameslen > 0 && !PlayerQueryCanceled(stop))
 		return strdup(names);
 	return NULL;
+}
+
+char *NET_QueryBrowserPlayers(const char *host, int maxslots, int interval_ms, SDL_AtomicInt *stop)
+{
+	return QueryPlayers(host, maxslots, interval_ms, stop);
+}
+
+char *UDP_QueryPlayers(const char *host, int maxslots)
+{
+	return QueryPlayers(host, maxslots, 0, NULL);
 }
 
 /*

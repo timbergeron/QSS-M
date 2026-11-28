@@ -58,6 +58,24 @@ void	NET_CancelWebRequests (void); // terminal shutdown: cancel current and futu
 void	NET_CancelServerQueries (void); // terminal shutdown: cancel browser ping/player queries
 void	NET_AbortExternalIP (void);
 
+struct addrinfo;
+struct SDL_AtomicInt;
+typedef struct net_ping_sweep_s net_ping_sweep_t;
+typedef void (*net_ping_result_fn)(void *context, unsigned int id, int ping,
+	const char *resolved, qboolean done);
+
+struct addrinfo *NET_PingResolve(const char *address, int default_port, qboolean numeric_only,
+	qboolean *needs_dns);
+void NET_PingFreeAddresses(struct addrinfo *addresses);
+net_ping_sweep_t *NET_PingCreate(net_ping_result_fn result, void *context);
+void NET_PingDestroy(net_ping_sweep_t *sweep);
+qboolean NET_PingHasRoom(const net_ping_sweep_t *sweep);
+qboolean NET_PingIdle(const net_ping_sweep_t *sweep);
+/* Takes ownership of addresses. Results are delivered on the calling thread. */
+void NET_PingAdd(net_ping_sweep_t *sweep, unsigned int id, struct addrinfo *addresses);
+void NET_PingPoll(net_ping_sweep_t *sweep, double packet_interval);
+char *NET_QueryBrowserPlayers(const char *address, int slots, int interval_ms, struct SDL_AtomicInt *stop);
+
 struct qsocket_s	*NET_CheckNewConnections (void);
 // returns a new connection number if there is one pending, else -1
 

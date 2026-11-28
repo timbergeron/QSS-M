@@ -34594,7 +34594,6 @@ static int slist_name_w = 16, slist_map_w = 6;
 #define SLIST_USERS_COL	(SLIST_MAP_COL + slist_map_w + 1)
 #define SLIST_PING_COL	(SLIST_USERS_COL + 6)
 #define PING_COOLDOWN 2.0
-#define MAX_PING_QUEUE 5
 #define SERVERLIST_UNAVAILABLE_ALPHA 0.35f
 #define TESLA_QUAKE_NAME "Tesla Quake"
 #define TESLA_QUAKE_ADDRESS "wss://quake.0effort.io"
@@ -34602,10 +34601,16 @@ static int slist_name_w = 16, slist_map_w = 6;
 #define TESLA_QUAKE_HOUSE_BOTS 7
 #define SERVERLIST_MAX_RESPONSE_BYTES (4 * 1024 * 1024)
 
-// number of worker threads used for the initial server ping sweep
-#ifndef MAX_PING_THREADS
-#define MAX_PING_THREADS 4
-#endif
+typedef enum
+{
+	SERVER_PING_NEW,
+	SERVER_PING_READY,
+	SERVER_PING_NEEDS_DNS,
+	SERVER_PING_RESOLVING,
+	SERVER_PING_RESOLVED,
+	SERVER_PING_IN_FLIGHT,
+	SERVER_PING_DONE
+} server_ping_state_t;
 
 typedef struct {
 	const char* name;
@@ -34618,7 +34623,12 @@ typedef struct {
 	int ping;
 	qboolean active;
 	double lastPingTime;
-	qboolean isLoading;  // New flag to indicate loading state
+	server_ping_state_t ping_state;
+	struct addrinfo *ping_addresses;
+	unsigned int ping_id;
+	int ping_priority;
+	qboolean players_requested;
+	qboolean refresh_players;
 	qboolean pinned_bookmark;
 	int pinned_rank;
 	qboolean known_available;
@@ -34656,16 +34666,13 @@ static struct {
     int* filtered_indices;
     int servercount;
 	size_t hostcache_copied;
-	int pinged_count;
     int slist_first;
     qboolean pingSortDirty;
-	SDL_Thread* pingThreads[MAX_PING_THREADS];
-	qboolean initialPingComplete;
-	int initialPingThreadsRemaining;
-	int pingQueue[MAX_PING_QUEUE];
-	int pingQueueSize;
-	qboolean pingThreadRunning;
-	SDL_Thread* pingThread;
+	double nextPingSort;
+	SDL_Thread *pingThread, *detailsThread;
+	unsigned int next_ping_id, details_id;
+	int default_ping_port;
+	qboolean connected, stop_details;
 	qboolean resolvedDedupePending;
 	int sort_mode;
 	qboolean sort_descending;
@@ -34684,8 +34691,9 @@ enum {
 // woods servers.quakeone.com support curl+json parsing #serversmenu
 //=============================================================================
 
-static volatile qboolean pingThreadsShouldExit = false;
-SDL_Mutex* pingMutex = NULL;
+static SDL_AtomicInt pingStop;
+static SDL_Mutex *pingMutex;
+static SDL_Condition *pingCondition;
 
 static qboolean ServerList_SnapshotItem(int actualIndex, servertitem_snapshot_t *snapshot)
 {
@@ -34746,10 +34754,6 @@ static struct
 	servertitem_t* items;
 	int count;
 } serverlistapi;
-
-int UDP_Ping_Host(const char* host);
-int UDP_Ping_HostResolved(const char* host, char* resolved, size_t resolvedsize);
-char *UDP_QueryPlayers(const char *host, int maxslots);
 
 static int ServersMenu_ResolveIndex(int displayIndex);
 static void SortServers(qboolean lockMutex);
@@ -35132,7 +35136,6 @@ static qboolean ServerList_CreatePinnedBookmarkItem(const pinnedbookmark_t* book
 	item->active = true;
 	item->ping = -1;
 	item->lastPingTime = 0;
-	item->isLoading = false;
 	item->pinned_bookmark = true;
 	item->pinned_rank = rank;
 	item->known_available = (cls.state == ca_connected &&
@@ -35157,6 +35160,8 @@ static void ServerList_FreeItem(servertitem_t* item)
 	free((void *)item->ip);
 	free((void *)item->map);
 	free((void *)item->players);
+	NET_PingFreeAddresses(item->ping_addresses);
+	item->ping_addresses = NULL;
 
 	item->name = NULL;
 	item->ip = NULL;
@@ -35271,7 +35276,6 @@ static void ServerList_MergeLiveDetailsIntoPinned(servertitem_t* pinned, servert
 	if (live->ping >= 0)
 		pinned->ping = live->ping;
 	pinned->active = live->active;
-	pinned->isLoading = live->isLoading;
 	if (live->resolved_ip[0])
 		q_strlcpy(pinned->resolved_ip, live->resolved_ip, sizeof(pinned->resolved_ip));
 	pinned->known_available = pinned->known_available || live->known_available;
@@ -35279,13 +35283,9 @@ static void ServerList_MergeLiveDetailsIntoPinned(servertitem_t* pinned, servert
 		pinned->lastPingTime = live->lastPingTime;
 }
 
-static qboolean ServerList_AppendOrReplaceMovedItem(servertitem_t** items, int* count, servertitem_t* src, int* changedIndex)
+static qboolean ServerList_AppendOrReplaceMovedItem(servertitem_t** items, int* count, servertitem_t* src)
 {
 	int duplicateIndex;
-	int appendIndex;
-
-	if (changedIndex)
-		*changedIndex = -1;
 
 	if (!items || !count || !src)
 		return false;
@@ -35297,28 +35297,18 @@ static qboolean ServerList_AppendOrReplaceMovedItem(servertitem_t** items, int* 
 		{
 			ServerList_MergeLiveDetailsIntoPinned(&(*items)[duplicateIndex], src);
 			ServerList_FreeItem(src);
-			if (changedIndex)
-				*changedIndex = duplicateIndex;
 			return true;
 		}
 		if (ServerList_ShouldReplaceDuplicate(&(*items)[duplicateIndex], src))
 		{
 			ServerList_FreeItem(&(*items)[duplicateIndex]);
 			ServerList_MoveItem(&(*items)[duplicateIndex], src);
-			if (changedIndex)
-				*changedIndex = duplicateIndex;
 			return true;
 		}
 		return false;
 	}
 
-	appendIndex = *count;
-	if (!ServerList_AppendMovedItem(items, count, src))
-		return false;
-
-	if (changedIndex)
-		*changedIndex = appendIndex;
-	return true;
+	return ServerList_AppendMovedItem(items, count, src);
 }
 
 static void ServerList_RebuildOrderAndFilterWithSelection(int selectedActual)
@@ -35445,7 +35435,6 @@ static qboolean ServerList_CreateHostCacheItem(size_t index, servertitem_t* item
 	item->active = true;
 	item->ping = -1;
 	item->lastPingTime = 0;
-	item->isLoading = false;
 	item->pinned_bookmark = false;
 	item->pinned_rank = -1;
 	item->known_available = true;
@@ -35460,442 +35449,242 @@ static qboolean ServerList_CreateHostCacheItem(size_t index, servertitem_t* item
 	return true;
 }
 
-void InitializePingMutex(void)
+static servertitem_t *ServerList_FindPingItem(unsigned int id)
 {
-	if (pingMutex != NULL)
-		return;
-
-	pingMutex = SDL_CreateMutex();
-	if (pingMutex == NULL) {
-		Con_DPrintf("SDL_CreateMutex failed: %s\n", SDL_GetError());
-	}
+	if (id)
+		for (int i = 0; i < serversmenu.servercount; ++i)
+			if (serversmenu.items[i].ping_id == id)
+				return &serversmenu.items[i];
+	return NULL;
 }
 
-void CleanupPingMutex(void)
+static servertitem_t *ServerList_NextPingItem(server_ping_state_t state, server_ping_state_t alternate)
 {
-	if (pingMutex != NULL) {
-		SDL_DestroyMutex(pingMutex);
-		pingMutex = NULL;
+	servertitem_t *best = NULL;
+
+	for (int i = 0; i < serversmenu.servercount; ++i)
+	{
+		servertitem_t *item = &serversmenu.items[i];
+		if ((item->ping_state == state || item->ping_state == alternate) &&
+			(!best || item->ping_priority < best->ping_priority))
+			best = item;
 	}
+	return best;
 }
 
-void PingSingleServer(int index)
+static void ServerList_PingResult(void *context, unsigned int id, int ping, const char *resolved,
+	qboolean done)
 {
-	qboolean same_server;
-	qboolean was_unavailable;
-	qboolean is_tesla;
-
-	if (index < 0 || index >= serversmenu.servercount)
-		return;
-
-	char serverAddress[256];
-	char resolvedAddress[256];
-	int  previousPing;
-	int  users;
-
+	(void)context;
 	SDL_LockMutex(pingMutex);
-	if (!serversmenu.items || index >= serversmenu.servercount || !serversmenu.items[index].ip)
+	servertitem_t *item = ServerList_FindPingItem(id);
+	if (item)
 	{
-		SDL_UnlockMutex(pingMutex);
-		return;
-	}
-	q_strlcpy(serverAddress, serversmenu.items[index].ip, sizeof(serverAddress));
-	previousPing = serversmenu.items[index].ping;
-	users = serversmenu.items[index].users;
-	was_unavailable = ServerList_IsUnavailableBookmark(&serversmenu.items[index]);
-	is_tesla = !q_strcasecmp(serverAddress, TESLA_QUAKE_ADDRESS);
-	if (is_tesla)
-	{
-		servertitem_t refreshed;
-		qboolean refresh_ok;
+		qboolean unavailable = ServerList_IsUnavailableBookmark(item);
+		int previous = item->ping;
 
-		serversmenu.items[index].isLoading = true;
-		SDL_UnlockMutex(pingMutex);
-
-		memset(&refreshed, 0, sizeof(refreshed));
-		refresh_ok = ServerList_RefreshTeslaItem(&refreshed);
-
-		SDL_LockMutex(pingMutex);
-		same_server = (serversmenu.items && index < serversmenu.servercount &&
-			serversmenu.items[index].ip && !strcmp(serversmenu.items[index].ip, serverAddress));
-		if (same_server && refresh_ok)
+		if (ping >= 0)
+			item->ping = ping;
+		if (resolved[0] && (ping >= 0 || !item->resolved_ip[0]) && strcmp(item->resolved_ip, resolved))
 		{
-			free((void*)serversmenu.items[index].map);
-			free((void*)serversmenu.items[index].players);
-			serversmenu.items[index].map = refreshed.map;
-			serversmenu.items[index].players = refreshed.players;
-			refreshed.map = NULL;
-			refreshed.players = NULL;
-			serversmenu.items[index].users = refreshed.users;
-			serversmenu.items[index].maxusers = refreshed.maxusers;
-			serversmenu.items[index].ping = refreshed.ping;
-			serversmenu.items[index].known_available = true;
-			serversmenu.pingSortDirty = true;
-		}
-		if (same_server)
-		{
-			serversmenu.items[index].ping_tested = true;
-			serversmenu.items[index].isLoading = false;
-		}
-		SDL_UnlockMutex(pingMutex);
-		ServerList_FreeItem(&refreshed);
-		return;
-	}
-	if (NET_WebSocketSchemeLength(serverAddress, NULL))
-	{
-		serversmenu.items[index].ping_tested = true;
-		serversmenu.items[index].isLoading = false;
-		SDL_UnlockMutex(pingMutex);
-		return;
-	}
-	serversmenu.items[index].isLoading = true;  // Set loading flag
-	SDL_UnlockMutex(pingMutex);
-
-	int ping = UDP_Ping_HostResolved(serverAddress, resolvedAddress, sizeof(resolvedAddress));
-
-	SDL_LockMutex(pingMutex);
-	same_server = (serversmenu.items && index < serversmenu.servercount &&
-		serversmenu.items[index].ip && !strcmp(serversmenu.items[index].ip, serverAddress));
-	if (same_server && ping >= 0)
-	{
-		serversmenu.items[index].ping = ping;
-	}
-	else if (same_server && previousPing >= 0)
-	{
-		serversmenu.items[index].ping = previousPing;
-	}
-	else if (same_server)
-	{
-		serversmenu.items[index].ping = -1;  // -1 indicates "failed"
-	}
-	if (same_server)
-	{
-		if (resolvedAddress[0] && strcmp(serversmenu.items[index].resolved_ip, resolvedAddress))
-		{
-			q_strlcpy(serversmenu.items[index].resolved_ip, resolvedAddress,
-				sizeof(serversmenu.items[index].resolved_ip));
+			q_strlcpy(item->resolved_ip, resolved, sizeof(item->resolved_ip));
 			serversmenu.resolvedDedupePending = true;
 		}
-		serversmenu.items[index].ping_tested = true;
-		serversmenu.items[index].isLoading = false;  // Clear loading flag
-		if (was_unavailable != ServerList_IsUnavailableBookmark(&serversmenu.items[index]))
+		item->ping_tested = true;
+		if (done)
+			item->ping_state = SERVER_PING_DONE;
+		if (previous != item->ping || unavailable != ServerList_IsUnavailableBookmark(item))
 			serversmenu.pingSortDirty = true;
 	}
 	SDL_UnlockMutex(pingMutex);
-
-	/* refresh player names on re-ping if server has players */
-	if (same_server && ping >= 0 && users > 0)
-	{
-		char *playernames = UDP_QueryPlayers(serverAddress, users);
-		if (playernames)
-		{
-			qboolean stored_players = false;
-
-			SDL_LockMutex(pingMutex);
-			if (serversmenu.items && index < serversmenu.servercount &&
-				serversmenu.items[index].ip && !strcmp(serversmenu.items[index].ip, serverAddress))
-			{
-				free((void *)serversmenu.items[index].players);
-				serversmenu.items[index].players = playernames;
-				stored_players = true;
-			}
-			SDL_UnlockMutex(pingMutex);
-
-			if (!stored_players)
-				free(playernames);
-		}
-	}
 }
 
-int ProcessPingQueue(void* data)
+static void ServerList_SubmitPing(net_ping_sweep_t *sweep, unsigned int id, const char *address,
+	int port)
 {
-	while (!pingThreadsShouldExit)
+	qboolean needs_dns = false;
+	struct addrinfo *addresses;
+
+	if (NET_WebSocketSchemeLength(address, NULL))
 	{
-		int serverIndex = -1;
-
-		SDL_LockMutex(pingMutex);
-		if (serversmenu.pingQueueSize > 0)
-		{
-			serverIndex = serversmenu.pingQueue[0];
-			for (int i = 0; i < serversmenu.pingQueueSize - 1; i++)
-				serversmenu.pingQueue[i] = serversmenu.pingQueue[i + 1];
-			serversmenu.pingQueueSize--;
-		}
-		SDL_UnlockMutex(pingMutex);
-
-		if (serverIndex != -1)
-			PingSingleServer(serverIndex);
-		else
-			SDL_Delay(10);  // Short delay to prevent busy-waiting
-	}
-
-	SDL_LockMutex(pingMutex);
-	serversmenu.pingThreadRunning = false;
-	SDL_UnlockMutex(pingMutex);
-
-	return 0;
-}
-
-static void PingSweepThreadFinished(void)
-{
-	SDL_LockMutex(pingMutex);
-	if (serversmenu.initialPingThreadsRemaining > 0)
-		serversmenu.initialPingThreadsRemaining--;
-	if (serversmenu.initialPingThreadsRemaining <= 0)
-	{
-		serversmenu.initialPingThreadsRemaining = 0;
-		serversmenu.initialPingComplete = true;
-		serversmenu.pingSortDirty = true;
-	}
-	SDL_UnlockMutex(pingMutex);
-}
-
-void TriggerServerPing(int index)
-{
-	int actualIndex;
-	double currentTime;
-
-	if (!pingMutex)
-		return;
-	SDL_LockMutex(pingMutex);
-	if (!serversmenu.initialPingComplete)
-	{
-		SDL_UnlockMutex(pingMutex);
+		ServerList_PingResult(NULL, id, -1, "", true);
 		return;
 	}
-	actualIndex = ServersMenu_ResolveIndex(index);
-	if (!serversmenu.items || actualIndex < 0 || actualIndex >= serversmenu.servercount)
-	{
-		SDL_UnlockMutex(pingMutex);
-		return;
-	}
-
-	currentTime = Sys_DoubleTime();
-	if ((currentTime - serversmenu.items[actualIndex].lastPingTime) >= PING_COOLDOWN)
-	{
-		if (serversmenu.pingQueueSize < MAX_PING_QUEUE)
-		{
-			serversmenu.pingQueue[serversmenu.pingQueueSize++] = actualIndex;
-			serversmenu.items[actualIndex].lastPingTime = currentTime;
-		}
-	}
-	if (serversmenu.pingQueueSize > 0 && !serversmenu.pingThreadRunning)
-	{
-		serversmenu.pingThread = SDL_CreateThread(ProcessPingQueue, "PingQueueThread", NULL);
-		if (serversmenu.pingThread == NULL)
-			Con_DPrintf("SDL_CreateThread failed: %s\n", SDL_GetError());
-		else
-			serversmenu.pingThreadRunning = true;
-	}
-	SDL_UnlockMutex(pingMutex);
-}
-
-int PingServers(void* data)
-{
-	if (!data)
-	{
-		Con_DPrintf("PingServers received a null pointer\n");
-		return -1; // Return an error if data is null
-	}
-
-	int start = ((int*)data)[0];
-	int end = ((int*)data)[1];
-
-	for (int i = start; i < end; i++)
-	{
-		if (pingThreadsShouldExit)
-			break;
-
-		SDL_LockMutex(pingMutex);
-		if (serversmenu.items && i < serversmenu.servercount && serversmenu.items[i].ip)
-		{
-			char serverAddress[256];
-			char resolvedAddress[256];
-			int users;
-			qboolean has_players_already;
-			qboolean same_server;
-			qboolean was_unavailable;
-			q_strlcpy(serverAddress, serversmenu.items[i].ip, sizeof(serverAddress));
-			users = serversmenu.items[i].users;
-			has_players_already = (serversmenu.items[i].players != NULL);
-			was_unavailable = ServerList_IsUnavailableBookmark(&serversmenu.items[i]);
-			SDL_UnlockMutex(pingMutex);
-
-			if (NET_WebSocketSchemeLength(serverAddress, NULL))
-			{
-				SDL_LockMutex(pingMutex);
-				if (serversmenu.items && i < serversmenu.servercount &&
-					serversmenu.items[i].ip && !strcmp(serversmenu.items[i].ip, serverAddress))
-					serversmenu.items[i].ping_tested = true;
-				SDL_UnlockMutex(pingMutex);
-				continue;
-			}
-
-			int ping = UDP_Ping_HostResolved(serverAddress, resolvedAddress, sizeof(resolvedAddress));
-
-			SDL_LockMutex(pingMutex);
-			same_server = (serversmenu.items && i < serversmenu.servercount &&
-				serversmenu.items[i].ip && !strcmp(serversmenu.items[i].ip, serverAddress));
-			if (same_server)
-			{
-				if (resolvedAddress[0] && strcmp(serversmenu.items[i].resolved_ip, resolvedAddress))
-				{
-					q_strlcpy(serversmenu.items[i].resolved_ip, resolvedAddress,
-						sizeof(serversmenu.items[i].resolved_ip));
-					serversmenu.resolvedDedupePending = true;
-				}
-				serversmenu.items[i].ping = (ping >= 0) ? ping : -1;
-				serversmenu.items[i].ping_tested = true;
-				if (was_unavailable != ServerList_IsUnavailableBookmark(&serversmenu.items[i]))
-					serversmenu.pingSortDirty = true;
-			}
-			SDL_UnlockMutex(pingMutex);
-
-			/* query player names if server responded to ping and has players */
-			if (same_server && ping >= 0 && users > 0 && !has_players_already)
-			{
-				char *playernames = UDP_QueryPlayers(serverAddress, users);
-				if (playernames)
-				{
-					qboolean stored_players = false;
-
-					SDL_LockMutex(pingMutex);
-					if (serversmenu.items && i < serversmenu.servercount &&
-						serversmenu.items[i].ip && !strcmp(serversmenu.items[i].ip, serverAddress) &&
-						!serversmenu.items[i].players)
-					{
-						serversmenu.items[i].players = playernames;
-						stored_players = true;
-					}
-					SDL_UnlockMutex(pingMutex);
-
-					if (!stored_players)
-						free(playernames);
-				}
-			}
-		}
-		else
-		{
-			SDL_UnlockMutex(pingMutex);
-			Con_DPrintf("Invalid server item or IP\n");
-		}
-	}
-
-	free(data);
-	PingSweepThreadFinished();
-
-	return 0;
-}
-
-void WaitForPingThreads(void)
-{
-	if (!pingMutex)
-	{
-		pingThreadsShouldExit = false;
-		return;
-	}
-
-	pingThreadsShouldExit = true; // Signal threads to exit
-
-	for (int i = 0; i < MAX_PING_THREADS; ++i)
-	{
-		SDL_Thread* t = serversmenu.pingThreads[i];
-		if (t)
-		{
-			SDL_WaitThread(t, NULL);
-			serversmenu.pingThreads[i] = NULL; // Set to NULL after joining
-		}
-	}
-
-	SDL_LockMutex(pingMutex);
-	serversmenu.initialPingThreadsRemaining = 0;
-	serversmenu.initialPingComplete = true;
-	SDL_UnlockMutex(pingMutex);
-}
-
-static void JoinFinishedPingSweep(void)
-{
-	for (int i = 0; i < MAX_PING_THREADS; ++i)
-	{
-		SDL_Thread* t = serversmenu.pingThreads[i];
-		if (t)
-		{
-			SDL_WaitThread(t, NULL);
-			serversmenu.pingThreads[i] = NULL;
-		}
-	}
-}
-
-static void PingServerRange(int rangeStart, int rangeEnd)
-{
-	int servercount;
-	int desiredThreads;
-	int base;
-	int rem;
-	int start;
-
-	if (rangeStart < 0)
-		rangeStart = 0;
-	if (rangeEnd > serversmenu.servercount)
-		rangeEnd = serversmenu.servercount;
-	if (rangeEnd < rangeStart)
-		rangeEnd = rangeStart;
-
-	servercount = rangeEnd - rangeStart;
-
-	for (int i = 0; i < MAX_PING_THREADS; ++i)
-		serversmenu.pingThreads[i] = NULL;
-
-	if (servercount <= 0)
+	addresses = NET_PingResolve(address, port, true, &needs_dns);
+	if (needs_dns && serversmenu.detailsThread)
 	{
 		SDL_LockMutex(pingMutex);
-		serversmenu.initialPingThreadsRemaining = 0;
-		serversmenu.initialPingComplete = true;
-		serversmenu.pingSortDirty = true;
+		servertitem_t *item = ServerList_FindPingItem(id);
+		if (item)
+		{
+			item->ping_state = SERVER_PING_NEEDS_DNS;
+			SDL_BroadcastCondition(pingCondition);
+		}
 		SDL_UnlockMutex(pingMutex);
 		return;
 	}
+	NET_PingAdd(sweep, id, addresses);
+}
 
-	desiredThreads = MAX_PING_THREADS;
-	if (desiredThreads > servercount)
-		desiredThreads = servercount; // don't spawn more threads than servers
+static int ServerList_PingWorker(void *data)
+{
+	net_ping_sweep_t *sweep = data;
 
-	base = servercount / desiredThreads;
-	rem  = servercount % desiredThreads;
-
-	SDL_LockMutex(pingMutex);
-	serversmenu.initialPingThreadsRemaining = desiredThreads;
-	serversmenu.initialPingComplete = false;
-	SDL_UnlockMutex(pingMutex);
-
-	start = rangeStart;
-	for (int i = 0; i < desiredThreads; ++i)
+	while (!SDL_GetAtomicInt(&pingStop))
 	{
-		int count = base + (i < rem ? 1 : 0);
-		int end = start + count;
+		servertitem_t *item = NULL;
+		double packet_interval;
 
-		int* range = (int*)malloc(2 * sizeof(int));
-		if (!range)
+		SDL_LockMutex(pingMutex);
+		if (NET_PingHasRoom(sweep))
+			item = ServerList_NextPingItem(SERVER_PING_READY, SERVER_PING_RESOLVED);
+		packet_interval = serversmenu.connected ? 0.025 : 0.008;
+		if (item)
 		{
-			Con_DPrintf("Memory allocation failed\n");
-			PingSweepThreadFinished();
+			char address[MAX_SERVER_ADDRESS_LEN];
+			struct addrinfo *addresses = item->ping_addresses;
+			unsigned int id = item->ping_id;
+			int port = serversmenu.default_ping_port;
+			qboolean resolved = item->ping_state == SERVER_PING_RESOLVED;
+
+			if (!id)
+				item->ping_id = id = ++serversmenu.next_ping_id;
+			item->ping_addresses = NULL;
+			item->ping_state = SERVER_PING_IN_FLIGHT;
+			if (!item->lastPingTime)
+				item->lastPingTime = Sys_DoubleTime();
+			q_strlcpy(address, item->ip, sizeof(address));
+			SDL_UnlockMutex(pingMutex);
+
+			if (resolved)
+				NET_PingAdd(sweep, id, addresses);
+			else
+				ServerList_SubmitPing(sweep, id, address, port);
 			continue;
 		}
-		range[0] = start;
-		range[1] = end;
+		if (NET_PingIdle(sweep) && !SDL_GetAtomicInt(&pingStop))
+			SDL_WaitCondition(pingCondition, pingMutex);
+		SDL_UnlockMutex(pingMutex);
 
-		char namebuf[32];
-		q_snprintf(namebuf, sizeof(namebuf), "PingServersThread%d", i + 1);
-		serversmenu.pingThreads[i] = SDL_CreateThread(PingServers, namebuf, (void*)range);
-		if (serversmenu.pingThreads[i] == NULL)
-		{
-			Con_DPrintf("SDL_CreateThread failed: %s\n", SDL_GetError());
-			free(range);
-			PingSweepThreadFinished();
-		}
-
-		start = end;
+		if (!NET_PingIdle(sweep) && !SDL_GetAtomicInt(&pingStop))
+			NET_PingPoll(sweep, packet_interval);
 	}
+	NET_PingDestroy(sweep);
+	return 0;
+}
+
+static int ServerList_DetailsWorker(void *data)
+{
+	(void)data;
+	SDL_LockMutex(pingMutex);
+	while (!serversmenu.stop_details)
+	{
+		servertitem_t *item = ServerList_NextPingItem(SERVER_PING_NEEDS_DNS, SERVER_PING_NEEDS_DNS);
+		char address[MAX_SERVER_ADDRESS_LEN];
+		unsigned int id;
+		int port = serversmenu.default_ping_port;
+		qboolean dns = item != NULL;
+		qboolean tesla = false;
+		int users = 0;
+		int player_interval = serversmenu.connected ? 25 : 8;
+		struct addrinfo *addresses = NULL;
+		char *players = NULL;
+		servertitem_t refreshed = {0};
+
+		if (dns)
+		{
+			item->ping_state = SERVER_PING_RESOLVING;
+			q_strlcpy(address, item->ip, sizeof(address));
+		}
+		else
+		{
+			item = ServerList_FindPingItem(serversmenu.details_id);
+			serversmenu.details_id = 0;
+			if (!item)
+			{
+				SDL_WaitCondition(pingCondition, pingMutex);
+				continue;
+			}
+			tesla = !q_strcasecmp(item->ip, TESLA_QUAKE_ADDRESS);
+			item->players_requested = true;
+			users = item->users;
+			q_strlcpy(address, item->resolved_ip, sizeof(address));
+		}
+		id = item->ping_id;
+		SDL_UnlockMutex(pingMutex);
+
+		if (dns)
+			addresses = NET_PingResolve(address, port, false, NULL);
+		else if (tesla)
+			ServerList_RefreshTeslaItem(&refreshed);
+		else
+			players = NET_QueryBrowserPlayers(address, users, player_interval, &pingStop);
+
+		SDL_LockMutex(pingMutex);
+		item = ServerList_FindPingItem(id);
+		if (item && dns)
+		{
+			item->ping_addresses = addresses;
+			addresses = NULL;
+			item->ping_state = SERVER_PING_RESOLVED;
+			SDL_BroadcastCondition(pingCondition);
+		}
+		else if (item && tesla && refreshed.known_available)
+		{
+			free((void *)item->map);
+			free((void *)item->players);
+			item->map = refreshed.map;
+			item->players = refreshed.players;
+			refreshed.map = NULL;
+			refreshed.players = NULL;
+			item->users = refreshed.users;
+			item->maxusers = refreshed.maxusers;
+			item->ping = refreshed.ping;
+			item->known_available = true;
+			serversmenu.pingSortDirty = true;
+		}
+		else if (item && players && item->users == users && (!item->players || item->refresh_players))
+		{
+			free((void *)item->players);
+			item->players = players;
+			players = NULL;
+		}
+		NET_PingFreeAddresses(addresses);
+		ServerList_FreeItem(&refreshed);
+		free(players);
+	}
+	SDL_UnlockMutex(pingMutex);
+	return 0;
+}
+
+static void TriggerServerPing(int index)
+{
+	int actual = ServersMenu_ResolveIndex(index);
+	double now = Sys_DoubleTime();
+
+	if (!pingMutex || actual < 0)
+		return;
+	SDL_LockMutex(pingMutex);
+	servertitem_t *item = &serversmenu.items[actual];
+	if (item->ping_state == SERVER_PING_DONE && now - item->lastPingTime >= PING_COOLDOWN)
+	{
+		item->lastPingTime = now;
+		item->players_requested = false;
+		if (!q_strcasecmp(item->ip, TESLA_QUAKE_ADDRESS))
+		{
+			/* Use a new ID so a refresh already in progress cannot overwrite it. */
+			item->ping_id = ++serversmenu.next_ping_id;
+			serversmenu.details_id = item->ping_id;
+		}
+		else if (!NET_WebSocketSchemeLength(item->ip, NULL))
+		{
+			item->ping_id = 0;
+			item->ping_state = SERVER_PING_NEW;
+			item->refresh_players = true;
+		}
+		SDL_BroadcastCondition(pingCondition);
+	}
+	SDL_UnlockMutex(pingMutex);
 }
 
 static void ServerList_ApplyResolvedDedupe(void)
@@ -35941,54 +35730,8 @@ static void ServerList_ApplyResolvedDedupe(void)
 			}
 		}
 
-		serversmenu.pinged_count = serversmenu.servercount;
-		serversmenu.pingQueueSize = 0;
 		ServerList_RebuildOrderAndFilterWithSelection(newSelected);
 	}
-	SDL_UnlockMutex(pingMutex);
-}
-
-static void ServerList_StartPendingPingSweep(void)
-{
-	qboolean complete;
-	int start;
-	int end;
-
-	if (!pingMutex)
-		return;
-
-	SDL_LockMutex(pingMutex);
-	complete = serversmenu.initialPingComplete;
-	start = serversmenu.pinged_count;
-	end = serversmenu.servercount;
-	SDL_UnlockMutex(pingMutex);
-
-	if (!complete)
-		return;
-
-	JoinFinishedPingSweep();
-	if (start >= end)
-	{
-		ServerList_ApplyResolvedDedupe();
-		return;
-	}
-
-	PingServerRange(start, end);
-
-	SDL_LockMutex(pingMutex);
-	if (serversmenu.pinged_count < end)
-		serversmenu.pinged_count = end;
-	SDL_UnlockMutex(pingMutex);
-}
-
-void PingAllServers(void)
-{
-	int servercount = serversmenu.servercount;
-
-	PingServerRange(0, servercount);
-
-	SDL_LockMutex(pingMutex);
-	serversmenu.pinged_count = servercount;
 	SDL_UnlockMutex(pingMutex);
 }
 
@@ -36426,7 +36169,6 @@ void populateServersFromJSON (const char* jsonText, servertitem_t** items, int* 
 		newItem->active = true;
 		newItem->ping = -1;
 		newItem->lastPingTime = 0;
-		newItem->isLoading = false;
 		newItem->pinned_bookmark = false;
 		newItem->pinned_rank = -1;
 		newItem->known_available = true;
@@ -36472,7 +36214,7 @@ static int ServerList_ApiFetchThread(void* unused)
 
 		if (ServerList_CreateTeslaItem(&tesla))
 		{
-			if (!ServerList_AppendOrReplaceMovedItem(&items, &count, &tesla, NULL))
+			if (!ServerList_AppendOrReplaceMovedItem(&items, &count, &tesla))
 				ServerList_FreeItem(&tesla);
 			else
 				ok = true;
@@ -36631,14 +36373,8 @@ static void ServerList_ApplyApiResults(void)
 
 	for (int i = 0; i < apiCount; i++)
 	{
-		int changedIndex;
-
-		if (ServerList_AppendOrReplaceMovedItem(&serversmenu.items, &serversmenu.servercount, &apiItems[i], &changedIndex))
-		{
-			if (changedIndex >= 0 && changedIndex < serversmenu.pinged_count)
-				serversmenu.pinged_count = changedIndex;
+		if (ServerList_AppendOrReplaceMovedItem(&serversmenu.items, &serversmenu.servercount, &apiItems[i]))
 			added++;
-		}
 	}
 
 	if (added > 0)
@@ -36646,9 +36382,6 @@ static void ServerList_ApplyApiResults(void)
 
 	if (locked)
 		SDL_UnlockMutex(pingMutex);
-
-	if (added > 0)
-		TriggerServerPing(serversmenu.list.cursor);
 
 	ServerList_FreeItems(apiItems, apiCount);
 }
@@ -36969,7 +36702,11 @@ static void M_ServerList_RefilterWithSelection(int selectedActual)
 
 static void M_ServerList_Refilter(void)
 {
+    if (pingMutex)
+        SDL_LockMutex(pingMutex);
     M_ServerList_RefilterWithSelection(ServersMenu_ResolveIndex(serversmenu.list.cursor));
+    if (pingMutex)
+        SDL_UnlockMutex(pingMutex);
 }
 
 static void SortServersWithSelection(qboolean lockMutex, int selectedActual)
@@ -37089,7 +36826,7 @@ void FetchAndSortServers (void)
 		servertitem_t tesla;
 
 		if (ServerList_InitTeslaItem(&tesla) &&
-			!ServerList_AppendOrReplaceMovedItem(&serversmenu.items, &actualServerCount, &tesla, NULL))
+			!ServerList_AppendOrReplaceMovedItem(&serversmenu.items, &actualServerCount, &tesla))
 			ServerList_FreeItem(&tesla);
 	}
 
@@ -37098,7 +36835,7 @@ void FetchAndSortServers (void)
 		servertitem_t item;
 
 		if (ServerList_CreateHostCacheItem(i, &item) &&
-			!ServerList_AppendOrReplaceMovedItem(&serversmenu.items, &actualServerCount, &item, NULL))
+			!ServerList_AppendOrReplaceMovedItem(&serversmenu.items, &actualServerCount, &item))
 			ServerList_FreeItem(&item);
 	}
 	serversmenu.hostcache_copied = hostCacheCount;
@@ -37106,7 +36843,7 @@ void FetchAndSortServers (void)
 	if (searchLastScope == SLIST_INTERNET && ServerList_TakeApiResults(&apiItems, &apiCount))
 	{
 		for (int i = 0; i < apiCount; i++)
-			ServerList_AppendOrReplaceMovedItem(&serversmenu.items, &actualServerCount, &apiItems[i], NULL);
+			ServerList_AppendOrReplaceMovedItem(&serversmenu.items, &actualServerCount, &apiItems[i]);
 		ServerList_FreeItems(apiItems, apiCount);
 	}
 
@@ -37142,19 +36879,16 @@ static void ServerList_AppendHostCacheResults(void)
 	for (size_t i = serversmenu.hostcache_copied; i < hostCacheCount; i++)
 	{
 		servertitem_t item;
-		int changedIndex;
 
 		if (!ServerList_CreateHostCacheItem(i, &item))
 			continue;
 
-		if (!ServerList_AppendOrReplaceMovedItem(&serversmenu.items, &serversmenu.servercount, &item, &changedIndex))
+		if (!ServerList_AppendOrReplaceMovedItem(&serversmenu.items, &serversmenu.servercount, &item))
 		{
 			ServerList_FreeItem(&item);
 			continue;
 		}
 
-		if (changedIndex >= 0 && changedIndex < serversmenu.pinged_count)
-			serversmenu.pinged_count = changedIndex;
 		added++;
 	}
 	serversmenu.hostcache_copied = hostCacheCount;
@@ -37164,9 +36898,107 @@ static void ServerList_AppendHostCacheResults(void)
 
 	if (locked)
 		SDL_UnlockMutex(pingMutex);
+}
 
-	if (added > 0)
-		TriggerServerPing(serversmenu.list.cursor);
+static void ServerList_StartPingWorkers(void)
+{
+	net_ping_sweep_t *sweep;
+
+	if (!pingMutex)
+	{
+		pingMutex = SDL_CreateMutex();
+		pingCondition = SDL_CreateCondition();
+		if (!pingMutex || !pingCondition)
+		{
+			SDL_DestroyMutex(pingMutex);
+			SDL_DestroyCondition(pingCondition);
+			pingMutex = NULL;
+			pingCondition = NULL;
+			return;
+		}
+	}
+	sweep = NET_PingCreate(ServerList_PingResult, NULL);
+	if (!sweep)
+		return;
+
+	SDL_LockMutex(pingMutex);
+	serversmenu.connected = cls.state == ca_connected;
+	serversmenu.default_ping_port = net_hostport > 0 && net_hostport <= 65535 ? net_hostport : DEFAULTnet_hostport;
+	if (serversmenu.default_ping_port <= 0 || serversmenu.default_ping_port > 65535)
+		serversmenu.default_ping_port = 26000;
+	SDL_SetAtomicInt(&pingStop, 0);
+	if (!serversmenu.detailsThread)
+		serversmenu.detailsThread = SDL_CreateThread(ServerList_DetailsWorker, "server details", NULL);
+	serversmenu.pingThread = SDL_CreateThread(ServerList_PingWorker, "server pings", sweep);
+	SDL_UnlockMutex(pingMutex);
+	if (!serversmenu.pingThread)
+		NET_PingDestroy(sweep);
+}
+
+static void ServerList_ServicePings(void)
+{
+	int visible;
+	int selected = ServersMenu_ResolveIndex(serversmenu.list.cursor);
+	qboolean pending = false;
+	qboolean queued = false;
+	double now = Sys_DoubleTime();
+
+	if (!serversmenu.servercount)
+		return;
+	ServerList_GetVisibleLayout(NULL, &visible, NULL, NULL);
+	if (pingMutex)
+		SDL_LockMutex(pingMutex);
+	for (int i = 0; i < serversmenu.servercount; ++i)
+	{
+		servertitem_t *item = &serversmenu.items[i];
+		item->ping_priority = item->pinned_bookmark ?
+			item->pinned_rank - visible - MAX_PINNED_BOOKMARKS : item->users > 0 ? 1 : 2;
+		if (item->ping_state == SERVER_PING_NEW)
+		{
+			item->ping_state = SERVER_PING_READY;
+			queued = true;
+		}
+		pending |= item->ping_state != SERVER_PING_DONE;
+	}
+	for (int row = 0; row < visible; ++row)
+	{
+		int index = ServersMenu_ResolveIndex(serversmenu.list.scroll + row);
+		if (index >= 0 && !serversmenu.items[index].pinned_bookmark)
+			serversmenu.items[index].ping_priority = row - visible;
+	}
+
+	if (pingMutex)
+	{
+		qboolean dedupe = !pending && serversmenu.resolvedDedupePending;
+
+		serversmenu.connected = cls.state == ca_connected;
+		if (selected >= 0 && serversmenu.detailsThread && !serversmenu.details_id)
+		{
+			servertitem_t *item = &serversmenu.items[selected];
+			if (item->ping_state == SERVER_PING_DONE && item->ping >= 0 && item->resolved_ip[0] &&
+				item->users > 0 && !item->players_requested && (!item->players || item->refresh_players))
+			{
+				if (!item->ping_id)
+					item->ping_id = ++serversmenu.next_ping_id;
+				serversmenu.details_id = item->ping_id;
+				SDL_BroadcastCondition(pingCondition);
+			}
+		}
+		if (serversmenu.pingSortDirty && (now >= serversmenu.nextPingSort || !pending) &&
+			!serversmenu.scrollbar_grab)
+		{
+			SortServers(false);
+			serversmenu.nextPingSort = now + 0.25;
+		}
+		if (queued)
+			SDL_BroadcastCondition(pingCondition);
+		SDL_UnlockMutex(pingMutex);
+
+		if (dedupe)
+			ServerList_ApplyResolvedDedupe();
+	}
+	if (!serversmenu.pingThread)
+		ServerList_StartPingWorkers();
 }
 
 void M_Menu_ServerList_f (void)
@@ -37182,22 +37014,20 @@ void M_Menu_ServerList_f (void)
 	serversmenu.list.scroll = 0;
 	serversmenu.list.numitems = 0;
 	serversmenu.scrollbar_grab = false;
-	serversmenu.initialPingComplete = false;
-	serversmenu.initialPingThreadsRemaining = 0;
-	serversmenu.pingQueueSize = 0;
-	serversmenu.pingThreadRunning = false;
 	serversmenu.resolvedDedupePending = false;
 	serversmenu.copy_message_until = 0.0;
-	pingThreadsShouldExit = false;
+	serversmenu.nextPingSort = 0.0;
 	M_UpdateBounds (); // woods -- size for the current window before centering (iw)
 	serversmenu.list.viewsize = MAX_VIS_SERVERS;
 	memset(&serversmenu.list.search, 0, sizeof(serversmenu.list.search));
 	serversmenu.list.search.maxlen = 32;
 	VEC_CLEAR(serversmenu.filtered_indices);
 
+	if (pingMutex)
+		SDL_LockMutex(pingMutex);
 	FetchAndSortServers();
-	InitializePingMutex();
-	PingAllServers();
+	if (pingMutex)
+		SDL_UnlockMutex(pingMutex);
 
 	M_Ticker_Init(&serversmenu.ticker);
 
@@ -37261,10 +37091,7 @@ void M_ServerList_Draw (void)
 	if (searchLastScope == SLIST_INTERNET)
 		ServerList_AppendHostCacheResults();
 	ServerList_ApplyApiResults();
-	ServerList_StartPendingPingSweep();
-
-	if (serversmenu.pingSortDirty)
-		SortServers(true);
+	ServerList_ServicePings();
 	ServerList_ClampScroll();
 
         if (!keydown[K_MOUSE1])
@@ -37569,40 +37396,52 @@ qboolean M_Servers_Match(int index, char initial)
 
 static void CleanupPingThreads(void)
 {
-	SDL_Thread* queueThread = NULL;
-
 	if (!pingMutex)
-	{
-		pingThreadsShouldExit = false;
-		serversmenu.pingThread = NULL;
-		serversmenu.pingThreadRunning = false;
-		serversmenu.pingQueueSize = 0;
 		return;
-	}
-
-	WaitForPingThreads();
-
-	pingThreadsShouldExit = true;
-	if (serversmenu.pingThread)
-	{
-		queueThread = serversmenu.pingThread;
-		serversmenu.pingThread = NULL;
-	}
-	if (queueThread)
-		SDL_WaitThread(queueThread, NULL);
 
 	SDL_LockMutex(pingMutex);
-	serversmenu.pingQueueSize = 0;
-	serversmenu.pingThreadRunning = false;
+	SDL_SetAtomicInt(&pingStop, 1);
+	serversmenu.details_id = 0;
+	for (int i = 0; i < serversmenu.servercount; ++i)
+	{
+		servertitem_t *item = &serversmenu.items[i];
+		item->ping_id = 0;
+		if (item->ping_state != SERVER_PING_DONE)
+			item->ping_state = SERVER_PING_NEW;
+		if (!item->players)
+			item->players_requested = false;
+		NET_PingFreeAddresses(item->ping_addresses);
+		item->ping_addresses = NULL;
+	}
+	SDL_BroadcastCondition(pingCondition);
 	SDL_UnlockMutex(pingMutex);
 
-	CleanupPingMutex();
-	pingThreadsShouldExit = false;
+	if (serversmenu.pingThread)
+	{
+		SDL_WaitThread(serversmenu.pingThread, NULL);
+		serversmenu.pingThread = NULL;
+	}
 }
 
 void M_ServerList_ShutdownPingThreads(void)
 {
 	CleanupPingThreads();
+	if (!pingMutex)
+		return;
+
+	SDL_LockMutex(pingMutex);
+	serversmenu.stop_details = true;
+	SDL_BroadcastCondition(pingCondition);
+	SDL_UnlockMutex(pingMutex);
+	if (serversmenu.detailsThread)
+	{
+		SDL_WaitThread(serversmenu.detailsThread, NULL);
+		serversmenu.detailsThread = NULL;
+	}
+	SDL_DestroyCondition(pingCondition);
+	SDL_DestroyMutex(pingMutex);
+	pingCondition = NULL;
+	pingMutex = NULL;
 }
 
 static void M_ServerList_CopySelectedAddress(void)

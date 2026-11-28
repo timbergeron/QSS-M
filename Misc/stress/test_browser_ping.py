@@ -22,7 +22,8 @@ from test_quit_udp import ROOT, QUERY_SOURCE, compile_query_test
 
 SOURCE = QUERY_SOURCE.replace("static SDL_AtomicInt server_queries_abort;", r'''
 /* Inject the otherwise rare socket-allocation failure; all other I/O is real. */
-static int fail_third_socket, socket_attempts;
+static int fail_third_socket, socket_attempts, track_sends;
+static double last_send, shortest_gap = 10.0;
 static sys_socket_t test_socket(int family, int type, int protocol) {
     if (++socket_attempts == 3 && fail_third_socket) {
 #ifdef _WIN32
@@ -35,16 +36,63 @@ static sys_socket_t test_socket(int family, int type, int protocol) {
     return socket(family, type, protocol);
 }
 #define socket test_socket
+#ifdef _WIN32
+static int test_sendto(sys_socket_t sock, const char *data, int len, int flags,
+#else
+static ssize_t test_sendto(sys_socket_t sock, const void *data, size_t len, int flags,
+#endif
+        const struct sockaddr *address, socklen_t address_len) {
+    if (track_sends) {
+        double now = Sys_DoubleTime();
+        if (last_send && now - last_send < shortest_gap)
+            shortest_gap = now - last_send;
+        last_send = now;
+    }
+    return sendto(sock, data, len, flags, address, address_len);
+}
+#define sendto test_sendto
 static SDL_AtomicInt server_queries_abort;
 ''') + r'''
+static void sweep_result(void *context, unsigned int id, int ping, const char *resolved, qboolean done) {
+    double start = *(double *)context;
+    printf("EVENT %u %d %d %.6f %s\n", id, ping, done, Sys_DoubleTime() - start, resolved);
+}
+
+static void run_sweep(int argc, char **argv) {
+    assert(argc >= 4);
+    double start = Sys_DoubleTime();
+    double interval = atof(argv[2]);
+    net_ping_sweep_t *sweep = NET_PingCreate(sweep_result, &start);
+    assert(sweep);
+    track_sends = 1;
+    int i = 3;
+    while (i < argc || !NET_PingIdle(sweep)) {
+        while (i < argc && NET_PingHasRoom(sweep)) {
+            struct addrinfo *addresses = NET_PingResolve(argv[i], 26000, false, NULL);
+            assert(addresses);
+            NET_PingAdd(sweep, i - 3, addresses);
+            ++i;
+        }
+        NET_PingPoll(sweep, interval);
+    }
+    printf("SWEEP %.6f %.6f %d\n", Sys_DoubleTime() - start, shortest_gap, socket_attempts);
+    NET_PingDestroy(sweep);
+}
+
 int main(int argc, char **argv) {
-    assert(argc == 2 || argc == 3);
-    fail_third_socket = argc == 3;
+    assert(argc >= 2);
 #ifdef _WIN32
     WSADATA winsock;
     assert(WSAStartup(MAKEWORD(2, 2), &winsock) == 0);
 #endif
     assert(SDL_Init(0));
+    if (!strcmp(argv[1], "--sweep")) {
+        run_sweep(argc, argv);
+        SDL_Quit();
+        return 0;
+    }
+    assert(argc == 2 || argc == 3);
+    fail_third_socket = argc == 3;
     char resolved[256];
     double start = Sys_DoubleTime();
     int ping = UDP_Ping_HostResolved(argv[1], resolved, sizeof(resolved));
@@ -152,9 +200,13 @@ class BrowserPingTests(unittest.TestCase):
         cls.addClassCleanup(cls.temp.cleanup)
         cls.binary = compile_query_test(SOURCE, path)
 
-    def probe(self, server, *, fail_third=False):
+    @staticmethod
+    def endpoint(server):
         address, port = server.server_address[:2]
-        endpoint = f"[{address}]:{port}" if ":" in address else f"{address}:{port}"
+        return f"[{address}]:{port}" if ":" in address else f"{address}:{port}"
+
+    def probe(self, server, *, fail_third=False):
+        endpoint = self.endpoint(server)
         command = [str(self.binary), endpoint]
         if fail_third:
             command.append("fail-third-socket")
@@ -162,6 +214,46 @@ class BrowserPingTests(unittest.TestCase):
         _, ping, wall, resolved = output.strip().split()
         self.assertEqual(resolved, endpoint)
         return int(ping), float(wall)
+
+    def sweep(self, *servers, interval=0.008):
+        endpoints = [self.endpoint(server) for server in servers]
+        output = subprocess.check_output(
+            [str(self.binary), "--sweep", str(interval), *endpoints], text=True, timeout=6)
+        lines = output.strip().splitlines()
+        _, wall, spacing, sockets = lines.pop().split()
+        self.assertGreaterEqual(float(spacing), interval - 0.0005)
+        events = [[] for _ in servers]
+        for line in lines:
+            _, index, ping, done, elapsed, address = line.split()
+            index = int(index)
+            self.assertEqual(address, endpoints[index])
+            events[index].append((int(ping), bool(int(done)), float(elapsed)))
+        self.assertTrue(all(events_for_server[-1][1] for events_for_server in events), events)
+        return events, float(wall), int(sockets)
+
+    def test_sweep_shows_first_reply_and_refines_without_waiting_for_silent_server(self):
+        with (fixture(delays=(None,)) as silent,
+              fixture(delays=(0.13, 0.04, 0.08), duplicate=True) as live,
+              fixture(protocol="status") as fallback):
+            (silent_events, live_events, fallback_events), wall, sockets = self.sweep(silent, live, fallback)
+            self.assertEqual(silent_events[0][:2], (-1, True))
+            ping, done, first = live_events[0]
+            self.assertFalse(done)
+            self.assertTrue(115 <= ping < 210, live_events)
+            self.assertLess(first, 0.35)
+            self.assertTrue(30 <= live_events[-1][0] < 85, live_events)
+            self.assertLess(fallback_events[-1][2], silent_events[-1][2])
+            self.assertTrue(1.4 <= wall < 2, wall)
+            self.assertEqual(sockets, 3)
+            self.assertEqual(set(silent.clients), set(live.clients))
+            self.assertEqual(set(live.clients), set(fallback.clients))
+
+    def test_sweep_keeps_alias_samples_separate_and_paces_connected_probes(self):
+        with fixture(delays=(0.06,) * 6, duplicate=True, wrong_source=True) as live:
+            events, _, sockets = self.sweep(live, live, interval=0.025)
+            self.assertEqual(sockets, 6)
+            self.assertEqual(len(live.clients), 6)
+            self.assertTrue(all(50 <= result[-1][0] < 140 for result in events), events)
 
     def test_retry_wait_is_excluded_from_rtt(self):
         with fixture(drop=1) as server:
