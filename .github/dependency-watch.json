@@ -52,7 +52,7 @@
     "vendored": "3.3.16",
     "dlls": ["Windows/codecs/x86/libmikmod-3.dll", "Windows/codecs/x64/libmikmod-3.dll"],
     "packages": [
-      { "repository": "mingw64", "name": "mingw-w64-x86_64-libmikmod", "baseline": "3.3.16-1" }
+      { "repository": "mingw64", "name": "mingw-w64-x86_64-libmikmod", "baseline": "3.3.16-1", "allowMissing": true }
     ]
   },
   {
@@ -61,7 +61,7 @@
     "vendored": "1.33.7",
     "dlls": ["Windows/codecs/x86/libmpg123-0.dll", "Windows/codecs/x64/libmpg123-0.dll"],
     "packages": [
-      { "repository": "mingw64", "name": "mingw-w64-x86_64-mpg123", "baseline": "1.33.7-1" }
+      { "repository": "mingw64", "name": "mingw-w64-x86_64-mpg123", "baseline": "1.33.7-2" }
     ]
   },
   {
@@ -162,10 +162,10 @@
   {
     "name": "GnuTLS",
     "source": "gnutls",
-    "vendored": "3.8.13",
+    "vendored": "3.8.14",
     "dlls": [],
     "packages": [
-      {"repository": "mingw64", "name": "mingw-w64-x86_64-gnutls", "baseline": "3.8.13-3"}
+      {"repository": "mingw64", "name": "mingw-w64-x86_64-gnutls", "baseline": "3.8.14-1"}
     ]
   }
 ]

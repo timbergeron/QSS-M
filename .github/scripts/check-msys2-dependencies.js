@@ -109,7 +109,8 @@ function validateManifest(dependencies, repositoryRoot) {
 
     for (const pkg of dependency.packages) {
       if (!pkg || typeof pkg.repository !== "string" || typeof pkg.name !== "string" ||
-          typeof pkg.baseline !== "string") {
+          typeof pkg.baseline !== "string" ||
+          (pkg.allowMissing !== undefined && typeof pkg.allowMissing !== "boolean")) {
         throw new Error(`Invalid package entry for ${dependency.name}.`);
       }
       const key = `${pkg.repository}:${pkg.name}`;
@@ -145,7 +146,8 @@ function findChanges(dependencies, databases, { includeMonthly = false } = {}) {
 
       const availablePackage = database.get(pkg.name);
       if (!availablePackage) {
-        missing.push(`${pkg.repository}:${pkg.name}`);
+        if (!pkg.allowMissing)
+          missing.push(`${pkg.repository}:${pkg.name}`);
         continue;
       }
 

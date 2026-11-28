@@ -124,6 +124,22 @@ test("findChanges fails closed when a monitored package disappears", () => {
   );
 });
 
+test("findChanges checks explicitly retired packages if they reappear", () => {
+  const dependencies = [{
+    name: "libmikmod",
+    vendored: "3.3.16",
+    packages: [{ repository: "mingw64", name: "package-a", baseline: "3.3.16-1", allowMissing: true }],
+  }];
+  const database = new Map();
+  const databases = new Map([["mingw64", database]]);
+  assert.deepEqual(findChanges(dependencies, databases), []);
+
+  database.set("package-a", { VERSION: "3.3.17-1" });
+  const changes = findChanges(dependencies, databases);
+  assert.equal(changes.length, 1);
+  assert.equal(changes[0].packageVersion, "3.3.17-1");
+});
+
 test("validateManifest requires complete, one-to-one DLL coverage", () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "qssm-dependency-test-"));
   try {

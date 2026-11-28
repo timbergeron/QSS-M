@@ -57,7 +57,7 @@ i686-w64-mingw32-objdump   -p x86/libFLAC.dll | grep 'DLL Name'
 | libvorbis          | 1.3.7-3        | `mingw-w64-{x86_64,i686}-libvorbis`        |
 | libxmp             | 4.7.4-1        | `mingw-w64-{x86_64,i686}-libxmp`           |
 | libmikmod          | 3.3.16         | MSYS2 x64 `3.3.16-1`; upstream source for x86 |
-| libmpg123          | 1.33.7-1       | `mingw-w64-{x86_64,i686}-mpg123`           |
+| libmpg123          | 1.33.7-2 (x64), 1.33.7-1 (x86) | `mingw-w64-{x86_64,i686}-mpg123` |
 | libogg             | 1.3.6          | `mingw-w64-{x86_64,i686}-libogg-1.3.6`     |
 | libwinpthread      | 14.0.0.r598.ge3d18511f-1 | `mingw-w64-{x86_64,i686}-libwinpthread` |
 | libgcc (x86 only)  | gcc 16.2.0-7   | `mingw-w64-i686-libgcc` (monitored as `gcc-libs`) |
@@ -89,7 +89,8 @@ are inert here: `snd_mikmod.c` registers only `drv_nos` and decodes via
 `include/mikmod.h`). MSYS2 no longer publishes this package for x86, so that
 DLL is built from the same upstream release with static libgcc; see
 [`include/mikmod_config.txt`](include/mikmod_config.txt) for the source checksum
-and build commands. Neither architecture needs a new runtime DLL.
+and build commands. Neither architecture needs a new runtime DLL. The x64
+package was also [retired from the MSYS2 index](https://github.com/msys2/MINGW-packages/pull/33859).
 
 Note: libmpg123 is **not linked by default** — MP3 decoding uses libmad
 (`MP3LIB=mad` in the makefiles, `libmad` in the MSVC project); libmpg123 is only
@@ -102,6 +103,11 @@ API version) — so no version string needs manual bumping. mpg123
 1.32+ split `fmt123.h` out of `mpg123.h`, so both headers are vendored together.
 The DLL imports `SHLWAPI.dll` (system) and, on x86, the shared
 `libgcc_s_dw2-1.dll`.
+
+MSYS2 rebuilt the x64 package for SDL2. Its libmpg123 DLL keeps the same PE
+exports, runtime imports, public headers, and LGPL license. The archive
+`mingw-w64-x86_64-mpg123-1.33.7-2-any.pkg.tar.zst` matches the repository
+index SHA-256 `4e7c26164dc6dba090d1c7ef98d2b1d8eac294c1c9e8b1f7d168f8990f1d3131`.
 
 The Windows import libraries (`libFLAC.dll.a` for MinGW, `libFLAC.lib` for MSVC)
 target `libFLAC.dll` and were generated with `dlltool` from the shipped DLL.
