@@ -12,3 +12,9 @@ void(vector virtsize, float showscores) CSQC_DrawHud =
 	chud_draw(virtsize, showscores);
 	autotest_frame();
 };
+
+// Tab scoreboard (and the deathmatch intermission board): scores.qc
+void(vector virtsize, float showscores) CSQC_DrawScores =
+{
+	chud_drawscores(virtsize, showscores);
+};

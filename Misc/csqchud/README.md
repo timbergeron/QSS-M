@@ -66,6 +66,7 @@ Widgets (`<w>`):
 | `qe_armor`, `qe_health`, `qe_ammo`, `qe_keys` | re-release corner blocks | 3 |
 | `speed` | speed readout, white / red over 400 / gold over 600 | follows `scr_showspeed` |
 | `loc` | location name, centred under the crosshair | follows `r_showlocs` |
+| `scores` | always-on scores list (multiplayer), grows upward from its anchor | follows `scr_showscores` |
 
 `speed` and `loc` default to following the engine's own toggles and positions.
 Set `chud_speed_show`/`chud_loc_show` to make them independent; then turn the
@@ -92,6 +93,43 @@ Engine settings (`viewsize`, `scr_sbar`, `scr_sbaralpha`, `scr_sbarshowqeammo`,
 `scr_sbarscale`, `scr_showspeed`, `r_showlocs`, `r_showlocs_y`) are declared as
 `autocvar_*` globals so they exist with sensible defaults on engines that don't
 define them natively.
+
+## Scores list and Tab scoreboard
+
+The `scores` widget is QSS-M's `scr_showscores` list: colour bars, frags, your
+brackets and names, highest first. Like any widget it takes
+`chud_scores_anchor`, `_ofs` and `_scale`, plus:
+
+| cvar | meaning |
+|---|---|
+| `chud_scores_alpha` | opacity, default `1` |
+| `chud_scores_rows` | most players listed, default `16` like the engine |
+
+The Tab scoreboard (`CSQC_DrawScores`, also the deathmatch intermission
+board) has three layouts:
+
+| cvar | meaning |
+|---|---|
+| `chud_scoreboard` | `1` regular, `2` team-sorted (team rows with totals), `3` double column (teams side by side Q3/QuakeLive style, or the FFA list split in half); `0` follows `scr_scoreboard_teamsort` |
+| `chud_scoreboard_alpha` | row background opacity, default `0.8` like the engine |
+| `chud_scoreboard_scale` | multiplier on top of `scr_sbarscale` |
+
+Layout 1 matches the engine board's position, columns and colours. Teams come
+from the `team` playerkey; on ProQuake/CRMod servers the totals are the
+server's own scores (`pq_teamfragsN`, which can be arena round wins), elsewhere
+the sum of connected players' frags.
+
+Differences from QSS-M's native board:
+
+- no "status" column (the CRX/CRMod ready count needs match state CSQC can't
+  read exactly)
+- no scrolling: past 16 rows it shows "+N more"
+- no observer item icons in the list (they come from team-overlay data)
+
+Checked on a local QSS-M dedicated server with four extra clients on two teams.
+On 800x600, layout 1 sits where the engine board does with the same columns and
+colours. Layout 2 grouped red and blue under team rows. Layout 3 put the teams
+side by side.
 
 ## Building
 

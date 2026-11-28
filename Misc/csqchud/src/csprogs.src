@@ -1,5 +1,6 @@
 ../csprogs.dat
 qscsextensions.qc
 hud.qc
+scores.qc
 autotest.qc
 main.qc

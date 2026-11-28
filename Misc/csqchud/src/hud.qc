@@ -72,6 +72,11 @@ var float autocvar_viewsize = 100;
 
 var float autocvar_chud_preset = 0;
 var float autocvar_chud_frags_count = 2;
+var float autocvar_scr_showscores = 0;
+
+// scores.qc
+float() scores_list_rows;
+void() draw_scores_list;
 
 // ---- widgets ----
 const float W_STATUS = 0;	// sbar row: armor, face, health, ammo (presets 1, 2)
@@ -85,10 +90,11 @@ const float W_QEAMMO = 7;	// re-release current ammo (preset 3)
 const float W_QEKEYS = 8;	// re-release keys + sigils (preset 3)
 const float W_SPEED = 9;	// speed readout (follows scr_showspeed)
 const float W_LOC = 10;		// location name (follows r_showlocs)
-const float W_COUNT = 11;
+const float W_SCORES = 11;	// always-on scores list (follows scr_showscores), scores.qc
+const float W_COUNT = 12;
 
-string widget_name[W_COUNT] = {"status", "ibar", "items", "frags", "qwammo", "qe_armor", "qe_health", "qe_ammo", "qe_keys", "speed", "loc"};
-vector widget_size[W_COUNT] = {'320 24', '320 24', '128 16', '128 8', '44 188', '104 25', '104 25', '106 24', '80 16', '32 8', '64 8'};
+string widget_name[W_COUNT] = {"status", "ibar", "items", "frags", "qwammo", "qe_armor", "qe_health", "qe_ammo", "qe_keys", "speed", "loc", "scores"};
+vector widget_size[W_COUNT] = {'320 24', '320 24', '128 16', '128 8', '44 188', '104 25', '104 25', '106 24', '80 16', '32 8', '64 8', '140 128'};
 
 // resolved per frame
 vector loc_size;	// the loc widget is as wide as the current name
@@ -152,6 +158,8 @@ float(float w) preset_show =
 		return autocvar_scr_showspeed >= 1;
 	if (w == W_LOC)
 		return autocvar_r_showlocs != 0;
+	if (w == W_SCORES)
+		return autocvar_scr_showscores != 0;
 	if (preset == 1)
 		return w == W_STATUS || w == W_IBAR || w == W_ITEMS || w == W_FRAGS;
 	if (preset == 2)
@@ -163,6 +171,8 @@ vector(float w) preset_anchor =
 {
 	if (w == W_LOC)
 		return '0.5 0.5';
+	if (w == W_SCORES)
+		return '0 1';
 	if (w == W_SPEED && preset == 3)
 		return '0 1';
 	if (w == W_QEARMOR || w == W_QEHEALTH)
@@ -194,6 +204,8 @@ vector(float w) preset_ofs =
 	}
 	if (w == W_LOC)
 		return [0, autocvar_r_showlocs_y + 4, 0];	// below the crosshair
+	if (w == W_SCORES)
+		return '10 -132';	// SCR_ShowObsFrags: bottom-left, growing upwards
 	if (w == W_QEARMOR)	return '18 -36';
 	if (w == W_QEHEALTH)	return '18 -12';
 	if (w == W_QEAMMO)	return '-16 -12';
@@ -222,6 +234,8 @@ float(float w) widget_viewsize_ok =
 		return hud_viewsize <= 110;
 	if (w == W_LOC)
 		return TRUE;
+	if (w == W_SCORES)
+		return hud_viewsize < 120;
 	if (w == W_STATUS)
 		return hud_viewsize < 120;
 	if (w == W_QEARMOR || w == W_QEHEALTH || w == W_QEAMMO)
@@ -258,7 +272,12 @@ float(float w) widget_begin =
 	if (wscale <= 0)
 		return FALSE;
 
-	size = ((w == W_LOC) ? loc_size : widget_size[w]) * wscale;
+	if (w == W_LOC)
+		size = loc_size * wscale;
+	else if (w == W_SCORES)	// one 8px row per player, so a bottom anchor grows upwards
+		size = [140, 8 * scores_list_rows(), 0] * wscale;
+	else
+		size = widget_size[w] * wscale;
 	wpos_x = anchor_x * scr_x - anchor_x * size_x + ofs_x * wscale;
 	wpos_y = anchor_y * scr_y - anchor_y * size_y + ofs_y * wscale;
 	return TRUE;
@@ -761,8 +780,14 @@ void() draw_frags =
 		for (i = 1; i < nteams; i++)
 		{
 			k = order[i];
-			for (j = i; j > 0 && tsum[k] > tsum[order[j - 1]]; j--)
+			j = i;
+			while (j > 0)	// no "&&" guard: fteqcc doesn't short-circuit, [j - 1] would read -1
+			{
+				if (tsum[k] <= tsum[order[j - 1]])
+					break;
 				order[j] = order[j - 1];
+				j--;
+			}
 			order[j] = k;
 		}
 
@@ -1047,6 +1072,8 @@ void(vector virtsize, float showscores) chud_draw =
 		draw_speed();
 	if (widget_begin(W_LOC))
 		draw_loc();
+	if (maxclients > 1 && widget_begin(W_SCORES))
+		draw_scores_list();
 	if (showscores && maxclients <= 1)
 		draw_soloscores();
 	else
