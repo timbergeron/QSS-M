@@ -34631,6 +34631,7 @@ typedef struct {
 	qboolean refresh_players;
 	qboolean pinned_bookmark;
 	int pinned_rank;
+	int keyword_priority;
 	qboolean known_available;
 	qboolean ping_tested;
 } servertitem_t;
@@ -34725,13 +34726,76 @@ static const char *M_MenuSortValue(const menu_sort_column_t *column, qboolean de
 	return va("%s_%s", column->name, descending ? "desc" : "asc");
 }
 
+typedef struct
+{
+	char *storage;
+	const char **terms;
+} menu_keywords_t;
+
+static menu_keywords_t M_ReadMenuKeywords(const char *value)
+{
+	menu_keywords_t keywords = {0};
+
+	if (*value)
+		keywords.storage = strdup(value);
+	for (char *term = keywords.storage, *next; term; term = next)
+	{
+		char *end;
+
+		next = strchr(term, ',');
+		if (next)
+			*next++ = '\0';
+		while (q_isspace((unsigned char)*term))
+			++term;
+		if (!*term)
+			continue;
+
+		end = term + strlen(term);
+		while (q_isspace((unsigned char)end[-1]))
+			--end;
+		*end = '\0';
+		VEC_PUSH(keywords.terms, term);
+	}
+	return keywords;
+}
+
+static void M_FreeMenuKeywords(menu_keywords_t *keywords)
+{
+	VEC_FREE(keywords->terms);
+	free(keywords->storage);
+}
+
+/* Match the earliest listed keyword. Zero marks rows without a match. */
+static int M_MenuKeywordPriority(const menu_keywords_t *keywords, const char *name)
+{
+	size_t count = VEC_SIZE(keywords->terms);
+
+	for (size_t i = 0; i < count; ++i)
+		if (q_strcasestr(name, keywords->terms[i]))
+			return (int)(count - i);
+	return 0;
+}
+
 static cvar_t menu_servers_sort = {"menu_servers_sort", "ping", CVAR_ARCHIVE};
+static cvar_t menu_servers_priority = {"menu_servers_priority", "", CVAR_ARCHIVE};
 static const menu_sort_column_t server_sort_columns[] = {
 	[SORT_PING] = {"ping", false},
 	[SORT_NAME] = {"name", false},
 	[SORT_MAP] = {"map", false},
 	[SORT_USERS] = {"players", true}
 };
+
+static void ServerList_UpdateKeywordPriorities(void)
+{
+	menu_keywords_t keywords = M_ReadMenuKeywords(menu_servers_priority.string);
+
+	for (int i = 0; i < serversmenu.servercount; ++i)
+	{
+		servertitem_t *item = &serversmenu.items[i];
+		item->keyword_priority = M_MenuKeywordPriority(&keywords, item->name);
+	}
+	M_FreeMenuKeywords(&keywords);
+}
 
 //=============================================================================
 // woods servers.quakeone.com support curl+json parsing #serversmenu
@@ -35387,6 +35451,7 @@ static void ServerList_RebuildOrderAndFilterWithSelection(int selectedActual)
 	}
 
 	serversmenu.pingSortDirty = false;
+	ServerList_UpdateKeywordPriorities();
 	SortServersWithSelection(false, selectedActual);
 
 	if (serversmenu.list.search.len > 0)
@@ -36459,6 +36524,9 @@ static int CompareServers(const void* a, const void* b)
 	if (pinA >= 0 && pinB >= 0 && pinA != pinB)
 		return pinA - pinB;
 
+	if (groupA && serverA->keyword_priority != serverB->keyword_priority)
+		return serverB->keyword_priority - serverA->keyword_priority;
+
 	switch (serversmenu.sort_mode) {
 	case SORT_NAME:
 		res = q_strcasecmp(serverA->name, serverB->name);
@@ -36807,6 +36875,20 @@ static void SortServersWithSelection(qboolean lockMutex, int selectedActual)
 static void SortServers(qboolean lockMutex)
 {
         SortServersWithSelection(lockMutex, ServersMenu_ResolveIndex(serversmenu.list.cursor));
+}
+
+static void ServerList_KeywordPriorityChanged(cvar_t *var)
+{
+	(void)var;
+	if (m_state != m_slist)
+		return;
+
+	if (pingMutex)
+		SDL_LockMutex(pingMutex);
+	ServerList_UpdateKeywordPriorities();
+	SortServers(false);
+	if (pingMutex)
+		SDL_UnlockMutex(pingMutex);
 }
 
 static void RemoveDuplicateServers(servertitem_t** items, int* actualServerCount)
@@ -42577,10 +42659,11 @@ typedef enum
 } demo_sort_t;
 
 static cvar_t menu_demos_sort = {"menu_demos_sort", "date", CVAR_ARCHIVE};
+static cvar_t menu_demos_priority = {"menu_demos_priority", "", CVAR_ARCHIVE};
 static const menu_sort_column_t demo_sort_columns[] = {
 	[DEMO_SORT_DATE] = {"date", true},
 	[DEMO_SORT_NAME] = {"name", false},
-	[DEMO_SORT_SIZE] = {"size", false},
+	[DEMO_SORT_SIZE] = {"size", true},
 	[DEMO_SORT_MAP] = {"map", false}
 };
 
@@ -42624,6 +42707,7 @@ typedef struct
 	time_t      mtime;
 	size_t      fsize;
 	int         scan_order; // preserve search-path precedence and equal-date ordering
+	int         keyword_priority;
 	searchpath_t *source_searchpath;
 	char        cache_key[MAX_OSPATH];
 	demo_minframes_state_t minframes_state;
@@ -43321,6 +43405,7 @@ static struct
 	int					*sorted_indices;
 	demo_sort_t			sort_mode;
 	qboolean			sort_reverse;
+	qboolean			has_priority_matches;
 	menu_textfield_t	path_field;
 	char				path_suffix[MAX_QPATH];
 	char				remembered_path_suffix[MAX_QPATH];
@@ -43597,6 +43682,22 @@ static const char *M_Demos_MapSortKey(const demoitem_t *di)
 	return di->map_parse_failed ? "" : di->map;
 }
 
+static void M_Demos_UpdateKeywordPriorities(void)
+{
+	menu_keywords_t keywords = M_ReadMenuKeywords(menu_demos_priority.string);
+	qboolean has_matches = false;
+
+	if (VEC_SIZE(keywords.terms) || demosmenu.has_priority_matches)
+		for (int i = 0; i < demosmenu.democount; ++i)
+		{
+			demoitem_t *item = &demosmenu.items[i];
+			item->keyword_priority = M_MenuKeywordPriority(&keywords, COM_SkipPath(item->name));
+			has_matches |= item->keyword_priority != 0;
+		}
+	demosmenu.has_priority_matches = has_matches;
+	M_FreeMenuKeywords(&keywords);
+}
+
 // The underlying indices are in the original date order, which also breaks ties.
 static int M_Demos_CompareDisplay(const void *a, const void *b)
 {
@@ -43604,6 +43705,9 @@ static int M_Demos_CompareDisplay(const void *a, const void *b)
 	const demoitem_t *da = &demosmenu.items[ia];
 	const demoitem_t *db = &demosmenu.items[ib];
 	int order = 0;
+
+	if (da->keyword_priority != db->keyword_priority)
+		return db->keyword_priority - da->keyword_priority;
 
 	switch (demosmenu.sort_mode)
 	{
@@ -45324,7 +45428,7 @@ static const int *M_Demos_DisplayOrder(void)
 {
 	int i;
 
-	if (demosmenu.sort_mode == DEMO_SORT_DATE && !demosmenu.sort_reverse)
+	if (demosmenu.sort_mode == DEMO_SORT_DATE && !demosmenu.sort_reverse && !demosmenu.has_priority_matches)
 		return NULL;
 
 	if (VEC_SIZE(demosmenu.sorted_indices) != (size_t)demosmenu.democount ||
@@ -45462,6 +45566,17 @@ static void M_Demos_Refilter(void)
     M_Demos_RefilterEx(false);
 }
 
+static void M_Demos_KeywordPriorityChanged(cvar_t *var)
+{
+	(void)var;
+	if (m_state != m_demos)
+		return;
+
+	M_Demos_UpdateKeywordPriorities();
+	VEC_CLEAR(demosmenu.sorted_indices);
+	M_Demos_RefilterEx(true);
+}
+
 static const char *M_Demos_CommandName(const char *name);
 
 static qboolean M_Demos_AllowPlayByMinFrames(demoitem_t *di)
@@ -45540,6 +45655,7 @@ static void M_Demos_RebuildForCurrentPath(void)
 
 	t_scan = Sys_DoubleTime();
 	M_Demos_SortItems();
+	M_Demos_UpdateKeywordPriorities();
 	t_sort = Sys_DoubleTime();
 	M_Demos_Refilter();
 	t_filter = Sys_DoubleTime();
@@ -48539,8 +48655,12 @@ void M_Init (void)
 	Cvar_RegisterVariable (&menu_search_debug);
 	Cvar_RegisterVariable (&menu_servers_sort);
 	Cvar_SetCompletion (&menu_servers_sort, M_MenuSortCompletion);
+	Cvar_RegisterVariable (&menu_servers_priority);
+	Cvar_SetCallback (&menu_servers_priority, ServerList_KeywordPriorityChanged);
 	Cvar_RegisterVariable (&menu_demos_sort);
 	Cvar_SetCompletion (&menu_demos_sort, M_MenuSortCompletion);
+	Cvar_RegisterVariable (&menu_demos_priority);
+	Cvar_SetCallback (&menu_demos_priority, M_Demos_KeywordPriorityChanged);
 	M_TextField_Init(&menusearch.field, menusearch.query, MENU_SEARCH_QUERY_CHARS, false);
 	MenuSearch_CheckRegistry();
 	AudioCatalog_InitCommands();
