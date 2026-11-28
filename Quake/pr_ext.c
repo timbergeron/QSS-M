@@ -6615,27 +6615,74 @@ static void PF_cs_getplayerstat(void)
 	}
 }
 
+/*	FTE's STAT_TIME / STAT_MATCHSTARTTIME (ms) for servers that never send
+	them (NQ, ProQuake, CRMod), so standard FTE HUD clocks work on QSS-M.
+	Computed on demand and never stored in cl.stats: anything there is taken
+	as server data by demo recording (CL_Record_f's stat dump) and seek
+	snapshots, and a recorded copy would switch synthesis off on playback. */
+static qboolean PR_CSQC_SyntheticStat(int stnum, double *out)
+{
+	char tlbuf[64];
+	char *end;
+	const char *tl;
+	double tlmin, ref_time, remaining, tl_secs;
+
+	if (stnum == STAT_TIME && !cl.stat_time_from_server)
+	{
+		*out = cl.time * 1000.0;
+		return true;
+	}
+	if (stnum != STAT_MATCHSTARTTIME || cl.stat_matchstarttime_from_server)
+		return false;
+
+	*out = 0.0;	// 0 = no match start known
+	if (cl.minutes < 0 || cl.minutes >= 254 || cl.seconds < 0 || cl.seconds >= 128 ||
+		(!cl.minutes && !cl.seconds) || cl.intermission || cl.match_elapsed_overtime_seen)
+		return true;
+	tl = Info_GetKey(cl.serverinfo, "timelimit", tlbuf, sizeof(tlbuf));
+	if (!tl || !*tl)
+		return true;
+	tlmin = strtod(tl, &end);
+	if (end == tl || *end || tlmin <= 0.0 || tlmin > 1440.0)
+		return true;
+	ref_time = cl.match_pause_time ? cl.match_pause_time : cl.time;
+	remaining = 60.0 * cl.minutes + cl.seconds - (ref_time - cl.last_match_time);
+	tl_secs = tlmin * 60.0;
+	if (remaining < 0.0 || remaining > tl_secs)
+		return true;
+	// Matches usually start at map load, so this lands near 0 and jitters;
+	// keep a valid start at least 1ms because 0 means "no match".
+	*out = q_max((cl.time + remaining - tl_secs) * 1000.0, 1.0);
+	return true;
+}
+
 static void PF_cl_getstat_int(void)
 {
 	int stnum = G_FLOAT(OFS_PARM0);
+	double synth;
 	if (stnum < 0 || stnum >= countof(cl.stats))
 		G_INT(OFS_RETURN) = 0;
+	else if (PR_CSQC_SyntheticStat(stnum, &synth))
+		G_INT(OFS_RETURN) = (int)synth;
 	else
 		G_INT(OFS_RETURN) = cl.stats[stnum];
 }
 static void PF_cl_getstat_float(void)
 {
 	int stnum = G_FLOAT(OFS_PARM0);
+	double synth;
+	qboolean synthetic = (stnum >= 0 && stnum < countof(cl.stats)) && PR_CSQC_SyntheticStat(stnum, &synth);
 	if (stnum < 0 || stnum >= countof(cl.stats))
 		G_FLOAT(OFS_RETURN) = 0;
 	else if (qcvm->argc > 1)
 	{
 		int firstbit = G_FLOAT(OFS_PARM1);
 		int bitcount = (qcvm->argc > 2) ? G_FLOAT(OFS_PARM2) : 1;	//like fteqw, bitcount is optional
-		G_FLOAT(OFS_RETURN) = (cl.stats[stnum]>>firstbit) & ((1<<bitcount)-1);
+		int value = synthetic ? (int)synth : cl.stats[stnum];
+		G_FLOAT(OFS_RETURN) = (value>>firstbit) & ((1<<bitcount)-1);
 	}
 	else
-		G_FLOAT(OFS_RETURN) = cl.statsf[stnum];
+		G_FLOAT(OFS_RETURN) = synthetic ? (float)synth : cl.statsf[stnum];
 }
 static void PF_cl_getstat_string(void)
 {
@@ -6804,7 +6851,12 @@ static qpic_t *DrawQC_CachePic(const char *picname, unsigned int flags)
 		//note this caches pic_nul rather than NULL, so unlike every other failure here it is not retried: a later
 		//request for the same name without PICFLAG_WAD keeps getting the checkerboard until PR_ReloadPics. that is the
 		//price of not changing what an explicit wad miss draws for mods that already rely on it.
-		qcpics[i].pic = Draw_PicFromWad2(picname + (strncmp(picname, "gfx/", 4)?0:4), texflags);
+		const char *lumpname = picname + (strncmp(picname, "gfx/", 4)?0:4);
+		lumpinfo_t *info;
+		if ((flags & PICFLAG_BLOCK) && !W_GetLumpName(lumpname, &info))
+			qcpics[i].pic = pic_nul;	//a test query (PRECACHE_PIC_TEST) probing for a lump: same answer, no console warning
+		else
+			qcpics[i].pic = Draw_PicFromWad2(lumpname, texflags);
 	}
 	else if (!strncmp(picname, "gfx/", 4) && !strchr(picname+4, '.'))
 	{	//extensionless gfx/ name, so a real wad lump wins and supplies the logical size. if there is no such lump we
@@ -8206,6 +8258,34 @@ void PF_cl_playerkey_internal(int player, const char *key, qboolean retfloat)
 		else
 			ret = NULL;
 	}
+	else if (!strcmp(key, "speed"))
+	{
+		if (cls.state != ca_connected || cls.signon != SIGNONS)
+			ret = NULL;
+		else if (player == cl.viewentity - 1)
+			q_snprintf(buf, sizeof(buf), "%.0f", SCR_GetPlayerSpeed());
+		else if (cl.scores[player].tinfo.speed > 0)
+			q_snprintf(buf, sizeof(buf), "%i", (int)cl.scores[player].tinfo.speed);
+		else
+			ret = NULL;
+	}
+	else if (!strcmp(key, "location"))
+	{
+		/* Only expose the viewed player's location: exposing arbitrary slots
+		   under nogameaccess would let an untrusted HUD act as a radar. */
+		if (cls.state != ca_connected || cls.signon != SIGNONS ||
+			player != cl.viewentity - 1 ||
+			!cl.entities || cl.viewentity <= 0 || cl.viewentity >= cl.num_entities)
+			ret = NULL;
+		else
+		{
+			const char *loc = LOC_GetLocation(cl.entities[cl.viewentity].origin);
+			if (!loc || !*loc || !strcmp(loc, "no .loc"))
+				ret = NULL;
+			else
+				ret = loc;
+		}
+	}
 	else
 	{
 		ret = Info_GetKey(cl.scores[player].userinfo, key, buf, sizeof(buf));
@@ -8257,7 +8337,6 @@ static void PF_cl_registercommand(void)
 		pq_clockmode	up, down, prematch, suddendeath
 		pq_clockwarn	1 when the engine draws it red (final minute, sudden death)
 		pq_matchpaused	1 while a match is paused
-		pq_teamgame		1 when the server sends team scores
 		pq_teams		space separated team colours (0-13) that have a score
 		pq_teamfragsN	frags of team colour N
 	*handled is false for any other pq_ name, so a real serverinfo key that
@@ -8271,7 +8350,7 @@ static const char *PF_cl_serverkey_proquake(const char *key, char *buf, size_t b
 	qboolean isteams = !strcmp(key, "teams");
 	qboolean isteamfrags = !strncmp(key, "teamfrags", 9) && key[9];
 
-	*handled = isclock || isteams || isteamfrags || !strcmp(key, "matchpaused") || !strcmp(key, "teamgame");
+	*handled = isclock || isteams || isteamfrags || !strcmp(key, "matchpaused");
 	if (!*handled || cls.state != ca_connected)
 		return NULL;
 	if (isclock)
@@ -8290,8 +8369,6 @@ static const char *PF_cl_serverkey_proquake(const char *key, char *buf, size_t b
 	}
 	if (!strcmp(key, "matchpaused"))
 		return cl.match_pause_time ? "1" : "0";
-	if (!strcmp(key, "teamgame"))
-		return cl.teamgame ? "1" : "0";
 	if (!cl.teamscores)
 		return NULL;
 	if (isteams)
@@ -8310,40 +8387,6 @@ static const char *PF_cl_serverkey_proquake(const char *key, char *buf, size_t b
 		q_snprintf(buf, bufsize, "%i", cl.teamscores[team].frags);
 		return buf;
 	}
-}
-
-/*	Values QSS-M's own HUD overlays already put on screen, so a CSQC HUD can
-	draw them anywhere. Display values only: raw velocity/origin stay withheld
-	from untrusted (simple) CSQC, as in FTE.
-		qssm_speed		units/sec the speedometer shows (spectators: the tracked player)
-		qssm_loc		location name for the view, as team chat's %l reports it
-		qssm_movekeys	what scr_movekeys lights: 1 fwd, 2 back, 4 left, 8 right, 16 jump, 32 swim up
-	*handled as for the pq_ keys.
-*/
-static const char *PF_cl_serverkey_qssm(const char *key, char *buf, size_t bufsize, qboolean *handled)
-{
-	const char *loc;
-
-	*handled = !strcmp(key, "speed") || !strcmp(key, "movekeys") || !strcmp(key, "loc");
-	if (!*handled || cls.state != ca_connected || cls.signon != SIGNONS)
-		return NULL;
-	if (!strcmp(key, "speed"))
-	{
-		q_snprintf(buf, bufsize, "%.0f", SCR_GetPlayerSpeed());
-		return buf;
-	}
-	if (!strcmp(key, "movekeys"))
-	{
-		q_snprintf(buf, bufsize, "%i", SCR_GetMoveKeys());
-		return buf;
-	}
-	// loc
-	if (!cl.entities || cl.viewentity <= 0 || cl.viewentity >= cl.num_entities)
-		return NULL;
-	loc = LOC_GetLocation(cl.entities[cl.viewentity].origin);
-	if (!loc || !*loc || !strcmp(loc, "no .loc"))	// no loc file for this map
-		return NULL;
-	return loc;
 }
 
 void PF_cl_serverkey_internal(const char *key, qboolean retfloat)
@@ -8365,8 +8408,6 @@ void PF_cl_serverkey_internal(const char *key, qboolean retfloat)
 		ret = NULL;
 		if (!strncmp(key, "pq_", 3))
 			ret = PF_cl_serverkey_proquake(key + 3, buf, sizeof(buf), &handled);
-		else if (!strncmp(key, "qssm_", 5))
-			ret = PF_cl_serverkey_qssm(key + 5, buf, sizeof(buf), &handled);
 		if (!handled)
 			ret = Info_GetKey(cl.serverinfo, key, buf, sizeof(buf));
 	}
@@ -13738,8 +13779,8 @@ void PR_DumpPlatform_f(void)
 		fprintf(f, "const float STAT_KILLEDMONSTERS = 14;\n");
 		fprintf(f, "const float STAT_ITEMS = 15;		/* self.items | (self.items2<<23). In order to decode this stat properly, you need to use getstatbits(STAT_ITEMS,0,23) to read self.items, and getstatbits(STAT_ITEMS,23,11) to read self.items2 or getstatbits(STAT_ITEMS,28,4) to read the visible part of serverflags, whichever is applicable. */\n");
 		fprintf(f, "const float STAT_VIEWHEIGHT = 16;	/* player.view_ofs_z */\n");
-//		fprintf(f, "const float STAT_TIME = 17;\n");
-//		fprintf(f, "//const float STAT_MATCHSTARTTIME = 18;\n");
+		fprintf(f, "const float STAT_TIME = 17;\n");
+		fprintf(f, "const float STAT_MATCHSTARTTIME = 18;\n");
 //		fprintf(f, "const float STAT_UNUSED = 19;\n");
 		fprintf(f, "const float STAT_VIEW2 = 20;		/* This stat contains the number of the entity in the server's .view2 field. */\n");
 		fprintf(f, "const float STAT_VIEWZOOM = 21;		/* Scales fov and sensitiity. Part of DP_VIEWZOOM. */\n");

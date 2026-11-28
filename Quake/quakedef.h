@@ -150,8 +150,8 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 #define	STAT_MONSTERS		14	// bumped by svc_killedmonster
 #define STAT_ITEMS			15	//replaces clc_clientdata info
 #define STAT_VIEWHEIGHT		16	//replaces clc_clientdata info
-//#define STAT_TIME			17	//zquake, redundant for nq.
-//#define STAT_MATCHSTARTTIME 18
+#define STAT_TIME			17	//zquake, redundant for nq.
+#define STAT_MATCHSTARTTIME 18
 //#define STAT_VIEW2		20
 #define STAT_VIEWZOOM		21 // DP
 //#define STAT_UNUSED3		22 

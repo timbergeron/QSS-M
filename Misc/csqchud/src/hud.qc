@@ -1,11 +1,13 @@
 /*
-	csqchud -- a portable simple-CSQC HUD that recreates QSS-M's scr_sbar 1/2/3
-	status bars from standard CSQC builtins only, and lets every widget be moved.
+	csqchud -- an id1 sample simple-CSQC HUD that recreates QSS-M's scr_sbar
+	1/2/3 status bars and lets every widget be moved, scaled or hidden.
 
-	Only CSQC_DrawHud is used, so it also runs as "simple CSQC" (a local
-	csprogs.dat the server didn't send). It uses standard CSQC builtins only,
-	plus optional QSS-M serverkey() keys (pq_*, qssm_*) that read as empty on
-	other engines; the same progs runs on FTEQW.
+	Tested on QSS-M and FTEQW. Only CSQC_DrawHud is defined, so it works as
+	"simple CSQC" (a local csprogs.dat the server didn't send). Standard CSQC
+	paths come first (STAT_TIME / STAT_MATCHSTARTTIME + timelimit for timed
+	matches, playerkey "team" summing gated on teamplay for team scores);
+	optional QSS-M extensions (pq_* serverkeys and speed/location playerkeys)
+	read as empty on other engines and degrade gracefully.
 
 	Layout model. Each widget has a native size (in 320x200-era HUD units) and:
 		chud_<w>_show    ""=preset default, 0 hide, 1 show
@@ -34,24 +36,59 @@ const float IT_KEY2 = 262144;
 const float IT_INVISIBILITY = 524288;
 const float IT_INVULNERABILITY = 1048576;
 const float IT_QUAD = 4194304;
+const float IT_GRENADE_LAUNCHER = 16;
+
+// Hipnotic: hipweapons[] bit numbers (laser cannon, mjolnir, grenade launcher, proximity gun)
+const float HIT_PROXIMITY_GUN_BIT = 16;
+const float HIT_GRENADE_LAUNCHER_BIT = 4;
+// Rogue weapon/ammo bits below bit 23 (the rest are read through has_bit())
+const float RIT_SHELLS = 128;
+const float RIT_NAILS = 256;
+const float RIT_ROCKETS = 512;
+const float RIT_CELLS = 1024;
+const float RIT_LAVA_NAILGUN = 4096;
+// Rogue bit numbers at 23 and above
+const float RIT_ARMOR1_BIT = 23;
+const float RIT_ARMOR2_BIT = 24;
+const float RIT_ARMOR3_BIT = 25;
+const float RIT_LAVA_NAILS_BIT = 26;
+const float RIT_PLASMA_AMMO_BIT = 27;
+const float RIT_MULTI_ROCKETS_BIT = 28;
+
+// Standard FTE/ZQuake timer stats (named with a prefix so we compile cleanly
+// whether or not the dumped engine header defines STAT_TIME/STAT_MATCHSTARTTIME).
+const float CHUD_STAT_TIME = 17;
+const float CHUD_STAT_MATCHSTARTTIME = 18;
+
+// ---- engine cvars as autocvars (created with defaults on engines without them) ----
+var float autocvar_scr_sbar = 1;
+var float autocvar_scr_sbaralpha = 1;
+var float autocvar_scr_sbarscale = 1;
+var float autocvar_scr_sbarshowqeammo = 1;
+var float autocvar_scr_showspeed = 0;
+var float autocvar_r_showlocs = 0;
+var float autocvar_r_showlocs_y = 30;
+var float autocvar_viewsize = 100;
+
+var float autocvar_chud_preset = 0;
+var float autocvar_chud_frags_count = 2;
 
 // ---- widgets ----
 const float W_STATUS = 0;	// sbar row: armor, face, health, ammo (presets 1, 2)
 const float W_IBAR = 1;		// classic inventory strip: weapons + ammo counts (preset 1)
 const float W_ITEMS = 2;	// keys, powerups, sigils row (presets 1, 2)
-const float W_FRAGS = 3;	// frag counts + ProQuake clock/team totals (preset 1, multiplayer)
+const float W_FRAGS = 3;	// frag counts + match clock / team totals (preset 1, multiplayer)
 const float W_QWAMMO = 4;	// side column: weapons + ammo counts (presets 2, 3)
 const float W_QEARMOR = 5;	// re-release armor block (preset 3)
 const float W_QEHEALTH = 6;	// re-release face + health (preset 3)
 const float W_QEAMMO = 7;	// re-release current ammo (preset 3)
 const float W_QEKEYS = 8;	// re-release keys + sigils (preset 3)
 const float W_SPEED = 9;	// speed readout (follows scr_showspeed)
-const float W_MOVEKEYS = 10;	// movement keys (follows scr_movekeys)
-const float W_LOC = 11;		// location name (follows r_showlocs)
-const float W_COUNT = 12;
+const float W_LOC = 10;		// location name (follows r_showlocs)
+const float W_COUNT = 11;
 
-string widget_name[W_COUNT] = {"status", "ibar", "items", "frags", "qwammo", "qe_armor", "qe_health", "qe_ammo", "qe_keys", "speed", "movekeys", "loc"};
-vector widget_size[W_COUNT] = {'320 24', '320 24', '128 16', '128 8', '44 188', '104 25', '104 25', '106 24', '80 16', '32 8', '24 24', '64 8'};
+string widget_name[W_COUNT] = {"status", "ibar", "items", "frags", "qwammo", "qe_armor", "qe_health", "qe_ammo", "qe_keys", "speed", "loc"};
+vector widget_size[W_COUNT] = {'320 24', '320 24', '128 16', '128 8', '44 188', '104 25', '104 25', '106 24', '80 16', '32 8', '64 8'};
 
 // resolved per frame
 vector loc_size;	// the loc widget is as wide as the current name
@@ -62,10 +99,12 @@ float sbaralpha;
 float hud_items, hud_sigils, hud_viewsize;
 vector wpos;	// current widget's top-left on screen
 float wscale;	// current widget's scale
+float hudtype;		// 0 id1, 1 Hipnotic, 2 Rogue: detected from gfx.wad like Sbar_LoadPics
+float hud_items2;	// STAT_ITEMS bits 23-31 (Rogue armour/ammo/powerups, Hipnotic laser and suits)
 
 // pickup flash bookkeeping, mirrors cl.item_gettime
 float item_gettime[32];
-float lastitems;
+float lastitems, lastitems2;
 float lasthealth;
 float faceanimtime;
 
@@ -80,13 +119,12 @@ float(float i) bit =
 	return b;
 };
 
-// ---- cvars ----
-// QSS-M's scr_sbar* cvars don't exist on other engines; cvar() would read 0.
-float(string name, float def) cvar_or =
+// any of the 32 STAT_ITEMS bits (getstatbits can only hand back 23 at a time)
+float(float n) has_bit =
 {
-	if (!cvar_type(name))
-		return def;
-	return cvar(name);
+	if (n < 23)
+		return (hud_items & bit(n)) != 0;
+	return (hud_items2 & bit(n - 23)) != 0;
 };
 
 float(string s) is_blank = { return s == "" || s == "-"; };
@@ -94,15 +132,13 @@ float(string s) is_blank = { return s == "" || s == "-"; };
 void() chud_registercvars =
 {
 	float i;
-	registercvar("chud_preset", "0");
 	registercvar("chud_autotest", "0");
-	registercvar("chud_frags_count", "2");
 	for (i = 0; i < W_COUNT; i++)
 	{
-		registercvar(strcat("chud_", widget_name[i], "_show"), "");
-		registercvar(strcat("chud_", widget_name[i], "_anchor"), "");
-		registercvar(strcat("chud_", widget_name[i], "_ofs"), "");
-		registercvar(strcat("chud_", widget_name[i], "_scale"), "");
+		registercvar(sprintf("chud_%s_show", widget_name[i]), "");
+		registercvar(sprintf("chud_%s_anchor", widget_name[i]), "");
+		registercvar(sprintf("chud_%s_ofs", widget_name[i]), "");
+		registercvar(sprintf("chud_%s_scale", widget_name[i]), "");
 	}
 };
 
@@ -113,11 +149,9 @@ void() chud_registercvars =
 float(float w) preset_show =
 {	// the overlay widgets follow the engine's own toggles, so a HUD shows what the player enabled
 	if (w == W_SPEED)
-		return cvar_or("scr_showspeed", 0) >= 1;
-	if (w == W_MOVEKEYS)
-		return cvar_or("scr_movekeys", 0) != 0;
+		return autocvar_scr_showspeed >= 1;
 	if (w == W_LOC)
-		return cvar_or("r_showlocs", 0) != 0;
+		return autocvar_r_showlocs != 0;
 	if (preset == 1)
 		return w == W_STATUS || w == W_IBAR || w == W_ITEMS || w == W_FRAGS;
 	if (preset == 2)
@@ -129,7 +163,7 @@ vector(float w) preset_anchor =
 {
 	if (w == W_LOC)
 		return '0.5 0.5';
-	if ((w == W_SPEED || w == W_MOVEKEYS) && preset == 3)
+	if (w == W_SPEED && preset == 3)
 		return '0 1';
 	if (w == W_QEARMOR || w == W_QEHEALTH)
 		return '0 1';
@@ -158,24 +192,14 @@ vector(float w) preset_ofs =
 			return '-144 -29';
 		return '-144 -54';
 	}
-	if (w == W_MOVEKEYS)
-	{	// SCR_DrawMovementKeys centre (x, y); the widget box starts 8px up and left of it
-		if (preset == 3)
-			return (cvar_or("scr_showspeed", 0) == 1) ? '164 -36' : '166 -18';
-		if (preset == 2)
-			return (cvar_or("scr_showspeed", 0) == 1) ? '-146 -44' : '-146 -30';
-		if (cvar_or("scr_showspeed", 0) == 1)
-			return (hud_viewsize >= 110) ? '-146 -42' : '-146 -68';
-		return (hud_viewsize >= 110) ? '-146 -30' : '-146 -56';
-	}
 	if (w == W_LOC)
-		return [0, cvar_or("r_showlocs_y", 30) + 4, 0];	// below the crosshair
+		return [0, autocvar_r_showlocs_y + 4, 0];	// below the crosshair
 	if (w == W_QEARMOR)	return '18 -36';
 	if (w == W_QEHEALTH)	return '18 -12';
 	if (w == W_QEAMMO)	return '-16 -12';
 	if (w == W_QEKEYS)
 	{
-		if (cvar_or("scr_sbarshowqeammo", 1))
+		if (autocvar_scr_sbarshowqeammo)
 			return '-16 -40';
 		return '-16 -64';
 	}
@@ -184,18 +208,9 @@ vector(float w) preset_ofs =
 
 float(float w) preset_scale =
 {
-	float s, qs;
-	if (w == W_QWAMMO && preset == 3)
-	{	// CANVAS_IBAR_QWQE runs at scr_sbarscale/1.4 while the CSQC canvas is at scr_sbarscale
-		s = max(1, cvar("scr_sbarscale"));
-		qs = max(1, cvar("scr_sbarscale") / 1.4);
-		return qs / s;
-	}
-	if (w == W_MOVEKEYS && preset == 3)
-	{	// CANVAS_BOTTOMLEFTQESMALL: scr_sbarscale/1.2
-		s = max(1, cvar("scr_sbarscale"));
-		qs = max(1, cvar("scr_sbarscale") / 1.2);
-		return qs / s;
+	if (w == W_QWAMMO && preset == 3 && autocvar_scr_sbarscale > 1)
+	{	// CANVAS_IBAR_QWQE runs at max(1, scr_sbarscale/1.4) while CANVAS_CSQC runs at scr_sbarscale
+		return max(1, autocvar_scr_sbarscale / 1.4) / autocvar_scr_sbarscale;
 	}
 	return 1;
 };
@@ -203,7 +218,7 @@ float(float w) preset_scale =
 // engine viewsize gates: inventory < 110, classic status < 120, re-release vitals <= 110
 float(float w) widget_viewsize_ok =
 {
-	if (w == W_SPEED || w == W_MOVEKEYS)
+	if (w == W_SPEED)
 		return hud_viewsize <= 110;
 	if (w == W_LOC)
 		return TRUE;
@@ -221,7 +236,7 @@ float(float w) widget_begin =
 	float show;
 	vector anchor, ofs, size;
 
-	s = cvar_string(strcat("chud_", widget_name[w], "_show"));
+	s = cvar_string(sprintf("chud_%s_show", widget_name[w]));
 	if (is_blank(s))
 		show = preset_show(w) && widget_viewsize_ok(w);
 	else
@@ -230,15 +245,15 @@ float(float w) widget_begin =
 		return FALSE;
 	if (w == W_LOC)
 	{	// centred on its own width
-		loc_name = serverkey("qssm_loc");
+		loc_name = getplayerkeyvalue(player_localentnum - 1, "location");
 		loc_size = [strlen(loc_name) * 8, 8, 0];
 	}
 
-	s = cvar_string(strcat("chud_", widget_name[w], "_anchor"));
+	s = cvar_string(sprintf("chud_%s_anchor", widget_name[w]));
 	anchor = is_blank(s) ? preset_anchor(w) : stov(s);
-	s = cvar_string(strcat("chud_", widget_name[w], "_ofs"));
+	s = cvar_string(sprintf("chud_%s_ofs", widget_name[w]));
 	ofs = is_blank(s) ? preset_ofs(w) : stov(s);
-	s = cvar_string(strcat("chud_", widget_name[w], "_scale"));
+	s = cvar_string(sprintf("chud_%s_scale", widget_name[w]));
 	wscale = is_blank(s) ? preset_scale(w) : stof(s);
 	if (wscale <= 0)
 		return FALSE;
@@ -284,7 +299,7 @@ void(vector p, float num, float digits, float red) wnum =
 	float l, i;
 
 	num = min(999, floor(num));
-	s = ftos(num);
+	s = sprintf("%d", num);
 	l = strlen(s);
 	if (l > digits)
 	{
@@ -299,7 +314,7 @@ void(vector p, float num, float digits, float red) wnum =
 		c = substring(s, i, 1);
 		if (c == "-")
 			c = "minus";
-		wpic(p, strcat(prefix, c), 1);
+		wpic(p, sprintf("%s%s", prefix, c), 1);
 		p_x += 24;
 	}
 };
@@ -327,28 +342,135 @@ string(float i) weapon_name =
 };
 
 // sb_weapons[flashon][i]: 0 owned, 1 active, 2-6 pickup flash
-string(float i) weapon_pic =
+// sb_weapons[flashon][i]: 0 owned, 1 active, 2-6 pickup flash. n is the
+// item bit, activeval the STAT_ACTIVEWEAPON value that marks it in use.
+float(float n, float activeval) flash_state =
 {
-	float flashon, b = bit(i);
-	flashon = floor((cltime - item_gettime[i]) * 10);
+	float flashon = floor((cltime - item_gettime[n]) * 10);
 	if (flashon < 0)
 	{
-		item_gettime[i] = cltime;
+		item_gettime[n] = cltime;
 		flashon = 0;
 	}
 	if (flashon >= 10)
-		flashon = (getstatf(STAT_ACTIVEWEAPON) == b) ? 1 : 0;
-	else
-		flashon = (flashon % 5) + 2;
+		return (getstatf(STAT_ACTIVEWEAPON) == activeval) ? 1 : 0;
+	return (flashon % 5) + 2;
+};
+
+string(float flashon, string name) flash_pic =
+{
 	if (flashon == 0)
-		return strcat("gfx/inv_", weapon_name(i));
+		return sprintf("gfx/inv_%s", name);
 	if (flashon == 1)
-		return strcat("gfx/inv2_", weapon_name(i));
-	return strcat("gfx/inva", ftos(flashon - 1), "_", weapon_name(i));
+		return sprintf("gfx/inv2_%s", name);
+	return sprintf("gfx/inva%d_%s", flashon - 1, name);
+};
+
+string(float i) weapon_pic =
+{
+	return flash_pic(flash_state(i, bit(i)), weapon_name(i));
+};
+
+// hsb_weapons[][]: laser, mjolnir, grenade+prox flash, prox+grenade, prox
+string(float j) hip_weapon_name =
+{
+	if (j == 0) return "laser";
+	if (j == 1) return "mjolnir";
+	if (j == 2) return "gren_prox";
+	if (j == 3) return "prox_gren";
+	return "prox";
+};
+
+float(float i) hip_weapon_bit =
+{
+	if (i == 0) return 23;	// laser cannon
+	if (i == 1) return 7;	// mjolnir
+	if (i == 2) return 4;	// grenade launcher
+	return 16;				// proximity gun
+};
+
+// Sbar_DrawInventory / _QW hipnotic block, including the grenade/proximity overlap
+void(float qw) draw_hip_weapons =
+{
+	float i, n, f, grenadeflashing = 0, alpha = qw ? sbaralpha : 1;
+	vector slot96 = qw ? '20 64 0' : '96 8 0';
+	for (i = 0; i < 4; i++)
+	{
+		n = hip_weapon_bit(i);
+		if (!has_bit(n))
+			continue;
+		f = flash_state(n, bit(n));
+		if (i == 2)
+		{
+			if (has_bit(HIT_PROXIMITY_GUN_BIT) && f)
+			{
+				grenadeflashing = 1;
+				wpic(slot96, flash_pic(f, hip_weapon_name(2)), alpha);
+			}
+		}
+		else if (i == 3)
+		{
+			if (has_bit(HIT_GRENADE_LAUNCHER_BIT))
+			{
+				if (f && !grenadeflashing)
+					wpic(slot96, flash_pic(f, hip_weapon_name(3)), alpha);
+				else if (!grenadeflashing)
+					wpic(slot96, flash_pic(0, hip_weapon_name(3)), alpha);
+			}
+			else
+				wpic(slot96, flash_pic(f, hip_weapon_name(4)), alpha);
+		}
+		else if (qw)
+			wpic([20, (i + 7) * 16, 0], flash_pic(f, hip_weapon_name(i)), alpha);
+		else
+			wpic([176 + i * 24, 8, 0], flash_pic(f, hip_weapon_name(i)), alpha);
+	}
+};
+
+string(float i) rogue_weapon_pic =
+{
+	if (i == 0) return "gfx/r_lava";
+	if (i == 1) return "gfx/r_superlava";
+	if (i == 2) return "gfx/r_gren";
+	if (i == 3) return "gfx/r_multirock";
+	return "gfx/r_plasma";
+};
+
+// Rogue's powered-up weapon replaces the matching id weapon icon
+void(float qw) draw_rogue_powered =
+{
+	float i, aw = getstatf(STAT_ACTIVEWEAPON);
+	if (aw < RIT_LAVA_NAILGUN)
+		return;
+	for (i = 0; i < 5; i++)
+		if (aw == RIT_LAVA_NAILGUN * bit(i))
+		{
+			if (qw)
+				wpic([20, (i + 2) * 16 + 32, 0], rogue_weapon_pic(i), sbaralpha);
+			else
+				wpic([(i + 2) * 24, 8, 0], rogue_weapon_pic(i), 1);
+		}
+};
+
+// rsb_invbar[0] while a Rogue powered weapon is active, else [1]
+string() rogue_invbar =
+{
+	return (getstatf(STAT_ACTIVEWEAPON) >= RIT_LAVA_NAILGUN) ? "gfx/r_invbar1" : "gfx/r_invbar2";
 };
 
 string() ammo_icon =
 {
+	if (hudtype == 2)
+	{	// rsb_ammo[] is loaded lava, multi, plasma but indexed lava, plasma, multi; mirrored as-is
+		if (hud_items & RIT_SHELLS)	return "gfx/sb_shells";
+		if (hud_items & RIT_NAILS)	return "gfx/sb_nails";
+		if (hud_items & RIT_ROCKETS)	return "gfx/sb_rocket";
+		if (hud_items & RIT_CELLS)	return "gfx/sb_cells";
+		if (has_bit(RIT_LAVA_NAILS_BIT))	return "gfx/r_ammolava";
+		if (has_bit(RIT_PLASMA_AMMO_BIT))	return "gfx/r_ammomulti";
+		if (has_bit(RIT_MULTI_ROCKETS_BIT))	return "gfx/r_ammoplasma";
+		return "";
+	}
 	if (hud_items & IT_SHELLS)	return "gfx/sb_shells";
 	if (hud_items & IT_NAILS)	return "gfx/sb_nails";
 	if (hud_items & IT_ROCKETS)	return "gfx/sb_rocket";
@@ -358,6 +480,13 @@ string() ammo_icon =
 
 string() armor_icon =
 {
+	if (hudtype == 2)
+	{
+		if (has_bit(RIT_ARMOR3_BIT))	return "gfx/sb_armor3";
+		if (has_bit(RIT_ARMOR2_BIT))	return "gfx/sb_armor2";
+		if (has_bit(RIT_ARMOR1_BIT))	return "gfx/sb_armor1";
+		return "";
+	}
 	if (hud_items & IT_ARMOR3)	return "gfx/sb_armor3";
 	if (hud_items & IT_ARMOR2)	return "gfx/sb_armor2";
 	if (hud_items & IT_ARMOR1)	return "gfx/sb_armor1";
@@ -380,8 +509,8 @@ string() face_pic =
 	}
 	f = bound(0, floor(health / 20), 4);
 	if (cltime <= faceanimtime)
-		return strcat("gfx/face_p", ftos(5 - f));
-	return strcat("gfx/face", ftos(5 - f));
+		return sprintf("gfx/face_p%d", 5 - f);
+	return sprintf("gfx/face%d", 5 - f);
 };
 
 // ---- widgets ----
@@ -391,6 +520,13 @@ void() draw_status =
 	string pic;
 
 	wpic('0 0', "gfx/sbar", sbaralpha);
+	if (hudtype == 1)
+	{	// Hipnotic moved the keys onto the status row so its items fit
+		if (hud_items & IT_KEY1)
+			wpic('209 3', "gfx/sb_key1", 1);
+		if (hud_items & IT_KEY2)
+			wpic('209 12', "gfx/sb_key2", 1);
+	}
 	armor = getstatf(STAT_ARMOR);
 	health = getstatf(STAT_HEALTH);
 	ammo = getstatf(STAT_AMMO);
@@ -435,10 +571,14 @@ void() draw_soloscores =
 void() draw_ibar =
 {
 	float i;
-	wpic('0 0', "gfx/ibar", sbaralpha);
+	wpic('0 0', (hudtype == 2) ? rogue_invbar() : "gfx/ibar", sbaralpha);
 	for (i = 0; i < 7; i++)
-		if (hud_items & (bit(i)))
+		if (hud_items & bit(i))
 			wpic([i * 24, 8, 0], weapon_pic(i), 1);
+	if (hudtype == 1)
+		draw_hip_weapons(FALSE);
+	else if (hudtype == 2)
+		draw_rogue_powered(FALSE);
 	for (i = 0; i < 4; i++)
 		wammocount([10 + 48 * i, 0, 0], getstatf(STAT_SHELLS + i));
 };
@@ -456,54 +596,106 @@ string(float i) item_pic =
 void() draw_items =
 {
 	float i;
-	for (i = 0; i < 6; i++)
-		if (hud_items & (IT_KEY1 * bit(i)))
+	for (i = 0; i < 6; i++)	// Hipnotic draws its keys on the status row instead
+		if ((hud_items & (IT_KEY1 * bit(i))) && (hudtype != 1 || i > 1))
 			wpic([i * 16, 0, 0], item_pic(i), 1);
+	if (hudtype == 1)
+	{	// wetsuit, empathy shields
+		if (has_bit(24))	wpic('96 0', "gfx/sb_wsuit", 1);
+		if (has_bit(25))	wpic('112 0', "gfx/sb_eshld", 1);
+	}
+	else if (hudtype == 2)
+	{	// shield, antigrav (replace the sigils)
+		if (has_bit(29))	wpic('96 0', "gfx/r_shield1", 1);
+		if (has_bit(30))	wpic('112 0', "gfx/r_agrav1", 1);
+		return;
+	}
 	if (!isdemo())	// the engine leaves the sigil slots free for its demo percentage
 		for (i = 0; i < 4; i++)
 			if (hud_sigils & bit(i))
-				wpic([96 + i * 8, 0, 0], strcat("gfx/sb_sigil", ftos(i + 1)), 1);
+				wpic([96 + i * 8, 0, 0], sprintf("gfx/sb_sigil%d", i + 1), 1);
 };
 
-// Quake palette entries (colour << 4) + 8: what the engine fills team slots with
+// Quake palette entries (colour << 4) + 8: what the engine fills ProQuake team slots with
 vector team_rgb[14] = {'0.4824 0.4824 0.4824', '0.3255 0.2314 0.1059', '0.3098 0.3098 0.451', '0.2157 0.2157 0.0275', '0.2784 0 0', '0.3725 0.2784 0.0275', '0.5608 0.2627 0.2', '0.498 0.3255 0.2471', '0.3412 0.2157 0.2627', '0.3725 0.2 0.2471', '0.4196 0.3412 0.2784', '0.1843 0.2627 0.2157', '0.4824 0.3882 0.0275', '0.1843 0.1843 0.498'};
 
-// Sbar_DrawFrags. The ProQuake/CRMod clock and team totals come from QSS-M's
-// "pq_*" serverkey pseudo-keys; on engines without them those read as empty
-// and this falls back to plain player frags.
+// Sbar_DrawFrags.
+// Clock: standard FTE STAT_TIME / STAT_MATCHSTARTTIME + timelimit first, with
+// QSS-M's pq_clock* fallback for prematch, sudden death, pause, count-up,
+// overtime or older ProQuake servers without timelimit.
+// Teams: QSS-M's pq_teams/pq_teamfragsN when the server sends ProQuake team
+// scores (including CRMod arena round wins); otherwise sum frags grouped by
+// the "team" playerkey when teamplay > 0 (works with QW team names on FTE).
+float clock_last_st, clock_last_change;	// detects a server time that never advances
+
 void() draw_frags =
 {
-	float i, j, n, x, f, mask, secs, t, best;
-	string clock, mode, s;
+	float i, j, n, x, f, mask, secs, t, best, tl, has_clock;
+	string clock, mode, s, pq_teams;
 	float team[4], tfrags[4];
 
-	n = cvar("chud_frags_count");
-	clock = serverkey("pq_clock");
-	if (clock != "")
+	n = autocvar_chud_frags_count;
+
+	mode = serverkey("pq_clockmode");
+	tl = serverkeyfloat("timelimit");
+	has_clock = FALSE;
+	if (tl > 0 && !(mode == "suddendeath" || mode == "prematch" || mode == "up" || serverkeyfloat("pq_matchpaused")))
+	{	// FTE convention: timelimit - (server time - match start). Needs a real
+		// match start and a server time that advances in this entry point (FTE
+		// leaves servertime and both stats at 0 inside CSQC_DrawHud); without
+		// them show the legacy clock or nothing, never a frozen countdown.
+		float st = getstatf(CHUD_STAT_TIME) / 1000;
+		if (st <= 0)
+			st = servertime;
+		if (st != clock_last_st)
+		{
+			clock_last_st = st;
+			clock_last_change = cltime;
+		}
+		float mstart = getstatf(CHUD_STAT_MATCHSTARTTIME) / 1000;
+		secs = ceil(tl * 60 - (st - mstart));
+		if (mstart > 0 && st > 0 && st >= mstart && secs >= 0 &&
+			cltime - clock_last_change < 1.5)	// a stalled server time is no clock either
+		{
+			mask = (secs < 60) ? 128 : 0;
+			s = sprintf("%3d:%02d", floor(secs / 60), secs % 60);
+			has_clock = TRUE;
+		}
+	}
+	if (!has_clock)
+	{
+		clock = serverkey("pq_clock");
+		if (clock != "")
+		{
+			secs = stof(clock);
+			mask = serverkeyfloat("pq_clockwarn") ? 128 : 0;
+			if (mode == "suddendeath")
+				s = "    SD";
+			else if (mode == "prematch")
+				s = sprintf(" -0:%02d", secs);
+			else
+				s = sprintf("%3d:%02d", floor(secs / 60), secs % 60);
+			has_clock = TRUE;
+		}
+	}
+	if (has_clock)
 	{	// the clock takes the right half of the slot, leaving room for two scores
 		n = min(n, 2);
-		secs = stof(clock);
-		mode = serverkey("pq_clockmode");
-		mask = serverkeyfloat("pq_clockwarn") ? 128 : 0;
-		if (mode == "suddendeath")
-			s = "    SD";
-		else if (mode == "prematch")
-			s = sprintf(" -0:%02d", secs);
-		else
-			s = sprintf("%3d:%02d", floor(secs / 60), secs % 60);
 		for (i = 0; i < 6; i++)
 			wchar([75 + i * 8, 0, 0], str2chr(s, i) + mask);
 	}
 
-	if (serverkeyfloat("pq_teamgame"))
-	{	// Sbar_SortTeamFrags: teams by score, highest first
+	pq_teams = serverkey("pq_teams");
+	if (pq_teams != "")
+	{	// ProQuake/CRMod server-sent team scores (includes arena round wins)
+		string mybot = getplayerkeyvalue(player_localentnum - 1, "bottomcolor");
 		n = min(n, 4);
-		j = tokenize(serverkey("pq_teams"));
+		j = tokenize(pq_teams);
 		for (i = 0; i < 4; i++)
 			team[i] = -1;
 		for (t = 0; t < j; t++)
 		{
-			f = serverkeyfloat(strcat("pq_teamfrags", argv(t)));
+			f = serverkeyfloat(sprintf("pq_teamfrags%s", argv(t)));
 			for (i = 0; i < 4; i++)
 				if (team[i] < 0 || f > tfrags[i])
 					break;
@@ -522,12 +714,75 @@ void() draw_frags =
 			wfill([x + 10, 1, 0], '28 4', team_rgb[team[i]]);
 			wfill([x + 10, 5, 0], '28 3', team_rgb[team[i]]);
 			drawstring(wpos + [x + 12, 0, 0] * wscale, sprintf("%3d", tfrags[i]), '8 8' * wscale, '1 1 1', 1, 0);
-			if (stof(getplayerkeyvalue(player_localentnum - 1, "bottomcolor")) == team[i])
+			// String compare: legacy colours are "0"-"13", RGB is "0x...", so RGB never false-matches.
+			if (mybot == sprintf("%d", team[i]))
 			{
 				wchar([x + 5, 0, 0], 16);
 				wchar([x + 33, 0, 0], 17);
 			}
 		}
+		return;
+	}
+
+	if (serverkeyfloat("teamplay") > 0)
+	{	// Standard QW/FTE fallback: sum connected players' frags by string "team" key
+		string tnames[8];
+		float tsum[8], order[8];
+		vector trgb[8];
+		float nteams = 0, k;
+		string localteam = strzone(getplayerkeyvalue(player_localentnum - 1, "team"));
+
+		for (i = 0; i < maxclients; i++)
+		{
+			if (getplayerkeyvalue(i, "name") == "")
+				continue;
+			if (stof(getplayerkeyvalue(i, "*spectator")) != 0)
+				continue;
+			s = getplayerkeyvalue(i, "team");
+			if (s == "")
+				continue;
+			for (k = 0; k < nteams; k++)
+				if (tnames[k] == s)
+					break;
+			if (k == nteams)
+			{
+				if (nteams >= 8)
+					continue;
+				tnames[k] = strzone(s);
+				tsum[k] = 0;
+				trgb[k] = stov(getplayerkeyvalue(i, "bottomcolor_rgb"));
+				order[k] = k;
+				nteams++;
+			}
+			tsum[k] += stof(getplayerkeyvalue(i, "frags"));
+		}
+
+		// Insertion-sort team indices by summed frags, highest first
+		for (i = 1; i < nteams; i++)
+		{
+			k = order[i];
+			for (j = i; j > 0 && tsum[k] > tsum[order[j - 1]]; j--)
+				order[j] = order[j - 1];
+			order[j] = k;
+		}
+
+		n = min(n, nteams);
+		for (i = 0, x = 0; i < n; i++, x += 32)
+		{
+			k = order[i];
+			wfill([x + 10, 1, 0], '28 4', trgb[k]);
+			wfill([x + 10, 5, 0], '28 3', trgb[k]);
+			drawstring(wpos + [x + 12, 0, 0] * wscale, sprintf("%3d", tsum[k]), '8 8' * wscale, '1 1 1', 1, 0);
+			if (localteam != "" && tnames[k] == localteam)
+			{
+				wchar([x + 5, 0, 0], 16);
+				wchar([x + 33, 0, 0], 17);
+			}
+		}
+
+		for (i = 0; i < nteams; i++)
+			strunzone(tnames[i]);
+		strunzone(localteam);
 		return;
 	}
 
@@ -551,13 +806,22 @@ void() draw_frags =
 
 void() draw_qwammo =
 {
-	float i;
-	// scr_sbaralphaqwammo 1: ibar ammo slots at full alpha, digits at x 9
-	for (i = 0; i < 4; i++)
-		wsubpic([2, 144 + 11 * i, 0], "gfx/ibar", [3 + 48 * i, 0, 0], '42 11', 1);
+	float i, extraguns = (hudtype == 1) ? 2 : 0;
+	if (hudtype == 2)
+	{	// Rogue: the active inventory bar's ammo slots at scr_sbaralpha
+		for (i = 0; i < 4; i++)
+			wsubpic([0, 144 + 11 * i, 0], rogue_invbar(), [1 + 48 * i, 0, 0], '44 11', sbaralpha);
+	}
+	else	// scr_sbaralphaqwammo 1: ibar ammo slots at full alpha
+		for (i = 0; i < 4; i++)
+			wsubpic([2, 144 + 11 * i, 0], "gfx/ibar", [3 + 48 * i, 0, 0], '42 11', 1);
 	for (i = 0; i < 7; i++)
-		if (hud_items & (bit(i)))
-			wpic([20, 32 + i * 16, 0], weapon_pic(i), sbaralpha);
+		if (hud_items & bit(i))
+			wpic([20, 32 + i * 16 - 16 * extraguns, 0], weapon_pic(i), sbaralpha);
+	if (hudtype == 1)
+		draw_hip_weapons(TRUE);
+	else if (hudtype == 2)
+		draw_rogue_powered(TRUE);
 	for (i = 0; i < 4; i++)
 		wammocount([9, 144 + 11 * i, 0], getstatf(STAT_SHELLS + i));
 };
@@ -594,7 +858,7 @@ void() draw_qeammo =
 {
 	float ammo = getstatf(STAT_AMMO);
 	string pic;
-	if (!cvar_or("scr_sbarshowqeammo", 1))
+	if (!autocvar_scr_sbarshowqeammo)
 		return;
 	wsubpic('82 0', "gfx/sbar", '0 0', '24 24', 1);
 	pic = ammo_icon();
@@ -618,7 +882,7 @@ void() draw_qekeys =
 	for (i = 0; i < 4; i++)
 		if (hud_sigils & bit(i))
 		{
-			wpic([x, 0, 0], strcat("gfx/sb_sigil", ftos(i + 1)), 1);
+			wpic([x, 0, 0], sprintf("gfx/sb_sigil%d", i + 1), 1);
 			x -= 8;
 		}
 };
@@ -626,7 +890,7 @@ void() draw_qekeys =
 // SCR_DrawSpeed text mode: white, red over 400, gold digits over 600
 void() draw_speed =
 {
-	string v = serverkey("qssm_speed");
+	string v = getplayerkeyvalue(player_localentnum - 1, "speed");
 	float speed, i, c;
 	if (v == "")
 		return;
@@ -642,22 +906,6 @@ void() draw_speed =
 	}
 };
 
-// SCR_DrawMovementKeys. The engine rotates '^'; drawcharacter can't, so arrows are ^ v < >.
-void() draw_movekeys =
-{
-	float k = serverkeyfloat("qssm_movekeys", -1);
-	if (k < 0)
-		return;
-	if (k & 1)	wchar('8 0', '^');
-	if (k & 2)	wchar('8 16', 'v');
-	if (k & 4)	wchar('0 8', '<');
-	if (k & 8)	wchar('16 8', '>');
-	if (k & 16)
-		wchar('8 7', 'j' + 128);
-	else if (k & 32)
-		wchar('8 7', 's' + 128);
-};
-
 void() draw_loc =
 {
 	if (loc_name == "")
@@ -671,8 +919,9 @@ void() track_state =
 	float i, b, health;
 
 	hud_items = getstatbits(STAT_ITEMS, 0, 23);
+	hud_items2 = getstatbits(STAT_ITEMS, 23, 9);
 	hud_sigils = getstatbits(STAT_ITEMS, 28, 4);
-	if (hud_items != lastitems)
+	if (hud_items != lastitems || hud_items2 != lastitems2)
 	{	// CL_ParseClientdata: a newly set bit restarts that item's pickup flash
 		for (i = 0; i < 23; i++)
 		{
@@ -680,7 +929,14 @@ void() track_state =
 			if ((hud_items & b) && !(lastitems & b))
 				item_gettime[i] = cltime;
 		}
+		for (i = 0; i < 9; i++)
+		{
+			b = bit(i);
+			if ((hud_items2 & b) && !(lastitems2 & b))
+				item_gettime[23 + i] = cltime;
+		}
 		lastitems = hud_items;
+		lastitems2 = hud_items2;
 	}
 	// The engine animates the face on svc_damage, which simple CSQC can't see;
 	// a health drop is the portable stand-in.
@@ -690,40 +946,88 @@ void() track_state =
 	lasthealth = health;
 };
 
+// Every lump Sbar_LoadPics requires before it switches to that pack's HUD.
+const string ROGUE_LUMPS = "r_invbar1 r_invbar2 r_lava r_superlava r_gren r_multirock r_plasma r_shield1 r_agrav1 r_teambord r_ammolava r_ammomulti r_ammoplasma";
+
+string() hip_lumps =
+{
+	string l = "sb_wsuit sb_eshld";
+	float i, f;
+	for (i = 0; i < 5; i++)
+	{
+		l = sprintf("%s inv_%s inv2_%s", l, hip_weapon_name(i), hip_weapon_name(i));
+		for (f = 1; f <= 5; f++)
+			l = sprintf("%s inva%d_%s", l, f, hip_weapon_name(i));
+	}
+	return l;
+};
+
+float(string lumps) wad_has_all =
+{
+	float i, n = tokenize(lumps);
+	for (i = 0; i < n; i++)
+		if (precache_pic(argv(i), PRECACHE_PIC_FROMWAD | PRECACHE_PIC_TEST) == "")
+			return FALSE;
+	return TRUE;
+};
+
 void() chud_precache =
 {
 	float i, j;
 	string pics = "sbar ibar scorebar disc sb_shells sb_nails sb_rocket sb_cells sb_armor1 sb_armor2 sb_armor3 sb_key1 sb_key2 sb_invis sb_invuln sb_suit sb_quad sb_sigil1 sb_sigil2 sb_sigil3 sb_sigil4 face_inv2 face_quad face_invis face_invul2 num_minus anum_minus";
 	float n = tokenize(pics);
 	for (i = 0; i < n; i++)
-		precache_pic(strcat("gfx/", argv(i)));
+		precache_pic(sprintf("gfx/%s", argv(i)));
 	for (i = 0; i < 10; i++)
 	{
-		precache_pic(strcat("gfx/num_", ftos(i)));
-		precache_pic(strcat("gfx/anum_", ftos(i)));
+		precache_pic(sprintf("gfx/num_%d", i));
+		precache_pic(sprintf("gfx/anum_%d", i));
 	}
 	for (i = 1; i <= 5; i++)
 	{
-		precache_pic(strcat("gfx/face", ftos(i)));
-		precache_pic(strcat("gfx/face_p", ftos(i)));
+		precache_pic(sprintf("gfx/face%d", i));
+		precache_pic(sprintf("gfx/face_p%d", i));
 	}
 	for (i = 0; i < 7; i++)
 	{
-		precache_pic(strcat("gfx/inv_", weapon_name(i)));
-		precache_pic(strcat("gfx/inv2_", weapon_name(i)));
+		precache_pic(sprintf("gfx/inv_%s", weapon_name(i)));
+		precache_pic(sprintf("gfx/inv2_%s", weapon_name(i)));
 		for (j = 1; j <= 5; j++)
-			precache_pic(strcat("gfx/inva", ftos(j), "_", weapon_name(i)));
+			precache_pic(sprintf("gfx/inva%d_%s", j, weapon_name(i)));
+	}
+
+	// Sbar_LoadPics picks the HUD only when gfx.wad holds the pack's whole lump
+	// set; do the same. Bare lump names with PRECACHE_PIC_FROMWAD look in the
+	// wad only (a loose gfx/inv_laser.tga must not count) and are cached apart
+	// from the gfx/ names used for drawing.
+	hudtype = 0;
+	if (wad_has_all(hip_lumps()))
+	{
+		hudtype = 1;
+		for (i = 0; i < 5; i++)
+			for (j = 0; j <= 6; j++)
+				precache_pic(flash_pic(j, hip_weapon_name(i)));
+		precache_pic("gfx/sb_wsuit");
+		precache_pic("gfx/sb_eshld");
+	}
+	else if (wad_has_all(ROGUE_LUMPS))
+	{
+		hudtype = 2;
+		n = tokenize(ROGUE_LUMPS);
+		for (i = 0; i < n; i++)
+			precache_pic(sprintf("gfx/%s", argv(i)));
 	}
 };
 
 void(vector virtsize, float showscores) chud_draw =
 {
 	scr = virtsize;
-	preset = cvar("chud_preset");
+
+	preset = autocvar_chud_preset;
 	if (preset < 1 || preset > 3)
-		preset = bound(1, floor(cvar_or("scr_sbar", 1)), 3);
-	sbaralpha = cvar_or("scr_sbaralpha", 1);
-	hud_viewsize = cvar("viewsize");
+		preset = bound(1, floor(autocvar_scr_sbar), 3);
+	sbaralpha = autocvar_scr_sbaralpha;
+	hud_viewsize = autocvar_viewsize;
 
 	track_state();
 	if (intermission)
@@ -741,8 +1045,6 @@ void(vector virtsize, float showscores) chud_draw =
 		draw_frags();
 	if (widget_begin(W_SPEED))
 		draw_speed();
-	if (widget_begin(W_MOVEKEYS))
-		draw_movekeys();
 	if (widget_begin(W_LOC))
 		draw_loc();
 	if (showscores && maxclients <= 1)

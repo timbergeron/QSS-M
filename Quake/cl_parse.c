@@ -3690,6 +3690,10 @@ static void CL_ParseStatNumeric(int stat, int ival, float fval)
 	}
 	cl.stats[stat] = ival;
 	cl.statsf[stat] = fval;
+	if (stat == STAT_TIME)
+		cl.stat_time_from_server = true;
+	else if (stat == STAT_MATCHSTARTTIME)
+		cl.stat_matchstarttime_from_server = true;
 	if (stat == STAT_VIEWZOOM)
 		vid.recalc_refdef = true;
 	//just assume that they all affect the hud

@@ -142,7 +142,9 @@ cvar_t		scr_match_hud = {"scr_match_hud", "1", CVAR_ARCHIVE};  // woods #matchhu
 cvar_t		scr_showspeed = {"scr_showspeed", "0",CVAR_ARCHIVE}; // woods #speed
 cvar_t		scr_showspeed_y = {"scr_showspeed_y", "176", CVAR_ARCHIVE}; // woods - #speedometer
 cvar_t		scr_movekeys = {"scr_movekeys", "0", CVAR_ARCHIVE}; // woods #movementkeys
-cvar_t		scr_csqc_cleanhud = {"scr_csqc_cleanhud", "0", CVAR_ARCHIVE}; // simple CSQC HUD: 1 hides engine gameplay overlays, 2 also crosshair + demo bar
+cvar_t		scr_movekeys_x = {"scr_movekeys_x", "-1", CVAR_ARCHIVE}; // woods #movementkeys (-1 = preset default, 0-100 = % across screen)
+cvar_t		scr_movekeys_y = {"scr_movekeys_y", "-1", CVAR_ARCHIVE}; // woods #movementkeys (-1 = preset default, 0-100 = % down screen)
+cvar_t		scr_movekeys_scale = {"scr_movekeys_scale", "1", CVAR_ARCHIVE}; // woods #movementkeys
 cvar_t		scr_matchclock = {"scr_matchclock", "0",CVAR_ARCHIVE}; // woods #varmatchclock
 cvar_t		scr_matchclock_countup = {"scr_matchclock_countup", "0", CVAR_ARCHIVE}; // woods #varmatchclock
 cvar_t		scr_matchclock_y = {"scr_matchclock_y", "0",CVAR_ARCHIVE}; // woods #varmatchclock
@@ -1083,15 +1085,6 @@ static void Sbar_Completion_f(cvar_t* cvar, const char* partial)
 ShowSpeed_Completion_f -- woods #iwtabcomplete
 ===============
 */
-static void CSQCCleanHud_Completion_f(cvar_t* cvar, const char* partial)
-{
-	(void)cvar;
-
-	Con_AddToTabList("0", partial, "engine overlays on", NULL);
-	Con_AddToTabList("1", partial, "hide gameplay overlays", NULL);
-	Con_AddToTabList("2", partial, "also crosshair and demo bar", NULL);
-}
-
 static void ShowSpeed_Completion_f(cvar_t* cvar, const char* partial)
 {
 	(void)cvar;
@@ -1246,8 +1239,9 @@ void SCR_Init (void)
 	Cvar_SetCompletion (&scr_showspeed, &ShowSpeed_Completion_f); // woods #iwtabcomplete
 	Cvar_RegisterVariable (&scr_showspeed_y); // woods #speedometer
 	Cvar_RegisterVariable (&scr_movekeys); // woods #movementkeys
-	Cvar_RegisterVariable (&scr_csqc_cleanhud);
-	Cvar_SetCompletion (&scr_csqc_cleanhud, &CSQCCleanHud_Completion_f);
+	Cvar_RegisterVariable (&scr_movekeys_x); // woods #movementkeys
+	Cvar_RegisterVariable (&scr_movekeys_y); // woods #movementkeys
+	Cvar_RegisterVariable (&scr_movekeys_scale); // woods #movementkeys
 	Cvar_RegisterVariable (&scr_matchclock); // woods #varmatchclock
 	Cvar_SetCompletion (&scr_matchclock, &MatchClock_Completion_f); // woods #iwtabcomplete
 	Cvar_RegisterVariable (&scr_matchclock_countup); // woods #varmatchclock
@@ -1412,20 +1406,9 @@ static float scr_demobar_prevbasespeed = 1.0f;
 static float scr_demobar_showtime = 1.0f;
 static double scr_demobar_force_until = 0.0; // woods #democontrols -- realtime deadline for forced-visible bar
 
-/* scr_csqc_cleanhud level that applies right now. Only a simple CSQC HUD
-   (CSQC_DrawHud without CSQC_UpdateView) honours it: full CSQC already owns
-   the gameplay HUD, and with no CSQC there is nothing to replace the engine's. */
-static int SCR_CSQCCleanHudLevel (void)
-{
-	if (!cl.qcvm.progs || !cl.qcvm.extfuncs.CSQC_DrawHud || cl.qcvm.extfuncs.CSQC_UpdateView)
-		return 0;
-	return CLAMP (0, (int)scr_csqc_cleanhud.value, 2);
-}
-
 static qboolean SCR_DemoBarEligible(void)
 {
-	/* level 2 hides the bar, so its hitbox and scrub input go with it */
-	return cls.demoplayback && SCR_CSQCCleanHudLevel () < 2;
+	return cls.demoplayback;
 }
 
 static int SCR_DemoBarStatusY(void)
@@ -3965,7 +3948,7 @@ static float SCR_LivePreviewSpeedValue(void)
 }
 
 /* Speed the speedometer shows: interpolated spectator tinfo speed when
-   observing, else local velocity. Also read by CSQC as serverkey "qssm_speed". */
+   observing, else local velocity. Also read by CSQC as playerkey "speed". */
 float SCR_GetPlayerSpeed(void)
 {
 	if (!cl.notobserver &&
@@ -3997,17 +3980,6 @@ static float GetSpeedValue(void)
 	if (M_LivePreview_UseSpeed())
 		return SCR_LivePreviewSpeedValue();
 	return SCR_GetPlayerSpeed();
-}
-
-/* Movement keys the scr_movekeys overlay lights up, as a bitmask:
-   1 forward, 2 back, 4 left, 8 right, 16 jump, 32 swim up.
-   Also read by CSQC as serverkey "qssm_movekeys". */
-int SCR_GetMoveKeys(void)
-{
-	extern kbutton_t in_moveleft, in_moveright, in_forward, in_back, in_jump, in_up;
-	return ((in_forward.state & 1) ? 1 : 0) | ((in_back.state & 1) ? 2 : 0) |
-		((in_moveleft.state & 1) ? 4 : 0) | ((in_moveright.state & 1) ? 8 : 0) |
-		((in_jump.state & 1) ? 16 : 0) | ((in_up.state & 1) ? 32 : 0);
 }
 
 /*
@@ -4164,53 +4136,105 @@ SCR_DrawMovementKeys -- woods #movementkeys (soruced from: https://github.com/j0
 void SCR_DrawMovementKeys(void)
 {
 	qboolean movekeys_preview = M_LivePreview_UseMovementKeys();
+	qboolean custom_pos = (scr_movekeys_x.value >= 0.0f || scr_movekeys_y.value >= 0.0f);
+	float scale = CLAMP(0.25f, scr_movekeys_scale.value, 8.0f);
 
 	if (!scr_movekeys.value ||
 		(!movekeys_preview && (cl.intermission || qeintermission || crxintermission)) ||
-		scr_viewsize.value > 110)
+		(custom_pos ? (scr_viewsize.value >= 130) : (scr_viewsize.value > 110)))
 		return;
 
 	extern kbutton_t in_moveleft, in_moveright, in_forward, in_back, in_jump, in_up;
 
 	int x, y, size = 8;
-	int clampedSbar = CLAMP(1, (int)scr_sbar.value, 3);
+	qboolean use_matrix = false;
+	float tx = 0.0f, ty = 0.0f;
 
-	switch (clampedSbar)
+	if (custom_pos)
 	{
-	case 1:
-		x = 10;
-		y = (scr_showspeed.value == 1) ? 186 : 198;
-		if (scr_viewsize.value == 110)
-			y += 26;
-		GL_SetCanvas(CANVAS_SBAR2);
-		break;
-	case 2:
-		x = 10;
-		y = (scr_showspeed.value == 1 || !strcmp(mute, "y")) ? 210 : 224;
-		GL_SetCanvas(CANVAS_SBAR2);
-		break;
-	case 3: // #qehud
-		x = (scr_showspeed.value == 1) ? 172 : 174;
-		y = (scr_showspeed.value == 1) ? 148 : 166;
-		GL_SetCanvas(CANVAS_BOTTOMLEFTQESMALL);
-		break;
-	default:
-		return; // Invalid clampedSbar value
+		float s = CLAMP(1.0f, scr_sbarscale.value, (float)glwidth / 320.0f);
+		float view_w = glwidth / s;
+		float view_h = glheight / s;
+		float pct_x = CLAMP(0.0f, scr_movekeys_x.value >= 0.0f ? scr_movekeys_x.value : 50.0f, 100.0f);
+		float pct_y = CLAMP(0.0f, scr_movekeys_y.value >= 0.0f ? scr_movekeys_y.value : 50.0f, 100.0f);
+		float box = 24.0f * scale;
+
+		GL_SetCanvas(CANVAS_CSQC);
+		tx = (pct_x / 100.0f) * q_max(0.0f, view_w - box);
+		ty = (pct_y / 100.0f) * q_max(0.0f, view_h - box);
+		x = size;
+		y = size;
+		use_matrix = true;
+	}
+	else
+	{
+		int clampedSbar = CLAMP(1, (int)scr_sbar.value, 3);
+
+		switch (clampedSbar)
+		{
+		case 1:
+			x = 10;
+			y = (scr_showspeed.value == 1) ? 186 : 198;
+			if (scr_viewsize.value == 110)
+				y += 26;
+			GL_SetCanvas(CANVAS_SBAR2);
+			break;
+		case 2:
+			x = 10;
+			y = (scr_showspeed.value == 1 || !strcmp(mute, "y")) ? 210 : 224;
+			GL_SetCanvas(CANVAS_SBAR2);
+			break;
+		case 3: // #qehud
+			x = (scr_showspeed.value == 1) ? 172 : 174;
+			y = (scr_showspeed.value == 1) ? 148 : 166;
+			GL_SetCanvas(CANVAS_BOTTOMLEFTQESMALL);
+			break;
+		default:
+			return; // Invalid clampedSbar value
+		}
+
+		if (scale != 1.0f)
+		{
+			tx = (float)(x - size);
+			ty = (float)(y - size);
+			x = size;
+			y = size;
+			use_matrix = true;
+		}
 	}
 
-	// Draw movement keys
-	if (movekeys_preview || (in_forward.state & 1))
+	// Draw movement keys (combine raw key buttons with cl.pendingcmd so
+	// controllers, mouse-move, +strafe and smartjump light up too)
+	qboolean live_cmd = !cls.demoplayback;
+	qboolean mv_fwd = (in_forward.state & 1) || (live_cmd && cl.pendingcmd.forwardmove > 1);
+	qboolean mv_back = (in_back.state & 1) || (live_cmd && cl.pendingcmd.forwardmove < -1);
+	qboolean mv_left = (in_moveleft.state & 1) || (live_cmd && cl.pendingcmd.sidemove < -1);
+	qboolean mv_right = (in_moveright.state & 1) || (live_cmd && cl.pendingcmd.sidemove > 1);
+	qboolean mv_jump = (in_jump.state & 1) || (live_cmd && (cl.pendingcmd.buttons & 2));
+	qboolean mv_up = (in_up.state & 1) || (live_cmd && cl.pendingcmd.upmove > 1);
+
+	if (use_matrix)
+	{
+		glPushMatrix();
+		glTranslatef(tx, ty, 0.0f);
+		glScalef(scale, scale, 1.0f);
+	}
+
+	if (movekeys_preview || mv_fwd)
 		Draw_Character_Rotation(x, y - size, '^', 0);
-	if (movekeys_preview || (in_back.state & 1))
+	if (movekeys_preview || mv_back)
 		Draw_Character_Rotation(x, y + size, '^', 180);
-	if (movekeys_preview || (in_moveleft.state & 1))
+	if (movekeys_preview || mv_left)
 		Draw_Character_Rotation(x - size, y, '^', 270);
-	if (movekeys_preview || (in_moveright.state & 1))
+	if (movekeys_preview || mv_right)
 		Draw_Character_Rotation(x + size, y, '^', 90);
-	if (movekeys_preview || (in_jump.state & 1))
+	if (movekeys_preview || mv_jump)
 		M_Print(x, y - 1, "j");
-	else if (in_up.state & 1)
-		M_Print(x, y -1, "s");
+	else if (mv_up)
+		M_Print(x, y - 1, "s");
+
+	if (use_matrix)
+		glPopMatrix();
 }
 
 /*
@@ -8923,7 +8947,7 @@ void SCR_UpdateScreen (void)
 		if (!cl.intermission)
 		{
 			Sbar_Draw ();
-			if (!scr_drawloading && !con_forcedup && SCR_CSQCCleanHudLevel () < 2)
+			if (!scr_drawloading && !con_forcedup)
 				SCR_DrawCrosshair (); //johnfitz
 		}
 	}
@@ -8966,8 +8990,6 @@ void SCR_UpdateScreen (void)
 		   HUD too. Keep system/diagnostic overlays (centerprint, FPS,
 		   netgraph, devstats, demo controls, debug tools, console, menus). */
 		qboolean engine_hud = !csqc_updateview;
-		/* scr_csqc_cleanhud lets a simple CSQC HUD take these over too */
-		qboolean gameplay_hud = engine_hud && SCR_CSQCCleanHudLevel () < 1;
 
 		if (engine_hud)
 		{
@@ -8981,23 +9003,22 @@ void SCR_UpdateScreen (void)
 		SCR_CheckDrawCenterString ();
 		SCR_DrawDevStats (); //johnfitz
 		SCR_DrawFPS (); //johnfitz
-		if (gameplay_hud)
+		if (engine_hud)
 			SCR_DrawClock (); //johnfitz
 		SCR_DrawDemoControls(); // woods (iw) #democontrols
-		if (gameplay_hud)
+		if (engine_hud)
 		{
 			SCR_ShowPing (); // woods #scrping
 			SCR_ShowPL (); // woods #scrpl
 		}
 		SCR_DrawNetGraph (); // woods #netgraph
-		if (gameplay_hud)
+		if (engine_hud)
 		{
 			SCR_DrawMatchClock (); // woods #matchhud
 			SCR_DrawMatchScores (); // woods #matchhud
 			SCR_ShowFlagStatus (); // woods #matchhud #flagstatus
 			SCR_ShowObsFrags (); // woods #observerhud
 			SCR_DrawSpeed (); // woods #speed
-			SCR_DrawMovementKeys (); // woods #movementkeys
 			SCR_DrawGrenadeTimer(); // woods #nadecount
 			SCR_DrawMapName ();
 			TP_DrawClosestLocText (); // woods #locext
@@ -9006,9 +9027,11 @@ void SCR_UpdateScreen (void)
 			SCR_Observing (); // woods
 		}
 		else
-			obs_frags_active = false; // no stale click target for IN_ObsFragsClick
+			obs_frags_active = false; // full CSQC skips the list: no stale click target for IN_ObsFragsClick
+		if (engine_hud)
+			SCR_DrawMovementKeys (); // woods #movementkeys
 		TexturePointer_Draw (); // woods #texturepointer
-		if (gameplay_hud)
+		if (engine_hud)
 			SCR_DrawScopeOverlay (); // woods #scope
 		SCR_DrawEdictInfo (); // woods #showfields
 		SCR_HullDebug_DrawInfo ();

@@ -10,3 +10,7 @@ set -e
 FTEQCC=${1:-fteqcc}
 "$FTEQCC" -srcfile csprogs.src
 "$FTEQCC" -srcfile ref.src
+# compare.py's mission-pack scenarios: needs qsssextensions.qc (pr_dumpplatform -Tss -O qsssextensions)
+if [ -f qsssextensions.qc ]; then
+	"$FTEQCC" -srcfile chudss.src
+fi

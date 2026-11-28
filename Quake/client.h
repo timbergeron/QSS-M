@@ -486,6 +486,8 @@ typedef struct
 	int				match_elapsed_seed_samples;
 	qboolean		match_elapsed_overtime_seen;
 	qboolean		match_elapsed_valid;
+	qboolean		stat_time_from_server;
+	qboolean		stat_matchstarttime_from_server;
 	double			last_ping_time;		// JPG - last time pings were obtained // woods #pqteam
 	qboolean		console_ping;		// JPG 1.05 - true if the ping came from the console // woods #pqteam
 	double			last_status_time;	// JPG 1.05 - last time status was obtained // woods #pqteam

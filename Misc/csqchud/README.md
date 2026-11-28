@@ -1,25 +1,44 @@
-# csqchud: a movable status bar in portable CSQC
+# csqchud: a movable id1 status bar in CSQC
 
-A sample HUD that recreates QSS-M's three status bar styles (`scr_sbar 1`
-classic, `2` QuakeWorld, `3` Quake re-release) using only standard CSQC
-builtins. Every piece can then be moved, scaled or hidden.
+An id1 sample HUD tested on QSS-M and FTEQW, with optional QSS-M extensions.
+It recreates QSS-M's three status bar styles (`scr_sbar 1` classic, `2`
+QuakeWorld, `3` Quake re-release) and lets every piece be moved, scaled or
+hidden.
 
-It only defines `CSQC_DrawHud`, so it also works as **simple CSQC**: a
-`csprogs.dat` the player drops into their own gamedir, on any server. It uses
-standard CSQC builtins, plus optional QSS-M `serverkey()` keys (see
-[below](#engine-data-through-serverkey)) that read as empty on other engines.
-The same progs runs unchanged on FTEQW; only the widgets fed by those keys
-stay blank there.
+It only defines `CSQC_DrawHud`, so it works as **simple CSQC**: a `csprogs.dat`
+the player drops into their own gamedir, on any server. Standard CSQC paths
+come first (FTE's `STAT_TIME`/`STAT_MATCHSTARTTIME` + `timelimit` clock and
+`teamplay`-gated `team` playerkey summing); optional QSS-M extensions (see
+[below](#optional-qss-m-extensions)) return `""` on other engines and degrade
+gracefully.
 
 At the default layout the sample matches the engine's own status bar pixel for
-pixel in all three presets (see [Checking it](#checking-it)).
+pixel in all three presets, for id1 and for the Hipnotic and Rogue layouts (see
+[Checking it](#checking-it); the mission packs are checked with placeholder
+art, see below). It has
+not been runtime-tested on DarkPlaces (DarkPlaces accepts a `CSQC_DrawHud`-only
+progs in source, but its playerkey implementation lacks the `team` and RGB
+colour keys this sample reads).
+
+Like the engine, it picks the Hipnotic or Rogue layout from which lumps
+`gfx.wad` has (`inv_laser` / `r_invbar1`), so it switches automatically with
+the game directory.
 
 ## Using it
 
 1. Build it (below) and copy `csprogs.dat` into a gamedir.
-2. Set `scr_csqc_cleanhud 1` so QSS-M stops drawing its own gameplay overlays
-   (match clock, speed, ping and so on) over a custom HUD. Use `2` to hide the
-   crosshair and the demo bar as well.
+2. Turn off only the engine overlays the HUD replaces, so they aren't drawn
+   twice. Everything else (ping, observer scores, demo controls, FPS,
+   crosshair) keeps working as usual:
+
+   | HUD widget | turn on | engine overlay to turn off |
+   |---|---|---|
+   | `speed` | `chud_speed_show 1` | `scr_showspeed 0` |
+   | `loc` | `chud_loc_show 1` | `r_showlocs 0` |
+   | match clock in `frags` | (on with preset 1) | `scr_matchclock 0` if you don't want both |
+
+   The HUD needs no engine setting for this. On FTEQW there are no such
+   QSS-M overlays, so there's nothing to turn off.
 
 ## Layout cvars
 
@@ -42,19 +61,19 @@ Widgets (`<w>`):
 | `status` | sbar row: armor, face, health, current ammo | 1, 2 |
 | `ibar` | classic inventory strip: weapons and ammo counts | 1 |
 | `items` | keys, powerups, sigils | 1, 2 |
-| `frags` | top frag counts (`chud_frags_count`, default 2, like QSS-M), or team totals and the match clock on ProQuake/CRMod servers | 1 (multiplayer) |
+| `frags` | top frag counts (`chud_frags_count`, default 2, like QSS-M), match clock, and team totals | 1 (multiplayer) |
 | `qwammo` | side column: weapons and ammo counts | 2, 3 |
 | `qe_armor`, `qe_health`, `qe_ammo`, `qe_keys` | re-release corner blocks | 3 |
 | `speed` | speed readout, white / red over 400 / gold over 600 | follows `scr_showspeed` |
-| `movekeys` | movement keys | follows `scr_movekeys` |
 | `loc` | location name, centred under the crosshair | follows `r_showlocs` |
 
-`speed`, `movekeys` and `loc` follow the engine's own toggles and default to
-the engine's positions. With `scr_csqc_cleanhud 1` the engine stops drawing
-them, and the HUD's copies can go anywhere. The speedometer bar
-(`scr_showspeed 2`) isn't reproduced, only the number. The engine draws the
-movement arrows by rotating `^`; `drawcharacter` can't rotate, so the sample
-uses `^ v < >`.
+`speed` and `loc` default to following the engine's own toggles and positions.
+Set `chud_speed_show`/`chud_loc_show` to make them independent; then turn the
+engine's copy off and put the HUD's anywhere. The speedometer bar (`scr_showspeed 2`) isn't
+reproduced, only the number. Movement keys (`scr_movekeys`) stay on the native engine overlay, which can be
+positioned anywhere with
+`scr_movekeys_x`, `scr_movekeys_y` (`-1` = preset default, `0`–`100`% across the
+screen) and `scr_movekeys_scale`.
 
 Examples:
 
@@ -69,9 +88,10 @@ line the quotes are lost, so `+set chud_status_ofs "0 8"` arrives as two
 arguments and the `set` is refused. Also keep the command line under 50
 arguments: Quake drops everything past that, `+map` included.
 
-The sample also respects `viewsize` (110 and 120 hide parts, as the engine
-does), `scr_sbaralpha`, `scr_sbarshowqeammo` and `scr_sbarscale`. On engines
-without those cvars it falls back to their QSS-M defaults.
+Engine settings (`viewsize`, `scr_sbar`, `scr_sbaralpha`, `scr_sbarshowqeammo`,
+`scr_sbarscale`, `scr_showspeed`, `r_showlocs`, `r_showlocs_y`) are declared as
+`autocvar_*` globals so they exist with sensible defaults on engines that don't
+define them natively.
 
 ## Building
 
@@ -84,7 +104,9 @@ cd Misc/csqchud/src && ./build.sh /path/to/fteqcc
 ```
 
 This writes `csprogs.dat` (the sample) and `ref.dat` (reference progs used only
-by `compare.py`).
+by `compare.py`). With `src/qsssextensions.qc` present (`pr_dumpplatform -Tss
+-O qsssextensions`) it also builds `chudss.dat`, the tiny server progs the
+mission-pack checks use.
 
 ## Checking it
 
@@ -101,22 +123,60 @@ takes a screenshot:
   through `VF_DRAWENGINESBAR`
 - `chud`: the sample
 
-It then diffs the HUD rectangles. The last run: 0 differing pixels in all nine
-rectangles (classic bar, QW status/items/column, re-release
-armor/health/ammo/keys/column).
+It then diffs the HUD rectangles.
 
 `--hud-arg` passes extra console arguments to the sample run only, which is
 handy for a layout cfg placed in `<basedir>/chud/`: `--hud-arg=+exec
---hud-arg=mylayout.cfg`. Any moved widget makes its rectangle fail. Moving one
-widget by a single pixel gave 5102 differing pixels, which shows the check
-catches real differences.
+--hud-arg=mylayout.cfg`. Any moved widget makes its rectangle fail.
 
-## Engine data through serverkey()
+### Mission packs
 
-Match timers and team scores reach the client as binary ProQuake messages,
-which CSQC never sees. QSS-M exposes them through the standard `serverkey()`
-builtin as read-only `pq_*` pseudo-keys. Nothing new is registered, and other
-engines just return `""`, so the sample falls back to plain player frags there.
+```bash
+python3 Misc/csqchud/compare.py --bin <QSS-M> --basedir <throwaway basedir> \
+    --missionpacks <basedir>/id1/pak0.pak
+```
+
+Hipnotic and Rogue are commercial, so the check doesn't use their data.
+`make_placeholder_wads.py` builds a `gfx.wad` holding id1's lumps plus every
+lump name the engine looks for; each placeholder is an id1 pic of the same size
+with its palette shifted, so a wrong lump in a slot shows up as a difference.
+`chudss.dat` forces the item bits, active weapon, ammo and armour from cvars
+every frame (bits 23-31 through `items2`). Five scenarios cover the laser
+cannon, mjolnir and the grenade/proximity overlap, the wetsuit and empathy
+shields, Hipnotic's keys on the status row, both Rogue inventory bars, every
+powered weapon icon tested (lava nailgun, plasma gun), Rogue's armour and ammo
+icons, the shield and antigrav. This proves positions and selection logic match
+the engine, not the real art.
+
+The same run also checks an id1 gamedir with a stray loose
+`gfx/inv_laser.tga`: like the engine, the sample only detects a mission pack
+from `gfx.wad`, and only when the pack's whole lump set is there.
+
+## Standard match clock and team scores
+
+- **Match clock:** QSS-M populates FTE's `STAT_TIME` (17) and
+  `STAT_MATCHSTARTTIME` (18) in milliseconds from ProQuake timers whenever the
+  server didn't send those stats itself and `serverinfo` has a positive
+  `timelimit`. The sample reads `STAT_TIME`/`STAT_MATCHSTARTTIME` +
+  `serverkeyfloat("timelimit")` first (the standard FTE convention).
+- **Team totals (fallback):** when `pq_teams` is empty and
+  `serverkeyfloat("teamplay") > 0`, the sample groups connected non-spectator
+  players by `getplayerkeyvalue(i, "team")` and sums their frags, which works
+  with QuakeWorld team names on FTEQW. Note one parity difference on CRMod FFA
+  servers (where `pq_teams` is empty and `teamplay` is `0`): the sample shows
+  player frags where the engine's classic bar shows none.
+
+## Optional QSS-M extensions
+
+Everything below uses existing builtins (`serverkey()` and
+`getplayerkeyvalue()`) and returns `""` on engines that don't implement them.
+
+### ProQuake/CRMod `serverkey()` keys
+
+Match-global ProQuake/CRMod data that standard stats and playerkeys cannot
+express (prematch countdown, pause, sudden death, count-up, timed overtime,
+servers without `timelimit`, and server-authoritative team scores including
+CRMod arena round wins):
 
 | key | value |
 |---|---|
@@ -124,37 +184,28 @@ engines just return `""`, so the sample falls back to plain player frags there.
 | `pq_clockmode` | `up`, `down`, `prematch` or `suddendeath` |
 | `pq_clockwarn` | `1` when the engine draws it red (final minute, sudden death) |
 | `pq_matchpaused` | `1` while a match is paused |
-| `pq_teamgame` | `1` when the server sends team scores |
-| `pq_teams` | space-separated team colours (0-13) that have a score |
-| `pq_teamfragsN` | frags of team colour N |
+| `pq_teams` | space-separated ProQuake team colours (`0`–`13`) that have a score |
+| `pq_teamfragsN` | frags/score of ProQuake team colour `N` |
 
-Values QSS-M's own overlays already show on screen. These are display values
-only; raw velocity and position stay withheld from simple CSQC, as in FTE:
+### Per-player `getplayerkeyvalue()` keys
+
+Display values already drawn by QSS-M's native overlays, exposed per player
+slot so they fit splitscreen/MVD semantics (raw velocity and origin remain
+withheld from simple CSQC):
 
 | key | value |
 |---|---|
-| `qssm_speed` | units/sec the speedometer shows (spectators: the tracked player) |
-| `qssm_loc` | location name for the view, as team chat's `%l` reports it |
-| `qssm_movekeys` | keys `scr_movekeys` lights: 1 forward, 2 back, 4 left, 8 right, 16 jump, 32 swim up |
-
-The clock comes from the same function the engine's status bar uses
-(`Sbar_GetMatchClock`), so the two always agree, including the player's
-`scr_matchclock_countup` preference. On a live CRMod 7 server the sample's
-frag-slot clock read the same value as the engine's `scr_matchclock` in the
-same frame. Speed, movement keys and loc name matched the engine's overlays in
-the same frame in single player, and drew correctly on the live server with
-`scr_csqc_cleanhud 1`.
+| `speed` | units/sec for the viewed player (interpolated spectator `tinfo` speed when observing, else local velocity), or `tinfo` speed for other slots when available |
+| `location` | map location name for the viewed player only (restricted to `cl.viewentity` so untrusted HUDs cannot use it as radar; `""` when no `.loc` is loaded) |
 
 ## What it doesn't reproduce
 
-- demo percentage and frame counts; the engine's demo bar covers these, and
-  `scr_csqc_cleanhud 1` keeps it
+- demo percentage and frame counts; the engine's demo bar covers these
 - `scr_sbarfacecolor` team face border: doable with
   `getplayerkeyvalue(player_localnum, "bottomcolor_rgb")`
 - the record indicator
 - the mini deathmatch overlay
 - powerup timer bars and combined-powerup faces (QSS-M-only pics)
-- hipnotic/rogue weapons and items
 
 Approximations:
 
@@ -162,6 +213,9 @@ Approximations:
   so the sample starts it when health drops.
 - **Tab scoreboard:** draws the scorebar with kills and secrets. It isn't
   QSS-M's map/server/session-time line.
+- **RGB player colours on ProQuake team slots:** ProQuake team slots are legacy
+  palette indices (`0`–`13`), so a player using an RGB `0xrrggbb` pants colour
+  gets no team bracket (and does not false-match team `0`).
 
 ## Portability notes
 
@@ -169,6 +223,6 @@ Approximations:
   flashes, the pain face and its autotest from `cltime`, which both engines
   update.
 - `getplayerkeyvalue` with a negative player number reads the frag-sorted list
-  on both engines.
+  on both QSS-M and FTEQW.
 - FTE ignored the autotest's `impulse 9` and `give`, so FTE runs show a bare
   inventory. Layout-wise the HUD draws the same there.

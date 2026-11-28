@@ -2,3 +2,4 @@ artifacts/
 *.dat
 *.lno
 src/qscsextensions.qc
+src/qsssextensions.qc
