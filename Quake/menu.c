@@ -2741,13 +2741,53 @@ qboolean M_List_UseScrollbar(menulist_t* list, int yrel)
 
 	yrel -= scrollh * 4; // half the thumb height, in pixels
 	range = (list->viewsize - scrollh) * 8;
-	list->scroll = (int)(yrel * (float)(list->numitems - list->viewsize) / range + 0.5f);
+	list->scroll = (int)(yrel * (float)(list->numitems - list->viewsize) / q_max(1, range) + 0.5f);
 
 	if (list->scroll > list->numitems - list->viewsize)
 		list->scroll = list->numitems - list->viewsize;
 	if (list->scroll < 0)
 		list->scroll = 0;
 
+	return true;
+}
+
+/* Hit-test the track only when starting a drag. An active drag can leave it. */
+static qboolean M_List_MouseInScrollbar(const menulist_t *list, int xrel, int yrel, int cols)
+{
+	int thumb_x = (cols - 1) * 8;
+	return list->numitems > list->viewsize && xrel >= thumb_x - 4 && xrel < cols * 8 &&
+		yrel >= 0 && yrel < list->viewsize * 8;
+}
+
+static qboolean M_List_MouseInColumns(int xrel, int cols)
+{
+	return xrel >= -8 && xrel < cols * 8;
+}
+
+static void M_DrawListSearch(int x, int y, int cols, const char *text, int len, qboolean matched)
+{
+	int start = q_max(0, len - cols + 1);
+
+	M_DrawTextBox(x, y, cols, 1);
+	M_PrintWhite(x + 8, y + 8, text + start);
+	M_DrawCharacter(x + 8 + (len - start) * 8, y + 8,
+		matched ? 10 + ((int)(realtime * 4) & 1) : 11 ^ 128);
+}
+
+static int M_List_RowAt(const menulist_t *list, int xrel, int yrel, int cols)
+{
+	if (!M_List_MouseInColumns(xrel, cols) || yrel < 0 || yrel >= list->viewsize * 8)
+		return -1;
+	int row = list->scroll + yrel / 8;
+	return row < list->numitems ? row : -1;
+}
+
+static qboolean M_List_SelectClickedRow(menulist_t *list, int xrel, int yrel, int cols)
+{
+	int row = M_List_RowAt(list, xrel, yrel, cols);
+	if (row < 0 || (list->isactive_fn && !list->isactive_fn(row)))
+		return false;
+	list->cursor = row;
 	return true;
 }
 
@@ -3431,16 +3471,16 @@ typedef struct
 #define MODMENU_MAX_VISIBLE_ITEMS 32
 #define MODMENU_GROUP_GAP 8
 #define MODMENU_MAX_MAP_ALIASES 2048
-#define MODMENU_MAP_FIRST_Y 56
+#define MODMENU_MAP_FIRST_Y (m_top + 56)
 #define MODMENU_MAP_ITEM_HEIGHT 8
-#define MODMENU_MAP_LABEL_X 16
-#define MODMENU_MAP_CURSOR_X 8
-#define MODMENU_MAP_COLS 36
-#define MODMENU_MAP_VIEW_ROWS 13
-#define MODMENU_MAP_SEARCH_BOX_X 16
-#define MODMENU_MAP_SEARCH_BOX_Y 176
-#define MODMENU_MAP_SEARCH_TEXT_X 24
-#define MODMENU_MAP_SEARCH_TEXT_Y 184
+#define MODMENU_MAP_LABEL_X (m_left + 16)
+#define MODMENU_MAP_CURSOR_X (MODMENU_MAP_LABEL_X - 8)
+#define MODMENU_MAP_COLS M_LIST_COLS
+#define MODMENU_MAP_VIEW_ROWS (13 + M_EXTRA_ROWS)
+#define MODMENU_MAP_SEARCH_BOX_X MODMENU_MAP_LABEL_X
+#define MODMENU_MAP_SEARCH_BOX_Y M_BOTTOM(176)
+#define MODMENU_MAP_SEARCH_TEXT_X (MODMENU_MAP_SEARCH_BOX_X + 8)
+#define MODMENU_MAP_SEARCH_TEXT_Y (MODMENU_MAP_SEARCH_BOX_Y + 8)
 
 #define MODMENU_GROUP_DEFAULT 0
 #define MODMENU_GROUP_JOIN 1
@@ -3903,6 +3943,7 @@ static void M_ModMenu_Maps_Open(void)
 	modmenu_mapmenu.scrollbar_grab = false;
 	modmenu_mapmenu.list.cursor = 0;
 	modmenu_mapmenu.list.scroll = 0;
+	M_UpdateBounds();
 	modmenu_mapmenu.list.viewsize = MODMENU_MAP_VIEW_ROWS;
 	modmenu_mapmenu.list.isactive_fn = M_ModMenu_MapListItemActive;
 	modmenu_mapmenu.list.search.len = 0;
@@ -4883,13 +4924,16 @@ static void M_ModMenu_Maps_Draw(void)
 {
 	menulist_t *list = &modmenu_mapmenu.list;
 	int firstvis, i, numvis;
+	int old_namecols = m_namecols;
 
 	if (!keydown[K_MOUSE1])
 		modmenu_mapmenu.scrollbar_grab = false;
 
-	M_PrintWhite((320 - (int)strlen("Map") * 8) / 2, 28, "Map");
-	M_DrawQuakeBar(80, 40, 20);
+	M_List_SetViewsize(list, MODMENU_MAP_VIEW_ROWS);
+	M_PrintWhite(m_left + (m_width - 3 * 8) / 2, m_top + 28, "Map");
+	M_DrawQuakeBar(m_left + (m_width - 160) / 2, m_top + 40, 20);
 
+	m_namecols = (int)CLAMP(12, MODMENU_MAP_COLS * 0.375f - 1, 40);
 	M_List_GetVisibleRange(list, &firstvis, &numvis);
 	for (i = 0; i < numvis; i++)
 	{
@@ -4941,6 +4985,7 @@ static void M_ModMenu_Maps_Draw(void)
 			M_DrawCharacter(MODMENU_MAP_CURSOR_X, y, 12 + ((int)(realtime * 4) & 1));
 	}
 
+	m_namecols = old_namecols;
 	if (modmenu_mapmenu.num_aliases == 0)
 		M_Print(MODMENU_MAP_LABEL_X, MODMENU_MAP_FIRST_Y, "no map aliases");
 	else if (list->numitems == 0)
@@ -5327,15 +5372,14 @@ static void M_ModMenu_Maps_Key(int key)
 		break;
 
 	case K_MOUSE1:
-		x = m_mousex - MODMENU_MAP_LABEL_X - (MODMENU_MAP_COLS - 1) * 8;
+		x = m_mousex - MODMENU_MAP_LABEL_X;
 		y = m_mousey - MODMENU_MAP_FIRST_Y;
-		if (x >= -8 && M_List_UseScrollbar(list, y))
+		if (M_List_MouseInScrollbar(list, x, y, MODMENU_MAP_COLS))
 		{
 			modmenu_mapmenu.scrollbar_grab = true;
 			M_ModMenu_Mousemove(m_mousex, m_mousey);
 		}
-		else if (m_mousey >= MODMENU_MAP_FIRST_Y &&
-			m_mousey < MODMENU_MAP_FIRST_Y + MODMENU_MAP_VIEW_ROWS * MODMENU_MAP_ITEM_HEIGHT)
+		else if (M_List_SelectClickedRow(list, x, y, MODMENU_MAP_COLS))
 		{
 			M_ModMenu_Maps_Select();
 		}
@@ -5473,6 +5517,8 @@ static void M_ModMenu_Maps_Mousemove(int cx, int cy)
 		}
 		M_List_UseScrollbar(list, cy);
 	}
+	else if (!M_List_MouseInColumns(cx - MODMENU_MAP_LABEL_X, MODMENU_MAP_COLS))
+		return;
 
 	M_List_Mousemove(list, cy);
 }
@@ -6452,7 +6498,7 @@ void M_Load_Draw (void)
 	if (loadmenu.list.search.len > 0)
 	{
 		int cursor_x = m_left + 24 + 8 * loadmenu.list.search.len;
-		M_DrawTextBox(m_left + 16, LOADGAME_SEARCH_BOX_Y, LOADGAME_LIST_COLS - 4, 1);
+		M_DrawTextBox(m_left + 16, LOADGAME_SEARCH_BOX_Y, 32, 1);
 		M_PrintHighlight(m_left + 24, LOADGAME_SEARCH_TEXT_Y, loadmenu.list.search.text,
 			loadmenu.list.search.text,
 			loadmenu.list.search.len);
@@ -6584,19 +6630,19 @@ void M_Load_Key (int k)
 		Cbuf_AddText (va ("load \"%s\"\n", selected->loadname));
 		return;
 
-	case K_MOUSE1: // woods #mousemenu
-		if (loadmenu.list.numitems > 0)
+	case K_MOUSE1:
+	{
+		int x = m_mousex - loadmenu.x;
+		int y = m_mousey - loadmenu.y;
+		if (M_List_MouseInScrollbar(&loadmenu.list, x, y, loadmenu.cols))
 		{
-			int x = m_mousex - loadmenu.x - (loadmenu.cols - 1) * 8;
-			int y = m_mousey - loadmenu.y;
-			if (x >= -8 && M_List_UseScrollbar(&loadmenu.list, y))
-			{
-				loadmenu.scrollbar_grab = true;
-				M_Load_Mousemove(m_mousex, m_mousey);
-				break;
-			}
+			loadmenu.scrollbar_grab = true;
+			M_Load_Mousemove(m_mousex, m_mousey);
 		}
-		goto enter;
+		else if (M_List_SelectClickedRow(&loadmenu.list, x, y, loadmenu.cols))
+			goto enter;
+		break;
+	}
 
 	default:
 		break;
@@ -6646,7 +6692,6 @@ void M_Save_Key (int k)
 void M_Load_Mousemove(int cx, int cy) // woods #mousemenu
 {
 	cy -= loadmenu.y;
-	(void)cx;
 
 	if (loadmenu.scrollbar_grab)
 	{
@@ -6657,6 +6702,8 @@ void M_Load_Mousemove(int cx, int cy) // woods #mousemenu
 		}
 		M_List_UseScrollbar(&loadmenu.list, cy);
 	}
+	else if (!M_List_MouseInColumns(cx - loadmenu.x, loadmenu.cols))
+		return;
 
 	if (m_mousey >= LOADGAME_INFO_Y)
 		return;
@@ -7123,7 +7170,7 @@ seeing nothing whatsoever reads as a broken feature.
 ================
 */
 #define MAPS_PREVIEW_WIDTH		200
-#define MAPS_PREVIEW_FALLBACK_H	(MAPS_PREVIEW_WIDTH * 7 / 10)
+#define MAPS_PREVIEW_MAX_WIDTH	320
 #define MAPS_PREVIEW_PAD		4
 #define MAPS_PREVIEW_RADIUS		5.0f
 /* Two alphas on purpose.  Behind a levelshot the photo is opaque and supplies
@@ -7140,7 +7187,7 @@ static void M_Maps_DrawLevelshotPreview (void)
 	const char		*status;
 	plcolour_t		bg;
 	qboolean		pending = false;
-	int				idx, w, h, x, y, panel_h;
+	int				idx, w, h, x, y, panel_h, max_h;
 
 	if (!Key_IsShortcutModifierDown())
 		return;
@@ -7153,16 +7200,18 @@ static void M_Maps_DrawLevelshotPreview (void)
 		return;
 
 	pic = Mapshot_ResolvePic(item->name);
-	w = MAPS_PREVIEW_WIDTH;
+	w = q_min(MAPS_PREVIEW_MAX_WIDTH, MAPS_PREVIEW_WIDTH +
+		q_min((m_width - 320) / 3, (m_height - 200) / 2));
+	max_h = w * 7 / 10;
 	if (pic && pic->width > 0 && pic->height > 0)
 	{
 		/* Fit inside the box rather than only pinning the width: local
 		   levelshots are whatever the user dropped in, and a portrait one
 		   scaled to 200 wide would run off the 320x200 canvas. */
-		h = w * pic->height / pic->width;
-		if (h > MAPS_PREVIEW_FALLBACK_H)
+		h = q_max(1, (int)(w * (float)pic->height / pic->width));
+		if (h > max_h)
 		{
-			h = MAPS_PREVIEW_FALLBACK_H;
+			h = max_h;
 			w = h * pic->width / pic->height;
 			if (w < 1)
 				w = 1;
@@ -7172,7 +7221,7 @@ static void M_Maps_DrawLevelshotPreview (void)
 	}
 	else
 	{
-		h = MAPS_PREVIEW_FALLBACK_H;
+		h = max_h;
 		pending = Mapshot_PicPending(item->name);
 		status = pending ? "loading..." : "no levelshot";
 		panel_h = h;			// status and name are centred inside the box
@@ -7335,7 +7384,7 @@ void M_Maps_Draw(void)
 		int box_y = y + MAX_VIS_MAPS * 8 + 8;
 		int cursor_x = x + 8 + 8 * mapsmenu.list.search.len; // Start position + character width * text length
 
-		M_DrawTextBox(x, box_y, cols - 4, 1);
+		M_DrawTextBox(x, box_y, 32, 1);
 		M_PrintHighlight(x + 8, box_y + 8, mapsmenu.list.search.text,
 			mapsmenu.list.search.text,
 			mapsmenu.list.search.len);
@@ -7479,19 +7528,22 @@ void M_Maps_Key(int key)
 		break;
 
 	case K_MOUSE1:
-		x = m_mousex - mapsmenu.x - (mapsmenu.cols - 1) * 8;
+		x = m_mousex - mapsmenu.x;
 		y = m_mousey - mapsmenu.y;
-		if (x < -8 || !M_List_UseScrollbar(&mapsmenu.list, y))
+		if (M_List_MouseInScrollbar(&mapsmenu.list, x, y, mapsmenu.cols))
+		{
+			mapsmenu.scrollbar_grab = true;
+			M_Maps_Mousemove(m_mousex, m_mousey);
+		}
+		else
 		{
 			if (M_Maps_MouseYInDownloadGap(y))
-			{
-				S_LocalSound ("misc/menu3.wav");
 				break;
-			}
-			goto enter;
+			if (M_Maps_HasDownloadGap() && y >= 16)
+				y -= 8;
+			if (M_List_SelectClickedRow(&mapsmenu.list, x, y, mapsmenu.cols))
+				goto enter;
 		}
-		mapsmenu.scrollbar_grab = true;
-		M_Maps_Mousemove(m_mousex, m_mousey);
 		break;
 
 	default:
@@ -7514,6 +7566,8 @@ void M_Maps_Mousemove(int cx, int cy)
 		M_List_UseScrollbar(&mapsmenu.list, cy);
 		// Note: no return, we also update the cursor
 	}
+	else if (!M_List_MouseInColumns(cx - mapsmenu.x, mapsmenu.cols))
+		return;
 
 	if (M_Maps_MouseYInDownloadGap(cy))
 		return;
@@ -7976,7 +8030,7 @@ void M_DownloadMaps_Draw(void)
 
 	if (downloadmapsmenu.list.search.len > 0)
 	{
-		M_DrawTextBox(m_left + 16, M_BOTTOM(176), cols - 4, 1);
+		M_DrawTextBox(m_left + 16, M_BOTTOM(176), 32, 1);
 		M_PrintHighlight(m_left + 24, M_BOTTOM(184), downloadmapsmenu.list.search.text,
 			downloadmapsmenu.list.search.text,
 			downloadmapsmenu.list.search.len);
@@ -8128,12 +8182,18 @@ void M_DownloadMaps_Key(int key)
 		break;
 
 	case K_MOUSE1:
-		x = m_mousex - downloadmapsmenu.x - (downloadmapsmenu.cols - 1) * 8;
+		x = m_mousex - downloadmapsmenu.x;
 		y = m_mousey - downloadmapsmenu.y;
-		if (x < -8 || !M_List_UseScrollbar(&downloadmapsmenu.list, y))
-			goto enter;
-		downloadmapsmenu.scrollbar_grab = true;
-		M_DownloadMaps_Mousemove(m_mousex, m_mousey);
+		if (M_List_MouseInScrollbar(&downloadmapsmenu.list, x, y, downloadmapsmenu.cols))
+		{
+			downloadmapsmenu.scrollbar_grab = true;
+			M_DownloadMaps_Mousemove(m_mousex, m_mousey);
+		}
+		else
+		{
+			if (M_List_SelectClickedRow(&downloadmapsmenu.list, x, y, downloadmapsmenu.cols))
+				goto enter;
+		}
 		break;
 
 	default:
@@ -8154,6 +8214,8 @@ void M_DownloadMaps_Mousemove(int cx, int cy)
 		}
 		M_List_UseScrollbar(&downloadmapsmenu.list, cy);
 	}
+	else if (!M_List_MouseInColumns(cx - downloadmapsmenu.x, downloadmapsmenu.cols))
+		return;
 
 	M_List_Mousemove(&downloadmapsmenu.list, cy);
 }
@@ -9736,12 +9798,18 @@ void M_NameHistory_Key (int key)
 		break;
 
 	case K_MOUSE1: // woods #mousemenu
-		x = m_mousex - namehistorymenu.x - (namehistorymenu.cols - 1) * 8;
+		x = m_mousex - namehistorymenu.x;
 		y = m_mousey - namehistorymenu.y;
-		if (x < -8 || !M_List_UseScrollbar(&namehistorymenu.list, y))
-			goto enter;
-		namehistorymenu.scrollbar_grab = true;
-		M_NameHistory_Mousemove (m_mousex, m_mousey);
+		if (M_List_MouseInScrollbar(&namehistorymenu.list, x, y, namehistorymenu.cols))
+		{
+			namehistorymenu.scrollbar_grab = true;
+			M_NameHistory_Mousemove (m_mousex, m_mousey);
+		}
+		else
+		{
+			if (M_List_SelectClickedRow(&namehistorymenu.list, x, y, namehistorymenu.cols))
+				goto enter;
+		}
 		break;
 
 	case K_BACKSPACE:
@@ -9784,6 +9852,8 @@ void M_NameHistory_Mousemove (int cx, int cy) // woods #mousemenu
 		M_List_UseScrollbar (&namehistorymenu.list, cy);
 		// Note: no return, we also update the cursor
 	}
+	else if (!M_List_MouseInColumns(cx - namehistorymenu.x, namehistorymenu.cols))
+		return;
 
 	M_List_Mousemove (&namehistorymenu.list, cy);
 }
@@ -11978,7 +12048,7 @@ void M_Menu_Keys_f(void)
 	keysmenu.scrollbar_grab = false;
 	keysmenu.x = 0;
 	keysmenu.y = KEYS_LIST_Y;
-	keysmenu.cols = 36;
+	keysmenu.cols = (m_left + m_width - 16 - keysmenu.x) / 8;
 
 	// Initialize filtered indices array
 	if (keysmenu.filtered_indices)
@@ -12067,6 +12137,7 @@ void M_Keys_Draw(void)
 	const char* hint = NULL;
 
 	keysmenu.y = KEYS_LIST_Y;
+	keysmenu.cols = (m_left + m_width - 16 - keysmenu.x) / 8;
 	M_List_SetViewsize(&keysmenu.list, MAX_VIS_KEYS);
 
 	p = Draw_CachePic("gfx/p_option.lmp");
@@ -12089,9 +12160,9 @@ void M_Keys_Draw(void)
 			M_Print(184, KEYS_TAB_Y, "Gamepad");
 	}
 
-	x = 0;
+	x = keysmenu.x;
 	y = keysmenu.y;
-	cols = 36;
+	cols = keysmenu.cols;
 
 	// Get visible range
 	M_List_GetVisibleRange(&keysmenu.list, &firstvis, &numvis);
@@ -12136,22 +12207,19 @@ void M_Keys_Draw(void)
 		int x_pos = 136;
 		if (keys[0] != -1)
 		{
-			const char* keyStr = Key_KeynumToFriendlyString(keys[0]);
-			print_fn(x_pos, y, keyStr);
-			x_pos += (strlen(keyStr) * 8);
+			char bindings[256];
+			int width = x + (cols - 2) * 8 - x_pos;
 
+			q_strlcpy(bindings, Key_KeynumToFriendlyString(keys[0]), sizeof(bindings));
 			for (int j = 1; j < 3 && keys[j] != -1; j++)
 			{
-				qboolean masked = !is_selected;
-				float alpha = 0.5f;
-				M_PrintRGBA(x_pos, y, ",", CL_PLColours_Parse("0xffffff"), alpha, masked);
-				x_pos += 8;  // Comma width
-				M_PrintRGBA(x_pos, y, " ", CL_PLColours_Parse("0xffffff"), alpha, masked);
-				x_pos += 8;  // Space width
-				keyStr = Key_KeynumToFriendlyString(keys[j]);
-				print_fn(x_pos, y, keyStr);
-				x_pos += (strlen(keyStr) * 8);
+				q_strlcat(bindings, ", ", sizeof(bindings));
+				q_strlcat(bindings, Key_KeynumToFriendlyString(keys[j]), sizeof(bindings));
 			}
+			if (list_index == keysmenu.list.cursor && !bind_grab)
+				M_PrintScroll(x_pos, y, width, bindings, realtime, true);
+			else
+				M_PrintTruncated(x_pos, y, width, bindings, !is_selected);
 		}
 		else
 		{
@@ -12171,17 +12239,8 @@ void M_Keys_Draw(void)
 
 	// Draw search box
 	if (keysmenu.search.len > 0)
-	{
-		M_DrawTextBox(16, M_BOTTOM(174), 32, 1);
-		M_PrintHighlight(24, M_BOTTOM(182), keysmenu.search.text,
-			keysmenu.search.text,
-			keysmenu.search.len);
-		int cursor_x = 24 + 8 * keysmenu.search.len;
-		if (keysmenu.num_filtered == 0)
-			M_DrawCharacter(cursor_x, M_BOTTOM(182), 11 ^ 128);
-		else
-			M_DrawCharacter(cursor_x, M_BOTTOM(182), 10 + ((int)(realtime * 4) & 1));
-	}
+		M_DrawListSearch(16, M_BOTTOM(176), 32, keysmenu.search.text,
+			keysmenu.search.len, keysmenu.num_filtered > 0);
 	else
 	{
 		if (bind_grab)
@@ -12369,30 +12428,28 @@ void M_Keys_Key(int k)
 		M_Menu_Options_f();
 		break;
 
-	case K_ENTER:
-	case K_KP_ENTER:
-	case K_ABUTTON:
 	case K_MOUSE1:
-	{
-		if (keysmenu.num_filtered <= 0 || !M_Keys_IsSelectableDisplayIndex(keysmenu.list.cursor))
-			break;
-		x = m_mousex - keysmenu.x - (keysmenu.cols - 1) * 8;
+		x = m_mousex - keysmenu.x;
 		y = m_mousey - keysmenu.y;
-		if (x < -8 || !M_List_UseScrollbar(&keysmenu.list, y))
-		{
-			// Handle normal click
-			S_LocalSound("misc/menu2.wav");
-			bind_grab = true;
-			M_List_AutoScroll(&keysmenu.list);
-			IN_UpdateGrabs();
-		}
-		else
+		if (M_List_MouseInScrollbar(&keysmenu.list, x, y, keysmenu.cols))
 		{
 			keysmenu.scrollbar_grab = true;
 			M_Keys_Mousemove(m_mousex, m_mousey);
+			break;
 		}
+		if (!M_List_SelectClickedRow(&keysmenu.list, x, y, keysmenu.cols))
+			break;
+		/* fall through */
+	case K_ENTER:
+	case K_KP_ENTER:
+	case K_ABUTTON:
+		if (!M_Keys_IsSelectableDisplayIndex(keysmenu.list.cursor))
+			break;
+		S_LocalSound("misc/menu2.wav");
+		bind_grab = true;
+		M_List_AutoScroll(&keysmenu.list);
+		IN_UpdateGrabs();
 		break;
-	}
 
 	case K_BACKSPACE:
 	case K_DEL:
@@ -12422,6 +12479,8 @@ void M_Keys_Mousemove(int cx, int cy)
 		M_List_UseScrollbar(&keysmenu.list, cy);
 		// Note: no return, we also update the cursor
 	}
+	else if (!M_List_MouseInColumns(cx - keysmenu.x, keysmenu.cols))
+		return;
 
 	M_List_Mousemove(&keysmenu.list, cy);
 }
@@ -13308,6 +13367,7 @@ static enum controller_e
 
 static qboolean controller_slider_grab;
 static int controller_scroll;
+static int controller_viewsize;
 
 static const char *M_Controller_GetItemText(int index)
 {
@@ -14020,6 +14080,7 @@ void M_Menu_Controller_f(void)
 	controller_scroll = 0;
 	controller_slider_grab = false;
 	M_UpdateBounds (); // woods -- size for the current window (iw)
+	controller_viewsize = CONTROLLER_MAX_VISIBLE;
 	M_Controller_ClampCursor();
 
 	IN_UpdateGrabs();
@@ -14036,6 +14097,11 @@ void M_Controller_Draw(void)
 	const char *title = "Controller Options";
 
 	M_Controller_ClampCursor();
+	if (controller_viewsize != CONTROLLER_MAX_VISIBLE)
+	{
+		controller_viewsize = CONTROLLER_MAX_VISIBLE;
+		M_Controller_ScrollToCursor();
+	}
 	visible_count = M_Controller_GetVisibleItemCount();
 	max_visible = q_min(visible_count, CONTROLLER_MAX_VISIBLE);
 
@@ -14266,7 +14332,8 @@ void M_Controller_Key(int k)
 		m_entersound = true;
 		visible_count = M_Controller_GetVisibleItemCount();
 		visible_count = q_min(visible_count, CONTROLLER_MAX_VISIBLE);
-		if (m_mousey >= CONTROLLER_TOP_Y && m_mousey < CONTROLLER_TOP_Y + visible_count * 8)
+		if (m_mousex >= 0 && m_mousex < 320 &&
+			m_mousey >= CONTROLLER_TOP_Y && m_mousey < CONTROLLER_TOP_Y + visible_count * 8)
 		{
 			int clicked = controller_scroll + (m_mousey - CONTROLLER_TOP_Y) / 8;
 			int clicked_option;
@@ -14405,7 +14472,7 @@ void M_Controller_Mousemove(int cx, int cy)
 
 	visible_count = M_Controller_GetVisibleItemCount();
 	visible_count = q_min(visible_count, CONTROLLER_MAX_VISIBLE);
-	if (cy >= CONTROLLER_TOP_Y && cy < CONTROLLER_TOP_Y + visible_count * 8)
+	if (cx >= 0 && cx < 320 && cy >= CONTROLLER_TOP_Y && cy < CONTROLLER_TOP_Y + visible_count * 8)
 	{
 		int hovered = controller_scroll + (cy - CONTROLLER_TOP_Y) / 8;
 		int total = M_Controller_GetVisibleItemCount();
@@ -14820,6 +14887,26 @@ extern cvar_t r_particles, gl_load24bit, r_replacemodels, r_lerpmodels, r_lerpmo
 vid_gamma, vid_contrast, vid_fsaa, r_particledesc, gl_loadlitfiles, r_rocketlight, r_explosionlight,
 gl_powerupshells, gl_caustics, gl_cshift_contents_auto;
 
+#define TALL_OPTIONS_SEARCH_Y M_BOTTOM(176)
+
+static int M_TallOptions_VisibleRows(int first_y, int count, qboolean searching)
+{
+	return searching ? CLAMP(1, (TALL_OPTIONS_SEARCH_Y - first_y) / 8, count) : count;
+}
+
+static int M_TallOptions_Scroll(int scroll, int cursor, int count, int rows)
+{
+	scroll = CLAMP(0, scroll, count - rows);
+	return CLAMP(q_max(0, cursor - rows + 1), scroll, q_max(0, cursor));
+}
+
+static int M_TallOptions_MouseItem(int y, int first_y, int scroll, int count, qboolean searching)
+{
+	int rows = M_TallOptions_VisibleRows(first_y, count, searching);
+	int offset = y - first_y;
+	return offset >= 0 && offset < rows * 8 ? q_min(scroll, count - rows) + offset / 8 : -1;
+}
+
 static enum graphics_e
 {
 	GRAPHICS_BRIGHTNESS,
@@ -14864,6 +14951,7 @@ static struct
 		char text[32];
 		int len;
 	} search;
+	int scroll;
 } graphicsmenu;
 
 /*
@@ -14914,7 +15002,7 @@ static int M_Graphics_FirstY(void)
 
 static int M_Graphics_ItemY(int index)
 {
-	return M_Graphics_FirstY() + GRAPHICS_ROW_HEIGHT * index;
+	return M_Graphics_FirstY() + GRAPHICS_ROW_HEIGHT * (index - graphicsmenu.scroll);
 }
 
 static const char* M_Graphics_GetItemText(int index)
@@ -15176,6 +15264,7 @@ void M_Menu_Graphics_f(void)
 	graphics_cursor = 0;
 	graphicsmenu.cursor = 0;
 	graphicsmenu.search.len = 0;
+	graphicsmenu.scroll = 0;
 	graphicsmenu.search.text[0] = 0;
 	numberOfGraphicsItems = GRAPHICS_ITEMS;
 	M_LivePreview_Reset();
@@ -15389,12 +15478,15 @@ void M_Graphics_Draw(void)
 
 	M_Graphics_ClampCursor();
 
+	int rows = M_TallOptions_VisibleRows(M_Graphics_FirstY(), GRAPHICS_ITEMS, graphicsmenu.search.len > 0);
+	graphicsmenu.scroll = M_TallOptions_Scroll(graphicsmenu.scroll, graphics_cursor, GRAPHICS_ITEMS, rows);
+
 	M_LivePreview_WantAt (M_Graphics_LivePreviewId (), M_Graphics_ItemY(graphics_cursor));
 
 	const char* title = "Graphics Options";
 	M_PrintWhite((320 - 8 * strlen(title)) / 2, 0, title);
 
-	for (i = 0; i < GRAPHICS_ITEMS; i++)
+	for (i = graphicsmenu.scroll; i < graphicsmenu.scroll + rows; i++)
 	{
 		int y = M_Graphics_ItemY(i);
 		qboolean isolated = M_LivePreview_IsolateY (y);
@@ -15626,17 +15718,8 @@ void M_Graphics_Draw(void)
 
 	// Draw search box if search is active
 	if (graphicsmenu.search.len > 0)
-	{
-		M_DrawTextBox(16, 170, 32, 1);
-		M_PrintHighlight(24, 178, graphicsmenu.search.text,
-			graphicsmenu.search.text,
-			graphicsmenu.search.len);
-		int cursor_x = 24 + 8 * graphicsmenu.search.len;
-		if (numberOfGraphicsItems == 0)
-			M_DrawCharacter(cursor_x, 178, 11 ^ 128);
-		else
-			M_DrawCharacter(cursor_x, 178, 10 + ((int)(realtime * 4) & 1));
-	}
+		M_DrawListSearch(16, TALL_OPTIONS_SEARCH_Y, 32,
+			graphicsmenu.search.text, graphicsmenu.search.len, numberOfGraphicsItems > 0);
 
 	// cursor
 	{
@@ -15746,38 +15829,34 @@ void M_Graphics_Key(int k)
 		break;
 
 	case K_MOUSE1:
-		m_entersound = true;
+	{
+		int item = M_TallOptions_MouseItem(m_mousey, M_Graphics_FirstY(), graphicsmenu.scroll,
+			GRAPHICS_ITEMS, graphicsmenu.search.len > 0);
 
-		// Check if click is in search box area
-		if (graphicsmenu.search.len > 0 && m_mousey >= 170)
+		if (m_mousex < 0 || m_mousex >= 320 || item < 0)
 			break;
 
-		// Check if click is in valid menu area
+		m_entersound = true;
+		graphics_cursor = item;
+
+		if (graphics_cursor == GRAPHICS_BRIGHTNESS ||
+			graphics_cursor == GRAPHICS_CONTRAST ||
+			graphics_cursor == GRAPHICS_ALIASSHADOW ||
+			graphics_cursor == GRAPHICS_ROCKETLIGHT ||
+			graphics_cursor == GRAPHICS_EXPLOSIONLIGHT ||
+			graphics_cursor == GRAPHICS_MODELOUTLINES ||
+			graphics_cursor == GRAPHICS_WATERCAUSTICS ||
+			graphics_cursor == GRAPHICS_WATERALPHA)
 		{
-			int first_y = M_Graphics_FirstY();
-			if (m_mousey < first_y || m_mousey >= first_y + (GRAPHICS_ITEMS * GRAPHICS_ROW_HEIGHT))
-				break;
-
-			graphics_cursor = (m_mousey - first_y) / GRAPHICS_ROW_HEIGHT;
-
-			if (graphics_cursor == GRAPHICS_BRIGHTNESS ||
-				graphics_cursor == GRAPHICS_CONTRAST ||
-				graphics_cursor == GRAPHICS_ALIASSHADOW ||
-				graphics_cursor == GRAPHICS_ROCKETLIGHT ||
-				graphics_cursor == GRAPHICS_EXPLOSIONLIGHT ||
-				graphics_cursor == GRAPHICS_MODELOUTLINES ||
-				graphics_cursor == GRAPHICS_WATERCAUSTICS ||
-				graphics_cursor == GRAPHICS_WATERALPHA)
-			{
-				graphics_slider_grab = true;
-				M_LivePreview_WantAndKick (M_Graphics_LivePreviewId (), M_Graphics_ItemY(graphics_cursor));
-			}
-			else
-			{
-				M_Graphics_AdjustSliders(1);
-			}
+			graphics_slider_grab = true;
+			M_LivePreview_WantAndKick (M_Graphics_LivePreviewId (), M_Graphics_ItemY(graphics_cursor));
+		}
+		else
+		{
+			M_Graphics_AdjustSliders(1);
 		}
 		break;
+	}
 
 	case K_ENTER:
 	case K_KP_ENTER:
@@ -15896,18 +15975,12 @@ void M_Graphics_Mousemove(int cx, int cy)
 		return;
 	}
 
-	// Don't process mouse movement if it's in the search box area
-	if (graphicsmenu.search.len > 0 && cy >= 170)
-		return;
-
-	// Calculate which menu item the mouse is over
-	int item = (cy - M_Graphics_FirstY()) / GRAPHICS_ROW_HEIGHT;
-
-	// Make sure the item is within valid range
-	if (item >= 0 && item < GRAPHICS_ITEMS)
+	if (cx >= 0 && cx < 320)
 	{
-		// Update the cursor position
-		graphics_cursor = item;
+		int item = M_TallOptions_MouseItem(cy, M_Graphics_FirstY(), graphicsmenu.scroll,
+			GRAPHICS_ITEMS, graphicsmenu.search.len > 0);
+		if (item >= 0)
+			graphics_cursor = item;
 	}
 }
 
@@ -16960,7 +17033,7 @@ void M_SkyboxViewer_Draw(void)
 	if (skyboxviewermenu.list.search.len > 0)
 	{
 		int cursor_x = m_left + 24 + 8 * skyboxviewermenu.list.search.len;
-		M_DrawTextBox(m_left + 16, SKYBOXVIEWER_SEARCH_BOX_Y, M_LIST_COLS - 4, 1);
+		M_DrawTextBox(m_left + 16, SKYBOXVIEWER_SEARCH_BOX_Y, 32, 1);
 		M_PrintHighlight(m_left + 24, SKYBOXVIEWER_SEARCH_BOX_Y + 8,
 			skyboxviewermenu.list.search.text, skyboxviewermenu.list.search.text,
 			skyboxviewermenu.list.search.len);
@@ -17079,15 +17152,15 @@ void M_SkyboxViewer_Key(int key)
 		}
 		if (skyboxviewermenu.list.numitems > 0)
 		{
-			int x = m_mousex - SKYBOXVIEWER_LIST_X - (SKYBOXVIEWER_LIST_COLS - 1) * 8;
+			int x = m_mousex - SKYBOXVIEWER_LIST_X;
 			int y = m_mousey - SKYBOXVIEWER_LIST_Y;
-			if (x >= -8 && M_List_UseScrollbar(&skyboxviewermenu.list, y))
+			if (M_List_MouseInScrollbar(&skyboxviewermenu.list, x, y, SKYBOXVIEWER_LIST_COLS))
 			{
 				skyboxviewermenu.scrollbar_grab = true;
 				M_SkyboxViewer_Mousemove(m_mousex, m_mousey);
 			}
 			else
-				M_List_Mousemove(&skyboxviewermenu.list, y);
+				M_List_SelectClickedRow(&skyboxviewermenu.list, x, y, SKYBOXVIEWER_LIST_COLS);
 		}
 		return;
 
@@ -18512,7 +18585,13 @@ static struct
 		char text[32];
 		int len;
 	} search;
+	int scroll;
 } gamemenu;
+
+static int M_Game_ItemY(int index)
+{
+	return 20 + (index - gamemenu.scroll) * 8;
+}
 
 static qboolean team_rgb_active;
 static qboolean enemy_rgb_active;
@@ -19384,6 +19463,7 @@ void M_Menu_Game_f(void)
 	game_cursor = 0;
 	gamemenu.cursor = 0;
 	gamemenu.search.len = 0;
+	gamemenu.scroll = 0;
 	gamemenu.search.text[0] = 0;
 	numberOfGameItems = GAME_ITEMS;
 	M_LivePreview_Reset();
@@ -19397,7 +19477,7 @@ static void M_Game_AdjustSliders(int dir)
 	float f;
 	S_LocalSound("misc/menu3.wav");
 
-	M_LivePreview_WantAndKick (M_Game_LivePreviewId (), 20 + game_cursor * 8);
+	M_LivePreview_WantAndKick (M_Game_LivePreviewId (), M_Game_ItemY(game_cursor));
 
 	switch (game_cursor)
 	{
@@ -19588,11 +19668,14 @@ void M_Game_Draw(void)
 	const char* title = "Game Options";
 	M_PrintWhite((320 - 8 * strlen(title)) / 2, 4, title);
 
-	M_LivePreview_WantAt (M_Game_LivePreviewId (), 20 + game_cursor * 8);
+	int rows = M_TallOptions_VisibleRows(20, GAME_ITEMS, gamemenu.search.len > 0);
+	gamemenu.scroll = M_TallOptions_Scroll(gamemenu.scroll, game_cursor, GAME_ITEMS, rows);
 
-	for (i = 0; i < GAME_ITEMS; i++)
+	M_LivePreview_WantAt (M_Game_LivePreviewId (), M_Game_ItemY(game_cursor));
+
+	for (i = gamemenu.scroll; i < gamemenu.scroll + rows; i++)
 	{
-		int y = 20 + 8 * i;
+		int y = M_Game_ItemY(i);
 		qboolean isolated = M_LivePreview_IsolateY (y);
 		const char* text = NULL;
 		const char* value = NULL;
@@ -19793,7 +19876,7 @@ void M_Game_Draw(void)
 
 	// Draw cursor
 	{
-		int y = 20 + game_cursor * 8;
+		int y = M_Game_ItemY(game_cursor);
 		qboolean isolated = M_LivePreview_IsolateY (y);
 		if (isolated)
 			M_LivePreview_BeginIsolate ();
@@ -19802,22 +19885,13 @@ void M_Game_Draw(void)
 			M_LivePreview_EndIsolate ();
 	}
 
-	if (game_cursor == GAME_TEAMCOLOR || game_cursor == GAME_ENEMYCOLOR)
+	if (!gamemenu.search.len && (game_cursor == GAME_TEAMCOLOR || game_cursor == GAME_ENEMYCOLOR))
 		M_PrintRGBA(74, 188, "+shift for RGB colors", CL_PLColours_Parse("0xffffff"), 0.6f, false);
 
 	// Draw search box if search is active
 	if (gamemenu.search.len > 0)
-	{
-		M_DrawTextBox(16, 170, 32, 1);
-		M_PrintHighlight(24, 178, gamemenu.search.text,
-			gamemenu.search.text,
-			gamemenu.search.len);
-		int cursor_x = 24 + 8 * gamemenu.search.len;
-		if (numberOfGameItems == 0)
-			M_DrawCharacter(cursor_x, 178, 11 ^ 128);
-		else
-			M_DrawCharacter(cursor_x, 178, 10 + ((int)(realtime * 4) & 1));
-	}
+		M_DrawListSearch(16, TALL_OPTIONS_SEARCH_Y, 32,
+			gamemenu.search.text, gamemenu.search.len, numberOfGameItems > 0);
 }
 
 void M_Game_Key(int k)
@@ -19916,32 +19990,31 @@ void M_Game_Key(int k)
 		break;
 
 	case K_MOUSE1:
-		m_entersound = true;
+	{
+		int item = M_TallOptions_MouseItem(m_mousey, 20, gamemenu.scroll,
+			GAME_ITEMS, gamemenu.search.len > 0);
 
-		// Check if click is in search box area
-		if (gamemenu.search.len > 0 && m_mousey >= 170)
+		if (m_mousex < 0 || m_mousex >= 320 || item < 0)
 			break;
 
-		// Check if click is in valid menu area
-		if (m_mousey >= 20 && m_mousey < 20 + (GAME_ITEMS * 8))  // Changed from 48 to 20
-		{
-			game_cursor = (m_mousey - 20) / 8;  // Changed from 48 to 20
+		m_entersound = true;
+		game_cursor = item;
 
-			if (game_cursor == GAME_FOV ||
-				game_cursor == GAME_FLASHES ||
-				game_cursor == GAME_TRUELIGHTNING ||
-				game_cursor == GAME_STRAIGHTSHAFT ||
-				game_cursor == GAME_VIEWMODEL)
-			{
-				game_slider_grab = true;
-				M_LivePreview_WantAndKick (M_Game_LivePreviewId (), 20 + game_cursor * 8);
-			}
-			else
-			{
-				M_Game_AdjustSliders(1);
-			}
+		if (game_cursor == GAME_FOV ||
+			game_cursor == GAME_FLASHES ||
+			game_cursor == GAME_TRUELIGHTNING ||
+			game_cursor == GAME_STRAIGHTSHAFT ||
+			game_cursor == GAME_VIEWMODEL)
+		{
+			game_slider_grab = true;
+			M_LivePreview_WantAndKick (M_Game_LivePreviewId (), M_Game_ItemY(game_cursor));
+		}
+		else
+		{
+			M_Game_AdjustSliders(1);
 		}
 		break;
+	}
 
 	case K_ENTER:
 	case K_KP_ENTER:
@@ -19990,7 +20063,7 @@ void M_Game_Mousemove(int cx, int cy)
 			return;
 		}
 
-		M_LivePreview_WantAndKick (M_Game_LivePreviewId (), 20 + game_cursor * 8);
+		M_LivePreview_WantAndKick (M_Game_LivePreviewId (), M_Game_ItemY(game_cursor));
 
 		float f;
 		switch (game_cursor)
@@ -20045,18 +20118,12 @@ void M_Game_Mousemove(int cx, int cy)
 		return;
 	}
 
-	// Don't process mouse movement if it's in the search box area
-	if (gamemenu.search.len > 0 && cy >= 170)
-		return;
-
-	// Calculate which menu item the mouse is over
-	int item = (cy - 20) / 8;
-
-	// Make sure the item is within valid range
-	if (item >= 0 && item < GAME_ITEMS)
+	if (cx >= 0 && cx < 320)
 	{
-		// Update the cursor position
-		game_cursor = item;
+		int item = M_TallOptions_MouseItem(cy, 20, gamemenu.scroll,
+			GAME_ITEMS, gamemenu.search.len > 0);
+		if (item >= 0)
+			game_cursor = item;
 	}
 }
 
@@ -20396,7 +20463,13 @@ static struct
 		char text[32];
 		int len;
 	} search;
+	int scroll;
 } hudmenu;
+
+static int M_HUD_ItemY(int index)
+{
+	return 48 + (index - hudmenu.scroll) * 8;
+}
 
 float target_hud_scale_frac;
 
@@ -20501,6 +20574,7 @@ void M_Menu_HUD_f(void)
 	hud_cursor = 0;
 	hudmenu.cursor = 0;
 	hudmenu.search.len = 0;
+	hudmenu.scroll = 0;
 	hudmenu.search.text[0] = 0;
 	numberOfHUDItems = HUD_ITEMS;
 	hud_slider_grab = false;
@@ -20515,7 +20589,7 @@ static void M_HUD_AdjustSliders(int dir)
 	int value;
 	S_LocalSound("misc/menu3.wav");
 
-	M_LivePreview_WantAndKick (M_HUD_LivePreviewId (), 48 + hud_cursor * 8);
+	M_LivePreview_WantAndKick (M_HUD_LivePreviewId (), M_HUD_ItemY(hud_cursor));
 
 	switch (hud_cursor)
 	{
@@ -20632,11 +20706,14 @@ void M_HUD_Draw(void)
 	const char* title = "HUD Options";
 	M_PrintWhite((320 - 8 * strlen(title)) / 2, 32, title);
 
-	M_LivePreview_WantAt (M_HUD_LivePreviewId (), 48 + hud_cursor * 8);
+	int rows = M_TallOptions_VisibleRows(48, HUD_ITEMS, hudmenu.search.len > 0);
+	hudmenu.scroll = M_TallOptions_Scroll(hudmenu.scroll, hud_cursor, HUD_ITEMS, rows);
 
-	for (int i = 0; i < HUD_ITEMS; i++)
+	M_LivePreview_WantAt (M_HUD_LivePreviewId (), M_HUD_ItemY(hud_cursor));
+
+	for (int i = hudmenu.scroll; i < hudmenu.scroll + rows; i++)
 	{
-		int y = 48 + 8 * i;
+		int y = M_HUD_ItemY(i);
 		qboolean isolated = M_LivePreview_IsolateY (y);
 		const char* text = NULL;
 		const char* value = NULL;
@@ -20829,21 +20906,12 @@ void M_HUD_Draw(void)
 
 	// Draw search box if active
 	if (hudmenu.search.len > 0)
-	{
-		M_DrawTextBox(16, 174, 32, 1);
-		M_PrintHighlight(24, 182, hudmenu.search.text,
-			hudmenu.search.text,
-			hudmenu.search.len);
-		int cursor_x = 24 + 8 * hudmenu.search.len;
-		if (numberOfHUDItems == 0)
-			M_DrawCharacter(cursor_x, 182, 11 ^ 128);
-		else
-			M_DrawCharacter(cursor_x, 182, 10 + ((int)(realtime * 4) & 1));
-	}
+		M_DrawListSearch(16, TALL_OPTIONS_SEARCH_Y, 32,
+			hudmenu.search.text, hudmenu.search.len, numberOfHUDItems > 0);
 
 	// Draw cursor
 	{
-		int y = 48 + hud_cursor * 8;
+		int y = M_HUD_ItemY(hud_cursor);
 		qboolean isolated = M_LivePreview_IsolateY (y);
 		if (isolated)
 			M_LivePreview_BeginIsolate ();
@@ -21014,7 +21082,7 @@ void M_HUD_Key(int k)
 			Cvar_SetValue("scr_showfps", !scr_showfps.value);
 			break;
 		case HUD_MATCHSCORES:
-			M_LivePreview_WantAndKick (M_HUD_LivePreviewId (), 48 + hud_cursor * 8);
+			M_LivePreview_WantAndKick (M_HUD_LivePreviewId (), M_HUD_ItemY(hud_cursor));
 			Cvar_SetValue("scr_match_hud", !scr_match_hud.value);
 			break;
 		case HUD_MATCHCLOCK:
@@ -21037,7 +21105,7 @@ void M_HUD_Key(int k)
 			M_HUD_AdjustSliders(1);
 			break;
 		case HUD_SHOWSCORES:
-			M_LivePreview_WantAndKick (M_HUD_LivePreviewId (), 48 + hud_cursor * 8);
+			M_LivePreview_WantAndKick (M_HUD_LivePreviewId (), M_HUD_ItemY(hud_cursor));
 			Cvar_SetValue("scr_showscores", !scr_showscores.value);
 			break;
 		case HUD_SCOREBOARD_SORT:
@@ -21054,120 +21122,116 @@ void M_HUD_Key(int k)
 		break;
 
 	case K_MOUSE1:
-		m_entersound = true;
+	{
+		int item = M_TallOptions_MouseItem(m_mousey, 48, hudmenu.scroll,
+			HUD_ITEMS, hudmenu.search.len > 0);
 
-		// Check if click is in search box area
-		if (hudmenu.search.len > 0 && m_mousey >= 170)
+		if (m_mousex < 0 || m_mousex >= 320 || item < 0)
 			break;
 
-		// Check if click is in valid menu area
-		if (m_mousey >= 48 && m_mousey < 48 + (HUD_ITEMS * 8))
+		m_entersound = true;
+		hud_cursor = item;
+
+		if (hud_cursor == HUD_CROSSHAIR)
 		{
-			hud_cursor = (m_mousey - 48) / 8;
+			M_Menu_Crosshair_f();
+			break;
+		}
+		if (hud_cursor == HUD_NETGRAPH) // woods #netgraph
+		{
+			M_Menu_NetGraph_f(true);
+			break;
+		}
 
-			if (hud_cursor == HUD_CROSSHAIR)
-			{
-				M_Menu_Crosshair_f();
-				break;
-			}
-			if (hud_cursor == HUD_NETGRAPH) // woods #netgraph
-			{
-				M_Menu_NetGraph_f(true);
-				break;
-			}
-
-			if (hud_cursor == HUD_SCALE ||
-				hud_cursor == HUD_SCRSIZE ||
-				hud_cursor == HUD_SBALPHA ||
-				hud_cursor == HUD_CONSOLEFONT)
-			{
-				hud_slider_grab = true;
-				M_LivePreview_WantAndKick (M_HUD_LivePreviewId (), 48 + hud_cursor * 8);
-			}
-			else if (hud_cursor == HUD_SBARSTYLE)
-			{
-				M_HUD_AdjustSliders(1);
-			}
-			else if (hud_cursor == HUD_SHOWFPS)
-			{
-				Cvar_SetValue("scr_showfps", !scr_showfps.value);
-			}
-			else if (hud_cursor == HUD_MATCHSCORES)
-			{
-				M_LivePreview_WantAndKick (M_HUD_LivePreviewId (), 48 + hud_cursor * 8);
-				Cvar_SetValue("scr_match_hud", !scr_match_hud.value);
-			}
-			else if (hud_cursor == HUD_MATCHCLOCK)
-			{
-				Cvar_SetValue("scr_matchclock", !scr_matchclock.value);
-			}
-			else if (hud_cursor == HUD_MATCHCLOCK_COUNTUP)
-			{
-				Cvar_SetValue("scr_matchclock_countup", !scr_matchclock_countup.value);
-			}
-			else if (hud_cursor == HUD_SHOWPING)
-			{
-				Cvar_SetValue("scr_ping", !scr_ping.value);
-			}
-			else if (hud_cursor == HUD_SHOWCLOCK)
-			{
-				int value = scr_clock.value + 1;
-				if (value > 8) value = 0;
-				Cvar_SetValue("scr_clock", value);
-			}
-			else if (hud_cursor == HUD_OBSITEMS)
-			{
-				M_HUD_AdjustSliders(1);
-			}
-			else if (hud_cursor == HUD_SCOREBOARD_SORT)
-			{
-				int val = scr_scoreboard_teamsort.value + 1;
-				if (val > 1) val = 0;
-				Cvar_SetValue("scr_scoreboard_teamsort", val);
-			}
-			else if (hud_cursor == HUD_SHOWSPEED)
-			{
-				int value = scr_showspeed.value + 1;
-				M_LivePreview_WantAndKick (M_HUD_LivePreviewId (), 48 + hud_cursor * 8);
-				if (value > 2) value = 0;
-				Cvar_SetValue("scr_showspeed", value);
-			}
-			else if (hud_cursor == HUD_SHOWSCORES)
-			{
-				M_LivePreview_WantAndKick (M_HUD_LivePreviewId (), 48 + hud_cursor * 8);
-				Cvar_SetValue("scr_showscores", !scr_showscores.value);
-			}
-			else if (hud_cursor == HUD_AUTOID)
-			{
-				int value = scr_autoid.value + 1;
-				if (value > 2) value = 0;
-				Cvar_SetValue("scr_autoid", value);
-			}
-			else if (hud_cursor == HUD_MOVEKEYS)
-			{
-				M_LivePreview_WantAndKick (M_HUD_LivePreviewId (), 48 + hud_cursor * 8);
-				Cvar_SetValue("scr_movekeys", !scr_movekeys.value);
-			}
-			else
-			{
-				M_HUD_AdjustSliders(1);
-			}
+		if (hud_cursor == HUD_SCALE ||
+			hud_cursor == HUD_SCRSIZE ||
+			hud_cursor == HUD_SBALPHA ||
+			hud_cursor == HUD_CONSOLEFONT)
+		{
+			hud_slider_grab = true;
+			M_LivePreview_WantAndKick (M_HUD_LivePreviewId (), M_HUD_ItemY(hud_cursor));
+		}
+		else if (hud_cursor == HUD_SBARSTYLE)
+		{
+			M_HUD_AdjustSliders(1);
+		}
+		else if (hud_cursor == HUD_SHOWFPS)
+		{
+			Cvar_SetValue("scr_showfps", !scr_showfps.value);
+		}
+		else if (hud_cursor == HUD_MATCHSCORES)
+		{
+			M_LivePreview_WantAndKick (M_HUD_LivePreviewId (), M_HUD_ItemY(hud_cursor));
+			Cvar_SetValue("scr_match_hud", !scr_match_hud.value);
+		}
+		else if (hud_cursor == HUD_MATCHCLOCK)
+		{
+			Cvar_SetValue("scr_matchclock", !scr_matchclock.value);
+		}
+		else if (hud_cursor == HUD_MATCHCLOCK_COUNTUP)
+		{
+			Cvar_SetValue("scr_matchclock_countup", !scr_matchclock_countup.value);
+		}
+		else if (hud_cursor == HUD_SHOWPING)
+		{
+			Cvar_SetValue("scr_ping", !scr_ping.value);
+		}
+		else if (hud_cursor == HUD_SHOWCLOCK)
+		{
+			int value = scr_clock.value + 1;
+			if (value > 8) value = 0;
+			Cvar_SetValue("scr_clock", value);
+		}
+		else if (hud_cursor == HUD_OBSITEMS)
+		{
+			M_HUD_AdjustSliders(1);
+		}
+		else if (hud_cursor == HUD_SCOREBOARD_SORT)
+		{
+			int val = scr_scoreboard_teamsort.value + 1;
+			if (val > 1) val = 0;
+			Cvar_SetValue("scr_scoreboard_teamsort", val);
+		}
+		else if (hud_cursor == HUD_SHOWSPEED)
+		{
+			int value = scr_showspeed.value + 1;
+			M_LivePreview_WantAndKick (M_HUD_LivePreviewId (), M_HUD_ItemY(hud_cursor));
+			if (value > 2) value = 0;
+			Cvar_SetValue("scr_showspeed", value);
+		}
+		else if (hud_cursor == HUD_SHOWSCORES)
+		{
+			M_LivePreview_WantAndKick (M_HUD_LivePreviewId (), M_HUD_ItemY(hud_cursor));
+			Cvar_SetValue("scr_showscores", !scr_showscores.value);
+		}
+		else if (hud_cursor == HUD_AUTOID)
+		{
+			int value = scr_autoid.value + 1;
+			if (value > 2) value = 0;
+			Cvar_SetValue("scr_autoid", value);
+		}
+		else if (hud_cursor == HUD_MOVEKEYS)
+		{
+			M_LivePreview_WantAndKick (M_HUD_LivePreviewId (), M_HUD_ItemY(hud_cursor));
+			Cvar_SetValue("scr_movekeys", !scr_movekeys.value);
+		}
+		else
+		{
+			M_HUD_AdjustSliders(1);
 		}
 		break;
+	}
 
 	case K_UPARROW:
 		S_LocalSound("misc/menu1.wav");
-		if (hud_cursor <= 0)
-			hud_cursor = numberOfHUDItems - 1;
-		else
-			hud_cursor--;
+		hud_cursor = M_Menu_MoveSearchCursor(HUD_ITEMS, numberOfHUDItems, hud_cursor,
+			-1, M_HUD_GetItemText, hudmenu.search.text, hudmenu.search.len);
 		break;
 
 	case K_DOWNARROW:
 		S_LocalSound("misc/menu1.wav");
-		hud_cursor++;
-		if (hud_cursor >= numberOfHUDItems)
-			hud_cursor = 0;
+		hud_cursor = M_Menu_MoveSearchCursor(HUD_ITEMS, numberOfHUDItems, hud_cursor,
+			1, M_HUD_GetItemText, hudmenu.search.text, hudmenu.search.len);
 		break;
 
 	case K_LEFTARROW:
@@ -21200,7 +21264,7 @@ void M_HUD_Mousemove(int cx, int cy)
 			return;
 		}
 
-		M_LivePreview_WantAndKick (M_HUD_LivePreviewId (), 48 + hud_cursor * 8);
+		M_LivePreview_WantAndKick (M_HUD_LivePreviewId (), M_HUD_ItemY(hud_cursor));
 
 		float f, l;
 		switch (hud_cursor)
@@ -21257,18 +21321,12 @@ void M_HUD_Mousemove(int cx, int cy)
 		return;
 	}
 
-	// Don't process mouse movement if it's in the search box area
-	if (hudmenu.search.len > 0 && cy >= 170)
-		return;
-
-	// Calculate which menu item the mouse is over
-	int item = (cy - 48) / 8;
-
-	// Make sure the item is within valid range
-	if (item >= 0 && item < HUD_ITEMS)
+	if (cx >= 0 && cx < 320)
 	{
-		// Update the cursor position
-		hud_cursor = item;
+		int item = M_TallOptions_MouseItem(cy, 48, hudmenu.scroll,
+			HUD_ITEMS, hudmenu.search.len > 0);
+		if (item >= 0)
+			hud_cursor = item;
 	}
 }
 
@@ -23034,10 +23092,11 @@ void M_Console_Mousemove(int cx, int cy)
 /* Chat translation menu: draw/hover are read-only; only local input calls the
  * trusted translation controller. No commands, aliases, or cvar opt-in. */
 extern qboolean WordFilter_Check (const char *text, char *dest, size_t size);
-#define TRANSLATE_LIST_X 16
-#define TRANSLATE_LIST_Y 32
-#define TRANSLATE_LIST_COLS 36
-#define TRANSLATE_LIST_ROWS 16
+#define TRANSLATE_LIST_X (m_left + 16)
+#define TRANSLATE_LIST_Y (m_top + 32)
+#define TRANSLATE_LIST_COLS M_LIST_COLS
+#define TRANSLATE_LIST_ROWS (16 + M_EXTRA_ROWS)
+#define TRANSLATE_SHORTCUT_Y M_BOTTOM(192)
 #define TRANSLATE_FIELD_CHARS 32
 #define TRANSLATE_ADD_ROW 0
 #define TRANSLATE_MESSAGE_ROW 1
@@ -23156,7 +23215,7 @@ static void M_Translate_RefreshPlayers (void)
 	else if (translatemenu.adding) translatemenu.list.cursor = everyone ? M_Translate_EveryoneRow() : CLAMP(0, translatemenu.list.cursor, 1);
 	else if (clear) translatemenu.list.cursor = translatemenu.count ? translatemenu.count + TRANSLATE_PLAYERS_ROW + 1 : 0;
 	translatemenu.list.numitems = M_Translate_Rows();
-	translatemenu.list.viewsize = TRANSLATE_LIST_ROWS;
+	M_List_SetViewsize(&translatemenu.list, TRANSLATE_LIST_ROWS);
 	translatemenu.list.isactive_fn = M_Translate_RowEnabled;
 	translatemenu.list.cursor = CLAMP(0, translatemenu.list.cursor, q_max(0, M_Translate_Rows() - 1));
 	if (!M_Translate_RowEnabled(translatemenu.list.cursor))
@@ -23480,11 +23539,11 @@ static int M_Translate_ShortcutX (void)
 static void M_Translate_DrawShortcuts (void)
 {
 	int x = M_Translate_ShortcutX();
-	M_Print(x, 192, KEY_SHORTCUT_MODIFIER_NAME_LOWER "+ ");
+	M_Print(x, TRANSLATE_SHORTCUT_Y, KEY_SHORTCUT_MODIFIER_NAME_LOWER "+ ");
 	x += ((int)strlen(KEY_SHORTCUT_MODIFIER_NAME_LOWER) + 2) * 8;
-	M_Translate_PrintMaybeDim(x, 192, "a:add", translatemenu.can_add);
-	M_Translate_PrintMaybeDim(x + 56, 192, "e:edit", translatemenu.adding || M_Translate_PlayerIndex() >= 0);
-	M_Translate_PrintMaybeDim(x + 120, 192, "backspace:remove", !translatemenu.adding && M_Translate_PlayerIndex() >= 0);
+	M_Translate_PrintMaybeDim(x, TRANSLATE_SHORTCUT_Y, "a:add", translatemenu.can_add);
+	M_Translate_PrintMaybeDim(x + 56, TRANSLATE_SHORTCUT_Y, "e:edit", translatemenu.adding || M_Translate_PlayerIndex() >= 0);
+	M_Translate_PrintMaybeDim(x + 120, TRANSLATE_SHORTCUT_Y, "backspace:remove", !translatemenu.adding && M_Translate_PlayerIndex() >= 0);
 }
 
 static void M_Translate_Draw (void)
@@ -23498,14 +23557,10 @@ static void M_Translate_Draw (void)
 	if (translatemenu.player_edit) { M_Translate_DrawPlayerCard(); return; }
 	M_Translate_RefreshPlayers();
 	M_Translate_RefreshSend();
-	if (!translatemenu.compose && !translatemenu.adding)
-		M_DrawCountHeader(TRANSLATE_LIST_X, 4, TRANSLATE_LIST_COLS, title,
-			translatemenu.count, "Player", "Players");
-	else
-		Draw_String(TRANSLATE_LIST_X, 4, title);
-	M_DrawQuakeBar(TRANSLATE_LIST_X - 8, 16, TRANSLATE_LIST_COLS + 2);
 	if (translatemenu.compose)
 	{
+		Draw_String(16, 4, title);
+		M_DrawQuakeBar(8, 16, 38);
 		int start = M_Translate_FieldViewStart();
 		menu_textfield_t field = translatemenu.field;
 		M_Print(16, 40, "Translate to");
@@ -23532,6 +23587,12 @@ static void M_Translate_Draw (void)
 		M_DrawCharacter(8, y, 12 + ((int)(realtime * 4) & 1));
 		return;
 	}
+	if (!translatemenu.adding)
+		M_DrawCountHeader(TRANSLATE_LIST_X, m_top + 4, TRANSLATE_LIST_COLS, title,
+			translatemenu.count, "Player", "Players");
+	else
+		Draw_String(TRANSLATE_LIST_X, m_top + 4, title);
+	M_DrawQuakeBar(TRANSLATE_LIST_X - 8, m_top + 16, TRANSLATE_LIST_COLS + 2);
 	if (!keydown[K_MOUSE1]) translatemenu.scrollbar_grab = false;
 	if (translatemenu.prev_cursor != translatemenu.list.cursor)
 	{
@@ -23574,7 +23635,7 @@ static void M_Translate_Draw (void)
 			M_DrawCharacter(TRANSLATE_LIST_X + indent - 8, y, 12 + ((int)(realtime * 4) & 1));
 	}
 	if (!translatemenu.adding && !translatemenu.count && !translatemenu.can_add && !translatemenu.can_compose)
-		M_Translate_PrintWrapped(96, "No saved players", 1, true);
+		M_Translate_PrintWrapped(m_top + 96, "No saved players", 1, true);
 	selected = M_Translate_PlayerIndex();
 	/* Like a bookmark's address, the selected player's language always owns
 	 * the tooltip. Routine acknowledgments never cover this information. */
@@ -23582,15 +23643,15 @@ static void M_Translate_Draw (void)
 	{
 		int language = translatemenu.adding ? CL_Translate_ReadLanguage() : translatemenu.players[selected].language;
 		q_snprintf(text, sizeof(text), "Language: %s", CL_Translate_LanguageName(language));
-		M_Translate_PrintWrapped(172, text, 1, true);
+		M_Translate_PrintWrapped(M_BOTTOM(172), text, 1, true);
 	}
-	else if (translatemenu.notice_until > realtime) M_Translate_PrintWrapped(172, translatemenu.notice, 1, true);
-	else if (unavailable && translatemenu.adding) M_Translate_PrintWrapped(172, unavailable, 1, true);
+	else if (translatemenu.notice_until > realtime) M_Translate_PrintWrapped(M_BOTTOM(172), translatemenu.notice, 1, true);
+	else if (unavailable && translatemenu.adding) M_Translate_PrintWrapped(M_BOTTOM(172), unavailable, 1, true);
 	else if (translatemenu.adding)
-		M_Translate_PrintWrapped(172, translatemenu.list.cursor == 0 ?
+		M_Translate_PrintWrapped(M_BOTTOM(172), translatemenu.list.cursor == 0 ?
 			"Language for new players" : translatemenu.list.cursor == 1 ?
 			"Use this name in future games" : "Add all remaining players", 1, true);
-	else if (translatemenu.list.cursor >= 0) M_Translate_PrintWrapped(172, translatemenu.list.cursor == TRANSLATE_ADD_ROW ?
+	else if (translatemenu.list.cursor >= 0) M_Translate_PrintWrapped(M_BOTTOM(172), translatemenu.list.cursor == TRANSLATE_ADD_ROW ?
 		"Choose whose chat to translate" : translatemenu.list.cursor == TRANSLATE_MESSAGE_ROW ?
 		"Translate and send a public message" : "Remove all selected players", 1, true);
 	if (M_List_GetOverflow(&translatemenu.list) > 0)
@@ -23646,6 +23707,8 @@ static void M_Translate_Shortcut (int key)
 		M_Translate_Notice(CL_Translate_MenuNotice());
 	}
 }
+
+static void M_Translate_Mousemove(int x, int y);
 
 static void M_Translate_Key (int key)
 {
@@ -23708,21 +23771,22 @@ static void M_Translate_Key (int key)
 	if (key == K_MOUSE1)
 	{
 		int x = M_Translate_ShortcutX() + ((int)strlen(KEY_SHORTCUT_MODIFIER_NAME_LOWER) + 2) * 8;
-		if (m_mousey >= 192 && m_mousey < 200)
+		if (m_mousey >= TRANSLATE_SHORTCUT_Y && m_mousey < TRANSLATE_SHORTCUT_Y + 8)
 		{
 			if (m_mousex >= x && m_mousex < x + 40) M_Translate_Shortcut('a');
 			else if (m_mousex >= x + 56 && m_mousex < x + 104) M_Translate_Shortcut('e');
 			else if (m_mousex >= x + 120 && m_mousex < x + 248) M_Translate_Shortcut(K_BACKSPACE);
 			return;
 		}
-		if (m_mousex >= 288 && m_mousex < 304 && m_mousey >= TRANSLATE_LIST_Y && m_mousey < 160 &&
-			M_List_UseScrollbar(&translatemenu.list, m_mousey - TRANSLATE_LIST_Y))
+		if (M_List_MouseInScrollbar(&translatemenu.list, m_mousex - TRANSLATE_LIST_X,
+			m_mousey - TRANSLATE_LIST_Y, TRANSLATE_LIST_COLS))
 		{
 			translatemenu.scrollbar_grab = true;
-			M_List_Mousemove(&translatemenu.list, m_mousey - TRANSLATE_LIST_Y);
+			M_Translate_Mousemove(m_mousex, m_mousey);
 			return;
 		}
-		if (m_mousex < 16 || m_mousex >= 288 || (row = M_Translate_HitRow(m_mousey)) < 0) return;
+		if (!M_List_MouseInColumns(m_mousex - TRANSLATE_LIST_X, TRANSLATE_LIST_COLS) ||
+			(row = M_Translate_HitRow(m_mousey)) < 0) return;
 		if (!M_Translate_RowEnabled(row)) return;
 		translatemenu.list.cursor = row;
 	}
@@ -23770,7 +23834,8 @@ static void M_Translate_Mousemove (int x, int y)
 		M_List_Mousemove(&translatemenu.list, y - TRANSLATE_LIST_Y);
 		return;
 	}
-	if (x < 16 || x >= 288 || (row = M_Translate_HitRow(y)) < 0 || !M_Translate_RowEnabled(row)) return;
+	if (!M_List_MouseInColumns(x - TRANSLATE_LIST_X, TRANSLATE_LIST_COLS) ||
+		(row = M_Translate_HitRow(y)) < 0 || !M_Translate_RowEnabled(row)) return;
 	M_List_Mousemove(&translatemenu.list, y - TRANSLATE_LIST_Y);
 }
 
@@ -23919,6 +23984,9 @@ static void M_LeaveMenuState (enum m_state_e from)
 #define MENU_SEARCH_RESULTS_Y MS_Y(52)
 #define MENU_SEARCH_RESULTS_BOTTOM (MENU_SEARCH_RESULTS_Y + MENU_SEARCH_VISIBLE_ROWS * 8)
 #define MENU_SEARCH_QUERY_CHARS 32
+#define MENU_SEARCH_FIELD_X MS_X(16)
+#define MENU_SEARCH_FIELD_Y MS_Y(20)
+#define MENU_SEARCH_FIELD_COLS (MENU_SEARCH_QUERY_CHARS + 2)
 #define MENU_SEARCH_RECENTS 5
 #define MENU_SEARCH_EMPTY_RECENTS 2
 
@@ -25445,6 +25513,13 @@ static void MenuSearch_UpdateScrollbar(int y)
 		menusearch.scroll + MENU_SEARCH_VISIBLE_ROWS - 1);
 }
 
+static qboolean M_MenuSearch_MouseInField(void)
+{
+	return m_mousex >= MENU_SEARCH_FIELD_X &&
+		m_mousex < MENU_SEARCH_FIELD_X + (MENU_SEARCH_FIELD_COLS + 2) * 8 &&
+		M_TextField_MouseInRow(m_mousey, MENU_SEARCH_FIELD_Y);
+}
+
 static void M_MenuSearch_Key(int key, qboolean repeat)
 {
 	char old_query[sizeof(menusearch.query)];
@@ -25491,7 +25566,7 @@ static void M_MenuSearch_Key(int key, qboolean repeat)
 	{
 		if (m_mousex < MS_X(8) || m_mousex >= MS_R(312) || m_mousey < MS_Y(4) || m_mousey >= MS_B(196))
 			M_MenuSearch_Close(true, true);
-		else if (m_mousex >= MS_X(16) && m_mousex < MS_R(304) && M_TextField_MouseInRow(m_mousey, MS_Y(20)))
+		else if (M_MenuSearch_MouseInField())
 			M_TextField_MouseClick(&menusearch.field, m_mousex, MS_X(32));
 		else if (!menusearch.empty_mode && menusearch.result_count > MENU_SEARCH_VISIBLE_ROWS &&
 			m_mousex >= MS_R(296) && m_mousex < MS_R(304) && m_mousey >= MENU_SEARCH_RESULTS_Y && m_mousey < MENU_SEARCH_RESULTS_BOTTOM)
@@ -25639,14 +25714,14 @@ static void M_MenuSearch_Draw(void)
 	M_LivePreview_DrawColorOverlay(0.f, 0.f, 0.f, 0.55f);
 	GL_SetCanvas(CANVAS_MENU);
 	M_DrawTextBox(MS_X(8), MS_Y(4), 36 + MS_EXTRA_COLS, 22 + M_EXTRA_ROWS);
-	M_DrawTextBox(MS_X(16), MS_Y(12), 34 + MS_EXTRA_COLS, 1);
-	M_TextField_DrawHighlight(&menusearch.field, MS_X(32), MS_Y(20));
+	M_DrawTextBox(MENU_SEARCH_FIELD_X, MENU_SEARCH_FIELD_Y - 8, MENU_SEARCH_FIELD_COLS, 1);
+	M_TextField_DrawHighlight(&menusearch.field, MS_X(32), MENU_SEARCH_FIELD_Y);
 	if (!menusearch.query[0])
-		M_PrintRGBA(MS_X(32), MS_Y(20), "Search menus and settings", CL_PLColours_Parse("0xffffff"), 0.45f, false);
+		M_PrintRGBA(MS_X(32), MENU_SEARCH_FIELD_Y, "Search menus and settings", CL_PLColours_Parse("0xffffff"), 0.45f, false);
 	else
 	{
-		M_PrintWhite(MS_X(32), MS_Y(20), menusearch.query);
-		M_TextField_DrawCursor(&menusearch.field, MS_X(32), MS_Y(20));
+		M_PrintWhite(MS_X(32), MENU_SEARCH_FIELD_Y, menusearch.query);
+		M_TextField_DrawCursor(&menusearch.field, MS_X(32), MENU_SEARCH_FIELD_Y);
 	}
 	M_DrawQuakeBar(MS_X(24), MS_Y(40), 34 + MS_EXTRA_COLS);
 
@@ -26791,8 +26866,8 @@ static struct
 	qboolean scrollbar_grab;
 } extrasmenu;
 
-#define MAX_VIS_EXTRAS 16
-#define MAX_VIS_EXTRAS_SEARCH 14
+#define MAX_VIS_EXTRAS (16 + M_EXTRA_ROWS)
+#define MAX_VIS_EXTRAS_SEARCH (14 + M_EXTRA_ROWS)
 #define EXTRAS_CONNECT_RETRIES_MIN 1
 #define EXTRAS_CONNECT_RETRIES_MAX 5
 
@@ -26903,11 +26978,10 @@ static void M_Extras_MoveCursor(int delta)
 
 static int M_Extras_RowY(int item)
 {
-	return 48 + (item - extrasmenu.list.scroll) * 8;
+	return extrasmenu.y + (item - extrasmenu.list.scroll) * 8;
 }
 
-#define EXTRAS_SEARCH_BOX_Y	176
-#define EXTRAS_SEARCH_TEXT_Y	184
+#define EXTRAS_SEARCH_BOX_Y	M_BOTTOM(176)
 #define EXTRAS_VALUE_X			168
 #define EXTRAS_CVAR_HINT_WIDTH	(17 * 8)
 
@@ -26934,13 +27008,14 @@ void M_Menu_Extras_f(void)
 	extras_cursor = 0;
 	extrasmenu.list.cursor = 0;
 	extrasmenu.list.scroll = 0;
+	M_UpdateBounds();
 	extrasmenu.list.viewsize = MAX_VIS_EXTRAS;
 	extrasmenu.list.numitems = EXTRAS_ITEMS;
 	extrasmenu.list.search.len = 0;
 	extrasmenu.list.search.maxlen = sizeof(extrasmenu.list.search.text) - 1;
 	extrasmenu.list.search.text[0] = 0;
 	extrasmenu.x = 16;
-	extrasmenu.y = 48;
+	extrasmenu.y = m_top + 48;
 	extrasmenu.cols = 36;
 	extrasmenu.scrollbar_grab = false;
 	numberOfExtrasItems = EXTRAS_ITEMS;
@@ -27068,15 +27143,17 @@ void M_Extras_Draw(void)
 	int firstvis, numvis, row;
 
 	extras_cursor = (enum extras_e)M_Menu_ClampCursorValue((int)extras_cursor, EXTRAS_ITEMS);
-	extrasmenu.list.viewsize = extrasmenu.list.search.len > 0 ? MAX_VIS_EXTRAS_SEARCH : MAX_VIS_EXTRAS;
+	extrasmenu.y = m_top + 48;
+	M_List_SetViewsize(&extrasmenu.list,
+		extrasmenu.list.search.len > 0 ? MAX_VIS_EXTRAS_SEARCH : MAX_VIS_EXTRAS);
 	extrasmenu.list.cursor = (int)extras_cursor;
 	M_List_Rescroll(&extrasmenu.list);
 
 	p = Draw_CachePic("gfx/p_option.lmp");
-	M_DrawPic((320 - p->width) / 2, 4, p);
+	M_DrawPic((320 - (int)p->width) / 2, m_top + 4, p);
 
 	const char* title = "Miscellaneous Options";
-	M_PrintWhite((320 - 8 * strlen(title)) / 2, 32, title);
+	M_PrintWhite((320 - 8 * strlen(title)) / 2, m_top + 32, title);
 
 	M_LivePreview_WantAt (M_Extras_LivePreviewId (), M_Extras_RowY (extras_cursor));
 
@@ -27286,17 +27363,8 @@ void M_Extras_Draw(void)
 
 	// Draw search box if search is active
 	if (extrasmenu.list.search.len > 0)
-	{
-		M_DrawTextBox(16, EXTRAS_SEARCH_BOX_Y, 32, 1);
-		M_PrintHighlight(24, EXTRAS_SEARCH_TEXT_Y, extrasmenu.list.search.text,
-			extrasmenu.list.search.text,
-			extrasmenu.list.search.len);
-		int cursor_x = 24 + 8 * extrasmenu.list.search.len;
-		if (numberOfExtrasItems == 0)
-			M_DrawCharacter(cursor_x, EXTRAS_SEARCH_TEXT_Y, 11 ^ 128);
-		else
-			M_DrawCharacter(cursor_x, EXTRAS_SEARCH_TEXT_Y, 10 + ((int)(realtime * 4) & 1));
-	}
+		M_DrawListSearch(16, EXTRAS_SEARCH_BOX_Y, 32, extrasmenu.list.search.text,
+			extrasmenu.list.search.len, numberOfExtrasItems > 0);
 }
 
 void M_Extras_Key(int k)
@@ -27394,15 +27462,16 @@ void M_Extras_Key(int k)
 		break;
 
 	case K_MOUSE1:
-		x = m_mousex - extrasmenu.x - (extrasmenu.cols - 1) * 8;
+		x = m_mousex - extrasmenu.x;
 		y = m_mousey - extrasmenu.y;
-		if (x >= -8 && M_List_UseScrollbar(&extrasmenu.list, y))
+		if (M_List_MouseInScrollbar(&extrasmenu.list, x, y, extrasmenu.cols))
 		{
 			extrasmenu.scrollbar_grab = true;
 			M_Extras_Mousemove(m_mousex, m_mousey);
 		}
-		else
+		else if (M_List_SelectClickedRow(&extrasmenu.list, x, y, extrasmenu.cols))
 		{
+			extras_cursor = (enum extras_e)extrasmenu.list.cursor;
 			m_entersound = true;
 			M_Extras_AdjustSliders(1);
 		}
@@ -27442,10 +27511,6 @@ void M_Extras_Key(int k)
 
 void M_Extras_Mousemove(int cx, int cy)
 {
-	// Don't process mouse movement if it's in the search box area
-	if (extrasmenu.list.search.len > 0 && cy >= EXTRAS_SEARCH_BOX_Y)
-		return;
-
 	cy -= extrasmenu.y;
 	if (extrasmenu.scrollbar_grab)
 	{
@@ -27456,6 +27521,8 @@ void M_Extras_Mousemove(int cx, int cy)
 		}
 		M_List_UseScrollbar(&extrasmenu.list, cy);
 	}
+	else if (!M_List_MouseInColumns(cx - extrasmenu.x, extrasmenu.cols))
+		return;
 
 	M_List_Mousemove(&extrasmenu.list, cy);
 	extras_cursor = (enum extras_e)extrasmenu.list.cursor;
@@ -28417,6 +28484,8 @@ static void M_Shortcuts_Refilter(void)
 	}
 
 	shortcutmenu.list.numitems = VEC_SIZE(shortcutmenu.filtered_indices);
+	M_List_SetViewsize(&shortcutmenu.list,
+		shortcutmenu.list.search.len > 0 ? 14 + M_EXTRA_ROWS : MAX_VIS_SHORTCUTS);
 
 	if (shortcutmenu.list.numitems <= 0)
 	{
@@ -28627,13 +28696,13 @@ void M_Shortcuts_Draw(void)
 {
 	int x, y, cols;
 	int firstvis, numvis, i;
-	int saved_viewsize;
 	qboolean show_status;
 
 	x = m_left + 16;
 	y = m_top + 32;
 	cols = M_LIST_COLS;
-	M_List_SetViewsize(&shortcutmenu.list, MAX_VIS_SHORTCUTS);
+	M_List_SetViewsize(&shortcutmenu.list,
+		shortcutmenu.list.search.len > 0 ? 14 + M_EXTRA_ROWS : MAX_VIS_SHORTCUTS);
 
 	shortcutmenu.x = x;
 	shortcutmenu.y = y;
@@ -28655,12 +28724,6 @@ void M_Shortcuts_Draw(void)
 	Draw_String(x, y - 28, "Keyboard Shortcuts");
 	M_DrawQuakeBar(x - 8, y - 16, cols + 2);
 
-	saved_viewsize = shortcutmenu.list.viewsize;
-	if (shortcutmenu.list.search.len > 0 && shortcutmenu.list.viewsize > 14 + M_EXTRA_ROWS)
-	{
-		shortcutmenu.list.viewsize = 14 + M_EXTRA_ROWS;
-		M_List_Rescroll(&shortcutmenu.list);
-	}
 
 	if (shortcutmenu.list.numitems > 0)
 	{
@@ -28736,7 +28799,7 @@ void M_Shortcuts_Draw(void)
 	if (shortcutmenu.list.search.len > 0)
 	{
 		int cursor_x = m_left + 24 + 8 * shortcutmenu.list.search.len;
-		M_DrawTextBox(m_left + 16, M_BOTTOM(176), cols - 4, 1);
+		M_DrawTextBox(m_left + 16, M_BOTTOM(176), 32, 1);
 		M_PrintHighlight(m_left + 24, M_BOTTOM(184), shortcutmenu.list.search.text,
 			shortcutmenu.list.search.text,
 			shortcutmenu.list.search.len);
@@ -28747,9 +28810,7 @@ void M_Shortcuts_Draw(void)
 	}
 
 	if (show_status)
-		M_PrintWhite(x, shortcutmenu.list.search.len > 0 ? M_BOTTOM(200) : M_BOTTOM(184), shortcutmenu.status_message);
-
-	shortcutmenu.list.viewsize = saved_viewsize;
+		M_PrintWhite(x, shortcutmenu.list.search.len > 0 ? M_BOTTOM(164) : M_BOTTOM(184), shortcutmenu.status_message);
 }
 
 void M_Shortcuts_Key(int key)
@@ -28847,9 +28908,9 @@ void M_Shortcuts_Key(int key)
 	case K_MOUSE1:
 		if (shortcutmenu.list.numitems > 0)
 		{
-			int x = m_mousex - shortcutmenu.x - (shortcutmenu.cols - 1) * 8;
+			int x = m_mousex - shortcutmenu.x;
 			int y = m_mousey - shortcutmenu.y;
-			if (x >= -8 && M_List_UseScrollbar(&shortcutmenu.list, y))
+			if (M_List_MouseInScrollbar(&shortcutmenu.list, x, y, shortcutmenu.cols))
 			{
 				shortcutmenu.scrollbar_grab = true;
 				M_Shortcuts_Mousemove(m_mousex, m_mousey);
@@ -28875,6 +28936,8 @@ void M_Shortcuts_Mousemove(int cx, int cy)
 		}
 		M_List_UseScrollbar(&shortcutmenu.list, cy);
 	}
+	else if (!M_List_MouseInColumns(cx - shortcutmenu.x, shortcutmenu.cols))
+		return;
 
 	if (shortcutmenu.list.numitems > 0)
 		M_List_Mousemove(&shortcutmenu.list, cy);
@@ -29457,7 +29520,7 @@ void M_ModelViewer_Draw(void)
 	if (modelviewermenu.list.search.len > 0)
 	{
 		int cursor_x = MODELVIEWER_SEARCH_BOX_X + 8 + 8 * modelviewermenu.list.search.len;
-		M_DrawTextBox(MODELVIEWER_SEARCH_BOX_X, MODELVIEWER_SEARCH_BOX_Y, M_LIST_COLS - 4, 1);
+		M_DrawTextBox(MODELVIEWER_SEARCH_BOX_X, MODELVIEWER_SEARCH_BOX_Y, 32, 1);
 		M_PrintHighlight(MODELVIEWER_SEARCH_BOX_X + 8, MODELVIEWER_SEARCH_BOX_Y + 8, modelviewermenu.list.search.text,
 			modelviewermenu.list.search.text,
 			modelviewermenu.list.search.len);
@@ -29580,13 +29643,15 @@ void M_ModelViewer_Key(int key)
 
 		if (modelviewermenu.list.numitems > 0)
 		{
-			int x = m_mousex - modelviewermenu.x - (modelviewermenu.cols - 1) * 8;
+			int x = m_mousex - modelviewermenu.x;
 			int y = m_mousey - modelviewermenu.y;
-			if (x >= -8 && M_List_UseScrollbar(&modelviewermenu.list, y))
+			if (M_List_MouseInScrollbar(&modelviewermenu.list, x, y, modelviewermenu.cols))
 			{
 				modelviewermenu.scrollbar_grab = true;
 				M_ModelViewer_Mousemove(m_mousex, m_mousey);
 			}
+			else
+				M_List_SelectClickedRow(&modelviewermenu.list, x, y, modelviewermenu.cols);
 		}
 		return;
 
@@ -30184,6 +30249,8 @@ static void M_Version_Refilter(void)
 	}
 
 	versionmenu.list.numitems = VEC_SIZE(versionmenu.filtered_indices);
+	M_List_SetViewsize(&versionmenu.list,
+		versionmenu.list.search.len > 0 ? 15 + M_EXTRA_ROWS : MAX_VIS_VERSION);
 
 	if (versionmenu.list.numitems <= 0)
 	{
@@ -30313,7 +30380,8 @@ void M_Version_Draw(void)
 	x = m_left + 16;
 	y = m_top + 32;
 	cols = M_LIST_COLS;
-	M_List_SetViewsize(&versionmenu.list, MAX_VIS_VERSION);
+	M_List_SetViewsize(&versionmenu.list,
+		versionmenu.list.search.len > 0 ? 15 + M_EXTRA_ROWS : MAX_VIS_VERSION);
 
 	versionmenu.x = x;
 	versionmenu.y = y;
@@ -30400,7 +30468,7 @@ void M_Version_Draw(void)
 	if (versionmenu.list.search.len > 0)
 	{
 		int cursor_x = m_left + 24 + 8 * versionmenu.list.search.len;
-		M_DrawTextBox(m_left + 16, M_BOTTOM(176), cols - 4, 1);
+		M_DrawTextBox(m_left + 16, M_BOTTOM(176), 32, 1);
 		M_PrintHighlight(m_left + 24, M_BOTTOM(184), versionmenu.list.search.text,
 			versionmenu.list.search.text,
 			versionmenu.list.search.len);
@@ -30411,7 +30479,7 @@ void M_Version_Draw(void)
 	}
 
 	if (versionmenu.status_message[0] && (realtime - versionmenu.status_time) < 2.0)
-		M_PrintWhite(x, versionmenu.list.search.len > 0 ? M_BOTTOM(200) : M_BOTTOM(184), versionmenu.status_message);
+		M_PrintWhite(x, versionmenu.list.search.len > 0 ? M_BOTTOM(164) : M_BOTTOM(184), versionmenu.status_message);
 }
 
 void M_Version_Key(int key)
@@ -30506,9 +30574,9 @@ void M_Version_Key(int key)
 	case K_MOUSE1:
 		if (versionmenu.list.numitems > 0)
 		{
-			int x = m_mousex - versionmenu.x - (versionmenu.cols - 1) * 8;
+			int x = m_mousex - versionmenu.x;
 			int y = m_mousey - versionmenu.y;
-			if (x >= -8 && M_List_UseScrollbar(&versionmenu.list, y))
+			if (M_List_MouseInScrollbar(&versionmenu.list, x, y, versionmenu.cols))
 			{
 				versionmenu.scrollbar_grab = true;
 				M_Version_Mousemove(m_mousex, m_mousey);
@@ -30534,6 +30602,8 @@ void M_Version_Mousemove(int cx, int cy)
 		}
 		M_List_UseScrollbar(&versionmenu.list, cy);
 	}
+	else if (!M_List_MouseInColumns(cx - versionmenu.x, versionmenu.cols))
+		return;
 
 	if (versionmenu.list.numitems > 0)
 		M_List_Mousemove(&versionmenu.list, cy);
@@ -30548,7 +30618,7 @@ Reset Config Menu
 #define MAX_VIS_RESETCONFIG	(17 + M_EXTRA_ROWS)
 #define RESETCONFIG_SEARCH_BOX_X	(m_left + 16)
 #define RESETCONFIG_SEARCH_BOX_Y	M_BOTTOM(180)
-#define RESETCONFIG_SEARCH_BOX_COLS	(M_LIST_COLS - 4)	// 32
+#define RESETCONFIG_SEARCH_BOX_COLS	32
 #define RESETCONFIG_SEARCH_TEXT_X	(RESETCONFIG_SEARCH_BOX_X + 8)
 #define RESETCONFIG_SEARCH_TEXT_Y	(RESETCONFIG_SEARCH_BOX_Y + 8)
 
@@ -31047,12 +31117,18 @@ void M_ResetConfig_Key(int key)
 			return;
 		}
 
-		x = m_mousex - resetconfigmenu.x - (resetconfigmenu.cols - 1) * 8;
+		x = m_mousex - resetconfigmenu.x;
 		y = m_mousey - resetconfigmenu.y;
-		if (x < -8 || !M_List_UseScrollbar(&resetconfigmenu.list, y))
-			goto enter;
-		resetconfigmenu.scrollbar_grab = true;
-		M_ResetConfig_Mousemove(m_mousex, m_mousey);
+		if (M_List_MouseInScrollbar(&resetconfigmenu.list, x, y, resetconfigmenu.cols))
+		{
+			resetconfigmenu.scrollbar_grab = true;
+			M_ResetConfig_Mousemove(m_mousex, m_mousey);
+		}
+		else
+		{
+			if (M_List_SelectClickedRow(&resetconfigmenu.list, x, y, resetconfigmenu.cols))
+				goto enter;
+		}
 		break;
 
 	default:
@@ -31094,6 +31170,8 @@ void M_ResetConfig_Mousemove(int cx, int cy) // woods #mousemenu
 		M_List_UseScrollbar(&resetconfigmenu.list, cy);
 		// Note: no return, we also update the cursor
 	}
+	else if (!M_List_MouseInColumns(cx - resetconfigmenu.x, resetconfigmenu.cols))
+		return;
 
 	M_List_Mousemove(&resetconfigmenu.list, cy);
 }
@@ -32359,12 +32437,18 @@ enter:
 		break;
 
 	case K_MOUSE1: // woods #mousemenu
-		x = m_mousex - historymenu.x - (historymenu.cols - 1) * 8;
+		x = m_mousex - historymenu.x;
 		y = m_mousey - historymenu.y;
-		if (x < -8 || !M_List_UseScrollbar(&historymenu.list, y))
-			goto enter;
-		historymenu.scrollbar_grab = true;
-		M_History_Mousemove(m_mousex, m_mousey);
+		if (M_List_MouseInScrollbar(&historymenu.list, x, y, historymenu.cols))
+		{
+			historymenu.scrollbar_grab = true;
+			M_History_Mousemove(m_mousex, m_mousey);
+		}
+		else
+		{
+			if (M_List_SelectClickedRow(&historymenu.list, x, y, historymenu.cols))
+				goto enter;
+		}
 		break;
 
 	case K_BACKSPACE:
@@ -32396,6 +32480,8 @@ void M_History_Mousemove(int cx, int cy) // woods #mousemenu
 		M_List_UseScrollbar(&historymenu.list, cy);
 		// Note: no return, we also update the cursor
 	}
+	else if (!M_List_MouseInColumns(cx - historymenu.x, historymenu.cols))
+		return;
 
 	M_List_Mousemove(&historymenu.list, cy);
 }
@@ -32637,12 +32723,18 @@ void M_Bookmarks_Key(int key)
 		break;
 
 	case K_MOUSE1: // woods #mousemenu
-		x = m_mousex - bookmarksmenu.x - (bookmarksmenu.cols - 1) * 8;
+		x = m_mousex - bookmarksmenu.x;
 		y = m_mousey - bookmarksmenu.y;
-		if (x < -8 || !M_List_UseScrollbar(&bookmarksmenu.list, y))
-			goto enter;
-		bookmarksmenu.scrollbar_grab = true;
-		M_Bookmarks_Mousemove(m_mousex, m_mousey);
+		if (M_List_MouseInScrollbar(&bookmarksmenu.list, x, y, bookmarksmenu.cols))
+		{
+			bookmarksmenu.scrollbar_grab = true;
+			M_Bookmarks_Mousemove(m_mousex, m_mousey);
+		}
+		else
+		{
+			if (M_List_SelectClickedRow(&bookmarksmenu.list, x, y, bookmarksmenu.cols))
+				goto enter;
+		}
 		break;
 
 	case 'a':
@@ -32691,6 +32783,8 @@ void M_Bookmarks_Mousemove(int cx, int cy) // woods #mousemenu
 		M_List_UseScrollbar(&bookmarksmenu.list, cy);
 		// Note: no return, we also update the cursor
 	}
+	else if (!M_List_MouseInColumns(cx - bookmarksmenu.x, bookmarksmenu.cols))
+		return;
 
 	M_List_Mousemove(&bookmarksmenu.list, cy);
 }
@@ -36585,13 +36679,17 @@ static void ServerList_ClampScroll(void)
 
 static void ServerList_Rescroll(void)
 {
-	int item_viewsize;
 	int saved_viewsize = serversmenu.list.viewsize;
 
-	ServerList_GetVisibleLayout(NULL, &item_viewsize, NULL, NULL);
-	serversmenu.list.viewsize = item_viewsize;
-	M_List_Rescroll(&serversmenu.list);
-	serversmenu.list.viewsize = saved_viewsize;
+	/* Scrolling to the cursor can bring the separator into view, costing one row. */
+	for (int pass = 0; pass < 2; ++pass)
+	{
+		int item_viewsize;
+		ServerList_GetVisibleLayout(NULL, &item_viewsize, NULL, NULL);
+		serversmenu.list.viewsize = item_viewsize;
+		M_List_Rescroll(&serversmenu.list);
+		serversmenu.list.viewsize = saved_viewsize;
+	}
 	ServerList_ClampScroll();
 }
 
@@ -36656,7 +36754,7 @@ static qboolean ServerList_ListCycleMatch(int key)
 	return handled;
 }
 
-static qboolean ServerList_UseScrollbar(int yrel)
+static qboolean ServerList_MouseScrollbar(int xrel, int yrel, qboolean hit_test)
 {
 	int item_viewsize;
 	int saved_viewsize = serversmenu.list.viewsize;
@@ -36665,14 +36763,16 @@ static qboolean ServerList_UseScrollbar(int yrel)
 	ServerList_GetVisibleLayout(NULL, &item_viewsize, NULL, NULL);
 
 	serversmenu.list.viewsize = item_viewsize;
-	used = M_List_UseScrollbar(&serversmenu.list, yrel);
+	used = hit_test ? M_List_MouseInScrollbar(&serversmenu.list, xrel, yrel, serversmenu.cols) :
+		M_List_UseScrollbar(&serversmenu.list, yrel);
 	serversmenu.list.viewsize = saved_viewsize;
-	ServerList_ClampScroll();
+	if (!hit_test)
+		ServerList_ClampScroll();
 
 	return used;
 }
 
-static void ServerList_MousemoveList(int yrel)
+static qboolean ServerList_MouseList(int xrel, int yrel, qboolean click)
 {
 	int rows, item_viewsize, pinned_count;
 	qboolean separator_visible;
@@ -36681,7 +36781,7 @@ static void ServerList_MousemoveList(int yrel)
 	ServerList_GetVisibleLayout(&rows, &item_viewsize, &pinned_count, &separator_visible);
 
 	if (ServerList_MouseOverPinnedSeparator(yrel, rows, pinned_count, separator_visible))
-		return;
+		return false;
 
 	if (separator_visible)
 	{
@@ -36691,8 +36791,13 @@ static void ServerList_MousemoveList(int yrel)
 	}
 
 	serversmenu.list.viewsize = item_viewsize;
-	M_List_Mousemove(&serversmenu.list, yrel);
+	qboolean selected = false;
+	if (click)
+		selected = M_List_SelectClickedRow(&serversmenu.list, xrel, yrel, serversmenu.cols);
+	else
+		M_List_Mousemove(&serversmenu.list, yrel);
 	serversmenu.list.viewsize = saved_viewsize;
+	return selected;
 }
 
 static int ServersMenu_ResolveIndex(int displayIndex)
@@ -37016,7 +37121,11 @@ void M_ServerList_Draw (void)
 		slist_name_w = 16 + extra * 2 / 3;
 		slist_map_w = 6 + extra - extra * 2 / 3;
 	}
-	serversmenu.list.viewsize = MAX_VIS_SERVERS;
+	if (serversmenu.list.viewsize != MAX_VIS_SERVERS)
+	{
+		serversmenu.list.viewsize = MAX_VIS_SERVERS;
+		ServerList_Rescroll();
+	}
 	loading = (searchLastScope == SLIST_INTERNET &&
 		(slistInProgress || ServerList_ApiFetchIsLoading()));
 	copy_message_active = (realtime < serversmenu.copy_message_until);
@@ -37331,7 +37440,7 @@ void M_ServerList_Draw (void)
 	// Draw search box
 	if (serversmenu.list.search.len > 0)
 	{
-		M_DrawTextBox(m_left + 16, M_BOTTOM(180), cols - 4, 1);
+		M_DrawTextBox(m_left + 16, M_BOTTOM(180), 32, 1);
 		M_PrintHighlight(m_left + 24, M_BOTTOM(188), serversmenu.list.search.text,
 			serversmenu.list.search.text,
 			serversmenu.list.search.len);
@@ -37568,22 +37677,16 @@ void M_ServerList_Key(int key)
 				return;
 			}
 		}
-		x = m_mousex - serversmenu.x - (serversmenu.cols - 1) * 8;
+		x = m_mousex - serversmenu.x;
 		y = m_mousey - serversmenu.y;
+		if (ServerList_MouseScrollbar(x, y, true))
 		{
-			int list_rows, pinned_count;
-			qboolean separator_visible;
-
-			ServerList_GetVisibleLayout(&list_rows, NULL, &pinned_count, &separator_visible);
-
-			if (ServerList_MouseOverPinnedSeparator(y, list_rows, pinned_count, separator_visible))
-				return;
+			serversmenu.scrollbar_grab = true;
+			M_ServerList_Mousemove(m_mousex, m_mousey);
 		}
-		if (x < -8 || !ServerList_UseScrollbar(y))
+		else if (ServerList_MouseList(x, y, true))
 			goto enter;
-		serversmenu.scrollbar_grab = true;
-		M_ServerList_Mousemove(m_mousex, m_mousey);
-
+		break;
 }
 	default:
 		break;
@@ -37602,11 +37705,13 @@ void M_ServerList_Mousemove(int cx, int cy) // woods
 			serversmenu.scrollbar_grab = false;
 			return;
 		}
-		ServerList_UseScrollbar(cy);
+		ServerList_MouseScrollbar(0, cy, false);
 		// Note: no return, we also update the cursor
 	}
+	else if (!M_List_MouseInColumns(cx - serversmenu.x, serversmenu.cols))
+		return;
 
-	ServerList_MousemoveList(cy);
+	ServerList_MouseList(cx - serversmenu.x, cy, false);
 
 	if (serversmenu.list.cursor != prev_cursor)
 		TriggerServerPing(serversmenu.list.cursor);
@@ -37928,7 +38033,7 @@ void M_Mods_Draw(void)
 
 	if (modsmenu.list.search.len > 0) // Draw search box if search is active
 	{
-		M_DrawTextBox(m_left + 16, M_BOTTOM(176), cols - 4, 1);
+		M_DrawTextBox(m_left + 16, M_BOTTOM(176), 32, 1);
 		M_PrintHighlight(m_left + 24, M_BOTTOM(184), modsmenu.list.search.text,
 			modsmenu.list.search.text,
 			modsmenu.list.search.len);
@@ -38139,19 +38244,23 @@ void M_Mods_Key(int key)
 		break;
 
 	case K_MOUSE1: // woods #mousemenu
-		x = m_mousex - modsmenu.x - (modsmenu.cols - 1) * 8;
+		x = m_mousex - modsmenu.x;
 		y = m_mousey - modsmenu.y;
-		if (x < -8 || !M_List_UseScrollbar(&modsmenu.list, y))
+		if (M_List_MouseInScrollbar(&modsmenu.list, x, y, modsmenu.cols))
+		{
+			modsmenu.scrollbar_grab = true;
+			M_Mods_Mousemove(m_mousex, m_mousey);
+		}
+		else
 		{
 			if (M_Mods_MouseYInDownloadGap(y))
-			{
-				S_LocalSound ("misc/menu3.wav");
 				break;
-			}
-			goto enter;
+			if (M_Mods_HasDownloadGap() && y >= 16)
+				y -= 8;
+			if (M_List_SelectClickedRow(&modsmenu.list, x, y, modsmenu.cols))
+				goto enter;
 		}
-		modsmenu.scrollbar_grab = true;
-		M_Mods_Mousemove(m_mousex, m_mousey);
+		break;
 
 	default:
 		break;
@@ -38172,6 +38281,8 @@ void M_Mods_Mousemove(int cx, int cy) // woods #mousemenu
 		M_List_UseScrollbar(&modsmenu.list, cy);
 		// Note: no return, we also update the cursor
 	}
+	else if (!M_List_MouseInColumns(cx - modsmenu.x, modsmenu.cols))
+		return;
 
 	if (M_Mods_MouseYInDownloadGap(cy))
 		return;
@@ -40955,13 +41066,25 @@ static void M_DownloadMods_ApplyExitPrompt(void)
 	M_DownloadMods_LeaveToMods();
 }
 
+#define DOWNLOADMOD_EXIT_OPTION_X 64
+#define DOWNLOADMOD_EXIT_OPTION_Y 104
+
+static qboolean M_DownloadMods_HoverExitPrompt(int x, int y)
+{
+	if (x < DOWNLOADMOD_EXIT_OPTION_X - 8 || x >= 240 ||
+		y < DOWNLOADMOD_EXIT_OPTION_Y || y >= DOWNLOADMOD_EXIT_OPTION_Y + DOWNLOADMOD_EXIT_COUNT * 8)
+		return false;
+	downloadmodsmenu.exit_prompt_cursor = (y - DOWNLOADMOD_EXIT_OPTION_Y) / 8;
+	return true;
+}
+
 static void M_DownloadMods_DrawExitPrompt(void)
 {
 	int box_x = 24;
 	int box_y = 68;
 	int text_x = 48;
-	int option_x = 64;
-	int option_y = box_y + 36;
+	int option_x = DOWNLOADMOD_EXIT_OPTION_X;
+	int option_y = DOWNLOADMOD_EXIT_OPTION_Y;
 	int cursor_y = option_y + downloadmodsmenu.exit_prompt_cursor * 8;
 
 	M_DrawTextBox(box_x, box_y, 32, 6);
@@ -41004,10 +41127,8 @@ static qboolean M_DownloadMods_ExitPromptKey(int key)
 		return true;
 
 	case K_MOUSE1:
-		if (m_mousex >= 56 && m_mousex < 240 &&
-			m_mousey >= 104 && m_mousey < 120)
-			downloadmodsmenu.exit_prompt_cursor = (m_mousey - 104) / 8;
-		M_DownloadMods_ApplyExitPrompt();
+		if (M_DownloadMods_HoverExitPrompt(m_mousex, m_mousey))
+			M_DownloadMods_ApplyExitPrompt();
 		return true;
 
 	case 'c':
@@ -42259,7 +42380,7 @@ void M_DownloadMods_Draw(void)
 
 	if (downloadmodsmenu.list.search.len > 0)
 	{
-		M_DrawTextBox(m_left + 16, M_BOTTOM(176), cols - 4, 1);
+		M_DrawTextBox(m_left + 16, M_BOTTOM(176), 32, 1);
 		M_PrintHighlight(m_left + 24, M_BOTTOM(184), downloadmodsmenu.list.search.text,
 			downloadmodsmenu.list.search.text,
 			downloadmodsmenu.list.search.len);
@@ -42364,6 +42485,7 @@ void M_DownloadMods_Key(int key)
 		if (M_DownloadMods_InstallBusy())
 		{
 			downloadmodsmenu.exit_prompt = true;
+			downloadmodsmenu.scrollbar_grab = false;
 			downloadmodsmenu.exit_prompt_cursor = DOWNLOADMOD_EXIT_BACKGROUND;
 			S_LocalSound("misc/menu1.wav");
 			return;
@@ -42388,15 +42510,18 @@ void M_DownloadMods_Key(int key)
 		break;
 
 	case K_MOUSE1:
-		x = m_mousex - downloadmodsmenu.x - (downloadmodsmenu.cols - 1) * 8;
+		x = m_mousex - downloadmodsmenu.x;
 		y = m_mousey - downloadmodsmenu.y;
-		if (x < -8 || !M_List_UseScrollbar(&downloadmodsmenu.list, y))
+		if (M_List_MouseInScrollbar(&downloadmodsmenu.list, x, y, downloadmodsmenu.cols))
 		{
-			M_List_Mousemove(&downloadmodsmenu.list, y);
-			goto enter;
+			downloadmodsmenu.scrollbar_grab = true;
+			M_DownloadMods_Mousemove(m_mousex, m_mousey);
 		}
-		downloadmodsmenu.scrollbar_grab = true;
-		M_DownloadMods_Mousemove(m_mousex, m_mousey);
+		else
+		{
+			if (M_List_SelectClickedRow(&downloadmodsmenu.list, x, y, downloadmodsmenu.cols))
+				goto enter;
+		}
 		break;
 
 	default:
@@ -42406,6 +42531,12 @@ void M_DownloadMods_Key(int key)
 
 void M_DownloadMods_Mousemove(int cx, int cy)
 {
+	if (downloadmodsmenu.exit_prompt)
+	{
+		M_DownloadMods_HoverExitPrompt(cx, cy);
+		return;
+	}
+
 	cy -= downloadmodsmenu.y;
 
 	if (downloadmodsmenu.scrollbar_grab)
@@ -42417,6 +42548,8 @@ void M_DownloadMods_Mousemove(int cx, int cy)
 		}
 		M_List_UseScrollbar(&downloadmodsmenu.list, cy);
 	}
+	else if (!M_List_MouseInColumns(cx - downloadmodsmenu.x, downloadmodsmenu.cols))
+		return;
 
 	M_List_Mousemove(&downloadmodsmenu.list, cy);
 }
@@ -42429,6 +42562,8 @@ Demos Menu
 
 // woods -- positions follow the menu bounds (iw); classic values in comments
 #define MAX_VIS_DEMOS	(10 + M_EXTRA_ROWS)
+#define DEMOS_SEARCH_BOX_Y M_BOTTOM(176)
+#define DEMOS_METADATA_ROWS 6
 #define MAX_VIS_DEMO_FOLDERS	(11 + M_EXTRA_ROWS)
 #define DEMOS_LIST_X	(m_left + 16)
 #define DEMOS_LIST_COLS	M_LIST_COLS	// 36
@@ -45196,6 +45331,8 @@ static const int *M_Demos_DisplayOrder(void)
 	return demosmenu.sorted_indices;
 }
 
+static void M_Demos_UpdateViewsize(void);
+
 // preserve_view=true: keep the user's scroll position when possible.  Used by
 // the background-parse tick so newly-matched items can stream into the list
 // without scroll-jumping under the user.  Keystroke callers pass false and
@@ -45203,6 +45340,7 @@ static const int *M_Demos_DisplayOrder(void)
 static void M_Demos_RefilterEx(qboolean preserve_view)
 {
     int i;
+	M_Demos_UpdateViewsize();
     qboolean has_search = demosmenu.list.search.len > 0;
     demosearchterm_t terms[DEMOS_SEARCH_MAX_TERMS];
     int term_count = has_search ? M_Demos_ParseSearchTerms(demosmenu.list.search.text,
@@ -45541,6 +45679,15 @@ static int M_Demos_ListY(void)
 	return demosmenu.path_valid && !M_Demos_ShowPathOptions() ? y + 8 : y;
 }
 
+static void M_Demos_UpdateViewsize(void)
+{
+	int footer = demosmenu.list.search.len > 0 ? DEMOS_SEARCH_BOX_Y : M_BOTTOM(200);
+	int list_bottom = footer - 12 - DEMOS_METADATA_ROWS * 8;
+
+	M_List_SetViewsize(&demosmenu.list,
+		q_min(MAX_VIS_DEMOS, (list_bottom - M_Demos_ListY()) / 8));
+}
+
 static const struct
 {
 	const char *label;
@@ -45825,7 +45972,7 @@ void M_Demos_Draw (void)
     x = DEMOS_LIST_X;
     y = M_Demos_ListY();
     cols = DEMOS_LIST_COLS;
-	M_List_SetViewsize(&demosmenu.list, MAX_VIS_DEMOS);
+	M_Demos_UpdateViewsize();
 
     char demofilename[MAX_OSPATH];
 
@@ -46012,7 +46159,7 @@ void M_Demos_Draw (void)
 
         if (di->players[0])
         {
-            // Handle player display, wrapped to the list width (40 chars classic)
+            // Handle player display, wrapped to the list width
             char players_copy[256];
             q_strlcpy(players_copy, di->players, sizeof(players_copy));
             
@@ -46043,13 +46190,13 @@ void M_Demos_Draw (void)
                 int comma_space = next_comma ? 2 : 0; // ", " if there are more names
                 int needed_space = name_len + comma_space;
                 
-                if (line_pos > 0 && line_pos + needed_space > cols + 4)
+                if (line_pos > 0 && line_pos + needed_space > cols)
                 {
                     // Check if we've reached the 3-line limit
                     if (line_count >= 2) // 0, 1, 2 = 3 lines total
                     {
                         // Add ellipsis to indicate more players
-                        if (line_pos + 4 <= cols + 4) // Space for " ..."
+                        if (line_pos + 4 <= cols) // Space for " ..."
                         {
                             line_buffer[line_pos++] = ' ';
                             line_buffer[line_pos++] = '.';
@@ -46057,13 +46204,12 @@ void M_Demos_Draw (void)
                             line_buffer[line_pos++] = '.';
                         }
                         line_buffer[line_pos] = '\0';
-                        M_PrintWhite(x, current_y, line_buffer);
                         break; // Stop processing more players
                     }
                     
                     // Print current line and start new one
                     line_buffer[line_pos] = '\0';
-                    M_PrintWhite(x, current_y, line_buffer); // Remove indent - all lines align to same x position
+                    M_PrintTruncated(x, current_y, cols * 8, line_buffer, false); // Remove indent - all lines align to same x position
                     if (first_line)
                         first_line = false;
                     current_y += 8;
@@ -46093,7 +46239,7 @@ void M_Demos_Draw (void)
             if (line_pos > 0 && line_count < 3)
             {
                 line_buffer[line_pos] = '\0';
-                M_PrintWhite(x, current_y, line_buffer); // Remove indent - all lines align to same x position
+                M_PrintTruncated(x, current_y, cols * 8, line_buffer, false); // Remove indent - all lines align to same x position
                 current_y += 8;
             }
         }
@@ -46101,15 +46247,15 @@ void M_Demos_Draw (void)
 
     if (demosmenu.list.search.len > 0)
     {
-        M_DrawTextBox(m_left + 16, M_BOTTOM(180), cols - 4, 1);
-        M_PrintHighlight(m_left + 24, M_BOTTOM(188), demosmenu.list.search.text,
+        M_DrawTextBox(m_left + 16, DEMOS_SEARCH_BOX_Y, 32, 1);
+        M_PrintHighlight(m_left + 24, (DEMOS_SEARCH_BOX_Y + 8), demosmenu.list.search.text,
             demosmenu.list.search.text,
             demosmenu.list.search.len);
         int cursor_x = m_left + 24 + 8 * demosmenu.list.search.len;
 		if (demosmenu.list.numitems == 0)
-			M_DrawCharacter(cursor_x, M_BOTTOM(188), 11 ^ 128);
+			M_DrawCharacter(cursor_x, (DEMOS_SEARCH_BOX_Y + 8), 11 ^ 128);
 		else
-			M_DrawCharacter(cursor_x, M_BOTTOM(188), 10 + ((int)(realtime * 4) & 1));
+			M_DrawCharacter(cursor_x, (DEMOS_SEARCH_BOX_Y + 8), 10 + ((int)(realtime * 4) & 1));
     }
 }
 
@@ -46498,27 +46644,22 @@ void M_Demos_Key(int key)
             S_LocalSound("misc/menu3.wav");
         break;
 
-    case K_MOUSE1: // woods #mousemenu
+    case K_MOUSE1:
         {
             int x = m_mousex - DEMOS_LIST_X;
             int y = m_mousey - M_Demos_ListY();
 
-            if (!demosmenu.path_valid || x < -8 || x >= DEMOS_LIST_COLS * 8 ||
-                y < 0 || y >= demosmenu.list.viewsize * 8)
+            if (!demosmenu.path_valid)
                 return;
-
-            if (x >= (DEMOS_LIST_COLS - 2) * 8 && M_List_UseScrollbar(&demosmenu.list, y))
+            if (M_List_MouseInScrollbar(&demosmenu.list, x, y, DEMOS_LIST_COLS))
             {
                 demosmenu.scrollbar_grab = true;
                 M_Demos_Mousemove(m_mousex, m_mousey);
                 return;
             }
-
-            if (y / 8 >= demosmenu.list.numitems - demosmenu.list.scroll)
-                return;
-
-            M_List_Mousemove(&demosmenu.list, y);
-            goto enter;
+            if (M_List_SelectClickedRow(&demosmenu.list, x, y, DEMOS_LIST_COLS))
+                goto enter;
+            return;
         }
 
     default:
@@ -46564,6 +46705,8 @@ void M_Demos_Mousemove(int cx, int cy) // woods #mousemenu
 		M_List_UseScrollbar(&demosmenu.list, cy);
 		// Note: no return, we also update the cursor
 	}
+	else if (!demosmenu.path_valid || !M_List_MouseInColumns(cx - DEMOS_LIST_X, DEMOS_LIST_COLS))
+		return;
 
 	M_List_Mousemove(&demosmenu.list, cy);
 }
@@ -47098,12 +47241,16 @@ static void AudioCatalog_InitCommands(void)
 	Cmd_AddCommand("audiofiles", AudioCatalog_List_f);
 }
 
-#define AUDIO_LIST_X 16
-#define AUDIO_LIST_Y 24
-#define AUDIO_LIST_COLS 18
-#define AUDIO_LIST_ROWS 16
-#define AUDIO_PANEL_X 176
-#define AUDIO_PANEL_W 128
+#define AUDIO_Y(y) (m_top + (y))
+#define AUDIO_LIST_X (m_left + 16)
+#define AUDIO_LIST_Y AUDIO_Y(24)
+#define AUDIO_LIST_COLS (18 + (M_LIST_COLS - 36) / 2)
+#define AUDIO_LIST_ROWS (16 + M_EXTRA_ROWS)
+#define AUDIO_SCROLL_X (AUDIO_LIST_X + AUDIO_LIST_COLS * 8)
+#define AUDIO_PANEL_X (AUDIO_SCROLL_X + 16)
+#define AUDIO_PANEL_W (m_left + m_width - 16 - AUDIO_PANEL_X)
+#define AUDIO_SEEK_Y AUDIO_Y(56)
+#define AUDIO_GAIN_Y AUDIO_Y(142)
 #define AUDIO_COPY_HINT KEY_SHORTCUT_MODIFIER_NAME "-C Copy"
 
 extern int m_mousex, m_mousey;
@@ -47507,6 +47654,7 @@ void M_Menu_AudioBrowser_f(void)
 	audiomenu.gain = 0.8f;
 	BGM_Preview_SetExclusive(true);
 	S_SoundPreview_SetExclusive(true);
+	M_UpdateBounds();
 	M_Audio_Rebuild();
 	key_dest = key_menu;
 	m_state = m_audiobrowser;
@@ -47594,7 +47742,7 @@ static double M_Audio_SmoothPosition(const char *name, int64_t source, int64_t t
 void M_AudioBrowser_Draw(void)
 {
 	const char *bottom_hints = "Tab Mode  F2 Auto  F3 Loop  " AUDIO_COPY_HINT;
-	audio_catalog_item_t *selected = M_Audio_Selected();
+	audio_catalog_item_t *selected;
 	int count = (int)VEC_SIZE(audiomenu.filtered);
 	int i;
 	float progress = 0.0f;
@@ -47606,19 +47754,24 @@ void M_AudioBrowser_Draw(void)
 	char format[64] = "";
 	char active[MAX_QPATH] = "";
 
+	M_Audio_Clamp();
+	selected = M_Audio_Selected();
+	if (!keydown[K_MOUSE1])
+		audiomenu.scrollbar_grab = false;
+
 	if (audiomenu.progress_grab && !keydown[K_MOUSE1])
 		M_Audio_EndScrub();
 	if (audiomenu.gain_grab && !keydown[K_MOUSE1])
 		audiomenu.gain_grab = false;
 
 	if (audiomenu.kind == AUDIO_CATALOG_SOUNDS)
-		M_PrintWhite(72, 8, "Sounds");
+		M_PrintWhite(m_left + 72, AUDIO_Y(8), "Sounds");
 	else
-		M_Print(72, 8, "Sounds");
+		M_Print(m_left + 72, AUDIO_Y(8), "Sounds");
 	if (audiomenu.kind == AUDIO_CATALOG_MUSIC)
-		M_PrintWhite(176, 8, "Music");
+		M_PrintWhite(AUDIO_PANEL_X, AUDIO_Y(8), "Music");
 	else
-		M_Print(176, 8, "Music");
+		M_Print(AUDIO_PANEL_X, AUDIO_Y(8), "Music");
 
 	for (i = 0; i < AUDIO_LIST_ROWS && audiomenu.scroll + i < count; ++i)
 	{
@@ -47643,8 +47796,8 @@ void M_AudioBrowser_Draw(void)
 		int track_h = AUDIO_LIST_ROWS * 8;
 		int thumb_h = q_max(8, track_h * AUDIO_LIST_ROWS / count);
 		int thumb_y = AUDIO_LIST_Y + (track_h - thumb_h) * audiomenu.scroll / (count - AUDIO_LIST_ROWS);
-		Draw_Fill(164, AUDIO_LIST_Y, 2, track_h, 0, 0.35f);
-		Draw_FillPlayer(163, thumb_y, 4, thumb_h, progress_color, 0.9f);
+		Draw_Fill(AUDIO_SCROLL_X + 4, AUDIO_LIST_Y, 2, track_h, 0, 0.35f);
+		Draw_FillPlayer(AUDIO_SCROLL_X + 3, thumb_y, 4, thumb_h, progress_color, 0.9f);
 	}
 
 	if (audiomenu.kind == AUDIO_CATALOG_SOUNDS)
@@ -47705,10 +47858,10 @@ void M_AudioBrowser_Draw(void)
 			q_strlcpy(active, state.name, sizeof(active));
 	}
 
-	M_PrintWhite(AUDIO_PANEL_X, 40, detail);
-	Draw_Fill(AUDIO_PANEL_X, 56, AUDIO_PANEL_W, 8, 0, 0.5f);
+	M_PrintTruncated(AUDIO_PANEL_X, AUDIO_Y(40), AUDIO_PANEL_W, detail, false);
+	Draw_Fill(AUDIO_PANEL_X, AUDIO_SEEK_Y, AUDIO_PANEL_W, 8, 0, 0.5f);
 	if (preview_active && progress_known)
-		Draw_FillPlayer(AUDIO_PANEL_X + 1, 58,
+		Draw_FillPlayer(AUDIO_PANEL_X + 1, AUDIO_SEEK_Y + 2,
 			q_max(1, (int)((AUDIO_PANEL_W - 2) * progress)),
 			4, progress_color, 0.9f);
 	else if (preview_active)
@@ -47716,7 +47869,7 @@ void M_AudioBrowser_Draw(void)
 		int marker_w = 16;
 		int marker_x = preview_playing ?
 			(int)(realtime * 40.0) % (AUDIO_PANEL_W - marker_w - 2) : 0;
-		Draw_FillPlayer(AUDIO_PANEL_X + 1 + marker_x, 57,
+		Draw_FillPlayer(AUDIO_PANEL_X + 1 + marker_x, AUDIO_SEEK_Y + 1,
 			marker_w, 6, progress_color, 0.9f);
 	}
 	if (preview_active && progress_known)
@@ -47726,47 +47879,47 @@ void M_AudioBrowser_Draw(void)
 		Tools_DrawPickerMarker(handle_x + 0.5f, 60.0f, 3,
 			progress_color, progress_color);
 	}
-	M_Print(AUDIO_PANEL_X, 68, va("%s / %s", elapsed, total));
+	M_Print(AUDIO_PANEL_X, AUDIO_Y(68), va("%s / %s", elapsed, total));
 	if (*active)
-		M_PrintScroll(AUDIO_PANEL_X, 76, AUDIO_PANEL_W, COM_SkipPath(active), realtime, false);
-	M_PrintWhite(AUDIO_PANEL_X, 92, "Enter Play");
-	M_Print(AUDIO_PANEL_X, 100, "Space Pause");
-	M_Print(AUDIO_PANEL_X, 108, "Del Stop");
-	M_Print(AUDIO_PANEL_X, 116, va("Loop     %s", audiomenu.loop ? "on" : "off"));
-	M_Print(AUDIO_PANEL_X, 124, va("Autoplay %s", audiomenu.autoplay ? "on" : "off"));
+		M_PrintScroll(AUDIO_PANEL_X, AUDIO_Y(76), AUDIO_PANEL_W, COM_SkipPath(active), realtime, false);
+	M_PrintWhite(AUDIO_PANEL_X, AUDIO_Y(92), "Enter Play");
+	M_Print(AUDIO_PANEL_X, AUDIO_Y(100), "Space Pause");
+	M_Print(AUDIO_PANEL_X, AUDIO_Y(108), "Del Stop");
+	M_Print(AUDIO_PANEL_X, AUDIO_Y(116), va("Loop     %s", audiomenu.loop ? "on" : "off"));
+	M_Print(AUDIO_PANEL_X, AUDIO_Y(124), va("Autoplay %s", audiomenu.autoplay ? "on" : "off"));
 	if (muted)
 	{
-		M_Print(AUDIO_PANEL_X, 132, "Volume < ");
-		M_PrintWhite(AUDIO_PANEL_X + 9 * 8, 132, "muted");
-		M_Print(AUDIO_PANEL_X + 14 * 8, 132, " >");
+		M_Print(AUDIO_PANEL_X, AUDIO_Y(132), "Volume < ");
+		M_PrintWhite(AUDIO_PANEL_X + 9 * 8, AUDIO_Y(132), "muted");
+		M_Print(AUDIO_PANEL_X + 14 * 8, AUDIO_Y(132), " >");
 	}
 	else
-		M_Print(AUDIO_PANEL_X, 132, va("Volume < %.0f%% >", audiomenu.gain * 100.0f));
-	Draw_Fill(AUDIO_PANEL_X, 142, AUDIO_PANEL_W, 4, 0, 0.5f);
-	Draw_FillPlayer(AUDIO_PANEL_X + 1, 143,
+		M_Print(AUDIO_PANEL_X, AUDIO_Y(132), va("Volume < %.0f%% >", audiomenu.gain * 100.0f));
+	Draw_Fill(AUDIO_PANEL_X, AUDIO_GAIN_Y, AUDIO_PANEL_W, 4, 0, 0.5f);
+	Draw_FillPlayer(AUDIO_PANEL_X + 1, AUDIO_GAIN_Y + 1,
 		q_max(1, (int)((AUDIO_PANEL_W - 2) * audiomenu.gain)),
 		2, progress_color, 0.9f);
 	Tools_DrawPickerMarker(AUDIO_PANEL_X + 1 +
-		(AUDIO_PANEL_W - 2) * audiomenu.gain + 0.5f, 144.0f, 2,
+		(AUDIO_PANEL_W - 2) * audiomenu.gain + 0.5f, AUDIO_GAIN_Y + 2, 2,
 		progress_color, progress_color);
 	if (*format)
-		M_PrintScroll(AUDIO_PANEL_X, 148, AUDIO_PANEL_W, format, realtime, false);
+		M_PrintScroll(AUDIO_PANEL_X, AUDIO_Y(148), AUDIO_PANEL_W, format, realtime, false);
 
 	if (selected)
 	{
-		M_PrintScroll(16, 156, 288, selected->path, realtime, false);
-		M_PrintScroll(16, 164, 288, selected->source, realtime, true);
+		M_PrintScroll(AUDIO_LIST_X, M_BOTTOM(156), m_width - 32, selected->path, realtime, false);
+		M_PrintScroll(AUDIO_LIST_X, M_BOTTOM(164), m_width - 32, selected->source, realtime, true);
 	}
 	if (audiomenu.searchlen)
 	{
-		M_DrawTextBox(16, 172, 32, 1);
-		M_PrintHighlight(24, 180, audiomenu.search, audiomenu.search, audiomenu.searchlen);
-		M_DrawCharacter(24 + audiomenu.searchlen * 8, 180, 10 + ((int)(realtime * 4) & 1));
+		M_DrawTextBox(AUDIO_LIST_X, M_BOTTOM(172), 32, 1);
+		M_PrintHighlight(AUDIO_LIST_X + 8, M_BOTTOM(180), audiomenu.search, audiomenu.search, audiomenu.searchlen);
+		M_DrawCharacter(AUDIO_LIST_X + 8 + audiomenu.searchlen * 8, M_BOTTOM(180), 10 + ((int)(realtime * 4) & 1));
 	}
 	else if (audiomenu.status[0] && realtime - audiomenu.status_time < 2.0)
-		M_PrintScroll(16, 184, 288, audiomenu.status, realtime, false);
+		M_PrintScroll(AUDIO_LIST_X, M_BOTTOM(184), m_width - 32, audiomenu.status, realtime, false);
 	else
-		M_Print((320 - (int)strlen(bottom_hints) * 8) / 2, 184, bottom_hints);
+		M_Print(m_left + (m_width - (int)strlen(bottom_hints) * 8) / 2, M_BOTTOM(184), bottom_hints);
 }
 
 void M_AudioBrowser_Key(int key)
@@ -47969,53 +48122,56 @@ void M_AudioBrowser_MouseClick(int x, int y)
 {
 	int count = (int)VEC_SIZE(audiomenu.filtered);
 
-	if (y >= 4 && y < 20 && x >= 56 && x < 248)
+	if (y >= AUDIO_Y(4) && y < AUDIO_Y(20) &&
+		x >= m_left + 56 && x < AUDIO_PANEL_X + 72)
 	{
-		if ((x < 160 && audiomenu.kind != AUDIO_CATALOG_SOUNDS) ||
-			(x >= 160 && audiomenu.kind != AUDIO_CATALOG_MUSIC))
+		audio_catalog_kind_t kind = x < AUDIO_SCROLL_X ? AUDIO_CATALOG_SOUNDS : AUDIO_CATALOG_MUSIC;
+		if (kind != audiomenu.kind)
 			M_Audio_SwitchKind();
 		return;
 	}
-	if (x >= AUDIO_PANEL_X && x < AUDIO_PANEL_X + AUDIO_PANEL_W &&
-		y >= 54 && y < 66)
+	if (y >= AUDIO_LIST_Y && y < AUDIO_LIST_Y + AUDIO_LIST_ROWS * 8)
 	{
-		M_Audio_BeginScrub(x);
-		return;
+		if (x >= AUDIO_SCROLL_X && x < AUDIO_SCROLL_X + 12 && count > AUDIO_LIST_ROWS)
+		{
+			audiomenu.scrollbar_grab = true;
+			M_AudioBrowser_Mousemove(x, y);
+			if (audiomenu.autoplay)
+				M_Audio_Play();
+			return;
+		}
+		if (x >= AUDIO_LIST_X - 8 && x < AUDIO_SCROLL_X)
+		{
+			int row = audiomenu.scroll + (y - AUDIO_LIST_Y) / 8;
+			if (row < count)
+			{
+				audiomenu.cursor = row;
+				M_Audio_Play();
+			}
+			return;
+		}
 	}
-	if (x >= AUDIO_PANEL_X && x < AUDIO_PANEL_X + AUDIO_PANEL_W &&
-		y >= 140 && y < 148)
+
+	if (x < AUDIO_PANEL_X || x >= AUDIO_PANEL_X + AUDIO_PANEL_W)
+		return;
+	if (y >= AUDIO_SEEK_Y - 2 && y < AUDIO_SEEK_Y + 10)
+		M_Audio_BeginScrub(x);
+	else if (y >= AUDIO_GAIN_Y - 2 && y < AUDIO_GAIN_Y + 6)
 	{
 		audiomenu.gain_grab = true;
 		M_Audio_UpdateGainSlider(x);
-		return;
 	}
-	if (x >= 160 && x < 172 && y >= AUDIO_LIST_Y &&
-		y < AUDIO_LIST_Y + AUDIO_LIST_ROWS * 8 && count > AUDIO_LIST_ROWS)
-	{
-		audiomenu.scrollbar_grab = true;
-		M_AudioBrowser_Mousemove(x, y);
-		if (audiomenu.autoplay)
-			M_Audio_Play();
-		return;
-	}
-	if (x >= AUDIO_LIST_X - 8 && x < AUDIO_LIST_X + AUDIO_LIST_COLS * 8 &&
-		y >= AUDIO_LIST_Y && y < AUDIO_LIST_Y + AUDIO_LIST_ROWS * 8)
-	{
-		M_AudioBrowser_Mousemove(x, y);
+	else if (y >= AUDIO_Y(92) && y < AUDIO_Y(100))
 		M_Audio_Play();
-		return;
-	}
-	if (x >= AUDIO_PANEL_X && y >= 92 && y < 100)
-		M_Audio_Play();
-	else if (x >= AUDIO_PANEL_X && y >= 100 && y < 108)
+	else if (y >= AUDIO_Y(100) && y < AUDIO_Y(108))
 		M_Audio_TogglePause();
-	else if (x >= AUDIO_PANEL_X && y >= 108 && y < 116)
+	else if (y >= AUDIO_Y(108) && y < AUDIO_Y(116))
 		M_Audio_Stop();
-	else if (x >= AUDIO_PANEL_X && y >= 116 && y < 124)
+	else if (y >= AUDIO_Y(116) && y < AUDIO_Y(124))
 		M_Audio_SetLoop(!audiomenu.loop);
-	else if (x >= AUDIO_PANEL_X && y >= 124 && y < 132)
+	else if (y >= AUDIO_Y(124) && y < AUDIO_Y(132))
 		audiomenu.autoplay = !audiomenu.autoplay;
-	else if (x >= AUDIO_PANEL_X && y >= 132 && y < 140)
+	else if (y >= AUDIO_Y(132) && y < AUDIO_Y(140))
 		M_Audio_SetGain(audiomenu.gain + (x < AUDIO_PANEL_X + AUDIO_PANEL_W / 2 ? -0.05f : 0.05f));
 }
 
@@ -49503,7 +49659,7 @@ qboolean M_WantsIBeamCursor(void)
 		return false;
 	if (MenuSearch_IsActive())
 		return M_TextField_IsDraggingField(&menusearch.field) ||
-			(m_mousex >= 24 && m_mousex < 296 && M_TextField_MouseInRow(m_mousey, 32));
+			M_MenuSearch_MouseInField();
 
 	if (M_TextField_IsDraggingAny())
 		return true;
@@ -49653,14 +49809,9 @@ typedef struct
 static struct
 {
 	menu_pak_t paks[MAX_PAKS];
-	int num_paks;
-	int cursor;
-	int scroll;
+	menulist_t list;
 	qboolean dragging;
-	struct {
-		char text[32];
-		int len;
-	} search;
+	qboolean scrollbar_grab;
 } pakmenu;
 static qboolean paklist_exists = false;
 static qboolean pak_reorder_enabled = false;
@@ -51202,6 +51353,7 @@ static qboolean MenuSearch_HasLocalModalState(enum m_state_e state)
 {
 	return (state == m_weaponwheel && weaponwheelmenu.preview) ||
 		(state == m_pakloading && pakmenu.dragging) ||
+		(state == m_downloadmods && downloadmodsmenu.exit_prompt) ||
 		(state == m_discord && M_Discord_TextEntry());
 }
 
@@ -51248,22 +51400,22 @@ static qboolean M_MenuSearch_OpenDemoOptionsItem(int index)
 static void M_Pak_Add(const char* name, qboolean readonly, int source)
 {
 	int i;
-	if (pakmenu.num_paks >= MAX_PAKS)
+	if (pakmenu.list.numitems >= MAX_PAKS)
 		return;
 
 	// Check duplicates
-	for (i = 0; i < pakmenu.num_paks; i++)
+	for (i = 0; i < pakmenu.list.numitems; i++)
 	{
 		if (!q_strcasecmp(pakmenu.paks[i].name, name))
 			return;
 	}
 
 	// Add new
-	q_strlcpy(pakmenu.paks[pakmenu.num_paks].name, name, MAX_PAK_NAME);
-	pakmenu.paks[pakmenu.num_paks].enabled = true;
-	pakmenu.paks[pakmenu.num_paks].readonly = readonly;
-	pakmenu.paks[pakmenu.num_paks].source = source;
-	pakmenu.num_paks++;
+	q_strlcpy(pakmenu.paks[pakmenu.list.numitems].name, name, MAX_PAK_NAME);
+	pakmenu.paks[pakmenu.list.numitems].enabled = true;
+	pakmenu.paks[pakmenu.list.numitems].readonly = readonly;
+	pakmenu.paks[pakmenu.list.numitems].source = source;
+	pakmenu.list.numitems++;
 }
 
 // Callback for COM_ListAllFiles
@@ -51358,7 +51510,7 @@ static void M_Pak_BuildList(void)
 	char *buffer;
 	const char *data;
 
-	pakmenu.num_paks = 0;
+	pakmenu.list.numitems = 0;
 	pakmenu.dragging = false;
 	paklist_exists = false;
 
@@ -51398,7 +51550,7 @@ static void M_Pak_BuildList(void)
 				*/
 				
 				/* 1. Extract and sort base paks */
-				for (i = 0; i < pakmenu.num_paks; i++)
+				for (i = 0; i < pakmenu.list.numitems; i++)
 					if (pakmenu.paks[i].source == 0)
 						temp[count++] = pakmenu.paks[i];
 				
@@ -51406,17 +51558,17 @@ static void M_Pak_BuildList(void)
 					qsort(temp, count, sizeof(menu_pak_t), M_Pak_Compare); /* source is same, sorts by name */
 				
 				/* 2. Append mod paks (preserve order) */
-				for (i = 0; i < pakmenu.num_paks; i++)
+				for (i = 0; i < pakmenu.list.numitems; i++)
 					if (pakmenu.paks[i].source == 1)
 						temp[count++] = pakmenu.paks[i];
 				
 				/* Apply back to main array */
 				memcpy(pakmenu.paks, temp, count * sizeof(menu_pak_t));
-				pakmenu.num_paks = count;
+				pakmenu.list.numitems = count;
 			}
 			pak_reorder_enabled = true;
-			pakmenu.search.len = 0;
-			pakmenu.search.text[0] = 0;
+			pakmenu.list.search.len = 0;
+			pakmenu.list.search.text[0] = 0;
 			return;
 		}
 		Z_Free(buffer);
@@ -51429,11 +51581,11 @@ static void M_Pak_BuildList(void)
 	COM_ListAllFiles(NULL, "*.pk3", M_Pak_ScanCallback, 0, NULL);
 	COM_ListAllFiles(NULL, "paks/*.pak", M_Pak_ScanCallback, 0, NULL);
 	COM_ListAllFiles(NULL, "paks/*.pk3", M_Pak_ScanCallback, 0, NULL);
-	if (pakmenu.num_paks > 1)
-		qsort(pakmenu.paks, pakmenu.num_paks, sizeof(menu_pak_t), M_Pak_Compare);
+	if (pakmenu.list.numitems > 1)
+		qsort(pakmenu.paks, pakmenu.list.numitems, sizeof(menu_pak_t), M_Pak_Compare);
 
-	pakmenu.search.len = 0;
-	pakmenu.search.text[0] = 0;
+	pakmenu.list.search.len = 0;
+	pakmenu.list.search.text[0] = 0;
 }
 
 static void M_Pak_DeleteList(void)
@@ -51464,7 +51616,7 @@ static void M_Pak_SaveList(void)
 	if (!f) return;
 
 	fprintf(f, "// Generated by PAK Loading Menu\n");
-	for (i = 0; i < pakmenu.num_paks; i++)
+	for (i = 0; i < pakmenu.list.numitems; i++)
 	{
 		/* Only save mod paks, skip readonly (id1) paks */
 		if (!pakmenu.paks[i].readonly)
@@ -51477,160 +51629,110 @@ static void M_Pak_SaveList(void)
 	Con_SafePrintf(" saved. Restart game to apply changes.\n");
 }
 
+#define PAK_LIST_X (m_left + 16)
+#define PAK_TITLE_Y (m_top + 32)
+#define PAK_LIST_Y (PAK_TITLE_Y + 8 * (Q_COUNTOF(pak_pinned) + 1))
+#define PAK_LIST_ROWS (13 + M_EXTRA_ROWS)
+
+static const char *const pak_pinned[] = {
+	"pak0.pak, pak1.pak (always loaded)", "quakespasm.pak", "qssm.pak"
+};
+
 static void M_PakLoading_Shutdown(void)
 {
 	pakmenu.dragging = false;
+	pakmenu.scrollbar_grab = false;
 	M_Pak_SaveList();
 }
 
 void M_PakLoading_Draw(void)
 {
-	int i;
-	int x = m_left + 16;
-	int y = m_top + 32;
-	const int visible_items = 13 + M_EXTRA_ROWS;
-	const int cols = M_LIST_COLS;
-	static const char* enginepacknames[] = { "quakespasm.pak", "qssm.pak" };
-	const char* pinned[] = {
-		"pak0.pak, pak1.pak (always loaded)",
-		enginepacknames[0],
-		enginepacknames[1]
-	};
-	const int pinned_count = (int)countof(pinned);
-	const int pinned_offset = pinned_count + 1; /* spacer line after pinned items */
-	const int list_y = y + pinned_offset * 8;
+	menulist_t *list = &pakmenu.list;
+	int x = PAK_LIST_X;
+	int y = PAK_LIST_Y;
+	int cols = M_LIST_COLS;
+	int first, count;
+	const char *gdir = COM_SkipPath(com_gamedir);
 	plcolour_t white = CL_PLColours_Parse("0xffffff");
-	int overflow_line_y = list_y - 8;
 
+	M_List_SetViewsize(list, PAK_LIST_ROWS);
+	if (!keydown[K_MOUSE1])
+		pakmenu.scrollbar_grab = false;
+
+	M_PrintTruncated(x, PAK_TITLE_Y - 28, cols * 8, va("PAK Loading Order (%s)", gdir), false);
+	M_DrawQuakeBar(x - 8, PAK_TITLE_Y - 16, cols + 2);
+
+	for (int i = 0; i < Q_COUNTOF(pak_pinned); ++i)
+		M_PrintRGBA(x, PAK_TITLE_Y + i * 8, pak_pinned[i], white, 0.5f, false);
+
+	M_List_GetVisibleRange(list, &first, &count);
+	for (int i = 0; i < count; ++i)
 	{
-		const char *gdir = COM_SkipPath(com_gamedir);
-		int title_width = strlen("PAK Loading Order (") * 8;
-		Draw_String(x, y - 28, "PAK Loading Order (");
-		M_Print(x + title_width, y - 28, gdir);
-		Draw_String(x + title_width + strlen(gdir) * 8, y - 28, ")");
-	}
-	M_DrawQuakeBar(x - 8, y - 16, cols + 2);
+		int idx = first + i;
+		int row_y = y + i * 8;
+		int indent = 0;
+		int width;
+		qboolean selected = idx == list->cursor;
+		const menu_pak_t *pak = &pakmenu.paks[idx];
 
-	if (pakmenu.cursor < pakmenu.scroll) pakmenu.scroll = pakmenu.cursor;
-	if (pakmenu.cursor >= pakmenu.scroll + visible_items) pakmenu.scroll = pakmenu.cursor - visible_items + 1;
-
-	if (pakmenu.scroll < 0) pakmenu.scroll = 0;
-	if (pakmenu.scroll > q_max(0, pakmenu.num_paks - visible_items))
-		pakmenu.scroll = q_max(0, pakmenu.num_paks - visible_items);
-
-	/* Always show base/engine paks at top (not reorderable) */
-	for (i = 0; i < pinned_count; i++)
-		M_PrintRGBA(x, y + i * 8, pinned[i], white, 0.5f, false);
-	/* spacer line after pinned */
-	M_Print(x, y + pinned_count * 8, " ");
-
-	for (i = 0; i < visible_items; i++)
-	{
-		int idx = pakmenu.scroll + i;
-		if (idx >= pakmenu.num_paks) break;
-
-		if (idx == pakmenu.cursor)
+		if (selected)
+			M_DrawCharacter(x - 8, row_y, pakmenu.dragging ? 141 : 12 + ((int)(realtime * 4) & 1));
+		if (selected && pakmenu.dragging)
 		{
-			if (pakmenu.dragging)
-				M_DrawCharacter(x - 8, list_y + i * 8, 141); 
-			else
-				M_DrawCharacter(x - 8, list_y + i * 8, 12 + ((int)(realtime * 4) & 1));
+			M_PrintWhite(x, row_y, ">>");
+			indent = 16;
 		}
-		
-			if (pakmenu.dragging && idx == pakmenu.cursor)
-			{
-				M_PrintWhite(x, list_y + i * 8, ">>");
-				/* draw name after marker with optional highlight */
-				if (pakmenu.search.len > 0 &&
-					q_strcasestr(pakmenu.paks[idx].name, pakmenu.search.text))
-				{
-					M_PrintHighlight(x + 16, list_y + i * 8,
-						pakmenu.paks[idx].name,
-						pakmenu.search.text,
-						pakmenu.search.len);
-				}
-				else if (pakmenu.paks[idx].readonly)
-				{
-					M_PrintRGBA(x + 16, list_y + i * 8, pakmenu.paks[idx].name, white, 0.5f, false);
-				}
-				else
-				{
-					M_Print(x + 16, list_y + i * 8,
-						pakmenu.paks[idx].name);
-				}
-			}
-			else
-			{
-				if (pakmenu.search.len > 0 &&
-					q_strcasestr(pakmenu.paks[idx].name, pakmenu.search.text))
-				{
-					M_PrintHighlight(x, list_y + i * 8,
-						pakmenu.paks[idx].name,
-						pakmenu.search.text,
-						pakmenu.search.len);
-				}
-				else if (pakmenu.paks[idx].readonly)
-				{
-					M_PrintRGBA(x, list_y + i * 8, pakmenu.paks[idx].name, white, 0.5f, false);
-				}
-				else
-				{
-					M_Print(x, list_y + i * 8, pakmenu.paks[idx].name);
-				}
-			}
-	}
-	
-	if (pakmenu.num_paks > visible_items)
-	{
-		if (pakmenu.scroll > 0)
-			M_DrawEllipsisBar(x, overflow_line_y, cols);
-		if (pakmenu.scroll + visible_items < pakmenu.num_paks)
-			M_DrawEllipsisBar(x, list_y + visible_items * 8, cols);
-	}
 
-	if (pakmenu.search.len > 0)
-	{
-		int box_x = x;
-		int box_y = list_y + visible_items * 8 + 16;
-		int cursor_x = box_x + 8 * pakmenu.search.len;
-		M_DrawTextBox(box_x - 8, box_y - 8, cols - 4, 1);
-		M_PrintWhite(box_x, box_y, pakmenu.search.text);
-
-		/* cursor color matches other menus: blink if match exists, solid inverted if no match */
+		width = (cols - 2) * 8 - indent;
+		if (list->search.len > 0 && q_strcasestr(pak->name, list->search.text))
 		{
-			qboolean match = false;
-			for (i = 0; i < pakmenu.num_paks; i++)
-			{
-				if (q_strcasestr(pakmenu.paks[i].name, pakmenu.search.text))
-				{
-					match = true;
-					break;
-				}
-			}
-			if (match)
-				M_DrawCharacter(cursor_x, box_y, 10 + ((int)(realtime * 4) & 1));
+			if (strlen(pak->name) * 8 <= (size_t)width)
+				M_PrintHighlight(x + indent, row_y, pak->name, list->search.text, list->search.len);
 			else
-				M_DrawCharacter(cursor_x, box_y, 11 ^ 128);
+				M_PrintHighlightScroll(x + indent, row_y, width, pak->name,
+					list->search.text, selected ? realtime : 0.0);
 		}
-	}
-
-	if (pakmenu.search.len == 0)
-	{
-		if (!pak_reorder_enabled)
-			M_PrintWhite(x, M_BOTTOM(180), "Re-ordering disabled");
-		else if (pakmenu.dragging)
-			M_PrintWhite(x, M_BOTTOM(180), "Arrows: Move  Enter/Space: Drop");
+		else if (pak->readonly && strlen(pak->name) * 8 <= (size_t)width)
+			M_PrintRGBA(x + indent, row_y, pak->name, white, 0.5f, false);
 		else
-			M_PrintWhite(x, M_BOTTOM(180), "Enter/Space: Grab  Arrows: Move");
+			M_PrintScroll(x + indent, row_y, width, pak->name, selected ? realtime : 0.0, !pak->readonly);
 	}
+
+	if (M_List_GetOverflow(list) > 0)
+	{
+		M_List_DrawScrollbar(list, x + (cols - 1) * 8, y);
+		if (list->scroll > 0)
+			M_DrawEllipsisBar(x, y - 8, cols);
+		if (list->scroll + list->viewsize < list->numitems)
+			M_DrawEllipsisBar(x, y + list->viewsize * 8, cols);
+	}
+
+	if (list->search.len > 0)
+	{
+		qboolean matched = false;
+		for (int i = 0; i < list->numitems && !matched; ++i)
+			matched = q_strcasestr(pakmenu.paks[i].name, list->search.text) != NULL;
+		M_DrawListSearch(x - 8, M_BOTTOM(176), 32, list->search.text, list->search.len, matched);
+	}
+	else if (!pak_reorder_enabled)
+		M_PrintWhite(x, M_BOTTOM(180), "Re-ordering disabled");
+	else if (pakmenu.dragging)
+		M_PrintWhite(x, M_BOTTOM(180), "Arrows: Move  Enter/Space: Drop");
+	else
+		M_PrintWhite(x, M_BOTTOM(180), "Enter/Space: Grab  Arrows: Move");
 }
 
 void M_PakLoading_Key(int k)
 {
-	qboolean disabled = !pak_reorder_enabled;
+	menulist_t *list = &pakmenu.list;
 
 	if (k == K_ESCAPE || k == K_MOUSE2 || k == K_MOUSE4 || k == K_BBUTTON)
 	{
+		if (pakmenu.scrollbar_grab)
+		{
+			pakmenu.scrollbar_grab = false;
+			return;
+		}
 		if (pakmenu.dragging)
 		{
 			pakmenu.dragging = false;
@@ -51638,141 +51740,97 @@ void M_PakLoading_Key(int k)
 			return;
 		}
 		M_Pak_SaveList();
-		M_Menu_Startup_f(); 
+		M_Menu_Startup_f();
 		return;
 	}
-
-	if (k == K_BACKSPACE)
-	{
-		if (pakmenu.search.len > 0)
-		{
-			pakmenu.search.text[--pakmenu.search.len] = 0;
-			if (pakmenu.cursor >= pakmenu.num_paks)
-				pakmenu.cursor = pakmenu.num_paks - 1;
-			if (pakmenu.cursor < pakmenu.scroll)
-				pakmenu.scroll = pakmenu.cursor;
-		}
+	if (pakmenu.scrollbar_grab)
 		return;
+
+	if (k == K_MOUSE1)
+	{
+		int x = m_mousex - PAK_LIST_X;
+		int y = m_mousey - PAK_LIST_Y;
+		if (!pakmenu.dragging && M_List_MouseInScrollbar(list, x, y, M_LIST_COLS))
+		{
+			pakmenu.scrollbar_grab = true;
+			M_PakLoading_Mousemove(m_mousex, m_mousey);
+			return;
+		}
+
+		int row = M_List_RowAt(list, x, y, M_LIST_COLS);
+		if (row < 0 || (pakmenu.dragging && row != list->cursor))
+			return;
+		list->cursor = row;
 	}
 
-	if (k >= 32 && k < 127 && pakmenu.search.len < (int)sizeof(pakmenu.search.text) - 1)
+	if (pak_reorder_enabled && (k == K_ENTER || k == K_KP_ENTER || k == K_ABUTTON ||
+		k == K_CTRL || k == K_SHIFT || k == K_MOUSE1 ||
+		(k == K_SPACE && (pakmenu.dragging || !list->search.len))))
 	{
-		int i;
-		pakmenu.search.text[pakmenu.search.len++] = k;
-		pakmenu.search.text[pakmenu.search.len] = 0;
-
-		for (i = 0; i < pakmenu.num_paks; i++)
-		{
-			if (q_strcasestr(pakmenu.paks[i].name, pakmenu.search.text))
-			{
-				pakmenu.cursor = i;
-				if (pakmenu.cursor < pakmenu.scroll)
-					pakmenu.scroll = pakmenu.cursor;
-				break;
-			}
-		}
-		return;
-	}
-
-	if (disabled)
-	{
-		if (k == K_UPARROW || k == K_MWHEELUP)
-		{
-			if (pakmenu.cursor > 0)
-			{
-				pakmenu.cursor--;
-				S_LocalSound("misc/menu1.wav");
-			}
-		}
-		else if (k == K_DOWNARROW || k == K_MWHEELDOWN)
-		{
-			if (pakmenu.cursor < pakmenu.num_paks - 1)
-			{
-				pakmenu.cursor++;
-				S_LocalSound("misc/menu1.wav");
-			}
-		}
-		return;
-	}
-
-	if (k == K_ENTER || k == K_KP_ENTER || k == K_SPACE || k == K_CTRL || k == K_SHIFT || k == K_MOUSE1)
-	{
-		/* Cannot drag readonly items */
-		if (pakmenu.paks[pakmenu.cursor].readonly)
+		if (list->cursor < 0 || list->cursor >= list->numitems || pakmenu.paks[list->cursor].readonly)
 			return;
 		pakmenu.dragging = !pakmenu.dragging;
 		S_LocalSound("misc/menu2.wav");
 		return;
 	}
 
-	if (k == K_UPARROW || k == K_MWHEELUP)
+	if (!pakmenu.dragging && k == K_BACKSPACE)
 	{
-		if (pakmenu.cursor > 0)
+		if (list->search.len > 0)
+			list->search.text[--list->search.len] = 0;
+		return;
+	}
+
+	if (!pakmenu.dragging && k >= 32 && k < 127 && list->search.len < list->search.maxlen)
+	{
+		list->search.text[list->search.len++] = k;
+		list->search.text[list->search.len] = 0;
+
+		for (int i = 0; i < list->numitems; ++i)
 		{
-			if (pakmenu.dragging)
+			if (q_strcasestr(pakmenu.paks[i].name, list->search.text))
 			{
-				/* Cannot swap with readonly items */
-				if (pakmenu.paks[pakmenu.cursor - 1].readonly)
-					return;
-				menu_pak_t tmp = pakmenu.paks[pakmenu.cursor];
-				pakmenu.paks[pakmenu.cursor] = pakmenu.paks[pakmenu.cursor - 1];
-				pakmenu.paks[pakmenu.cursor - 1] = tmp;
-				pakmenu.cursor--;
-				S_LocalSound("misc/menu2.wav");
-			}
-			else
-			{
-				pakmenu.cursor--;
-				S_LocalSound("misc/menu1.wav");
+				list->cursor = i;
+				M_List_AutoScroll(list);
+				break;
 			}
 		}
+		return;
 	}
-	else if (k == K_DOWNARROW || k == K_MWHEELDOWN)
+
+	int dir = k == K_UPARROW || k == K_MWHEELUP ? -1 :
+		k == K_DOWNARROW || k == K_MWHEELDOWN ? 1 : 0;
+	int next = list->cursor + dir;
+
+	if (!dir || next < 0 || next >= list->numitems)
+		return;
+	if (pakmenu.dragging)
 	{
-		if (pakmenu.cursor < pakmenu.num_paks - 1)
-		{
-			if (pakmenu.dragging)
-			{
-				/* Cannot swap with readonly items */
-				if (pakmenu.paks[pakmenu.cursor + 1].readonly)
-					return;
-				menu_pak_t tmp = pakmenu.paks[pakmenu.cursor];
-				pakmenu.paks[pakmenu.cursor] = pakmenu.paks[pakmenu.cursor + 1];
-				pakmenu.paks[pakmenu.cursor + 1] = tmp;
-				pakmenu.cursor++;
-				S_LocalSound("misc/menu2.wav");
-			}
-			else
-			{
-				pakmenu.cursor++;
-				S_LocalSound("misc/menu1.wav");
-			}
-		}
+		if (pakmenu.paks[next].readonly)
+			return;
+		menu_pak_t tmp = pakmenu.paks[list->cursor];
+		pakmenu.paks[list->cursor] = pakmenu.paks[next];
+		pakmenu.paks[next] = tmp;
 	}
+	list->cursor = next;
+	M_List_AutoScroll(list);
+	S_LocalSound(pakmenu.dragging ? "misc/menu2.wav" : "misc/menu1.wav");
 }
 
 void M_PakLoading_Mousemove(int cx, int cy)
 {
-	const int pinned_count = 3; /* pak0+pak1, engine packs */
-	const int pinned_offset = pinned_count + 1; /* spacer line */
-	const int y_start = m_top + 32 + pinned_offset * 8;
-	const int item_h = 8;
-	const int visible_items = 13 + M_EXTRA_ROWS; // match M_PakLoading_Draw
-	
-	int item_idx;
-	
-	if (cy < y_start) return;
-	
-	item_idx = (cy - y_start) / item_h;
-	
-	if (item_idx >= 0 && item_idx < visible_items)
+	menulist_t *list = &pakmenu.list;
+	int y = cy - PAK_LIST_Y;
+	if (pakmenu.scrollbar_grab)
 	{
-		int target_cursor = pakmenu.scroll + item_idx;
-		if (target_cursor < pakmenu.num_paks)
-		{
-			pakmenu.cursor = target_cursor;
-		}
+		if (!keydown[K_MOUSE1])
+			pakmenu.scrollbar_grab = false;
+		else if (M_List_UseScrollbar(list, y))
+			list->cursor = CLAMP(list->scroll, list->cursor, list->scroll + list->viewsize - 1);
+		return;
 	}
+	if (!pakmenu.dragging && M_List_MouseInColumns(cx - PAK_LIST_X, M_LIST_COLS))
+		M_List_Mousemove(list, y);
 }
 
 void M_Menu_PakLoading_f(void)
@@ -51781,12 +51839,16 @@ void M_Menu_PakLoading_f(void)
 	m_state = m_pakloading;
 	m_entersound = true;
 
+	M_UpdateBounds();
 	M_Pak_BuildList();
-	pakmenu.cursor = 0;
-	pakmenu.scroll = 0;
+	pakmenu.list.viewsize = PAK_LIST_ROWS;
+	pakmenu.list.cursor = 0;
+	pakmenu.list.scroll = 0;
 	pakmenu.dragging = false;
-	pakmenu.search.len = 0;
-	pakmenu.search.text[0] = 0;
+	pakmenu.scrollbar_grab = false;
+	pakmenu.list.search.len = 0;
+	pakmenu.list.search.maxlen = 31;
+	pakmenu.list.search.text[0] = 0;
 
 	IN_UpdateGrabs();
 }
